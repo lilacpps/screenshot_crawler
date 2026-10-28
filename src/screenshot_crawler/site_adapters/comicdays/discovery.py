@@ -10,12 +10,14 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
+from time import monotonic
 from urllib.parse import urlencode, urlparse
 
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -353,9 +355,90 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
     """Yield a complete Atom listing classified by first-party access state."""
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+    _EXCLUSION_PREVIEW_TTL_SECONDS = 30.0
 
     async def iter_records(self, page: Page, target: WatchlistTarget, mode: DiscoveryMode) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        cached = getattr(self, "_exclusion_preview_cache", None)
+        self._exclusion_preview_cache = None
+        if (
+            cached is not None
+            and cached["key"] == self._exclusion_cache_key(page, target)
+            and monotonic() <= cached["expires_at"]
+        ):
+            series_id, records = cached["series_id"], list(cached["records"])
+        else:
+            if target.discovery_scope is not None and target.discovery_scope.excluded_external_ids:
+                raise DiscoveryIncompleteError(
+                    "Comic DAYS exclusion Discovery requires a fresh prepared complete listing"
+                )
+            series_id, records = await self._load_complete_records(page, target)
+        selected_records = (
+            records if target.discovery_scope is None
+            else self._apply_scope(records, target.discovery_scope)
+        )
+        # All listing/access/boundary/exclusion checks finish before Catalog sees a row.
+        for record in selected_records:
+            yield record
+        # Only normal Full exhaustion publishes inventory, including on replay.
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target, all_records=records, selected_records=selected_records,
+                listing_identity=f"comicdays-series:{series_id}",
+            )
+
+    async def preview_complete_listing(self, page: Page, target: WatchlistTarget) -> ListingPreview:
+        self.reset_complete_listing_inventory()
+        self._exclusion_preview_cache = None
+        series_id, records = await self._load_complete_records(page, target)
+        return self._listing_preview(target, series_id, records)
+
+    async def prepare_exclusion_preview(self, page: Page, target: WatchlistTarget) -> ListingPreview:
+        self.reset_complete_listing_inventory()
+        self._exclusion_preview_cache = None
+        series_id, records = await self._load_complete_records(page, target)
+        if target.discovery_scope is not None:
+            self._apply_scope(records, target.discovery_scope)
+        preview = self._listing_preview(target, series_id, records)
+        self._exclusion_preview_cache = {
+            "key": self._exclusion_cache_key(page, target),
+            "series_id": series_id,
+            "records": tuple(records),
+            "expires_at": monotonic() + self._EXCLUSION_PREVIEW_TTL_SECONDS,
+        }
+        return preview
+
+    @staticmethod
+    def _exclusion_cache_key(page: Page, target: WatchlistTarget) -> tuple[object, ...]:
+        scope = target.discovery_scope
+        return (
+            id(page), target.site, target.key, target.work_key, target.url,
+            None if scope is None else scope.from_url,
+            None if scope is None else scope.through_url,
+            () if scope is None else tuple(sorted(scope.excluded_external_ids)),
+        )
+
+    @staticmethod
+    def _listing_preview(target: WatchlistTarget, series_id: str, records: list[DiscoveredRecord]) -> ListingPreview:
+        identity = f"comicdays-series:{series_id}"
+        rows = tuple(ListingRow(
+            external_id=record.source.external_id, url=record.source.url,
+            site_position=record.source.global_display_position or 0,
+            display_title=record.item.order_label or "", access_observation=record.source.access_mode,
+            listing_identity=identity,
+        ) for record in records)
+        if not rows or any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError("Comic DAYS complete listing has no authoritative positions")
+        return ListingPreview(
+            site=target.site, target_key=target.key, target_url=target.url,
+            listing_identity=identity, rows=rows, complete=True,
+            observed_at=datetime.now(UTC), digest=listing_digest(identity, rows),
+        )
+
+    async def _load_complete_records(self, page: Page, target: WatchlistTarget) -> tuple[str, list[DiscoveredRecord]]:
+        """Share the validated, read-only observation across Discovery and editing."""
         target_id = parse_comicdays_episode_url(target.url)
         if target_id is None:
             raise DiscoveryIncompleteError("Comic DAYS requires a canonical episode target")
@@ -426,37 +509,21 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
                     global_display_position=total - index,
                 ),
             ))
-        selected_records = (
-            records
-            if target.discovery_scope is None
-            else self._apply_scope(records, target.discovery_scope)
-        )
-        # Every network/listing invariant and every access classification must
-        # pass before the first record is handed to the Catalog service.
-        for record in selected_records:
-            yield record
-        # Publish the unbounded listing only after normal iterator exhaustion.
-        # DiscoveryService persists this inventory only after Catalog
-        # finalization, and incremental/early-closed iterators cannot leave a
-        # reusable proof behind.
-        if mode == "full":
-            self.capture_complete_listing_inventory(
-                target=target,
-                all_records=records,
-                selected_records=selected_records,
-                listing_identity=f"comicdays-series:{series_id}",
-            )
+        return series_id, records
 
     @staticmethod
     def _apply_scope(
         records: list[DiscoveredRecord], scope: DiscoveryScope
     ) -> list[DiscoveredRecord]:
-        if scope.from_url is None and scope.through_url is None:
+        if scope.from_url is None and scope.through_url is None and not scope.excluded_external_ids:
             raise DiscoveryIncompleteError("Comic DAYS bounded scope has no episode boundary")
 
         index_by_id = {
             record.source.external_id: index for index, record in enumerate(records)
         }
+        excluded = set(scope.excluded_external_ids)
+        if excluded - set(index_by_id):
+            raise DiscoveryIncompleteError("Comic DAYS excluded episode is not in the listing")
         boundary_indices: dict[str, int] = {}
         for name, url in (("from", scope.from_url), ("through", scope.through_url)):
             if url is None:
@@ -479,7 +546,10 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(
                 "Comic DAYS bounded Discovery boundaries are reversed"
             )
-        return records[from_index : through_index + 1]
+        selected = records[from_index : through_index + 1]
+        if excluded - {record.source.external_id for record in selected}:
+            raise DiscoveryIncompleteError("Comic DAYS excluded episode is outside the selected scope")
+        return [record for record in selected if record.source.external_id not in excluded]
 
     @staticmethod
     def _scope_boundary_episode_id(url: str) -> str | None:

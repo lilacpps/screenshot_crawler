@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.management_path = str(management_path)
         self._closed = False
         self._loading = False
+        self._reload_again = False
         self._worker: _LoadWorker | None = None
         self._job_store = None
         self._job_controller = None
@@ -199,6 +200,8 @@ class MainWindow(QMainWindow):
         self._rerun_original_id: str | None = None
         self._pending_rerun: tuple[str, frozenset[str], str] | None = None
         self._pending_editor_full: str | None = None
+        self._pending_work_full: tuple | None = None
+        self._work_editor = None
         self._session_job_ids: list[str] = []
         self._monitor_followed_active_id: str | None = None
         self._initial_expand_done = False
@@ -312,6 +315,9 @@ class MainWindow(QMainWindow):
         self.watchlist_button.setToolTip("Watchlistの基本項目・scope・archive_orderを編集")
         self.watchlist_button.clicked.connect(self._open_watchlist_editor)
         toolbar.addWidget(self.watchlist_button)
+        self.work_editor_button = QPushButton("新規登録・範囲・置換")
+        self.work_editor_button.clicked.connect(self._open_work_editor)
+        toolbar.addWidget(self.work_editor_button)
         self.expand_button = QPushButton("全展開")
         self.expand_button.clicked.connect(self.tree.expandAll)
         toolbar.addWidget(self.expand_button)
@@ -443,6 +449,14 @@ class MainWindow(QMainWindow):
     # --- loading ---------------------------------------------------------------
 
     def _invalidate_watchlist_editor_for_path_change(self) -> bool:
+        work_editor = self._work_editor
+        if work_editor is not None:
+            if work_editor.task is not None or not work_editor._discard():
+                return False
+            work_editor.dirty = False
+            work_editor.close()
+            self._work_editor = None
+        self._pending_work_full = None
         editor = getattr(self, "_watchlist_editor", None)
         if editor is None:
             return True
@@ -489,7 +503,10 @@ class MainWindow(QMainWindow):
             self.runtime_edit.setText(path)
 
     def reload(self) -> None:
-        if self._closed or self._loading:
+        if self._closed:
+            return
+        if self._loading:
+            self._reload_again = True
             return
         self._loading = True
         self.reload_button.setEnabled(False)
@@ -507,12 +524,20 @@ class MainWindow(QMainWindow):
         if self._closed:
             return
         self._loading = False
+        if self._reload_again:
+            self._reload_again = False
+            self.reload()
+            return  # Never consume pending Full against a pre-save snapshot.
         self.reload_button.setEnabled(True)
         for control in self._path_controls:
             control.setEnabled(True)
         self.set_snapshot(snapshot)
         if getattr(self, "_watchlist_editor", None) is not None:
             self._watchlist_editor.receive_snapshot(snapshot)
+        if self._work_editor is not None:
+            self._work_editor.snapshot = snapshot
+            self._work_editor.preview = None
+            self._work_editor._enabled()
         self.error_label.clear()
         self.statusBar().showMessage(f"読み込み完了: {snapshot.loaded_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
         pending = self._pending_rerun
@@ -532,12 +557,26 @@ class MainWindow(QMainWindow):
         self._pending_editor_full = None
         if editor_key is not None:
             self._show_execution_preview("discover", selected_keys={editor_key}, force_full=True)
+        work_full, self._pending_work_full = self._pending_work_full, None
+        if work_full is not None:
+            from screenshot_crawler.watchlist.service import WatchlistService
+
+            keys, revision = work_full
+            if WatchlistService(self.watchlist_path).revision() != revision:
+                self.error_label.setText("保存後にWatchlistが変わったためFull実行確認を停止しました")
+            else:
+                self._show_execution_preview("discover", selected_keys=set(keys), force_full=True,
+                                             after_watchlist_save=True)
 
     @Slot(str)
     def _load_failed(self, message: str) -> None:
         if self._closed:
             return
         self._loading = False
+        if self._reload_again:
+            self._reload_again = False
+            self.reload()
+            return
         self.reload_button.setEnabled(True)
         for control in self._path_controls:
             control.setEnabled(True)
@@ -549,6 +588,7 @@ class MainWindow(QMainWindow):
             self._rerun_original_id = None
             self.error_label.setText(self.error_label.text() + " / 再計画は停止しました")
         self._pending_editor_full = None
+        self._pending_work_full = None
 
     def set_snapshot(self, snapshot: object) -> None:
         old_focus = self.model._nodes.get(self.model.focused_node_id or "")
@@ -742,6 +782,7 @@ class MainWindow(QMainWindow):
         *,
         selected_keys: set[str] | frozenset[str] | None = None,
         force_full: bool = False,
+        after_watchlist_save: bool = False,
     ) -> None:
         snapshot = self.model.snapshot
         selected_identities = frozenset(
@@ -885,7 +926,8 @@ class MainWindow(QMainWindow):
             if preview.can_confirm
             else None
         )
-        dialog = ExecutionPreviewDialog(preview, request, self)
+        dialog = (ExecutionPreviewDialog(preview, request, self, after_watchlist_save=True)
+                  if after_watchlist_save else ExecutionPreviewDialog(preview, request, self))
         dialog.requestConfirmed.connect(self._start_execution)
         if dialog.exec() == QDialog.DialogCode.Accepted and request is not None:
             self.statusBar().showMessage("実行を開始しました")
@@ -982,6 +1024,26 @@ class MainWindow(QMainWindow):
         self._watchlist_editor.raise_()
         self._watchlist_editor.activateWindow()
 
+    def _open_work_editor(self) -> None:
+        from .work_editor import WorkEditorDialog
+
+        if self._work_editor is None:
+            self._work_editor = WorkEditorDialog(self.watchlist_path, self.catalog_path, self.runtime_path,
+                                                  snapshot=self.model.snapshot, parent=self)
+            self._work_editor.fullRequested.connect(self._run_work_full)
+            self._work_editor.watchlistSaved.connect(self.reload)
+        self._work_editor.set_active_job(self._job_controller is not None and self._job_controller.active_job_id is not None)
+        self._work_editor.show()
+        self._work_editor.raise_()
+        self._work_editor.activateWindow()
+
+    def _run_work_full(self, payload) -> None:
+        if self._job_controller is not None and self._job_controller.active_job_id is not None:
+            self.error_label.setText("保存済みですが実行中JobがあるためFullを開始できません")
+            return
+        self._pending_work_full = payload
+        self.reload()
+
     def _run_editor_full(self, key: str) -> None:
         """Run Full for the editor's explicit key, independent of Inventory checks."""
 
@@ -995,6 +1057,8 @@ class MainWindow(QMainWindow):
         if self._job_controller is None:
             return
         state = self._job_controller.poll()
+        if self._work_editor is not None:
+            self._work_editor.set_active_job(self._job_controller.active_job_id is not None)
         editor = getattr(self, "_watchlist_editor", None)
         if editor is not None:
             editor.set_active_job(self._job_controller.active_job_id is not None)
@@ -1059,6 +1123,11 @@ class MainWindow(QMainWindow):
         self.model._emit_check_updates()
 
     def closeEvent(self, event: Any) -> None:
+        if self._work_editor is not None:
+            if self._work_editor.task is not None or not self._work_editor._discard():
+                event.ignore()
+                return
+            self._work_editor.dirty = False
         editor = getattr(self, "_watchlist_editor", None)
         if editor is not None and editor._busy():
             self.statusBar().showMessage("Watchlist operation is running; wait before closing")

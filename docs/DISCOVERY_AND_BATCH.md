@@ -2070,13 +2070,67 @@ every existing Source is enabled. Removed keys are retained disabled and their
 last URL binding is kept to detect unsafe URL changes on later re-add. Migration
 alone does not create a sync marker or change existing acquisition behavior.
 
+### Work editing and interleaved archive segments (2026-10-27)
+
+The Work editor supports new Works, new keys on existing Works, post-registration
+scope edits and explicit cross-site episode replacements. A replacement changes
+acquisition selection and archive placement; it never merges Items, transfers a
+Source's discovery_key, propagates completion or deletes Catalog history/files.
+The operator selects both site-native intervals; unequal episode counts are valid.
+
+Watchlist targets optionally carry `archive_segments`, a sequence of mappings
+with a positive integer `order` and optional nonempty `start_external_id` and
+`end_external_id`. Boundaries are inclusive, oldest-first and resolved within
+that target's site/key. Omitted boundaries extend to the oldest/newest known row,
+including future discoveries at the open end. This differs from Discovery's
+newest-first from_url/through_url order; the editor performs the conversion.
+Within a Work, every target specifies segments or none does. Segment orders
+are unique across that Work. Segment mode and archive_order are mutually exclusive.
+`archive_segments: []` represents a key with no assigned rows. Legacy Watchlists
+retain their existing archive_order/site-local naming behavior unchanged.
+
+Segment naming concatenates segments by order, then acquisition-enabled Sources
+by display_position within each inclusive interval. Every enabled Source must
+appear exactly once. Unknown/disabled boundary identities, unknown/duplicate
+positions, overlapping placement and unplaced enabled Sources stop that Work's
+numbering even in provisional mode. A nonempty segment with no enabled known
+Sources is unresolved and also stops numbering; use an explicit empty segment
+list for a key with no assigned rows. This is an explicit segment-layout validation,
+not a new work-wide Full/scope-sync stamp gate for legacy operation. Batch, GUI,
+audit and renumber share the same naming contract; existing archives are untouched.
+
+Segment definitions participate in ordering fingerprints and existing saved
+configuration JSON, but not site scope fingerprints or acquisition bindings.
+This is an optional JSON-field extension; Catalog remains schema v7 with no new
+table/column. Saved-configuration restoration validates these fields as Watchlist
+input. Ordering-only edits do not invalidate site Full proof.
+
+The Work editor validates fresh complete listings and one Catalog snapshot for
+all keys together. New Works/keys/episodes need not exist in Catalog to save.
+Unavailable future ZIP names are reported as pending Full, not invented and not
+alone a save blocker. Conflicting ownership, malformed/stale/incomplete listing
+proof and mismatched selection/placement remain blockers. The legacy single-key
+editor retains its stricter artifact-based preview. Save changes only Watchlist,
+under one revision CAS/atomic replacement; it never performs Catalog registration.
+
+After save the GUI reloads Inventory and offers one explicit Full confirmation
+for added/scope/URL-changed keys and all keys affected by ordering changes.
+Yes queues the existing fingerprint-checked worker; No preserves the saved
+configuration without running Discovery. Disabled keys stay disabled. Each
+successful Full reflects its key's flags through the existing mechanism;
+partial failure retains saved settings and prior failed-key flags without auto
+retry or implicit scope apply. Old flags govern pending outer-boundary changes;
+the existing exact exclusion safety overlay remains effective immediately.
+
 ### Discovery acquisition flags and Batch selection
 
 The normal authority is existing acquisition flags, per-key display order and
-Watchlist archive_order. Discovery updates its key; packaging concatenates keys
-in archive_order and calculates ordinals. Intermediate numbers may be provisional;
+Watchlist archive_order or explicit archive_segments. Discovery updates its key;
+packaging concatenates keys or segments and calculates ordinals. Intermediate
+numbers may be provisional subject to the segment resolution checks above;
 one final explicit renumber can align existing ZIPs. DB stays v7: no schema,
-JSON fields, per-key sync records or membership digests are added.
+per-key sync records or membership digests are added. Segments optionally extend
+existing saved configuration JSON as specified above.
 
 GUI and selected Batch do not gate on work-wide sync stamps or full-listing proof.
 Existing evidence/binding data may reveal a pending range edit or known deletion;
@@ -2119,8 +2173,11 @@ exclusion-bearing Discovery run must first prove the complete listing, target
 identity, canonical positions, boundaries, and every excluded ID before it
 creates a Work or upserts a Catalog Source. The proof and the subsequent
 iterator are one adapter-bound observation; unsupported adapters and unknown,
-out-of-range, stale, or malformed IDs fail closed. Magapoke is currently the
-first adapter with the required exclusion-only capability and one-shot replay.
+out-of-range, stale, or malformed IDs fail closed. Magapoke, Zeblack, Jump+ and
+Comic DAYS support exclusion-only scope and one-shot replay. Zeblack, Jump+ and
+Comic DAYS reject
+an expired, missing or mismatched exclusion cache rather than silently reread
+after preflight.
 
 Saving an outer boundary can remain pending until Full or explicit scope apply;
 the existing Catalog flags continue to govern that temporary state. A newly

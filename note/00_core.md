@@ -1,3 +1,147 @@
+## Work-level registration, scope replacement and segment ordering (2026-10-27)
+
+The toolbar's `新規登録・範囲・置換` opens WorkEditorDialog. The existing
+Watchlist管理 key editor remains available for basic fields and Magapoke's
+checkbox workflow. WorkDraft holds unsaved registration and all key proposals
+for a Work, keyed by explicit site/key identities. New Works and additional
+sites can fetch read-only complete listings before saving or running Discovery;
+no temporary Work/Source is created. The new editor requires an existing valid
+Catalog v7, read through the same sidecar-safe CatalogInventoryReader.
+
+The Work editor's search box offers case-insensitive substring completion over
+Work labels and work_key values, including unsaved new Works. Selecting a result
+uses the existing Work switch and unsaved-change confirmation; typing alone
+does not alter the current draft or write settings. The selected Work remains
+visible in the separate combo. Search is disabled with other edit controls
+during an editor task or background job.
+Enter without a visible completion popup does not invoke the dialog's Add
+button. Search, keyboard selection, unsaved-change confirmation and adjacent GUI
+regressions passed (70 tests, zero skipped), with targeted ruff/diff checks and
+independent review also passing. Full suite, browser-backed Integration,
+Research and live verification were not rerun for this local GUI addition.
+
+Site lists display oldest-first labels/status and current/proposed assignment.
+Comic DAYS now supports complete-list preview and exclusion scopes as well as
+Magapoke, Jump+ and Zeblack. Its existing verified Atom/free-feed/pagination/access
+reader is shared with Discovery. Page/target-bound exclusion proof is replayed
+once within 30 seconds and stale/missing/mismatched proof fails before any row.
+The Magapoke-to-Comic DAYS Planetes workflow replaces only the two selected native
+rows, leaving the final Magapoke row and its state independent; see site note 08.
+Related Comic DAYS/listing/GUI and artificial-browser tests passed 202 cases with
+no skips on a short OS TEMP base; the final isolated replacement E2E also passed
+after cleanup. Read-only live previews returned 26 Magapoke and 27 Comic DAYS
+Planetes rows, without applying the user's operational draft or consuming rights.
+Full suite and Research were not rerun for this site-local addition.
+Jump+ complete-list validation uses UI range slot counts and native identities;
+it does not equate range numbers with chapter titles (offsets and split titles
+are valid). A failed listing still stops editing; see note/04_jumpplus.md for
+the Exorcist live observation and adapter-specific checks.
+The site-local correction passed 44 Discovery/artificial-browser and 108 adjacent
+listing/GUI/Jump+ tests (zero skipped), plus independent review; read-only live
+previews succeeded for Jump+ (129 rows) and Zeblack (117 rows). No operational
+Watchlist/Catalog/ZIP was changed. Full suite and Research were not rerun.
+Interval controls support fixed bounds, oldest-open and newest-open selection;
+newest-open is the default for a continuing tail. The translation to Discovery's
+newest-first URL boundaries is explicit. A replacement selects a contiguous
+source interval and a destination interval (including an unsaved new target),
+removes source selection, inserts destination at that location and splits the
+remaining source sequence. Repeated replacements and unequal counts are valid.
+Native identities, Source ownership, Item completion and files never transfer.
+
+Background jobs owned by MainWindow disable editing but do not prevent closing
+the Work editor with the window close button or Escape. Closing leaves the job
+running and retains the existing unsaved-change Discard/Cancel confirmation.
+Only the editor's own listing, preview or save task blocks closing until its
+callback finishes; edit and close guards intentionally use different conditions.
+The close regression covers window close/Escape, clean/Discard/Cancel states,
+unchanged Watchlist/Catalog bytes and own-task protection: 17 Work editor tests
+and 46 adjacent GUI tests passed (zero skipped); targeted ruff and diff checks
+passed. Independent review found no blockers. This dialog-only fix does not
+require a new full suite, browser-backed Integration, Research or live-site run.
+
+WatchlistTarget.archive_segments is optional tuple[ArchiveSegment, ...]. Each
+segment has a positive Work-unique order and optional oldest-first inclusive
+start_external_id/end_external_id. Omitted bounds are open. Every Work key
+specifies segments or none does; archive_order and segments cannot mix. An empty
+tuple (YAML []) denotes zero assigned rows, using an explicit exclusion scope.
+The shared archive plan orders segments, then enabled rows by display_position;
+enabled rows must appear exactly once and unresolved/disabled anchors, overlap
+or unplaced enabled rows fail that Work's numbering. A nonempty segment without
+enabled known Sources also stops numbering (a new site must first be discovered);
+an explicit empty segment tuple remains valid for a fully excluded key.
+Legacy provisional fallback
+is retained for Works without segments. Audit/renumber recognize segment mode.
+
+Service parsing, lossless block-YAML patching, update operations and saved JSON
+restoration preserve segments. Ordering fingerprints/configuration JSON include
+them; site scope fingerprints/acquisition bindings do not. DB stays v7 with no
+new columns/tables; this optional configuration-JSON extension supersedes older
+"no new JSON fields" wording for segment layout only.
+
+Lossless YAML field insertion appends immediately after the target's existing
+data, before separator blank lines and the following Work's heading. Newly
+added scope and ordering fields use scope-then-order/segments order. Field
+replacement/removal leaves peer-level trailing comments and separator lines
+outside its span; deeper nested comments still block scope/segment replacement.
+Target spans also stop before unrelated root fields. Original LF/CRLF, comment
+text and unrelated fields remain intact; this is a local patch, not a whole-file
+formatter. YAML syntax/target equality and CAS validation still precede replace.
+Watchlist/WorkDraft/GUI regression coverage includes exact LF/CRLF output,
+following Work headings/root footer, EOF without a newline, simultaneous
+scope/order or scope/segments additions, nested annotations, and scope
+replacement/removal. The reported three youchien-wars entries were locally
+reformatted under the Watchlist edit lock with whole-document parsed-value
+equality verified before and after; no setting values, Catalog or ZIP changed.
+Formatting regression run: 128 passed, zero skipped; targeted ruff, diff checks
+and independent review passed. Full suite, browser-backed Integration, Research
+and live verification were not rerun for this YAML text-patching-only change.
+
+Work preview validates all fresh complete lists (300 seconds), exact scope and
+sequence coverage, Watchlist revision and one read-only Catalog snapshot. Same-site
+overlap, unknown/unbound Source ownership and active Sources absent from their
+owner's complete listing fail closed. Missing Catalog Work,
+Items/Sources or final archive names alone do not prevent saving. Counts/order
+are listed as pending Full; existing archive references are reported without
+filesystem access. The legacy artifact-bound key editor remains stricter.
+Save revalidates under Catalog job lock and atomically replaces only Watchlist
+under CAS. Catalog, history, quota and ZIP bytes remain untouched.
+
+Save emits explicit added/scope/URL-changed keys plus all ordering-affected Work
+keys and saved revision. MainWindow reloads (deferring another read when one is
+already in flight) and offers a single Full Yes/No confirmation with the existing
+execution preview. Yes queues the existing worker; No only saves. Inventory
+execution checks remain unchanged. Changed inputs are rejected by revision and
+worker fingerprint checks, disabled keys stay disabled, failures never auto-retry.
+Normal Full reflects per-key flags; no implicit Scope apply occurs. Pending outer
+boundary edits use old flags; saved exact holes use the existing Batch deny.
+Existing ZIPs require explicit audit/renumber if desired; physical DB cleanup
+and automatic file replacement remain outside this feature.
+
+Validation: synthetic WorkDraft/Qt tests cover fresh Works, existing+new sites,
+post-registration replacement, single/multiple/unequal replacement counts,
+no-Catalog-write save, synthetic Full and shared numbering/Batch integration,
+stale snapshot/CAS, and one-confirmation Yes/No flow. Final validation:
+
+- Latest WorkDraft/Qt/synthetic listing-browser group: 18 passed.
+- Adapter unit + artificial browser listing group: 74 passed.
+- Core/Watchlist/Archive/Inventory/Scope regression group: 204 passed.
+- Latest nonempty/empty segment and disabled-position guards: 5 passed.
+- Independent read-only review: PASS, zero blocking findings after corrections.
+- Full pytest: 5805 passed, 3 failed, 0 skipped in 3254.61 seconds (5884 warnings).
+  One unchanged Comic DAYS DOM snapshot test timed out; two Hanayume tests
+  exceeded Windows path limits in the long workspace-local basetemp. All three
+  passed together via --lf with a new short basetemp under the OS TEMP directory
+  (3 passed, 9 warnings). The one-shot full run is not described as green.
+  Final narrow proof/segment guards added during the broad run were separately
+  checked with current code in the targeted groups above.
+- `ruff check src tests` and `git diff --check`: passed.
+- Synthetic Qt captures verified 1400x1000 and 980x700 logical sizes; a native
+  Windows capture at DPR 1.5 verified the larger layout. No real-site page images
+  were used as fixtures or screenshots.
+
+No operational Watchlist or Catalog
+has been edited by verification. Site live evidence belongs to the site notes.
+
 ## Policy-owned pending quota inventory (2026-10-25)
 
 `PolicyDecision.pending_quota` is an optional in-memory bool (default false)
@@ -158,9 +302,11 @@ Batch/grant protection, and stale candidate rejection; no live-site or paid
 resource verification was performed.
 ## Minimal acquisition and numbering contract (2026-10-24)
 
-Current DB stays v7; no schema/migration or JSON field is added. Normal GUI,
+Current DB stays v7; no schema/migration is added. Optional archive_segments
+extends existing configuration JSON as described in the current Work editor
+contract above. Normal GUI,
 selected/whole-site Batch, audit and renumber use existing acquisition flags,
-per-key display order and Watchlist archive_order. Discovery's existing key-local
+per-key display order and Watchlist archive_order or archive_segments. Discovery's existing key-local
 flag/position updates remain authoritative. Provisional intermediate ZIP numbers
 are accepted; one final explicit renumber can align existing archives. Normal
 operations do not require a scope-sync stamp or complete-listing proof. GUI no

@@ -13,7 +13,7 @@ class ExecutionPreviewDialog(QDialog):
 
     requestConfirmed = Signal(object)
 
-    def __init__(self, preview: ExecutionPlanPreview, request: JobExecutionRequest | None = None, parent=None):
+    def __init__(self, preview: ExecutionPlanPreview, request: JobExecutionRequest | None = None, parent=None, *, after_watchlist_save: bool = False):
         super().__init__(parent)
         self.preview = preview
         self.request = request
@@ -27,6 +27,9 @@ class ExecutionPreviewDialog(QDialog):
             "grant_only": "Grant-only 実行前確認",
         }[preview.action])
         layout.addWidget(title)
+        if after_watchlist_save:
+            self.setWindowTitle("Full Discoveryを実行しますか？")
+            layout.addWidget(QLabel("Watchlistを保存しました。編集した対象のFull Discoveryを実行しますか？"))
         details = QTextEdit(self)
         details.setReadOnly(True)
         lines = [
@@ -63,9 +66,11 @@ class ExecutionPreviewDialog(QDialog):
         layout.addWidget(details)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
         self.confirm_button = buttons.addButton(
-            "実行開始", QDialogButtonBox.ButtonRole.AcceptRole
+            "Yes：Full Discoveryを実行" if after_watchlist_save else "実行開始", QDialogButtonBox.ButtonRole.AcceptRole
         )
         self.confirm_button.setEnabled(preview.can_confirm and request is not None)
+        if after_watchlist_save:
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("No：設定保存のみ")
         buttons.accepted.connect(self._confirm)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

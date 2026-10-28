@@ -1,6 +1,6 @@
 """Human-managed watchlist configuration."""
 
-from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.service import (
     DuplicateWatchlistKeyError,
     InvalidWatchlistError,
@@ -13,6 +13,7 @@ from screenshot_crawler.watchlist.service import (
 __all__ = [
     "ArchiveArtifactFact",
     "ArchiveFactsSnapshot",
+    "ArchiveSegment",
     "DiscoveryScope",
     "DuplicateWatchlistKeyError",
     "InvalidWatchlistError",

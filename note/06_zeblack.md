@@ -2,6 +2,34 @@
 
 ## Current implementation snapshot (updated 2026-10-24)
 
+## Complete listing preview and exclusion replay (2026-10-27)
+
+Zeblack Discovery now exposes a read-only complete chapter-listing preview for
+the Watchlist editor. The preview uses the same DOM/protobuf set and order
+validation as Full Discovery, returns newest-first rows with contiguous
+authoritative site positions, and does not write Catalog state. A prepared
+exclusion preview binds that exact observation to one immediately following
+Discovery for a bounded 30-second TTL; the binding is consumed once. Unknown
+excluded chapter IDs and exclusions outside the inclusive boundary fail closed
+before the first record is yielded. Synthetic browser coverage exercises
+preview/replay/expiry; a read-only live listing shape check is recorded below.
+The GUI Watchlist editor itself has not been live-verified.
+
+## Read-only live listing verification (2026-10-27)
+
+Using a newly opened shared-Chrome page for
+`https://zebrack-comic.shueisha.co.jp/title/56/chapter/list`, the visible
+listing identity was title `56` / `カラダ探し 解`. The strict chapter DOM had
+44 unique rows, in oldest-first DOM order: `chapter5441` (`プロローグ`) through
+`chapter5484` (`第四十三話 最終日 解`). No viewer, ticket, purchase, Catalog,
+or Watchlist write was performed. A new page in the same shared Chrome was
+passed through the production `ZeblackDiscoveryAdapter` entry point
+`preview_complete_listing`:
+`ready=true`, `complete=true`, `listing_identity=zeblack-title:56`,
+`count=44`, `digest=c8bba701f5fcb9bd1bed8a885ff80367688d60c420b31a030ef043a6b41e5d24`.
+The returned first/last IDs in newest-first order were `5484` and `5441`.
+This does not establish future listing stability.
+
 ## Shared work-key scope inventory (2026-10-22)
 
 Zeblack Full Discovery supplies the complete chapter-list identity/position
@@ -16,10 +44,13 @@ status, access state and history. This shared feature was not live-verified and
 does not alter Zeblack's entry or ticket behavior.
 
 Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
-acquisition flags and key order directly, with archive_order applied at ZIP naming.
+acquisition flags and key order directly, with archive_order or optional
+archive_segments applied at ZIP naming. The Work editor can interleave this
+key's ranges around another site's ranges without moving Source ownership.
 No sync stamp or complete-listing proof gates ordinary operation or final renumber;
 intermediate numbers may be provisional. Explicit scope-sync remains for deletions
-and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+and repair. DB stays v7; archive_segments optionally extends saved configuration
+JSON as documented in note/00_core.md. File/identity safeguards and
 site-specific access/capture behavior are retained; no new live claim is made.
 
 ### Final-chapter END card (2026-10-16)

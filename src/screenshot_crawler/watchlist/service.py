@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from screenshot_crawler.catalog.job_lock import CatalogJobLock
-from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
 
 
 class WatchlistError(ValueError):
@@ -157,6 +157,7 @@ class WatchlistService:
         enabled: bool = True,
         discovery_scope: DiscoveryScope | None = None,
         archive_order: int | None = None,
+        archive_segments: Iterable[ArchiveSegment] | None = None,
         expected_revision: str | None = None,
     ) -> WatchlistTarget:
         """Add a target, rejecting an already-used stable key."""
@@ -166,6 +167,7 @@ class WatchlistService:
                 key=key, work_key=work_key, site=site, url=url, label=label,
                 enabled=enabled, discovery_scope=discovery_scope,
                 archive_order=archive_order,
+                archive_segments=None if archive_segments is None else tuple(archive_segments),
             ),
             source="new target",
         )
@@ -186,6 +188,7 @@ class WatchlistService:
         url: str | object = _UNSET,
         enabled: bool | object = _UNSET,
         discovery_scope: DiscoveryScope | None | object = _UNSET,
+        archive_segments: Iterable[ArchiveSegment] | None | object = _UNSET,
         expected_revision: str | None = None,
     ) -> WatchlistTarget:
         """Update editable fields of one key using an optimistic revision check."""
@@ -209,6 +212,11 @@ class WatchlistService:
                         else discovery_scope  # type: ignore[arg-type]
                     ),
                     archive_order=current.archive_order,
+                    archive_segments=(
+                        current.archive_segments
+                        if archive_segments is _UNSET
+                        else None if archive_segments is None else tuple(archive_segments)  # type: ignore[arg-type]
+                    ),
                 )
                 updated = self._validate_target(updated, source=f"target {key!r}")
                 if updated == current:
@@ -260,6 +268,7 @@ class WatchlistService:
                     enabled=target.enabled,
                     discovery_scope=target.discovery_scope,
                     archive_order=values[target.key],
+                    archive_segments=target.archive_segments,
                 )
                 if target.work_key == work_key else target
                 for target in targets
@@ -301,6 +310,7 @@ class WatchlistService:
                         enabled=enabled,
                         discovery_scope=target.discovery_scope,
                         archive_order=target.archive_order,
+                        archive_segments=target.archive_segments,
                     )
                     updated = self._validate_target(updated, source=f"target {key!r}")
                     targets[index] = updated
@@ -420,6 +430,7 @@ class WatchlistService:
             raise InvalidWatchlistError(
                 f"targets[{index}].archive_order must be a positive integer"
             )
+        archive_segments = self._parse_archive_segments(raw_target, index)
         return self._validate_target(
             WatchlistTarget(
                 work_key=raw_target["work_key"],
@@ -430,6 +441,7 @@ class WatchlistService:
                 enabled=enabled,
                 discovery_scope=discovery_scope,
                 archive_order=archive_order,
+                archive_segments=archive_segments,
             ),
             source=f"targets[{index}]",
         )
@@ -457,6 +469,40 @@ class WatchlistService:
             through_url=through_url,
             excluded_external_ids=excluded,
         )
+
+    @staticmethod
+    def _parse_archive_segments(
+        raw_target: Mapping[str, Any], index: int
+    ) -> tuple[ArchiveSegment, ...] | None:
+        if "archive_segments" not in raw_target:
+            return None
+        raw_segments = raw_target["archive_segments"]
+        if not isinstance(raw_segments, (list, tuple)):
+            raise InvalidWatchlistError(
+                f"targets[{index}].archive_segments must be a list"
+            )
+        result: list[ArchiveSegment] = []
+        for segment_index, raw_segment in enumerate(raw_segments):
+            source = f"targets[{index}].archive_segments[{segment_index}]"
+            if not isinstance(raw_segment, Mapping):
+                raise InvalidWatchlistError(f"{source} must be a mapping")
+            order = raw_segment.get("order")
+            if isinstance(order, bool) or not isinstance(order, int) or order < 1:
+                raise InvalidWatchlistError(f"{source}.order must be a positive integer")
+            values: dict[str, str | None] = {}
+            for field in ("start_external_id", "end_external_id"):
+                value = raw_segment.get(field)
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    raise InvalidWatchlistError(f"{source}.{field} must be a non-empty string")
+                values[field] = value
+            result.append(
+                ArchiveSegment(
+                    order=order,
+                    start_external_id=values["start_external_id"],
+                    end_external_id=values["end_external_id"],
+                )
+            )
+        return tuple(result)
 
     @staticmethod
     def _parse_excluded_external_ids(
@@ -519,6 +565,41 @@ class WatchlistService:
             or target.archive_order < 1
         ):
             raise InvalidWatchlistError(f"{source}.archive_order must be a positive integer")
+        if target.archive_segments is not None:
+            if not isinstance(target.archive_segments, (tuple, list)):
+                raise InvalidWatchlistError(f"{source}.archive_segments must be a list")
+            if target.archive_order is not None:
+                raise InvalidWatchlistError(
+                    f"{source} cannot specify both archive_order and archive_segments"
+                )
+            normalized_segments: list[ArchiveSegment] = []
+            for segment_index, segment in enumerate(target.archive_segments):
+                if not isinstance(segment, ArchiveSegment):
+                    raise InvalidWatchlistError(
+                        f"{source}.archive_segments[{segment_index}] must be an ArchiveSegment"
+                    )
+                if (
+                    isinstance(segment.order, bool)
+                    or not isinstance(segment.order, int)
+                    or segment.order < 1
+                ):
+                    raise InvalidWatchlistError(
+                        f"{source}.archive_segments[{segment_index}].order must be a positive integer"
+                    )
+                for field in ("start_external_id", "end_external_id"):
+                    value = getattr(segment, field)
+                    if value is not None and (not isinstance(value, str) or not value.strip()):
+                        raise InvalidWatchlistError(
+                            f"{source}.archive_segments[{segment_index}].{field} must be a non-empty string"
+                        )
+                normalized_segments.append(
+                    ArchiveSegment(
+                        order=segment.order,
+                        start_external_id=segment.start_external_id,
+                        end_external_id=segment.end_external_id,
+                    )
+                )
+            target = replace(target, archive_segments=tuple(normalized_segments))
         if target.discovery_scope is not None:
             if not isinstance(target.discovery_scope, DiscoveryScope):
                 raise InvalidWatchlistError(f"{source}.discovery_scope must be a DiscoveryScope")
@@ -554,6 +635,26 @@ class WatchlistService:
         for target in targets:
             by_work.setdefault(target.work_key, []).append(target)
         for work_key, members in by_work.items():
+            segment_members = [member for member in members if member.archive_segments is not None]
+            if segment_members:
+                if len(segment_members) != len(members):
+                    raise InvalidWatchlistError(
+                        f"work_key {work_key!r} must specify archive_segments for every key or none"
+                    )
+                segment_orders = [
+                    segment.order
+                    for member in members
+                    for segment in member.archive_segments or ()
+                ]
+                if len(segment_orders) != len(set(segment_orders)):
+                    raise InvalidWatchlistError(
+                        f"work_key {work_key!r} has duplicate archive_segments order values"
+                    )
+                if any(member.archive_order is not None for member in members):
+                    raise InvalidWatchlistError(
+                        f"work_key {work_key!r} cannot mix archive_order and archive_segments"
+                    )
+                continue
             specified = [member.archive_order is not None for member in members]
             if any(specified) and not all(specified):
                 raise InvalidWatchlistError(
@@ -625,6 +726,7 @@ class WatchlistService:
         known = {
             "key", "work_key", "site", "url", "enabled", "label",
             "discovery_scope", "archive_order",
+            "archive_segments",
         }
         for value in targets:
             if not isinstance(value, dict):
@@ -635,6 +737,13 @@ class WatchlistService:
             if isinstance(scope, dict) and set(scope) - {
                 "from_url", "through_url", "excluded_external_ids"
             }:
+                return True
+            segments = value.get("archive_segments")
+            if isinstance(segments, list) and any(
+                not isinstance(segment, dict)
+                or set(segment) - {"order", "start_external_id", "end_external_id"}
+                for segment in segments
+            ):
                 return True
         return False
 
@@ -688,6 +797,17 @@ class WatchlistService:
             value["discovery_scope"] = scope
         if target.archive_order is not None:
             value["archive_order"] = target.archive_order
+        if target.archive_segments is not None:
+            value["archive_segments"] = [
+                {
+                    "order": segment.order,
+                    **({"start_external_id": segment.start_external_id}
+                       if segment.start_external_id is not None else {}),
+                    **({"end_external_id": segment.end_external_id}
+                       if segment.end_external_id is not None else {}),
+                }
+                for segment in target.archive_segments
+            ]
         return value
 
     def _patch_existing_yaml(
@@ -762,6 +882,10 @@ class WatchlistService:
         item_starts_sorted = sorted(item_starts)
         for key, (node, item_line, _unused, _end) in list(item_infos.items()):
             next_line = next((line for line in item_starts_sorted if line > item_line), len(lines))
+            # The last item can be followed by an unrelated root field. PyYAML's
+            # collection end includes trailing comments, so trim those separately.
+            node_end_line = node.end_mark.line + bool(node.end_mark.column)
+            next_line = min(next_line, node_end_line)
             dash_indent = len(lines[item_line]) - len(lines[item_line].lstrip())
             field_indent = dash_indent + 2
             item_infos[key] = (node, item_line, field_indent, next_line)
@@ -806,7 +930,7 @@ class WatchlistService:
                 for field, value in node.value
                 if isinstance(field, yaml.ScalarNode)
             }
-            additions: list[str] = []
+            additions: dict[str, list[str]] = {}
             for field in ("url", "label", "enabled", "archive_order"):
                 old_value = getattr(old, field)
                 new_value = getattr(new, field)
@@ -821,21 +945,21 @@ class WatchlistService:
                 elif isinstance(value_node, yaml.ScalarNode) and field_span is not None:
                     edits.append((value_node.start_mark.index, value_node.end_mark.index, self._render_scalar(new_value)))
                 else:
-                    additions.extend(self._render_field(field, new_value, field_indent))
+                    additions[field] = self._render_field(field, new_value, field_indent)
 
             if old.discovery_scope != new.discovery_scope:
                 scope_span = self._field_span(
                     lines, starts, start_line, end_line, "discovery_scope", field_indent
                 )
                 if old.discovery_scope is None and new.discovery_scope is not None:
-                    additions.extend(self._render_scope(new.discovery_scope, field_indent))
+                    additions["discovery_scope"] = self._render_scope(new.discovery_scope, field_indent)
                 elif new.discovery_scope is None:
                     if scope_span is None:
                         return None
                     edits.append(scope_span)
                 else:
                     if scope_span is None:
-                        additions.extend(self._render_scope(new.discovery_scope, field_indent))
+                        additions["discovery_scope"] = self._render_scope(new.discovery_scope, field_indent)
                     else:
                         scope_node = direct_nodes.get("discovery_scope")
                         if isinstance(scope_node, yaml.MappingNode) and any(
@@ -848,9 +972,63 @@ class WatchlistService:
                         if "#" in original[scope_span[0] : scope_span[1]]:
                             return None
                         edits.append((scope_span[0], scope_span[1], "".join(self._render_scope(new.discovery_scope, field_indent))))
+            if old.archive_segments != new.archive_segments:
+                segments_span = self._field_span(
+                    lines, starts, start_line, end_line, "archive_segments", field_indent
+                )
+                if old.archive_segments is None and new.archive_segments is not None:
+                    additions["archive_segments"] = self._render_archive_segments(new.archive_segments, field_indent)
+                elif new.archive_segments is None:
+                    if segments_span is None:
+                        return None
+                    edits.append(segments_span)
+                elif segments_span is None:
+                    additions["archive_segments"] = self._render_archive_segments(new.archive_segments, field_indent)
+                else:
+                    if "#" in original[segments_span[0] : segments_span[1]]:
+                        return None
+                    segments_node = direct_nodes.get("archive_segments")
+                    if not isinstance(segments_node, yaml.SequenceNode) or segments_node.flow_style:
+                        return None
+                    if any(
+                        not isinstance(segment_node, yaml.MappingNode)
+                        or segment_node.flow_style
+                        or any(
+                            not isinstance(field, yaml.ScalarNode)
+                            or str(field.value)
+                            not in {"order", "start_external_id", "end_external_id"}
+                            for field, _value in segment_node.value
+                        )
+                        for segment_node in segments_node.value
+                    ):
+                        return None
+                    edits.append(
+                        (
+                            segments_span[0],
+                            segments_span[1],
+                            "".join(self._render_archive_segments(new.archive_segments, field_indent)),
+                        )
+                    )
             if additions:
-                insert_at = starts[end_line] if end_line < len(starts) else len(original)
-                edits.append((insert_at, insert_at, "".join(additions)))
+                # Leave the original separator and the next Work's heading after
+                # the entire target, rather than between its old and new fields.
+                insert_line = end_line
+                while insert_line > start_line and (
+                    not lines[insert_line - 1].strip()
+                    or (
+                        lines[insert_line - 1].lstrip().startswith("#")
+                        and len(lines[insert_line - 1]) - len(lines[insert_line - 1].lstrip()) <= field_indent
+                    )
+                ):
+                    insert_line -= 1
+                insert_at = starts[insert_line] if insert_line < len(starts) else len(original)
+                rendered = "".join(
+                    line for field in self._target_mapping(new)
+                    for line in additions.get(field, ())
+                )
+                if insert_at and original[insert_at - 1] not in "\r\n":
+                    rendered = "\n" + rendered
+                edits.append((insert_at, insert_at, rendered))
 
         patched = original
         for start, end, replacement in sorted(edits, key=lambda item: (item[0], item[1]), reverse=True):
@@ -912,6 +1090,18 @@ class WatchlistService:
                 if current_indent <= indent:
                     break
             end += 1
+        # Blank separators and peer-level comments belong outside this field.
+        # Keep deeper comments inside its span so structural rewrites still
+        # reject nested comments rather than silently discarding them.
+        while end > line + 1:
+            current = lines[end - 1]
+            if not current.strip() or (
+                current.lstrip().startswith("#")
+                and len(current) - len(current.lstrip()) <= indent
+            ):
+                end -= 1
+            else:
+                break
         return starts[line], starts[end] if end < len(starts) else sum(len(value) for value in lines), ""
 
     @staticmethod
@@ -934,6 +1124,28 @@ class WatchlistService:
                 f"{' ' * (indent + 4)}- {cls._render_scalar(value)}\n"
                 for value in scope.excluded_external_ids
             )
+        return lines
+
+    @classmethod
+    def _render_archive_segments(
+        cls, segments: tuple[ArchiveSegment, ...], indent: int
+    ) -> list[str]:
+        prefix = " " * indent
+        nested = " " * (indent + 2)
+        detail = " " * (indent + 4)
+        if not segments:
+            return [f"{prefix}archive_segments: []\n"]
+        lines = [f"{prefix}archive_segments:\n"]
+        for segment in segments:
+            lines.append(f"{nested}- order: {cls._render_scalar(segment.order)}\n")
+            if segment.start_external_id is not None:
+                lines.append(
+                    f"{detail}start_external_id: {cls._render_scalar(segment.start_external_id)}\n"
+                )
+            if segment.end_external_id is not None:
+                lines.append(
+                    f"{detail}end_external_id: {cls._render_scalar(segment.end_external_id)}\n"
+                )
         return lines
 
     @classmethod

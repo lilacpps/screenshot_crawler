@@ -40,10 +40,32 @@ latest-first list to positions `N..1` so oldest content gets the first archive
 ordinal. Inventory is exposed only after normal iterator exhaustion and
 committed by DiscoveryService only after Catalog finalization. A failed/partial
 Full or Incremental run does not publish proof, and adapter reuse clears the
-prior in-memory inventory before each run. After Full, operators must
-separately preview/apply `watch scope-sync` before Batch. See
+prior in-memory inventory before each run. Successful Full automatically reflects
+this key's acquisition flags; `watch scope-sync` is optional maintenance. See
 `runbooks/work-key-archive-order/README.md` and `note/08_comicdays.md` for the
 shared workflow and isolated-copy commands.
+
+## Watchlist complete-list preview and exclusions
+
+The Work editor supports Comic DAYS through the same fully validated Atom,
+free-feed, pagination-total, readable-product and access-classification read as
+Discovery. Preview returns all native rows latest-first with whole-list positions,
+`comicdays-series:<id>` and a digest, without creating Catalog data or consuming an
+access resource. Boundaries and `excluded_external_ids` select the assigned subset;
+exclusion-only scopes are supported. Unknown exclusions, exclusions outside the
+selected range and invalid/reversed boundaries fail before yielding.
+
+Exclusion preflight binds one complete observation to Page/site/key/Work/URL/scope
+for 30 seconds. Discovery consumes it once with no reread. Missing, expired or
+mismatched proof blocks an exclusion run instead of silently refreshing it.
+Preview and preparation never publish Full inventory; only normal Full iterator
+exhaustion does. Partial replacement uses existing `archive_segments` without
+moving Source ownership or completion history. Existing ZIPs are untouched.
+
+Read-only shared-Chrome verification for Planetes returned 27 complete rows;
+PHASE24/25 were observed as Work Ticket candidates and PHASE26 as paid. The
+Magapoke counterpart returned 26 rows. No ticket, purchase, Catalog/Watchlist
+write or capture occurred; see `note/08_comicdays.md` for native IDs and evidence.
 
 The shared-CDP direct verification on 2026-10-08 for item `21804` completed
 from the initial page through packaging. It used the target-local Ticket/DOM

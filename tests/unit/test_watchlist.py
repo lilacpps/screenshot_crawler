@@ -6,6 +6,7 @@ import pytest
 
 import screenshot_crawler.watchlist.service as watchlist_module
 from screenshot_crawler.watchlist import (
+    ArchiveSegment,
     DiscoveryScope,
     DuplicateWatchlistKeyError,
     InvalidWatchlistError,
@@ -14,6 +15,7 @@ from screenshot_crawler.watchlist import (
     WatchlistTargetNotFoundError,
 )
 from screenshot_crawler.watchlist.fingerprints import (
+    configuration_json,
     target_scope_definition,
     target_scope_fingerprint,
 )
@@ -439,36 +441,117 @@ def test_adding_all_archive_orders_roundtrips_for_commentless_watchlist(
     assert written.count("archive_order:") == 2
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_adding_archive_order_to_commented_watchlist_preserves_comments(
-    tmp_path: Path,
+    tmp_path: Path, newline: str,
 ) -> None:
     path = tmp_path / "watchlist.yaml"
     original = (
         "# preserve me\n"
         "targets:\n"
+        "  # First work\n"
         "  - key: one\n"
         "    work_key: shared\n"
         "    site: zebrak\n"
         "    url: https://example.invalid/one\n"
         "    label: One\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from-one\n"
+        "      # Keep scope annotation\n"
+        "\n"
         "  - key: two\n"
         "    work_key: shared\n"
         "    site: bookwalker\n"
         "    url: https://example.invalid/two\n"
         "    label: Two\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from-two\n"
+        "\n\n"
+        "  # Next work\n"
+        "  - key: three\n"
+        "    work_key: other\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/three\n"
+        "    label: Three\n"
+        "\n"
+        "# Document footer\n"
+        "metadata: retain-me\n"
     )
-    path.write_text(original, encoding="utf-8")
+    path.write_bytes(original.replace("\n", newline).encode("utf-8"))
     service = WatchlistService(path)
     previous = service.list_targets()
     updated = [
         replace(previous[0], archive_order=10),
         replace(previous[1], archive_order=20),
+        previous[2],
     ]
     service._write(updated, previous=previous)
-    after = path.read_text(encoding="utf-8")
-    assert "# preserve me" in after
-    assert "archive_order: 10" in after
-    assert "archive_order: 20" in after
+    expected = original.replace(
+        "      # Keep scope annotation\n",
+        "      # Keep scope annotation\n    archive_order: 10\n",
+    ).replace(
+        "      from_url: https://example.invalid/from-two\n",
+        "      from_url: https://example.invalid/from-two\n    archive_order: 20\n",
+    )
+    assert path.read_bytes() == expected.replace("\n", newline).encode("utf-8")
+
+
+@pytest.mark.parametrize("remove_scope", [False, True])
+def test_scope_patch_preserves_following_heading_and_blank_lines(tmp_path: Path, remove_scope: bool) -> None:
+    path = tmp_path / "watchlist.yaml"
+    scope = "    discovery_scope:\n      from_url: https://example.invalid/from\n"
+    original = (
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        + scope
+        + "\n\n"
+        "  # Next work\n"
+        "  - key: two\n"
+        "    work_key: work-two\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/two\n"
+        "    label: Two\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    service = WatchlistService(path)
+    updated_scope = None if remove_scope else DiscoveryScope(through_url="https://example.invalid/through")
+    service.update_target("one", discovery_scope=updated_scope)
+    rendered = "" if remove_scope else "    discovery_scope:\n      through_url: https://example.invalid/through\n"
+    assert path.read_text(encoding="utf-8") == original.replace(scope, rendered)
+
+
+@pytest.mark.parametrize("segments", [False, True])
+@pytest.mark.parametrize("with_footer", [False, True])
+def test_new_scope_and_order_stay_before_footer(tmp_path: Path, segments: bool, with_footer: bool) -> None:
+    path = tmp_path / "watchlist.yaml"
+    original = (
+        "# Preserve formatting\n"
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One"
+    )
+    footer = "\n\n# Footer\nmetadata: retain-me\n" if with_footer else ""
+    path.write_text(original + footer, encoding="utf-8")
+    service = WatchlistService(path)
+    target = service.get("one")
+    service.apply_edit([replace(
+        target,
+        discovery_scope=DiscoveryScope(from_url="https://example.invalid/from"),
+        archive_order=None if segments else 1,
+        archive_segments=(ArchiveSegment(order=1),) if segments else None,
+    )])
+    ordering = "    archive_segments:\n      - order: 1\n" if segments else "    archive_order: 1\n"
+    expected = original + "\n    discovery_scope:\n      from_url: https://example.invalid/from\n" + ordering
+    if footer:
+        expected += footer[1:]
+    assert path.read_text(encoding="utf-8") == expected
 
 
 def test_multiline_quoted_hash_blocks_structural_rewrite_without_writing(
@@ -662,6 +745,59 @@ def test_empty_exclusion_scope_is_omitted_on_write(tmp_path: Path) -> None:
     assert "discovery_scope" not in service.path.read_text(encoding="utf-8")
 
 
+def test_archive_segments_roundtrip_and_preserve_comments(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one # keep this comment\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: One\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+    segments = (
+        ArchiveSegment(order=1, end_external_id="episode-2"),
+        ArchiveSegment(order=3, start_external_id="episode-5"),
+    )
+    updated = service.update_target("one", archive_segments=segments)
+    assert updated.archive_segments == segments
+    assert service.get("one").archive_segments == segments
+    written = path.read_text(encoding="utf-8")
+    assert "# keep this comment" in written
+    assert "archive_segments:" in written
+    assert "end_external_id: episode-2" in written
+
+
+def test_archive_segments_are_work_wide_and_exclusive_of_archive_order(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    segments = (ArchiveSegment(order=1),)
+    add_target(service, key="one", work_key="shared", archive_segments=segments)
+    with pytest.raises(InvalidWatchlistError, match="archive_segments for every key"):
+        add_target(service, key="two", work_key="shared", archive_order=2)
+    with pytest.raises(InvalidWatchlistError, match="cannot specify both"):
+        add_target(
+            WatchlistService(tmp_path / "other.yaml"),
+            archive_order=1,
+            archive_segments=segments,
+        )
+
+
+def test_archive_segments_are_ordering_metadata_not_target_scope_fingerprint(tmp_path: Path) -> None:
+    first = add_target(
+        WatchlistService(tmp_path / "one.yaml"),
+        archive_segments=(ArchiveSegment(order=1, end_external_id="one"),),
+    )
+    second = replace(
+        first,
+        archive_segments=(ArchiveSegment(order=4, end_external_id="two"),),
+    )
+    assert target_scope_fingerprint(first) == target_scope_fingerprint(second)
+    assert configuration_json((first,)) != configuration_json((second,))
+
+
 def test_unknown_root_and_target_keys_survive_structural_edit(tmp_path: Path) -> None:
     path = tmp_path / "watchlist.yaml"
     path.write_text(
@@ -683,7 +819,8 @@ def test_unknown_root_and_target_keys_survive_structural_edit(tmp_path: Path) ->
     assert service.get("one").label == "Updated"
 
 
-def test_nested_scope_comments_fail_closed_without_data_loss(tmp_path: Path) -> None:
+@pytest.mark.parametrize("comment", [" # keep\n", "\n      # keep nested comment\n"])
+def test_nested_scope_comments_fail_closed_without_data_loss(tmp_path: Path, comment: str) -> None:
     path = tmp_path / "watchlist.yaml"
     original = (
         "targets:\n"
@@ -693,7 +830,8 @@ def test_nested_scope_comments_fail_closed_without_data_loss(tmp_path: Path) -> 
         "    url: https://example.invalid/one\n"
         "    label: One\n"
         "    discovery_scope:\n"
-        "      from_url: https://example.invalid/from # keep\n"
+        "      from_url: https://example.invalid/from" + comment
+        + "\n# Document footer\n"
     )
     path.write_text(original, encoding="utf-8")
     service = WatchlistService(path)

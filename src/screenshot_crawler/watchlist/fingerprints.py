@@ -51,6 +51,18 @@ def normalized_work_configuration(
         value = target_scope_definition(target)
         if include_archive_order:
             value["archive_order"] = target.archive_order
+            # Segment placement is work ordering metadata.  Keep it out of
+            # target_scope_definition/target_scope_fingerprint so changing
+            # archive layout never invalidates a site's Full listing proof.
+            if target.archive_segments is not None:
+                value["archive_segments"] = [
+                    {
+                        "order": segment.order,
+                        "start_external_id": segment.start_external_id,
+                        "end_external_id": segment.end_external_id,
+                    }
+                    for segment in target.archive_segments
+                ]
         normalized.append(value)
     return sorted(normalized, key=lambda value: str(value["key"]))
 

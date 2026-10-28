@@ -384,9 +384,20 @@ CrawlerのZIPでは、Watchlistの同じ`work_key`に複数key/siteを明示し�
 予約番号を保持し、担当外の有償話は番号を消費しない。`enabled: false`はDiscoveryの
 実行設定であり、担当範囲や番号を変えない。
 
-When every key omits `archive_order`, existing site-local naming is retained. Partial
-ordering, duplicate orders, unknown positions, and unsynchronized scope remain
-fail-closed. Batch uses the current pure naming plan for new candidates. Existing ZIP
+For an interleaved replacement Work, optional `archive_segments` replaces
+archive_order on every key. Each segment has a globally unique positive order
+and optional oldest-first inclusive start_external_id/end_external_id, resolved
+inside its own site/key. Segments concatenate by order and enabled Sources by
+display_position; every enabled Source must be placed once. Missing/disabled
+anchors, unknown/duplicate positions, overlap or unplaced rows fail closed even
+for provisional numbering. Empty segment lists permit fully excluded keys.
+Existing ZIPs are not renamed by editing or Full; use audit/renumber separately.
+
+When every key omits both `archive_order` and `archive_segments`, existing site-local naming is retained.
+Partial or duplicate ordering configuration fails closed. Legacy provisional
+numbering keeps its deterministic fallback for unknown positions; segment mode
+requires resolved placement. There is no global scope-sync/fresh-Full gate.
+Batch uses the current pure naming plan for new candidates. Existing ZIP
 stems, historical status mismatches, and ambiguous old Artifact records are inspected
 only by the read-only `scripts/check_archives.py` command. Batch does not traverse
 historical ZIP/status files at planning, execution, or replanning. The candidate ZIP

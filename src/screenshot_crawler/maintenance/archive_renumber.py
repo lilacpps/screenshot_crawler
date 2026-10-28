@@ -208,7 +208,10 @@ def build_archive_renumber_plan(
     opted_work_keys = {
         current_work_key
         for current_work_key, targets in targets_by_work.items()
-        if any(target.archive_order is not None for target in targets)
+        if any(
+            target.archive_order is not None or target.archive_segments is not None
+            for target in targets
+        )
     }
     selected_work_keys = {
         work.work_key
@@ -220,7 +223,9 @@ def build_archive_renumber_plan(
         current_work_key
         for current_work_key, targets in targets_by_work.items()
         if any(
-            target.archive_order is not None or target.discovery_scope is not None
+            target.archive_order is not None
+            or target.archive_segments is not None
+            or target.discovery_scope is not None
             for target in targets
         )
     }
@@ -318,7 +323,9 @@ def build_archive_renumber_plan(
                         )
                     else:
                         if any(
-                            target.archive_order is not None for target in current_targets
+                            target.archive_order is not None
+                            or target.archive_segments is not None
+                            for target in current_targets
                         ):
                             raise ArchiveOrderPlanningError(
                                 "Watchlist archive_order changed; create a new complete preview"

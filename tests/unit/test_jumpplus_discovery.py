@@ -118,6 +118,14 @@ def test_jumpplus_range_order_validation_is_latest_first() -> None:
         adapter._validate_range_order(list(reversed(ranges)))
 
 
+@pytest.mark.parametrize("labels", [["3 - 2", "2 - 1"], ["3 - 2", "0"]])
+def test_jumpplus_range_order_rejects_overlap_or_gap(labels) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    ranges = adapter._ranges({"range_controls": [{"text": label} for label in labels]})
+    with pytest.raises(DiscoveryIncompleteError, match="overlap or have a gap"):
+        adapter._validate_complete_range_order(ranges)
+
+
 def test_jumpplus_scope_validation_covers_both_dom_variants() -> None:
     base = {
         "series_ids": ["series-1"],
@@ -343,6 +351,115 @@ def test_jumpplus_bounded_scope_rejects_invalid_or_missing_boundaries(scope) -> 
 
 def test_jumpplus_bounded_capability_is_explicit() -> None:
     assert JumpPlusDiscoveryAdapter.supports_bounded_discovery is True
+    assert JumpPlusDiscoveryAdapter.supports_exclusion_only_scope is True
+    assert JumpPlusDiscoveryAdapter.supports_exclusion_replay is True
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_complete_listing_preview_has_positions_and_digest(monkeypatch) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    records = [
+        _jump_record("300"),
+        _jump_record("200"),
+        _jump_record("100"),
+    ]
+    from dataclasses import replace
+
+    records = [
+        replace(
+            record,
+            source=replace(record.source, global_display_position=len(records) - index),
+        )
+        for index, record in enumerate(records)
+    ]
+
+    async def load_complete(*_args):
+        return "series-1", records
+
+    monkeypatch.setattr(adapter, "_load_complete_records", load_complete)
+    preview = await adapter.preview_complete_listing(
+        _FakePage(), _jump_target(None)
+    )
+    assert preview.ready
+    assert preview.listing_identity == "jumpplus-series:series-1"
+    assert [row.external_id for row in preview.rows] == ["300", "200", "100"]
+    assert [row.site_position for row in preview.rows] == [3, 2, 1]
+    assert preview.digest
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_exclusion_preview_replays_once_without_rereading(monkeypatch) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    source_records = [_jump_record("300"), _jump_record("200"), _jump_record("100")]
+    from dataclasses import replace
+
+    records = [
+        replace(
+            record,
+            source=replace(record.source, global_display_position=len(source_records) - index),
+        )
+        for index, record in enumerate(source_records)
+    ]
+    calls = 0
+
+    async def load_complete(*_args):
+        nonlocal calls
+        calls += 1
+        return "series-1", records
+
+    monkeypatch.setattr(adapter, "_load_complete_records", load_complete)
+    page = _FakePage()
+    target = _jump_target(DiscoveryScope(excluded_external_ids=("200",)))
+    await adapter.prepare_exclusion_preview(page, target)
+    observed = [record async for record in adapter.iter_records(page, target, "full")]
+    assert calls == 1
+    assert [record.source.external_id for record in observed] == ["300", "100"]
+
+
+def test_jumpplus_unknown_exclusion_is_rejected_before_selection() -> None:
+    records = [_jump_record("300"), _jump_record("200")]
+    with pytest.raises(DiscoveryIncompleteError, match="excluded episode"):
+        JumpPlusDiscoveryAdapter._apply_discovery_scope(
+            records, DiscoveryScope(excluded_external_ids=("999",))
+        )
+
+
+def test_jumpplus_exclusion_outside_boundaries_is_rejected() -> None:
+    records = [_jump_record("300"), _jump_record("200"), _jump_record("100")]
+    with pytest.raises(DiscoveryIncompleteError, match="inside"):
+        JumpPlusDiscoveryAdapter._apply_discovery_scope(
+            records,
+            DiscoveryScope(
+                from_url="https://shonenjumpplus.com/episode/200",
+                through_url="https://shonenjumpplus.com/episode/200",
+                excluded_external_ids=("300",),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_exclusion_replay_requires_fresh_matching_preparation(monkeypatch) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    records = [_jump_record("200"), _jump_record("100")]
+    from dataclasses import replace
+    records = [
+        replace(
+            record,
+            source=replace(record.source, global_display_position=len(records) - index),
+        )
+        for index, record in enumerate(records)
+    ]
+    async def load_complete(*_args):
+        return "series-1", records
+    monkeypatch.setattr(adapter, "_load_complete_records", load_complete)
+    page = _FakePage()
+    target = _jump_target(DiscoveryScope(excluded_external_ids=("200",)))
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [record async for record in adapter.iter_records(page, target, "full")]
+    await adapter.prepare_exclusion_preview(page, target)
+    adapter._exclusion_preview_cache["expires_at"] = 0
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [record async for record in adapter.iter_records(page, target, "full")]
 
 
 @pytest.mark.asyncio
@@ -375,6 +492,21 @@ async def test_jumpplus_bounded_buffers_all_ranges_before_yielding(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_jumpplus_complete_listing_rejects_cross_range_identity_overlap(monkeypatch) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshots = [_jump_snapshot(["3", "2"]), _jump_snapshot(["2"])]
+    ranges = [
+        JumpPlusRange("3 - 2", 0, 3, 2),
+        JumpPlusRange("1", 1, 1, 1),
+    ]
+    _configure_jumpplus_traversal(monkeypatch, adapter, page, snapshots, ranges)
+
+    with pytest.raises(DiscoveryIncompleteError, match="multiple ranges"):
+        await adapter._load_complete_records(page, _jump_target(None))
+
+
+@pytest.mark.asyncio
 async def test_jumpplus_bounded_preserves_global_positions_from_complete_identity_order(
     monkeypatch,
 ) -> None:
@@ -404,13 +536,17 @@ async def test_jumpplus_bounded_preserves_global_positions_from_complete_identit
 
 
 @pytest.mark.asyncio
-async def test_jumpplus_special_chapter_keeps_global_position_without_label_inference(
-    monkeypatch,
+@pytest.mark.parametrize("labels", [
+    ["第4話", "第3話", "番外編", "第2話", "第1話"],
+    ["第4話", "第3話", "第2話", "第1話", "第0話"],
+    ["第3話", "第2話 前編", "第2話 後編", "第1話 前編", "第1話 後編"],
+])
+async def test_jumpplus_chapters_keep_global_positions_without_label_inference(
+    monkeypatch, labels,
 ) -> None:
     adapter = JumpPlusDiscoveryAdapter()
     page = _FakePage()
     snapshot = _jump_snapshot(["5004", "5003", "5000", "5002", "5001"])
-    labels = ["第4話", "第3話", "番外編", "第2話", "第1話"]
     for row, label in zip(snapshot["episodes"], labels, strict=True):
         row["title_text"] = label
     ranges = [JumpPlusRange("5 - 1", 0, 5, 1)]
@@ -430,7 +566,7 @@ async def test_jumpplus_special_chapter_keeps_global_position_without_label_infe
         )
     ]
 
-    assert [record.item.order_label for record in observed] == ["第3話", "番外編", "第2話"]
+    assert [record.item.order_label for record in observed] == labels[1:4]
     assert [record.source.global_display_position for record in observed] == [4, 3, 2]
 
 
@@ -467,6 +603,24 @@ async def test_jumpplus_bounded_later_range_failure_yields_no_records(
             ),
             mode,
         ):
+            observed.append(record)
+    assert observed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ids,error", [
+    (["2", "2"], "duplicate episode identities"),
+    (["2"], "has 1 rows; expected 2"),
+])
+async def test_jumpplus_invalid_range_rows_fail_closed(monkeypatch, ids, error) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshot = _jump_snapshot(ids)
+    ranges = [JumpPlusRange("2 - 1", 0, 2, 1)]
+    _configure_jumpplus_traversal(monkeypatch, adapter, page, [snapshot], ranges)
+    observed: list[object] = []
+    with pytest.raises(DiscoveryIncompleteError, match=error):
+        async for record in adapter.iter_records(page, _jump_target(None), "full"):
             observed.append(record)
     assert observed == []
 

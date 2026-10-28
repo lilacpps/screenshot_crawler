@@ -41,6 +41,17 @@ unsupported.
 - PNG/JPEG/WebP出力
 - Windowsを主対象
 
+## Watchlist Work editing extension (2026-10-27)
+
+The GUI supports new registrations, post-registration scopes and explicit
+cross-site replacements before Full Discovery. Save writes only Watchlist;
+the user can approve Full once afterward. The operator selects both native
+intervals; Items/Source ownership/history are never merged or transferred.
+Optional per-target archive_segments orders site-native intervals within a Work,
+mutually exclusive with legacy archive_order. Segment layouts require exactly
+one placement per enabled Source and fail closed on unresolved anchors. Existing
+ZIPs remain untouched. See DISCOVERY_AND_BATCH.md for schema and save semantics.
+
 ## 3. Browser Session Model
 
 Real-site automationの標準は、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する方式**とする。

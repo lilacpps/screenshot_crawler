@@ -15,6 +15,7 @@ from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -219,6 +220,9 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate the complete Zeblack chapter list in canonical order."""
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+    _EXCLUSION_PREVIEW_TTL_SECONDS = 30.0
 
     async def iter_records(
         self,
@@ -232,6 +236,39 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(
                 "Watchlist target must be a strict Zeblack chapter-list URL"
             )
+
+        cached = getattr(self, "_exclusion_preview_cache", None)
+        cache_key = self._exclusion_cache_key(page, target)
+        if (
+            cached is not None
+            and cached["key"] == cache_key
+            and time.monotonic() <= cached["expires_at"]
+        ):
+            self._exclusion_preview_cache = None
+            records = list(cached["records"])
+            if target.discovery_scope is not None:
+                records = self._apply_discovery_scope(
+                    records, target_identity.title_id, target.discovery_scope
+                )
+            if mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=list(cached["all_records"]),
+                    selected_records=records,
+                    listing_identity=cached["listing_identity"],
+                )
+            for record in records:
+                yield record
+            return
+        if (
+            target.discovery_scope is not None
+            and target.discovery_scope.excluded_external_ids
+        ):
+            self._exclusion_preview_cache = None
+            raise DiscoveryIncompleteError(
+                "Zeblack exclusion Discovery requires a fresh prepared complete listing"
+            )
+        self._exclusion_preview_cache = None
 
         try:
             dom_rows, protobuf_records = await self._load_listing(page, target_identity)
@@ -263,6 +300,129 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
         # records as it receives them.
         for record in records:
             yield record
+
+    async def preview_complete_listing(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Read the complete chapter listing without Catalog side effects."""
+
+        self._exclusion_preview_cache = None
+        target_identity = parse_zeblack_chapter_list_url(target.url)
+        if target_identity is None:
+            raise DiscoveryIncompleteError(
+                "Watchlist target must be a strict Zeblack chapter-list URL"
+            )
+        try:
+            dom_rows, protobuf_records = await self._load_listing(page, target_identity)
+            records = self._build_records(
+                dom_rows,
+                protobuf_records,
+                target=target,
+                target_identity=target_identity,
+            )
+        except DiscoveryIncompleteError:
+            raise
+        except (PlaywrightTimeoutError, TimeoutError, ZeblackProtobufError) as exc:
+            raise DiscoveryIncompleteError("Zeblack chapter listing is incomplete") from exc
+
+        listing_identity = f"zeblack-title:{target_identity.title_id}"
+        rows = tuple(
+            ListingRow(
+                external_id=record.source.external_id,
+                url=record.source.url,
+                site_position=record.source.global_display_position or 0,
+                display_title=record.item.order_label or "",
+                access_observation=record.source.access_mode,
+                listing_identity=listing_identity,
+            )
+            for record in records
+        )
+        if any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError(
+                "Zeblack complete listing has no authoritative positions"
+            )
+        return ListingPreview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            listing_identity=listing_identity,
+            rows=rows,
+            complete=True,
+            observed_at=datetime.now(UTC),
+            digest=listing_digest(listing_identity, rows),
+        )
+
+    async def prepare_exclusion_preview(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Validate and bind one listing for the immediately following Discovery."""
+
+        self._exclusion_preview_cache = None
+        target_identity = parse_zeblack_chapter_list_url(target.url)
+        if target_identity is None:
+            raise DiscoveryIncompleteError(
+                "Watchlist target must be a strict Zeblack chapter-list URL"
+            )
+        try:
+            dom_rows, protobuf_records = await self._load_listing(page, target_identity)
+            records = self._build_records(
+                dom_rows,
+                protobuf_records,
+                target=target,
+                target_identity=target_identity,
+            )
+        except DiscoveryIncompleteError:
+            raise
+        except (PlaywrightTimeoutError, TimeoutError, ZeblackProtobufError) as exc:
+            raise DiscoveryIncompleteError("Zeblack chapter listing is incomplete") from exc
+
+        listing_identity = f"zeblack-title:{target_identity.title_id}"
+        rows = tuple(
+            ListingRow(
+                external_id=record.source.external_id,
+                url=record.source.url,
+                site_position=record.source.global_display_position or 0,
+                display_title=record.item.order_label or "",
+                access_observation=record.source.access_mode,
+                listing_identity=listing_identity,
+            )
+            for record in records
+        )
+        if any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError(
+                "Zeblack complete listing has no authoritative positions"
+            )
+        self._exclusion_preview_cache = {
+            "key": self._exclusion_cache_key(page, target),
+            "records": records,
+            "all_records": records,
+            "listing_identity": listing_identity,
+            "expires_at": time.monotonic() + self._EXCLUSION_PREVIEW_TTL_SECONDS,
+        }
+        return ListingPreview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            listing_identity=listing_identity,
+            rows=rows,
+            complete=True,
+            observed_at=datetime.now(UTC),
+            digest=listing_digest(listing_identity, rows),
+        )
+
+    @staticmethod
+    def _exclusion_cache_key(page: Page, target: WatchlistTarget) -> tuple[object, ...]:
+        scope = target.discovery_scope
+        return (
+            id(page),
+            target.site,
+            target.key,
+            target.work_key,
+            target.url,
+            None if scope is None else scope.from_url,
+            None if scope is None else scope.through_url,
+            () if scope is None else tuple(sorted(scope.excluded_external_ids)),
+        )
 
     async def _load_listing(
         self, page: Page, target_identity: ZeblackListIdentity
@@ -435,8 +595,21 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
     def _apply_discovery_scope(
         records: list[DiscoveredRecord], title_id: str, scope: DiscoveryScope
     ) -> list[DiscoveredRecord]:
-        if scope.from_url is None and scope.through_url is None:
+        if (
+            scope.from_url is None
+            and scope.through_url is None
+            and not scope.excluded_external_ids
+        ):
             raise DiscoveryIncompleteError("Zeblack bounded Discovery scope has no boundary")
+        record_indices = {
+            record.source.external_id: index for index, record in enumerate(records)
+        }
+        unknown_exclusions = set(scope.excluded_external_ids) - set(record_indices)
+        if unknown_exclusions:
+            raise DiscoveryIncompleteError(
+                "Zeblack excluded chapter was not found: "
+                + ", ".join(sorted(unknown_exclusions)[:5])
+            )
         indices: dict[str, int] = {}
         for name, boundary_url in (
             ("from_url", scope.from_url),
@@ -449,14 +622,7 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError(
                     f"Zeblack {name} boundary is not in the target title"
                 )
-            index = next(
-                (
-                    position
-                    for position, record in enumerate(records)
-                    if record.source.external_id == boundary.chapter_id
-                ),
-                None,
-            )
+            index = record_indices.get(boundary.chapter_id)
             if index is None:
                 raise DiscoveryIncompleteError(
                     f"Zeblack {name} boundary chapter was not found"
@@ -466,7 +632,16 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
         through_index = indices.get("through_url", len(records) - 1)
         if from_index > through_index:
             raise DiscoveryIncompleteError("Zeblack bounded Discovery boundaries are reversed")
-        return records[from_index : through_index + 1]
+        excluded = set(scope.excluded_external_ids)
+        if any(
+            not (from_index <= record_indices[external_id] <= through_index)
+            for external_id in excluded
+        ):
+            raise DiscoveryIncompleteError(
+                "Zeblack excluded chapters must fall inside the inclusive discovery range"
+            )
+        selected = records[from_index : through_index + 1]
+        return [record for record in selected if record.source.external_id not in excluded]
 
 
 __all__ = [

@@ -31,3 +31,27 @@ sites:
     stop_on_http_429: true
     stop_on_challenge: true
     stop_on_captcha: true
+
+  hanayume:
+    page_turn_delay_ms: 1500
+    inter_candidate_delay_ms: 5000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
+
+  younganimal:
+    page_turn_delay_ms: 1500
+    inter_candidate_delay_ms: 5000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
+
+  kadocomi:
+    page_turn_delay_ms: 1000
+    inter_candidate_delay_ms: 3000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
