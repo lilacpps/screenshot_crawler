@@ -746,3 +746,34 @@ tickets, or access resources. Archive-number predictions require an immutable
 source-joined Artifact/collision snapshot and the shared full-stem naming
 primitive; missing or ambiguous facts are reported as UNKNOWN.
 
+## GUI direct execution with configuration-bound requests (2026-10-29)
+
+The operator does not need the detailed candidate-confirmation screen. Normal
+Discover, Batch Run and Grant-only therefore enqueue directly. The GUI stops
+rebuilding Inventory and calculating candidate plans for confirmation; the new
+worker path also removes the repeated preview plan and whole-Catalog file hash.
+Grant-only retains a visible consumption warning. Watchlist-save Full retains
+one compact confirmation showing target keys and warnings.
+
+New requests carry an explicit versioned input-fingerprint kind, covering selected
+keys and their sites, per-site Resources, mode, limit, paths, Watchlist/runtime/env
+contents and effective endpoints. Only hashes of sensitive inputs participate
+in the fingerprint; raw environment secrets are not written to job records.
+The worker checks configuration drift and all key/site/Resource mappings while
+holding the Catalog job lock. Unknown versions fail closed. Old persisted requests
+retain their original plan-fingerprint checks without a management schema change.
+
+Catalog contents deliberately do not belong to the new input fingerprint:
+no candidate-count promise is being confirmed. A queued job uses the latest
+Catalog and the existing common CLI Planner/Executor checks. Earlier jobs may
+change Catalog without forcing the next job to stop as stale. Scope, ownership,
+access, quota, numbering, output collision and cancellation protections remain
+in their existing shared execution path. Site tasks continue sequentially, so a
+later site's planning failure can follow an earlier successful site; job events
+preserve those results. Configuration changes still stop a queued request and
+are never silently accepted or retried.
+
+This trades a frozen preview of candidate counts for shorter startup and useful
+serial queues. It does not remove the actual Batch plan, make jobs parallel,
+modify site pacing, or apply Watchlist scope changes to Catalog before Discovery.
+

@@ -2,8 +2,8 @@
 
 Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とWatchlistを表示し、
 チェックしたWatchlist keyだけを実行対象に
-Discover / Batch Run / Grant-onlyできます。確認ダイアログは実行前に表示され、
-Grant-onlyでは権利・チケット・Quotaを消費する可能性を明示します。
+Discover / Batch Run / Grant-onlyできます。通常の実行は詳細確認画面を出さずジョブへ登録します。
+Grant-onlyでは操作欄に権利・チケット・Quotaを消費する可能性を明示します。
 
 ## インストール・起動
 
@@ -166,21 +166,24 @@ pipのないuv環境では `uv pip install --python .venv/Scripts/python.exe -e 
 ## 選択実行
 
 keyを1つ以上チェックすると下部のDiscover、Batch Run、Grant-onlyが有効になります。
-検索・表示モード・フォーカスを変えても選択集合はkey単位で保持されます。確認画面には
-対象サイト・作品・key、候補数、最大件数、Quota、Resource、スキップ理由、警告と
-Plan fingerprintが表示されます。空選択はサイト全件として扱いません。
+検索・表示モード・フォーカスを変えても選択集合はkey単位で保持されます。
+ボタンを押すと詳細確認画面を出さず、選択したkeyでジョブを登録します。
+候補数・Quota・スキップ理由の事前計算と表示は行いません。実行結果はモニターとジョブ履歴で確認します。
+空選択はサイト全件として扱いません。Watchlist保存後だけは、対象keyと警告を示す
+「Full Discoveryを実行しますか？」のYes/No確認を一度表示します。
 下部の最大件数は0（無制限）または候補数の上限を指定できます。Grant-onlyのResourceは
 選択中のサイトごとに表示されるセレクタで`all`またはサイト対応Resourceを選びます。
 key追加や再読込でもサイト別の指定値を保持します。以前のResourceが未対応になった場合は
-旧値を表示して確認を停止し、利用者が対応Resourceを明示的に選び直すまで実行しません。
+旧値を表示してジョブ登録を停止し、利用者が対応Resourceを明示的に選び直すまで実行しません。
 多数サイトのResource欄は横スクロールできます。
 
-確認後は独立したJobとして管理DBへ登録し、専用workerプロセスが既存CLIを起動します。
-複数サイトはサイトごとに順番に処理し、workerがCatalog job lockを取得したまま全サイトを再Planし、確認時fingerprintと
-一致することを確認してからサイトへ接続します。CatalogやWatchlistに重大な差異、
-未知key、未対応Resource、出力衝突がある場合はブラウザ接続前に停止します。
-入力ファイルのfingerprintは保守的に照合します。先行ジョブなどがCatalogを更新した場合も、
-待機ジョブの確認内容との差異で停止することがあります。その場合は履歴から再計画します。
+独立したJobとして管理DBへ登録し、専用workerプロセスが既存CLIの共通処理を呼びます。
+起動時のInventory再構築、Catalog全体のハッシュ計算、GUI独自の候補計算は省略します。
+複数サイトは順番に処理し、workerがCatalog job lock下で選択key・サイト・Resourceと、
+Watchlist・runtime・環境設定・接続先・実行オプションのfingerprintを検証します。
+待機中に設定が変わった場合は停止します。先行ジョブによるCatalogの更新だけでは停止せず、
+最新Catalogを使って共通CLIが候補を計算します。範囲・権利・Quota・採番・保存先衝突の
+安全検査は従来どおり実行時に行います。新方式導入前の待機ジョブは従来の厳密な計画検証を続けます。
 
 CLIからは次のようにkeyを繰り返し指定できます。
 
@@ -204,13 +207,20 @@ site/key/item/source、Resource消費のyes/no/unknownも表示されます。�
 イベントの末尾が未完成でも次回pollで無視して再読込します。
 
 実行中は「停止要求」で協調停止を依頼します。候補間やサイト境界で停止し、処理中の
-Resource消費を強制中断しません。強制停止は別の非常操作で、状態は`interrupted`、
+Resource消費を強制中断しません。
+メイン画面右上の赤い「緊急停止」は、確認なしで実行中workerを強制終了します。
+画面をスクロールしてもボタンは上部に残り、実行中だけ有効になります。
+待機ジョブの自動開始も止めます。待機ジョブ自体は取消せず、履歴から明示的に開始できます。
+共有Chromeは終了しません。停止したジョブの状態は`interrupted`、
 消費状態は不明として自動再試行しません。GUI再起動時にqueued Jobは自動実行せず、
 前回workerの同一性を確認できない実行中Jobも再接続・再実行しません。
 再起動後に残ったqueued Jobは自動開始せず、履歴画面の「選択ジョブを開始」で明示的に開始します。
 workerはPIDだけでなくtoken・OS開始identity・heartbeatを記録します。heartbeatが欠落・古い場合は
 「要確認」として二重起動を許可せず、実行結果を成功へ補正しません。
-終了済みJobの「最新状態で再計画」は現在のCatalog/Watchlistを再Previewして新しいJobを作成します。
+緊急停止が失敗した場合は停止未確認と表示し、実行中ならボタンから再試行できます。
+子workerの終了を確認できない場合は、新規実行を停止したままにします。
+ジョブ画面の「強制終了（非常）」は、従来どおり確認付きの別経路として利用できます。
+終了済みJobの「最新状態で再計画」は現在の選択と設定で新しいJobを作成します。
 古い候補をそのまま再利用しません。
 
 管理DBはschema v1です。未知のschemaや破損DBを自動移行・上書きしません。
@@ -220,7 +230,7 @@ workerはPIDだけでなくtoken・OS開始identity・heartbeatを記録しま�
 
 ## P2/P3の制約
 
-実行前確認は読み取り専用です。実行開始後は既存のCrawler、Chrome/CDP、Catalog job lock、
+実行要求の作成は設定を読み取るだけです。実行開始後は既存のCrawler、Chrome/CDP、Catalog job lock、
 Site Policyに従ってworkerを動かします。management DBはCatalogとは別に管理されます。
 Rename and scheduler remain outside the P2/P3 execution contract. Watchlist編集
 and Scope apply are provided by the separate Watchlist management section above.
@@ -249,8 +259,8 @@ WAL形式のCatalogはP1ではエラーにします。SQLiteはread-only接続�
 - [作品詳細](gui-screenshots/work-detail.png)
 - [話数詳細](gui-screenshots/item-detail.png)
 - [P2 選択実行](gui-screenshots/p2-execution.png)
-- [P2 実行前確認](gui-screenshots/p2-confirmation.png)
-- [P2 Grant-only確認](gui-screenshots/p2-grant-confirmation.png)
+- [旧P2 実行前確認（現行の通常起動では省略）](gui-screenshots/p2-confirmation.png)
+- [旧P2 Grant-only確認（現行は操作欄に注意表示）](gui-screenshots/p2-grant-confirmation.png)
 - [P3 ジョブ履歴](gui-screenshots/p3-jobs.png)
 - [P3 中断・要確認](gui-screenshots/p3-interrupted.png)
 

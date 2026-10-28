@@ -6,12 +6,15 @@
 Qt-independent immutable inventory projections and a dedicated SQLite read-only
 snapshot reader. Existing Watchlist parsing, Site Policies, ScopeReconciler
 (through in-memory read-only facades) and archive-order planning are reused.
-P1 inventory reads remain strictly read-only. P2 adds a Qt-independent preview and
-selected-key execution request; P3 queues each confirmed request in a separate,
+P1 inventory reads remain strictly read-only. Selected execution uses a lightweight
+configuration-bound request without a candidate preview; P3 queues each request in a separate,
 versioned `management.sqlite` and runs it in one serial worker subprocess. The
 worker writes structured JSONL events while the GUI imports them idempotently;
-Catalog job locks, Scope/Quota/ZIP preflight, and fail-closed drift checks remain
-authoritative. Cooperative stop, force interruption with unknown consumption,
+Catalog job locks, shared CLI Scope/Quota/ZIP checks, and fail-closed configuration
+drift checks remain authoritative. New requests do not hash Catalog contents or
+rebuild Inventory at launch: the shared CLI plans from the latest Catalog under
+the lock. Previously persisted plan-bound requests retain their legacy validation.
+Cooperative stop, force interruption with unknown consumption,
 heartbeat/OS-start identity checks, and explicit post-restart Resume are distinct
 operations. See [GUI contract](GUI_INVENTORY.md),
 [Windows launch instructions](GUI_README.md), and
