@@ -1,5 +1,46 @@
 # Comic DAYS
 
+## Dummy/front prefix normalization (2026-10-28)
+
+The direct Batch for item/source 22405, episode `14079602755444925666`, stopped
+with `Comic DAYS viewer normalization exceeded its time bound`. Its metric run
+`1823577ac42c43cf98693ea54517038a` showed no 403/429/5xx, zero retries and no
+resource consumption. The issue was a supported body/tail preceded by an
+unrecognized initial prefix, rather than a Watchlist/Discovery change.
+
+Read-only live DOM observation found area 0 empty dummy, area 1 one full
+front-link, body areas 2..23, half back-link 24, ad 25 and ordinary Colophon 26.
+At slider 1/26 the old hook requested body area 2 while no body area met the
+viewport threshold. A normal forward action reached slider 2 and ready areas
+2/3; the next reached slider 4 and ready areas 4/5.
+
+The new `dummy-front-double` mode requires that exact prefix plus an even,
+contiguous body-shell run, strict half-back shape, known ad/Colophon,
+sliderLast equal to the Colophon index and area count equal to sliderLast+1.
+The hook reports a front prefix at slider 1; initialization uses the existing
+validated forward control once and accepts slider 2 only with two consecutive
+render-ready body canvases. The structural first body index is 2 even after
+lazy unmount. Existing leading-area-tail selection and AD/END checks are kept.
+No time bound, access rule, provenance check, capture mode or output rule changed.
+
+Post-fix production direct initialization on the same episode completed in
+1.756 seconds. Bounded metadata-only traversal observed body areas 2..23 once
+in order at sliders 2,4,..22, AD at slider 24 and END at slider 26.
+`resource_consumed=false`. Dedicated shared-Chrome pages were closed afterward;
+no ticket/purchase action, image capture, Catalog/Watchlist write or ZIP change
+was performed. Normal Batch download/packaging was not run against operational
+data. Artificial fixtures cover prefix skip, late-slider rewind, lazy unmount,
+and malformed dummy/front/body/half-back variants with zero unsafe advances.
+
+Validation: Comic DAYS native capture/access/Batch and artificial viewer/Ticket
+integration group passed 218 cases. After adding late-slider cases and the final
+empty-dummy guard, the affected prefix/normalization/initialize browser group
+passed 27 cases (including the nine new variant cases), with zero skips.
+`ruff check src tests`, diff checks and independent final review passed. Full
+pytest and Research probes were not rerun for this site-local layout correction.
+Live verification covered initialization and metadata-only traversal; operational
+Batch capture/packaging remains to be retried by the operator.
+
 ## Work editor complete listing and exclusions (2026-10-28)
 
 The GUI's complete-listing preview now calls the same validated reader as normal

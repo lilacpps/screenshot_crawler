@@ -95,6 +95,16 @@ questionnaire/premium blocks, blank areas, dummy/front-link areas, and the
   the final structural body area may be a single content row before the
   full/half back-link pair; this exception does not relax ordinary spread
   validation.
+The `dummy-front-double` mode handles the separately observed leading-area tail
+with one empty dummy, one exact full front-link page, an even contiguous body
+run, one half back-link, ad and validated Colophon. Slider 1 is the prefix; one
+validated forward action reaches slider 2 and requires both first body canvases
+to be ready. The body starts at area 2 independently of lazy canvas mounts.
+Malformed prefixes/body shells/tails do not qualify. Subsequent body selection
+and AD/END use the existing leading-area-tail rules; no front-link is clicked.
+This corrected item 22405's normalization timeout: read-only shared-Chrome
+verification reached all 22 body areas and END without consuming a resource or
+writing images/Catalog/ZIP. See `note/08_comicdays.md` for the evidence bounds.
   A spread is ready only when every logically expected
 body area is visible and has exactly one render-ready canvas; a missing or
 hidden second area stays `LOADING`.

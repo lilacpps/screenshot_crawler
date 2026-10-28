@@ -720,7 +720,7 @@ class ComicDaysAdapter(SiteAdapter):
         state = await self._active_until(page, deadline)
         slider = self._valid_slider_state(state)
         front_prefix_mode = state.get("frontPrefixMode")
-        target_slider = {"dummy-single": 2, "two-front-double": 3}.get(front_prefix_mode)
+        target_slider = {"dummy-single": 2, "two-front-double": 3, "dummy-front-double": 2}.get(front_prefix_mode)
         if (
             slider is None
             or slider[0] != 1
@@ -828,6 +828,10 @@ class ComicDaysAdapter(SiteAdapter):
                 ) or (
                     state.get("frontPrefixMode") == "two-front-double"
                     and current == 3
+                    and front_prefix_advanced
+                ) or (
+                    state.get("frontPrefixMode") == "dummy-front-double"
+                    and current == 2
                     and front_prefix_advanced
                 ):
                     return
