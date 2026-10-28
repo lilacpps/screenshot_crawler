@@ -1,3 +1,16 @@
+## Comic DAYS initial dummy/front page (2026-10-28)
+
+Comic DAYS item 22405's site-local `dummy-front-double` normalization now skips
+one positively identified non-body prefix using the ordinary forward control,
+then requires the two first body canvases at slider 2. Access and shared Runner
+timeouts/capture/output remain unchanged. Read-only live traversal reached the
+22 body areas and END without consuming rights or writing operational output;
+see note/08_comicdays.md for structure, evidence, tests and limitations.
+Comic DAYS affected group: 218 passed; final prefix/normalization browser group:
+27 passed, zero skipped. Ruff/diff checks and independent review passed. Full
+pytest/Research and operational Batch download were not rerun for this site-local
+correction; current live initialization and metadata-only END traversal passed.
+
 ## Work-level registration, scope replacement and segment ordering (2026-10-27)
 
 The toolbar's `新規登録・範囲・置換` opens WorkEditorDialog. The existing
