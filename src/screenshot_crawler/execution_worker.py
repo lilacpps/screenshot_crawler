@@ -24,9 +24,10 @@ from screenshot_crawler.cli import (
     _discover_target,
     _discovery_registry,
 )
-from screenshot_crawler.management.execution import ExecutionPlanService
+from screenshot_crawler.management.execution import ExecutionPlanService, _effective_request_paths
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.jobs import sanitize_text
+from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -119,6 +120,75 @@ def _required_fingerprint(request: dict[str, object]) -> str:
     return expected
 
 
+def _fingerprint_kind(request: Mapping[str, object], expected: str) -> str:
+    """Return the explicit fingerprint version, preserving old jobs.
+
+    Requests written before ``fingerprint_kind`` have neither the field nor an
+    ``inputs-v1:`` prefix.  Those jobs must retain the old Catalog-plan
+    revalidation path.  A present but unknown version is unsafe to interpret.
+    """
+
+    kind = request.get("fingerprint_kind")
+    if kind is None:
+        return "inputs-v1" if expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX) else "legacy"
+    if not isinstance(kind, str) or kind not in {"inputs-v1", "legacy"}:
+        raise RuntimeError(f"unsupported execution fingerprint kind: {kind!r}")
+    if kind == "inputs-v1" and not expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX):
+        raise RuntimeError("inputs-v1 request has an invalid fingerprint")
+    if kind == "legacy" and expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX):
+        raise RuntimeError("legacy request has an inputs-v1 fingerprint")
+    return kind
+
+
+def _input_fingerprint(request: dict[str, object]) -> str:
+    """Recompute the lightweight request fingerprint in the worker process."""
+
+    values = dict(request)
+    # JobController keeps the transient explicit endpoint out of request.json
+    # and transports it through the child environment.
+    values["cdp_endpoint"] = _request_cdp_endpoint(request)
+    return ExecutionPlanService().input_fingerprint(values)
+
+
+def _validate_watchlist_targets(
+    request: Mapping[str, object], keys_by_site: Mapping[str, tuple[str, ...]]
+) -> dict[str, object]:
+    """Validate every selected key still belongs to its queued site."""
+
+    targets = {target.key: target for target in WatchlistService(
+        str(request["watchlist_path"])
+    ).list_targets()}
+    for site, keys in keys_by_site.items():
+        for key in keys:
+            target = targets.get(key)
+            if target is None:
+                raise RuntimeError(f"Watchlist key disappeared before execution: {key}")
+            if target.site != site:
+                raise RuntimeError(
+                    f"Watchlist key {key} changed site from {site} to {target.site}"
+                )
+    return targets
+
+
+def _validate_grant_resources(
+    resources: Mapping[str, str], policies
+) -> None:
+    """Check resource capability before entering any site operation."""
+
+    for site, resource in sorted(resources.items()):
+        try:
+            policy = policies.create(site)
+            if resource == "all":
+                if not policy.grant_only_supported_access_resources():
+                    raise SitePolicyError(
+                        f"Grant-only access resource is not implemented for site {site}"
+                    )
+            else:
+                policy.validate_grant_only_resource(resource)
+        except SitePolicyError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+
 def _validated_resources(
     request: dict[str, object], sites: Mapping[str, tuple[str, ...]]
 ) -> dict[str, str]:
@@ -179,8 +249,24 @@ async def _run(
     action = str(request["action"])
     if action not in {"discover", "batch", "grant_only"}:
         raise RuntimeError(f"unsupported execution action: {action}")
+    original_request = request
+    expected = _required_fingerprint(original_request)
+    fingerprint_kind = _fingerprint_kind(original_request, expected)
+    if fingerprint_kind == "inputs-v1":
+        # Normalize optional paths before signing and before constructing the
+        # CLI namespace, keeping defaults identical on both sides.
+        paths = _effective_request_paths(original_request)
+        request = {
+            **original_request,
+            "catalog_path": paths["catalog"],
+            "watchlist_path": paths["watchlist"],
+            "runtime_path": paths["runtime"],
+            "env_file": paths["env"],
+            "output_root": paths["output_root"],
+            "library_dir": paths["library_dir"],
+            "metrics_root": paths["metrics_root"],
+        }
     catalog_path = Path(str(request["catalog_path"]))
-    watchlist = WatchlistService(str(request["watchlist_path"]))
     policies = _batch_policy_registry()
     _selected, keys_by_site = _validated_selection(request)
     resources = _validated_resources(request, keys_by_site)
@@ -194,43 +280,54 @@ async def _run(
             emit("cancellation_checkpoint", reason="cooperative stop requested")
             raise WorkerCancelled("cooperative stop requested")
 
-    # All selected sites are planned before opening any BrowserSession.  The
-    # same lock remains held while the actual site operation runs.
+    # The same lock remains held while inputs are revalidated and the actual
+    # site operation runs.  New requests defer Catalog planning to the CLI
+    # path; legacy requests retain their historical preflight below.
     with CatalogService(catalog_path).job_lock():
+        if fingerprint_kind == "inputs-v1":
+            if _input_fingerprint(request) != expected:
+                raise RuntimeError("Watchlist/runtime/environment changed after confirmation")
+            targets = _validate_watchlist_targets(request, keys_by_site)
+            if _input_fingerprint(request) != expected:
+                raise RuntimeError("Watchlist/runtime/environment changed after confirmation")
+            if action == "discover" and not any(
+                targets[key].enabled for key in _selected
+            ):
+                raise RuntimeError("Discover requires at least one enabled Watchlist key")
+            if action == "grant_only":
+                _validate_grant_resources(resources, policies)
+        else:
+            targets = None
         if action == "discover":
             keys = _selected
             mode = str(request.get("mode") or "full")
             if mode not in {"full", "incremental"}:
                 raise RuntimeError(f"unsupported Discover mode: {mode}")
-            snapshot = InventoryService().load(
-                str(request["catalog_path"]),
-                str(request["watchlist_path"]),
-                runtime_path=str(request.get("runtime_path") or "crawler.yaml"),
-            )
-            preview = ExecutionPlanService().preview(
-                snapshot,
-                keys,
-                action="discover",
-                mode=mode,
-                runtime_path=str(request.get("runtime_path") or "crawler.yaml"),
-                env_file=str(request.get("env_file") or ".env"),
-                cdp_endpoint=_request_cdp_endpoint(request),
-                output_root=str(request.get("output_root") or ""),
-                library_dir=str(request.get("library_dir") or ""),
-                metrics_root=str(request.get("metrics_root") or ""),
-            )
-            expected = _required_fingerprint(request)
-            if preview.blockers or preview.fingerprint != expected:
-                raise RuntimeError("Catalog/Watchlist changed after confirmation")
-            targets = {target.key: target for target in watchlist.list_targets()}
+            if fingerprint_kind == "legacy":
+                snapshot = InventoryService().load(
+                    str(request["catalog_path"]),
+                    str(request["watchlist_path"]),
+                    runtime_path=str(request.get("runtime_path") or "crawler.yaml"),
+                )
+                preview = ExecutionPlanService().preview(
+                    snapshot,
+                    keys,
+                    action="discover",
+                    mode=mode,
+                    runtime_path=str(request.get("runtime_path") or "crawler.yaml"),
+                    env_file=str(request.get("env_file") or ".env"),
+                    cdp_endpoint=_request_cdp_endpoint(request),
+                    output_root=str(request.get("output_root") or ""),
+                    library_dir=str(request.get("library_dir") or ""),
+                    metrics_root=str(request.get("metrics_root") or ""),
+                )
+                if preview.blockers or preview.fingerprint != expected:
+                    raise RuntimeError("Catalog/Watchlist changed after confirmation")
+                targets = _validate_watchlist_targets(request, keys_by_site)
+            assert targets is not None
             selected = [targets.get(key) for key in keys]
             if any(target is None for target in selected):
                 raise RuntimeError("Catalog/Watchlist changed after confirmation")
-            for site, site_keys in keys_by_site.items():
-                for key in site_keys:
-                    target = targets.get(key)
-                    if target is None or target.site != site:
-                        raise RuntimeError("Catalog/Watchlist changed after confirmation")
             # Discovery has no Batch plan; verify identity and key ownership
             # for every target before the first CDP connection.
             if len({target.site for target in selected if target is not None}) == 0:
@@ -323,10 +420,10 @@ async def _run(
                 emit("task_finished", phase=f"discover:{mode}", result="succeeded", payload={"site": site})
             return
 
-        expected = _required_fingerprint(request)
-        current = _aggregate_fingerprint(request, policies)
-        if current != expected:
-            raise RuntimeError("Catalog/Watchlist changed after confirmation")
+        if fingerprint_kind == "legacy":
+            current = _aggregate_fingerprint(request, policies)
+            if current != expected:
+                raise RuntimeError("Catalog/Watchlist changed after confirmation")
         catalog = CatalogService(catalog_path)
         for site, keys in sorted(keys_by_site.items()):
             checkpoint()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,6 +38,30 @@ def _file_fingerprint(path: str | Path | None) -> tuple[str, str]:
     except OSError:
         digest = "missing"
     return resolved, digest
+
+
+def _path_identity(path: str | Path | None) -> str:
+    """Return a stable path identity without reading the file contents."""
+
+    if path is None:
+        return ""
+    return str(Path(path).resolve())
+
+
+def _effective_request_paths(values: Mapping[str, object]) -> dict[str, str]:
+    """Apply the same path defaults used by the worker's CLI namespace."""
+
+    catalog = Path(str(values.get("catalog_path") or "catalog.sqlite"))
+    root = catalog.parent
+    return {
+        "catalog": str(catalog),
+        "watchlist": str(values.get("watchlist_path") or "watchlist.yaml"),
+        "runtime": str(values.get("runtime_path") or "crawler.yaml"),
+        "env": str(values.get("env_file") or ".env"),
+        "output_root": str(values.get("output_root") or root / "output" / "batch"),
+        "library_dir": str(values.get("library_dir") or root / "output" / "Books"),
+        "metrics_root": str(values.get("metrics_root") or root / "output" / "metrics"),
+    }
 
 
 def _effective_endpoint_hash(
@@ -120,6 +144,9 @@ class JobExecutionRequest:
     library_dir: str | None = None
     metrics_root: str | None = None
     plan_fingerprint: str = ""
+    # ``None`` identifies requests persisted before the lightweight input
+    # fingerprint contract.  It is intentionally optional for legacy jobs.
+    fingerprint_kind: str | None = None
 
 
 def execution_request_payload(request: JobExecutionRequest) -> dict[str, object]:
@@ -182,6 +209,111 @@ class ExecutionPlanPreview:
 
 class ExecutionPlanService:
     """Build a read-only preview from a loaded InventorySnapshot."""
+
+    INPUT_FINGERPRINT_PREFIX = "inputs-v1:"
+
+    def input_fingerprint(
+        self, request: JobExecutionRequest | Mapping[str, object]
+    ) -> str:
+        """Fingerprint execution inputs without reading Catalog contents.
+
+        This is the lightweight confirmation contract used by the GUI queue.
+        Watchlist, runtime, and env contents are signed because they define
+        the request boundary; Catalog rows remain deliberately outside the
+        fingerprint so the worker can plan against the latest Catalog while
+        holding its job lock.
+        """
+
+        if isinstance(request, JobExecutionRequest):
+            values: Mapping[str, object] = asdict(request)
+        elif isinstance(request, Mapping):
+            values = request
+        else:
+            raise TypeError("request must be JobExecutionRequest or a mapping")
+
+        raw_selected = values.get("selected_keys")
+        if isinstance(raw_selected, (set, frozenset, tuple, list)):
+            selected = sorted(str(value) for value in raw_selected)
+        else:
+            raise TypeError("request selected_keys must be a sequence")
+        raw_sites = values.get("sites")
+        if not isinstance(raw_sites, (tuple, list, set, frozenset)):
+            raise TypeError("request sites must be a sequence")
+        sites = sorted(str(value) for value in raw_sites)
+
+        raw_by_site = values.get("keys_by_site")
+        if isinstance(raw_by_site, Mapping):
+            by_site_pairs = raw_by_site.items()
+        elif isinstance(raw_by_site, (tuple, list)):
+            by_site_pairs = raw_by_site
+        else:
+            raise TypeError("request keys_by_site must be a mapping or pairs")
+        keys_by_site: dict[str, list[str]] = {}
+        for pair in by_site_pairs:
+            if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+                raise ValueError("request keys_by_site contains an invalid entry")
+            site, raw_keys = pair
+            if not isinstance(site, str) or not isinstance(raw_keys, (tuple, list, set, frozenset)):
+                raise TypeError("request keys_by_site contains invalid values")
+            keys_by_site[site] = sorted(str(value) for value in raw_keys)
+
+        raw_resources = values.get("resources_by_site")
+        if isinstance(raw_resources, Mapping):
+            resources_by_site = {str(site): str(resource) for site, resource in raw_resources.items()}
+        elif isinstance(raw_resources, (tuple, list)):
+            resources_by_site = {
+                str(pair[0]): str(pair[1])
+                for pair in raw_resources
+                if isinstance(pair, (tuple, list)) and len(pair) == 2
+            }
+            if len(resources_by_site) != len(raw_resources):
+                raise TypeError("request resources_by_site contains an invalid entry")
+        else:
+            raise TypeError("request resources_by_site must be a mapping or pairs")
+
+        paths = _effective_request_paths(values)
+        env_file = paths["env"]
+        payload = {
+            "version": self.INPUT_FINGERPRINT_PREFIX.removesuffix(":"),
+            "action": values.get("action"),
+            "selected_keys": selected,
+            "sites": sites,
+            "keys_by_site": {
+                site: keys_by_site[site] for site in sorted(keys_by_site)
+            },
+            "mode": values.get("mode"),
+            "resource": values.get("resource"),
+            "resources_by_site": {
+                site: resources_by_site[site] for site in sorted(resources_by_site)
+            },
+            "limit": values.get("limit"),
+            "paths": {
+                # Catalog identity is signed, but its contents are intentionally
+                # excluded so current Catalog planning remains authoritative.
+                "catalog": _path_identity(paths["catalog"]),
+                "watchlist": _file_fingerprint(paths["watchlist"]),
+                "runtime": _file_fingerprint(paths["runtime"]),
+                "env": _file_fingerprint(env_file),
+                "output_root": _path_identity(paths["output_root"]),
+                "library_dir": _path_identity(paths["library_dir"]),
+                "metrics_root": _path_identity(paths["metrics_root"]),
+            },
+            "endpoint_identities": {
+                site: _effective_endpoint_hash(
+                    site,
+                    env_file=str(env_file) if env_file is not None else None,
+                    cdp_endpoint=(
+                        str(values["cdp_endpoint"])
+                        if values.get("cdp_endpoint") is not None else None
+                    ),
+                )
+                for site in sites
+            },
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return f"{self.INPUT_FINGERPRINT_PREFIX}{digest}"
 
     def preview(
         self,

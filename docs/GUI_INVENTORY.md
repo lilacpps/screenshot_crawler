@@ -1,7 +1,7 @@
 # Windows Inventory GUI (P0 / P1 / P2 / P3)
 
-P1 is a local PySide6 application. P2 selected execution uses a read-only
-preview and a separate Catalog-locked worker. P3 persists queue state in a
+P1 is a local PySide6 application. Selected execution uses a lightweight
+configuration-bound request and a separate Catalog-locked worker. P3 persists queue state in a
 separate management SQLite database and never auto-resumes unfinished jobs.
 
 ## Data contract (P0)
@@ -113,10 +113,38 @@ cannot become execution targets. Search matches title, label, key and site;
 matching descendants retain ancestors. Sorting is among siblings, numeric for
 counts; unsorted key order uses archive_order or Watchlist file order.
 
-Loading and all Policy/Scope calculations run on a worker. Snapshot replacement
+Inventory loading and its Policy/Scope calculations run on a worker. Snapshot replacement
 is atomic on the GUI thread. A failed reload keeps an explicitly stale display.
 The Jobs page is a separate history view; process launch, network, CDP and
-Catalog writes remain in the confirmed worker subprocess.
+Catalog writes remain in the worker subprocess.
+
+Discover, Batch Run and Grant-only buttons enqueue the selected keys without a
+detailed execution-preview dialog. Grant-only's consumption warning remains
+visible with its controls. Request creation reads only configuration inputs;
+neither the GUI nor the new-request worker rebuilds Inventory, hashes the Catalog
+file, or runs a duplicate candidate plan at launch. A versioned input fingerprint
+binds the selection, mode, limit, per-site Resource, paths, Watchlist, runtime,
+environment file and effective endpoints. The worker validates this fingerprint
+and every key/site/Resource mapping under the Catalog job lock before browser
+access. Shared CLI planning uses the latest Catalog and retains scope, access,
+quota, numbering, cancellation and output-collision guards. Catalog changes by
+earlier queued jobs alone do not invalidate new requests. Legacy persisted
+plan-bound requests keep their original verification path. Configuration changes
+while waiting still stop execution; there is no automatic retry.
+
+Watchlist-save Full Discovery retains one compact Yes/No confirmation with target
+keys and warnings. It does not compute or display candidate counts or a plan hash.
+
+The fixed main-window header exposes a red `緊急停止` button, enabled only for an
+active job. It calls the existing identity-checked `JobController.force_stop()`
+without confirmation. Session queue dispatch and pending automatic launch intents
+are cleared before termination, including on failure. Persisted queued jobs are
+retained for explicit start. Forced results remain interrupted/consumption-unknown;
+shared Chrome and existing output files are not closed or cleaned up. Stop failures
+remain visible and retryable while a job is active. An unverified surviving child
+continues to block new execution. Monitor/editor controls refresh after the call;
+passive-view failures cannot prevent termination. Jobs history retains its existing
+confirmation-based force-stop operation.
 
 ## Verification contract
 

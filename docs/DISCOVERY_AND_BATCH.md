@@ -2434,24 +2434,31 @@ crawl_pages          # page単位履歴が本当に必要になった場合
 ## 17. Windows GUI P2/P3 selected execution and job management
 
 The Windows GUI reuses this Discovery/Catalog/Batch contract through a
-Qt-independent execution preview. A checked Watchlist key set is passed to
+Qt-independent selected-execution request. A checked Watchlist key set is passed to
 `BatchPlanner.plan(selected_keys=...)` before candidate and quota allocation;
 `None` preserves legacy site-wide CLI behavior and an explicit empty set remains
 empty. Site-wide quota history and Work-wide archive numbering continue to use
 the complete Catalog state. Every resolver, deferred grant, additional-resource
 pass, and post-grant replan retains the same selector.
 
-Confirmed requests are persisted separately in versioned `management.sqlite` and
+Requested jobs are persisted separately in versioned `management.sqlite` and
 run in a single worker subprocess, one site at a time. The worker performs a
-fresh multi-site preflight under the existing Catalog lock before browser access,
-then appends structured candidate/resource/task events to JSONL. The GUI does
+lightweight multi-site configuration/selection validation under the existing Catalog
+lock before browser access. New GUI requests bind Watchlist/runtime/environment,
+effective endpoints and execution options, without hashing Catalog contents or
+rebuilding Inventory. They have no detailed candidate confirmation: common CLI
+planning uses the latest Catalog at execution and retains its existing guards.
+Earlier queued jobs may update Catalog without invalidating a request; changed
+configuration still stops it. Legacy persisted plan fingerprints retain their
+original preflight. Watchlist-save Full keeps one target/warning Yes/No prompt.
+The worker appends structured candidate/resource/task events to JSONL. The GUI does
 not parse stdout; it records the metrics writer's emitted path and sanitized
 stdout/stderr references. A stop request is cooperative at safe boundaries;
 force termination is `interrupted` with resource consumption unknown and never
 automatically retried. Incomplete event tails, management DB/event/log write
 failures, stale worker identity, or missing heartbeat are fail-closed. A queued
 job is never auto-started after GUI restart; Resume and rerun are explicit, with
-rerun creating a fresh preview from current Catalog and Watchlist.
+rerun creating a fresh request from current selection and configuration.
 
 The implementation, tests, Windows screenshot command, and non-live limitations
 are recorded in [P2/P3 PROGRESS](../runbooks/gui-execution-p2-p3/PROGRESS.md).

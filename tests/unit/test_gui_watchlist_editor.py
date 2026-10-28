@@ -464,7 +464,10 @@ def test_main_window_new_key_full_and_reopen_preserve_execution_checks(qt_app, t
     monkeypatch.setattr(window, "_show_execution_preview", lambda action, **kwargs: calls.append((action, kwargs)))
     window._run_editor_full(target.key)
     _wait(lambda: bool(calls))
-    assert calls == [("discover", {"selected_keys": {"new"}, "force_full": True})]
+    assert calls == [(
+        "discover",
+        {"selected_keys": {"new"}, "force_full": True, "after_watchlist_save": True},
+    )]
     assert window.model.selected_keys == {"one"}
     window.close()
 

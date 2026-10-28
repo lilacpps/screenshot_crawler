@@ -812,20 +812,11 @@ def test_worker_does_not_block_event_loop_and_closed_window_receives_no_result(q
     assert window.error_label.text() == old_error
 
 
-def test_selected_multi_site_preview_keeps_hidden_key_and_serializes_resources(
+def test_selected_multi_site_request_keeps_hidden_key_and_serializes_resources(
     qt_app, monkeypatch, tmp_path
 ):
-    from dataclasses import replace
-
-    from PySide6.QtCore import QObject, Signal
-    from PySide6.QtWidgets import QDialog, QTextEdit
-
-    from screenshot_crawler.gui.execution_dialog import ExecutionPreviewDialog
-    from screenshot_crawler.management.execution import (
-        ExecutionPlanPreview,
-        ExecutionSelection,
-        execution_request_payload,
-    )
+    """The lightweight path signs all selected sites without Catalog preview."""
+    from screenshot_crawler.management.execution import execution_request_payload
     from screenshot_crawler.management.inventory import InventoryService
     from tools.gui_sample import create_sample
 
@@ -836,102 +827,30 @@ def test_selected_multi_site_preview_keeps_hidden_key_and_serializes_resources(
     window.set_snapshot(snapshot)
     window.model.set_checked_keys({"sample-0000", "sample-0001"})
     window.model.set_search("sample-0001")
-    assert window.model.checked_keys == {"sample-0000", "sample-0001"}
-
-    def fake_preview(self, catalog_path, watchlist_path, policies, *, site,
-                     selected_keys, resource, **kwargs):
-        return ExecutionPlanPreview(
-            action="grant_only",
-            selection=ExecutionSelection.from_keys(selected_keys),
-            sites=(site,),
-            mode=None,
-            resource=resource,
-            limit=None,
-            candidate_count=1,
-            skipped_count=0,
-            skipped=(),
-            blockers=(),
-            warnings=(),
-            fingerprint=site,
-            resources_by_site=((site, resource or "all"),),
-            work_names=(site,),
-        )
-
     captured = []
-
-    class FakeDialog(QObject):
-        requestConfirmed = Signal(object)
-
-        def __init__(self, preview, request, parent=None):
-            super().__init__(parent)
-            captured.append((preview, request))
-
-        def exec(self):
-            return QDialog.DialogCode.Rejected
-
+    monkeypatch.setattr(window, "_start_execution", captured.append)
     monkeypatch.setattr(
-        "screenshot_crawler.management.execution.ExecutionPlanService.preview_batch",
-        fake_preview,
+        "screenshot_crawler.gui.main_window.ExecutionPlanService.preview_batch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("preview_batch called")),
     )
-    monkeypatch.setattr("screenshot_crawler.gui.main_window.ExecutionPreviewDialog", FakeDialog)
+    monkeypatch.setattr(
+        "screenshot_crawler.gui.main_window.ExecutionPlanService.preview",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("preview called")),
+    )
     window._show_execution_preview("grant_only")
     assert len(captured) == 1
-    preview, request = captured[0]
-    assert preview.sites == ("magapoke", "mangaone")
+    request = captured[0]
     assert set(request.selected_keys) == {"sample-0000", "sample-0001"}
+    assert request.sites == ("magapoke", "mangaone")
     assert dict(request.resources_by_site) == {"magapoke": "all", "mangaone": "all"}
-    dialog = ExecutionPreviewDialog(preview, request, window)
-    dialog_text = dialog.findChild(QTextEdit).toPlainText()
-    assert "Site Resource: magapoke=all, mangaone=all" in dialog_text
-    assert "実行モード: Grant-only" in dialog_text
-    assert "最大試行数: 無制限" in dialog_text
-    dialog.close()
+    assert request.fingerprint_kind == "inputs-v1"
+    assert request.plan_fingerprint.startswith("inputs-v1:")
     payload = execution_request_payload(request)
     assert payload["keys_by_site"] == {
         "magapoke": ["sample-0001"],
         "mangaone": ["sample-0000"],
     }
-
-    # Adding another Work/key and refreshing must not widen a specific grant
-    # choice into all resources.
-    combo = window._site_grant_resource_combos["magapoke"]
-    assert combo.findData("work_ticket") >= 0
-    combo.setCurrentIndex(combo.findData("work_ticket"))
-    window.model.set_checked_keys({"sample-0000", "sample-0001", "sample-0005"})
-    window.set_snapshot(snapshot)
-    assert window._site_grant_resource_combos["magapoke"].currentData() == "work_ticket"
-    window._show_execution_preview("grant_only")
-    assert dict(captured[-1][1].resources_by_site) == {
-        "magapoke": "work_ticket", "mangaone": "all",
-    }
-
-    # Losing support remains blocked across repeated widget rebuilds. The
-    # user must explicitly choose a valid resource before it can run again.
-    restricted = replace(snapshot, resources={
-        **snapshot.resources,
-        "magapoke": replace(snapshot.resources["magapoke"], grant_resources=("premium_ticket",)),
-    })
-    window.set_snapshot(restricted)
-    window._refresh_site_resource_controls()
-    window._refresh_site_resource_controls()
-    assert window._site_grant_resource_combos["magapoke"].currentData() == "work_ticket"
-    window._show_execution_preview("grant_only")
-    assert captured[-1][1] is None
-    assert any("no longer supported" in reason for reason in captured[-1][0].blockers)
-    combo = window._site_grant_resource_combos["magapoke"]
-    combo.setCurrentIndex(combo.findData("all"))
-    window._show_execution_preview("grant_only")
-    assert dict(captured[-1][1].resources_by_site)["magapoke"] == "all"
-
-    missing = replace(restricted, resources={site: value for site, value in restricted.resources.items()
-                                           if site != "magapoke"})
-    window.set_snapshot(missing)
-    window._show_execution_preview("grant_only")
-    assert captured[-1][1] is None
-    assert window.site_resource_scroll.maximumWidth() == 420
-    assert window.minimumSizeHint().width() <= 1400
     window.close()
-
 
 def test_jobs_page_shows_persistent_history_offscreen(qt_app, tmp_path):
     from screenshot_crawler.gui.jobs_page import JobsPage
@@ -988,9 +907,6 @@ def test_gui_real_controller_fake_child_covers_full_action_lifecycle(
     import textwrap
     import time
 
-    from PySide6.QtWidgets import QDialog
-
-    from screenshot_crawler.gui.execution_dialog import ExecutionPreviewDialog
     from screenshot_crawler.management.inventory import InventoryService
     from screenshot_crawler.management.job_controller import JobController
     from tools.gui_sample import create_sample
@@ -1085,16 +1001,6 @@ def test_gui_real_controller_fake_child_covers_full_action_lifecycle(
     window.model.set_checked_keys({selected_key})
     window.show()
     QApplication.processEvents()
-    confirmed = []
-
-    def confirm(dialog):
-        assert dialog.preview.can_confirm, dialog.preview.blockers
-        assert dialog.request.action == action
-        confirmed.append(dialog.request)
-        dialog._confirm()
-        return QDialog.DialogCode.Accepted
-
-    monkeypatch.setattr(ExecutionPreviewDialog, "exec", confirm)
     controller = window._ensure_jobs()
 
     def wait_terminal(job_id):
@@ -1132,7 +1038,7 @@ def test_gui_real_controller_fake_child_covers_full_action_lifecycle(
             QApplication.processEvents()
             window._poll_jobs()
             time.sleep(0.02)
-        assert len(confirmed) == 2
+        assert len(window._session_job_ids) == 2
         second_id = window._session_job_ids[-1]
         wait_terminal(second_id)
         assert window._job_store.get_job(second_id)["original_job_id"] == first_id
@@ -1149,16 +1055,15 @@ def test_gui_real_controller_fake_child_covers_full_action_lifecycle(
 
 
 def test_gui_confirm_to_real_worker_history_and_fresh_rerun_offscreen(qt_app, tmp_path, monkeypatch):
-    """Real previews, two-site production worker, reload, and fresh rerun."""
+    """Lightweight two-site request, production worker, reload, and rerun."""
     import hashlib
     import json
     import sqlite3
     import time
 
     import yaml
-    from PySide6.QtWidgets import QApplication, QDialog
+    from PySide6.QtWidgets import QApplication
 
-    from screenshot_crawler.gui.execution_dialog import ExecutionPreviewDialog
     from screenshot_crawler.management.inventory import InventoryService
     from screenshot_crawler.management.jobs import JobStore
     from tools.gui_sample import create_sample
@@ -1174,24 +1079,19 @@ def test_gui_confirm_to_real_worker_history_and_fresh_rerun_offscreen(qt_app, tm
     selected = {"sample-0004", "sample-0005"}
     confirmed = []
 
-    def confirm(dialog):
-        assert dialog.preview.can_confirm, dialog.preview.blockers
-        assert dialog.preview.candidate_count == 0
-        assert dialog.request.action == "batch"
-        assert set(dialog.request.selected_keys) == selected
-        assert dialog.request.sites == ("magapoke", "mangaone")
-        confirmed.append(dialog.request)
-        dialog._confirm()
-        return QDialog.DialogCode.Accepted
-
-    # Only replace the human click. Planner, dialog, controller and worker are real.
-    monkeypatch.setattr(ExecutionPreviewDialog, "exec", confirm)
     window = MainWindow(db, watchlist, runtime, auto_load=False,
                         management_path=tmp_path / "management.sqlite")
     window.set_snapshot(snapshot)
     window.model.set_checked_keys(selected)
     window.model.focus_node(window.model.node_by_key_identity("sample-0004"))
     window.model.set_search("sample-0004")
+    original_start = window._start_execution
+
+    def capture_start(request):
+        confirmed.append(request)
+        original_start(request)
+
+    monkeypatch.setattr(window, "_start_execution", capture_start)
 
     def wait_until(predicate):
         deadline = time.monotonic() + 25

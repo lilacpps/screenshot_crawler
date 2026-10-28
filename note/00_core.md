@@ -391,24 +391,81 @@ See [GUI usage](../docs/GUI_README.md) and
 execution boundary. `BatchPlanner.plan(selected_keys=...)` filters the candidate
 Source pool before Policy allocation while calculating shared site Quota from all
 site Sources. `None` keeps legacy whole-site CLI behavior; an explicit empty
-selection produces no candidates. The GUI preview is read-only and the confirmed
-request is queued in a separate management SQLite DB and launches a Qt-free
+selection produces no candidates. Normal Discover / Batch / Grant-only now create
+a lightweight configuration-bound request without a detailed preview dialog.
+Request creation does not rebuild Inventory, run BatchPlanner, or hash the Catalog.
+The request is queued in a separate management SQLite DB and launches a Qt-free
 worker subprocess outside the GUI event loop. The worker appends structured
 JSONL events, runs selected sites sequentially under the existing Catalog lock,
-and the GUI imports events idempotently. Metrics writer paths are emitted as
+and the GUI imports events idempotently. Before browser access the new worker path
+validates Watchlist/runtime/environment revisions, effective endpoints, execution
+options and every selected key/site/Resource, without Inventory or a duplicate
+candidate plan. The common CLI plans against the latest Catalog under the lock;
+earlier jobs' Catalog updates alone do not invalidate a request. Scope, access,
+quota, numbering, output-collision and cancellation guards remain authoritative.
+Configuration drift stops execution without automatic retry. Legacy persisted
+plan-bound jobs retain their original preflight. Watchlist-save Full retains one
+compact target/warning Yes/No confirmation, with no candidate count/hash display.
+Metrics writer paths are emitted as
 structured events and stored on the site task; a zero-candidate task carries a
 `no_candidates` reason rather than implying acquisition success. Grant-only is
-shown as potentially entitlement-consuming. The GUI exposes one Resource selector
+shown as potentially entitlement-consuming beside the execution controls. The GUI exposes one Resource selector
 per selected site and serializes the exact mapping in the request; there is no
 global selector that can override a heterogeneous site selection. If a reload no
 longer supports the previously chosen Resource, the old value remains visible as
-unsupported and preview is blocked until the operator explicitly chooses a
+unsupported and submission is blocked until the operator explicitly chooses a
 supported value. Queued jobs never auto-resume after
 GUI restart; a cooperative stop is distinct from force termination, and an
 interrupted worker leaves resource consumption unknown without automatic retry.
 The history detail shows request mode/max-count, per-site Resource, and event
 site/key/item/source fields with Resource consumption as yes/no/unknown.
-Re-run creates a new job after a fresh current preview.
+Re-run creates a new job with the current selection and configuration.
+
+The fixed header now has a red `緊急停止` button outside the scrollable Inventory
+and monitor. Active jobs enable it; idle/queued-only states leave it disabled.
+One click calls the existing `JobController.force_stop()` without a confirmation.
+Before stopping, the GUI clears session queue dispatch and deferred rerun/editor
+Full launch intents, so a stop failure or completion race cannot start the next
+queued job. Persisted queue entries remain for explicit start. The controller
+retains identity/token/OS-start checks, bounded termination, interrupted status,
+unknown resource consumption and the orphaned-child new-job guard. The GUI never
+assigns controller state or kills Chrome, deletes partial output or retries the
+job. Stop errors remain visible and allow retry while active. Monitor and editor
+state refresh after the call even though passive views do not own termination.
+The Jobs-page confirmation-based emergency operation remains available.
+
+Emergency-button verification: **121 passed, 0 skipped** across GUI execution,
+main-window smoke, management jobs and both Watchlist editors
+(`.tmp/gui-emergency-affected.xml`). Independent review passed and reran the five
+emergency cases (idle, stopped, failure, orphaned child, broken monitor).
+Whole-tree ruff and diff whitespace checks passed. An isolated offscreen sample
+render checks header placement; no operational job or shared browser was stopped.
+Full suite, browser-backed site Integration, Research and live verification were
+not rerun for this UI-only reuse of the unchanged controller termination path.
+
+The new request persists `fingerprint_kind="inputs-v1"` in the existing job JSON
+and an `inputs-v1:` fingerprint; absent kinds retain legacy compatibility.
+Optional path defaults are resolved identically for signing and execution only
+on the new path. Legacy payloads retain their original empty/omitted values for
+old plan validation. New-path input checks run before and after reading targets
+to reject configuration changes during validation. All-disabled Discover stops;
+mixed selections skip disabled targets. Batch keeps Discovery enable state
+independent of acquisition eligibility.
+
+2026-10-29 verification uses isolated Catalog/Watchlist/output fixtures, Qt
+offscreen tests and fake site calls. Independent review passed; its focused
+new-input/GUI tests passed 14 cases plus one smoke case. Coverage includes
+multi-site direct queueing, no Inventory/preview plan, configuration drift,
+key/site ownership, resource rejection, optional paths, persisted kinds, legacy
+compatibility and Full Yes/No. The final affected set passed **155 tests, 0
+skipped** with 55 warnings (`.tmp/gui-startup-affected-final.xml`); whole-tree
+`ruff check src tests` and `git diff --check` passed. A broad full-suite attempt
+was interrupted in unchanged artificial-browser tests after the last displayed 4% progress; it did
+not produce a final report and is not counted as passing. Full-suite completion
+and the cause of that delay remain unverified. No live/Research test or normal
+Catalog/ZIP operation was performed because adapter/browser execution behavior
+is unchanged. GUI startup improvement is structural; no production timing
+benchmark has been claimed.
 
 `management.catalog_reader.CatalogInventoryReader` validates existing v7 and
 reads a single `mode=ro`, query-only transaction. It creates no Catalog service,
@@ -443,7 +500,7 @@ events, records exact metrics/log paths, and uses PID/token/OS-start-identity pl
 heartbeat checks. SQLite/event/log failures are fail-closed; a filesystem cancel
 sentinel remains usable when management SQLite is unavailable. Partial event tails,
 forced termination, and uncertain resource consumption become `interrupted`/unknown
-and are never auto-retried. The Jobs page uses explicit Resume and fresh-preview
+and are never auto-retried. The Jobs page uses explicit Resume and fresh-request
 rerun after restart. Native synthetic Windows captures are in
 `docs/gui-screenshots/`; generation uses `tools/gui_execution_screenshots.py` and
 does not start a worker or connect to a site. No real-site or paid-resource

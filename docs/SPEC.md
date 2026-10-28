@@ -52,6 +52,21 @@ mutually exclusive with legacy archive_order. Segment layouts require exactly
 one placement per enabled Source and fail closed on unresolved anchors. Existing
 ZIPs remain untouched. See DISCOVERY_AND_BATCH.md for schema and save semantics.
 
+## GUI execution startup (2026-10-29)
+
+Discover / Batch Run / Grant-only enqueue explicitly selected keys without a
+detailed candidate-confirmation screen. Configuration revisions and execution
+options remain bound to the queued request; the worker checks them under the
+Catalog job lock. Candidate planning uses the latest Catalog through the common
+CLI implementation, without GUI-only Inventory reloads or whole-Catalog hashes.
+Scope, quota, numbering, output safety and cancellation checks remain in force.
+Watchlist-save Full Discovery retains one compact target/warning Yes/No prompt.
+Legacy persisted plan-bound jobs retain their previous verification.
+The main-window emergency button force-stops the active worker without a second
+confirmation, pauses session queue dispatch and preserves interrupted/unknown
+consumption semantics. Shared Chrome remains open; queued jobs require explicit
+start afterward. Unverified worker survival blocks new execution.
+
 ## 3. Browser Session Model
 
 Real-site automationの標準は、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する方式**とする。

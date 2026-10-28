@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -17,7 +16,6 @@ from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, 
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -40,14 +38,16 @@ from PySide6.QtWidgets import (
 
 from screenshot_crawler.management.execution import (
     ExecutionPlanService,
-    ExecutionSelection,
     JobExecutionRequest,
     execution_request_payload,
 )
-from screenshot_crawler.management.inventory import InventoryService, default_policy_registry
+from screenshot_crawler.management.inventory import InventoryService
 
 from .details import DetailPane
-from .execution_dialog import ExecutionPreviewDialog
+
+# Kept as a module export for integrations that construct the legacy dialog;
+# ordinary execution uses the compact QMessageBox confirmation below.
+from .execution_dialog import ExecutionPreviewDialog  # noqa: F401
 from .execution_monitor import ExecutionMonitor
 from .jobs_page import JobsPage
 from .model import InventoryTreeModel, StatusFilter, ViewMode
@@ -247,6 +247,21 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Screenshot Crawler — 作品管理（閲覧専用）")
         root = QWidget(self)
         root_layout = QVBoxLayout(root)
+        emergency = QHBoxLayout()
+        emergency.addStretch()
+        self.emergency_stop_button = QPushButton("緊急停止")
+        self.emergency_stop_button.setObjectName("emergency_stop_button")
+        self.emergency_stop_button.setStyleSheet(
+            "QPushButton { background:#b42318; color:white; font-weight:bold; padding:6px 18px; }"
+            "QPushButton:disabled { background:#ddd; color:#777; }"
+        )
+        self.emergency_stop_button.setToolTip(
+            "確認なしで実行中workerを強制停止。消費・出力状態は未確認となり、自動再試行しません。"
+        )
+        self.emergency_stop_button.setEnabled(False)
+        self.emergency_stop_button.clicked.connect(self._emergency_stop)
+        emergency.addWidget(self.emergency_stop_button)
+        root_layout.addLayout(emergency)
         upper = QWidget(root)
         outer = QVBoxLayout(upper)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -556,7 +571,12 @@ class MainWindow(QMainWindow):
         editor_key = self._pending_editor_full
         self._pending_editor_full = None
         if editor_key is not None:
-            self._show_execution_preview("discover", selected_keys={editor_key}, force_full=True)
+            self._show_execution_preview(
+                "discover",
+                selected_keys={editor_key},
+                force_full=True,
+                after_watchlist_save=True,
+            )
         work_full, self._pending_work_full = self._pending_work_full, None
         if work_full is not None:
             from screenshot_crawler.watchlist.service import WatchlistService
@@ -773,6 +793,8 @@ class MainWindow(QMainWindow):
         if self.model.snapshot is not None:
             self._refresh_site_resource_controls()
         enabled = bool(checked) and self.model.snapshot is not None and not self._loading
+        if self._job_controller is not None and getattr(self._job_controller, "orphaned_live_worker", False):
+            enabled = False
         for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
             button.setEnabled(enabled)
 
@@ -784,154 +806,113 @@ class MainWindow(QMainWindow):
         force_full: bool = False,
         after_watchlist_save: bool = False,
     ) -> None:
+        """Build a lightweight request and hand it to the durable job queue.
+
+        The GUI signs only the already loaded selection and execution inputs;
+        the worker performs the latest Catalog planning under its job lock.
+        """
         snapshot = self.model.snapshot
         selected_identities = frozenset(
             self.model.selected_keys if selected_keys is None else selected_keys
         )
         if snapshot is None or not selected_identities:
             return
-        service = ExecutionPlanService()
-        resource = None
         limit = self.execution_limit_spin.value() or None
-        selection = ExecutionSelection(selected_identities)
-        if action in {"batch", "grant_only"}:
-            by_site: dict[str, list[str]] = {}
-            for key in snapshot.keys:
-                if key.identity in selection.selected_keys and key.target is not None:
-                    by_site.setdefault(key.site, []).append(key.identity)
-            previews = []
-            resource_blockers = tuple(
-                f"{site}: no supported Grant-only Resource selector"
-                for site in sorted(by_site)
-                if action == "grant_only" and site not in self._site_grant_resource_combos
-            ) + tuple(
-                f"{site}: selected Resource {value!r} is no longer supported"
-                for site, value in self._site_resource_invalid.items()
-                if site in by_site and action == "grant_only"
-            )
-            try:
-                policies = default_policy_registry()
-                for site, keys in sorted(by_site.items()):
-                    site_resource = (
-                        self._site_grant_resource_combos[site].currentData()
-                        if action == "grant_only"
-                        else None
-                    )
-                    previews.append(
-                        service.preview_batch(
-                            snapshot.catalog_path,
-                            snapshot.watchlist_path,
-                            policies,
-                            site=site,
-                            selected_keys=keys,
-                            resource=site_resource,
-                            runtime_path=self.runtime_path,
-                            library_dir=str(Path("output/Books").resolve()),
-                            limit=limit,
-                            output_root=str(Path("output/batch").resolve()),
-                            metrics_root=str(Path("output/metrics").resolve()),
-                            env_file=str(Path(".env").resolve()),
-                        )
-                    )
-            except Exception as exc:  # noqa: BLE001 - render a blocking preview
-                preview = service.preview(
-                    snapshot,
-                    selection,
-                    action=action,
-                    resource=resource,
-                    limit=limit,
-                    runtime_path=self.runtime_path,
-                    env_file=str(Path(".env").resolve()),
-                    output_root=str(Path("output/batch").resolve()),
-                    library_dir=str(Path("output/Books").resolve()),
-                    metrics_root=str(Path("output/metrics").resolve()),
-                )
-                preview = replace(
-                    preview,
-                    blockers=(*preview.blockers, f"preflight failed: {exc}"),
-                )
-            else:
-                base = previews[0] if previews else service.preview(
-                    snapshot,
-                    selection,
-                    action=action,
-                    resource=resource,
-                    limit=limit,
-                    runtime_path=self.runtime_path,
-                    env_file=str(Path(".env").resolve()),
-                    output_root=str(Path("output/batch").resolve()),
-                    library_dir=str(Path("output/Books").resolve()),
-                    metrics_root=str(Path("output/metrics").resolve()),
-                )
-                preview = replace(
-                    base,
-                    selection=selection,
-                    sites=tuple(sorted(by_site)),
-                    candidate_count=sum(item.candidate_count for item in previews),
-                    skipped_count=sum(item.skipped_count for item in previews),
-                    skipped=tuple(value for item in previews for value in item.skipped),
-                    blockers=resource_blockers + tuple(
-                        f"{site}: {value}"
-                        for site, item in zip(sorted(by_site), previews)
-                        for value in item.blockers
-                    ),
-                    warnings=tuple(
-                        f"{site}: {value}"
-                        for site, item in zip(sorted(by_site), previews)
-                        for value in item.warnings
-                    ),
-                    resources_by_site=tuple(
-                        (site, item.resource or "all")
-                        for site, item in sorted(zip(sorted(by_site), previews))
-                    )
-                    if action == "grant_only"
-                    else (),
-                    work_names=tuple(
-                        sorted({value for item in previews for value in item.work_names})
-                    ),
-                    fingerprint=(
-                        previews[0].fingerprint
-                        if len(previews) == 1
-                        else hashlib.sha256(
-                            json.dumps(
-                                [item.fingerprint for item in previews],
-                                separators=(",", ":"),
-                            ).encode()
-                        ).hexdigest()
-                    ),
-                )
-        else:
-            preview = service.preview(
-                snapshot,
-                selection,
-                action="discover",
-                mode="full" if force_full else self.discover_mode_combo.currentData(),
-                limit=limit,
-                runtime_path=self.runtime_path,
-                env_file=str(Path(".env").resolve()),
-                output_root=str(Path("output/batch").resolve()),
-                library_dir=str(Path("output/Books").resolve()),
-                metrics_root=str(Path("output/metrics").resolve()),
-            )
-        request = (
-            replace(
-                preview.request(snapshot),
-                runtime_path=self.runtime_path,
-                env_file=str(Path(".env").resolve()),
-                cdp_endpoint=None,
-                output_root=str(Path("output/batch").resolve()),
-                library_dir=str(Path("output/Books").resolve()),
-                metrics_root=str(Path("output/metrics").resolve()),
-            )
-            if preview.can_confirm
-            else None
-        )
-        dialog = (ExecutionPreviewDialog(preview, request, self, after_watchlist_save=True)
-                  if after_watchlist_save else ExecutionPreviewDialog(preview, request, self))
-        dialog.requestConfirmed.connect(self._start_execution)
-        if dialog.exec() == QDialog.DialogCode.Accepted and request is not None:
-            self.statusBar().showMessage("実行を開始しました")
+        key_map = {key.identity: key for key in snapshot.keys}
+        by_site: dict[str, list[str]] = {}
+        blockers: list[str] = []
+        for identity in sorted(selected_identities):
+            key = key_map.get(identity)
+            if key is None or key.target is None:
+                blockers.append(f"unknown Watchlist key: {identity}")
+                continue
+            by_site.setdefault(key.site, []).append(identity)
+        if not by_site:
+            blockers.append("no managed Watchlist keys selected")
 
+        resources_by_site: tuple[tuple[str, str], ...] = ()
+        if action == "grant_only":
+            resources: list[tuple[str, str]] = []
+            for site in sorted(by_site):
+                combo = self._site_grant_resource_combos.get(site)
+                if combo is None:
+                    blockers.append(f"{site}: no supported Grant-only Resource selector")
+                    continue
+                if site in self._site_resource_invalid:
+                    blockers.append(
+                        f"{site}: selected Resource {self._site_resource_invalid[site]!r} is no longer supported"
+                    )
+                    continue
+                value = combo.currentData()
+                if not isinstance(value, str) or not value:
+                    blockers.append(f"{site}: Grant-only Resource is not selected")
+                    continue
+                resources.append((site, value))
+            resources_by_site = tuple(resources)
+        if limit is not None and limit < 1:
+            blockers.append("limit must be at least 1")
+        if blockers:
+            self.error_label.setText("; ".join(blockers))
+            return
+
+        mode = None
+        if action == "discover":
+            mode = "full" if force_full else self.discover_mode_combo.currentData()
+        request = JobExecutionRequest(
+            action=action,
+            selected_keys=selected_identities,
+            sites=tuple(sorted(by_site)),
+            keys_by_site=tuple(
+                (site, tuple(sorted(keys))) for site, keys in sorted(by_site.items())
+            ),
+            mode=mode,
+            resources_by_site=resources_by_site,
+            limit=limit,
+            catalog_path=snapshot.catalog_path,
+            watchlist_path=snapshot.watchlist_path,
+            runtime_path=str(Path(self.runtime_path).resolve()),
+            env_file=str(Path('.env').resolve()),
+            output_root=str(Path('output/batch').resolve()),
+            library_dir=str(Path('output/Books').resolve()),
+            metrics_root=str(Path('output/metrics').resolve()),
+            fingerprint_kind='inputs-v1',
+        )
+        request = replace(
+            request,
+            plan_fingerprint=ExecutionPlanService().input_fingerprint(request),
+        )
+        if not after_watchlist_save:
+            self._start_execution(request)
+            self.statusBar().showMessage('実行ジョブをキューに登録しました')
+            return
+        title = 'Full Discovery'
+        selected = ', '.join(
+            key_map[identity].label or key_map[identity].title or identity
+            for identity in sorted(request.selected_keys)
+        )
+        disabled = [
+            identity for identity in sorted(request.selected_keys)
+            if not key_map[identity].target.enabled
+        ]
+        warning = (
+            f"\n無効化されたkeyはスキップされます: {', '.join(disabled)}"
+            if disabled else ""
+        )
+        message = (
+            'Watchlistを保存しました。対象keyのFull Discoveryを実行しますか？\n'
+            f"対象: {selected}{warning}\n\n"
+            '実行時に最新Catalogから計画を作成します。'
+        )
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._start_execution(request)
+            self.statusBar().showMessage('Full Discoveryジョブをキューに登録しました')
     @Slot(object)
     def _start_execution(self, request: object) -> None:
         if not isinstance(request, JobExecutionRequest):
@@ -951,7 +932,58 @@ class MainWindow(QMainWindow):
         if controller.active_job_id is None:
             controller.start_job(job_id)
         self._monitor_followed_active_id = controller.active_job_id
+        self._refresh_emergency_controls()
         self.statusBar().showMessage(f"ジョブをキューしました: {job_id}")
+
+    def _refresh_emergency_controls(self) -> None:
+        controller = self._job_controller
+        self.emergency_stop_button.setEnabled(
+            controller is not None and controller.active_job_id is not None
+        )
+        if controller is not None and getattr(controller, "orphaned_live_worker", False):
+            for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
+                button.setEnabled(False)
+
+    @Slot()
+    def _emergency_stop(self) -> None:
+        controller = self._job_controller
+        if controller is None or controller.active_job_id is None:
+            self._refresh_emergency_controls()
+            return
+        # Pause session dispatch even if termination fails or races with normal
+        # completion. Persisted queued jobs remain available for explicit start.
+        self._session_job_ids.clear()
+        self._pending_rerun = None
+        self._rerun_original_id = None
+        self._pending_work_full = None
+        self._pending_editor_full = None
+        self.emergency_stop_button.setEnabled(False)
+        try:
+            controller.force_stop()
+        except Exception as exc:
+            LOGGER.exception("emergency worker stop failed")
+            self.error_label.setText(f"緊急停止失敗（停止未確認）: {exc}")
+            self.statusBar().showMessage("緊急停止失敗：workerの停止を確認できません")
+        else:
+            unverified = (
+                controller.active_job_id is not None
+                or getattr(controller, "orphaned_live_worker", False)
+            )
+            message = (
+                "緊急停止：workerの終了を確認できません。ジョブ履歴を確認してください。"
+                if unverified else "緊急停止しました。消費・出力状態は未確認です。自動再試行しません。"
+            )
+            self.error_label.setText(message)
+            self.statusBar().showMessage(message)
+        finally:
+            # Supervision precedes passive views; a broken monitor must never
+            # prevent termination or hide a still-active worker's stop button.
+            self._refresh_emergency_controls()
+            try:
+                self._poll_jobs()
+            except Exception:
+                LOGGER.debug("post-emergency job refresh failed", exc_info=True)
+            self._refresh_emergency_controls()
 
     @Slot(str)
     def _execution_succeeded(self, output: str) -> None:
@@ -1054,9 +1086,11 @@ class MainWindow(QMainWindow):
         self.reload()
 
     def _poll_jobs(self) -> None:
+        self._refresh_emergency_controls()
         if self._job_controller is None:
             return
         state = self._job_controller.poll()
+        self._refresh_emergency_controls()
         if self._work_editor is not None:
             self._work_editor.set_active_job(self._job_controller.active_job_id is not None)
         editor = getattr(self, "_watchlist_editor", None)
@@ -1094,6 +1128,7 @@ class MainWindow(QMainWindow):
                     try:
                         if self._job_store is not None and self._job_store.get_job(queued_id)["state"] == "queued":
                             self._job_controller.start_job(queued_id)
+                            self._refresh_emergency_controls()
                             self._monitor_followed_active_id = queued_id
                             try:
                                 self.execution_monitor.follow_job(queued_id)
