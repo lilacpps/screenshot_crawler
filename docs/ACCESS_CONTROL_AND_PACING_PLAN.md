@@ -6,6 +6,20 @@ Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
 Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
 Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PARTIAL**.
 
+## Bounded resolver prerequisite extension (2026-10-29)
+
+Implemented the optional site-neutral resolver configuration hook supplying
+runtime page-turn delay and explicit excluded external IDs, with a validated
+positive total operation budget. Per-observation timeout, borrowed AccessGuard,
+bounded cancellation and prepared-entry document validation are retained.
+Zeblack opts in to one stock-confirmed predecessor reread, with no rights
+acquisition for the predecessor. Its exact behavior and bounds are specified in
+`DISCOVERY_AND_BATCH.md`. Acceptance coverage includes default/invalid/extended
+budgets, runtime pacing propagation, expired/paid/excluded predecessors,
+rewind/forward/terminal/close, no-change/max-pages/deadline guards, final-snapshot
+handoff and no repeated reread. Existing grant-only tests continue to cover
+consumption persistence and later Work sequencing.
+
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
 ### Changes

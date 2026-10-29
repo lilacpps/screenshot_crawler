@@ -2459,6 +2459,58 @@ async def test_resolver_timeout_is_bounded_for_cancellation_resistant_adapter(
         )
 
 
+@pytest.mark.parametrize("budget", [25000, 0, -1, True, "25000"])
+async def test_resolver_preparation_uses_validated_adapter_budget_and_runtime_pacing(
+    tmp_path, monkeypatch, budget,
+):
+    service = CatalogService(tmp_path / "resolver-preparation.sqlite")
+    candidate = replace(
+        add_candidate(service, access_mode="quota", consumes_quota=True),
+        quota_resource="work_ticket",
+    )
+    executor = make_executor(service)
+    executor.runtime_settings = SiteRuntimeSettings(page_turn_delay_ms=321)
+    configured = []
+    waited = []
+    original_wait = asyncio.wait
+
+    class Adapter:
+        def configure_access_resource_resolution(self, **kwargs):
+            configured.append(kwargs)
+            return budget
+
+        def get_access_profile(self):
+            return AccessProfile()
+
+        async def resolve_access_resource_candidates(self, *_args, **kwargs):
+            assert kwargs["timeout_ms"] == 1234
+            return AccessResourceResolution(selected_source_ids=(candidate.source_id,))
+
+    async def record_wait(tasks, **kwargs):
+        waited.append(kwargs["timeout"])
+        return await original_wait(tasks, **kwargs)
+
+    monkeypatch.setattr(executor.adapters, "create", lambda _site: Adapter())
+    monkeypatch.setattr(batch_executor_module.asyncio, "wait", record_wait)
+    monkeypatch.setattr(batch_executor_module.AccessGuard, "from_profile",
+                        lambda **_kwargs: ImmediateStopGuard(None))
+    if budget != 25000 or isinstance(budget, bool):
+        with pytest.raises(BatchExecutionError, match="Invalid access-resource resolver time budget"):
+            await executor.resolve_access_resource_candidates(
+                object(), [candidate], "work_ticket", timeout_ms=1234,
+            )
+        assert waited == []
+    else:
+        result = await executor.resolve_access_resource_candidates(
+            object(), [candidate], "work_ticket", timeout_ms=1234,
+        )
+        assert result.selected_source_ids == (candidate.source_id,)
+        assert waited == [27]
+    assert configured == [{"timeout_ms": 1234, "page_turn_delay_ms": 321,
+                           "blocked_external_ids": frozenset()}]
+    assert service.get_source(candidate.source_id).quota_started_at is None
+
+
 async def test_resolver_access_guard_stop_is_bounded_for_cancellation_resistant_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

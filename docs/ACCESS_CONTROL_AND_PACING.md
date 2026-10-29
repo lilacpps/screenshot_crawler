@@ -431,6 +431,22 @@ Explicit deferred grant-only can borrow its resolver guard for prepared entry;
 the owner keeps it active and performs bounded cleanup. Default Runner entry
 and unsupported adapters keep their existing lifecycle.
 
+Resource resolvers may opt into bounded non-consuming prerequisite preparation
+through `configure_access_resource_resolution(timeout_ms, page_turn_delay_ms,
+blocked_external_ids)`. Its positive integer return is the total resolver budget;
+the original `timeout_ms` remains each observation's budget. Default adapters
+retain the original budget. The Executor supplies resolved runtime pacing and
+the current Works' explicit Watchlist exclusions before starting the operation,
+then preserves the same AccessGuard race, timeout, cancellation and cleanup
+bounds. No site/resource name is interpreted by this extension.
+
+Zeblack's conditional predecessor reread is specified in
+`DISCOVERY_AND_BATCH.md`. It uses a finite 180-second recovery budget, applies
+the configured page-turn delay to content advancement/rewinding, and performs
+no capture or consumption for preparation. This does not synthesize capture or
+candidate-attempt metrics; existing request/access observation remains active.
+Ordinary Runner pacing still follows content persistence as specified above.
+
 A local policy decision that a resource may be tried never proves that the resource is currently available.
 
 ### 9.4 Explicit resource passes

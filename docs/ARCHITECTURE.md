@@ -156,6 +156,15 @@ Runnerは`entry_only`と借用Guardを要求し、設定・target検証後にAda
 Runnerは借用Guardを再start/closeせず、所有contextが有界cleanupを行うため、
 監視の空白やmetricsの二重計上を作らない。通常runのgoto/Guard所有権は従来どおり。
 
+The optional site-neutral `configure_access_resource_resolution()` hook supplies
+runtime content pacing and explicit Watchlist exclusions and returns a bounded
+total resolver budget. Observation budgets remain separate. Zeblack's conditional
+predecessor reread runs under the existing Page/AccessGuard, with no prerequisite
+rights acquisition or content persistence, and replaces the prepared observation
+only with a final fresh list document. Site selectors and recovery rules stay in
+the Zeblack integration; see `DISCOVERY_AND_BATCH.md` for this bounded exception
+to the ordinary single-list-load path. Other adapters keep their prior budget.
+
 Zeblackの明示的な`quota + work_ticket`はcanonical viewer URLをtargetとして保持したまま、
 最初のブラウザ入口を`/title/{title_id}/chapter/list`へ切り替える。Adapterはlive protobufで対象章の
 statusと`mainName`を再確認し、`TICKET_AVAILABLE`のときだけchapter/listの対象行、確認modal、

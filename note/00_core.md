@@ -1,3 +1,31 @@
+## Bounded non-consuming resolver preparation (2026-10-29)
+
+`SiteAdapter.configure_access_resource_resolution()` optionally receives the
+original observation timeout, resolved runtime page-turn delay and the current
+Works' explicit Watchlist exclusion IDs. It returns a positive integer total
+operation budget; invalid values stop before Guard/network setup. Defaults
+retain the original resolver budget. Duck-typed integrations without the hook
+retain the old behavior. The Executor uses the returned budget plus its existing
+2-second allowance while preserving AccessGuard racing, cancellation, cleanup,
+same-Page prepared entry and existing consumption persistence.
+
+Zeblack opts in to 180 seconds for a conditional predecessor reread; its site
+module owns all stock/eligibility/reader selectors and limits. Core/Batch contains
+no site/resource branch, URL or consumption rule for that feature. Resolver
+preparation does not create a CrawlRun, content files, Artifact, completion or
+quota/cooldown state. Existing real request events remain observable. Default
+Runner capture pacing and non-participating sites are unchanged. No schema,
+CLI or YAML setting was added. See note/06_zeblack.md for the site behavior,
+synthetic coverage and isolated non-consuming production live verification.
+
+Final affected verification: shared Executor/CLI/deferred grant **252 passed**
+and Zeblack Unit/browser Integration **218 passed**, with **0 skipped** overall.
+Ruff and diff checks passed. The whole 5,924-case suite was attempted and
+interrupted during unrelated browser coverage because of its runtime; no
+full-suite success is claimed. Research helpers were unchanged. Live verification
+covered stock-confirmed restoration and the final prepared-document handoff,
+without consuming a real ticket or updating operational Catalog state.
+
 ## Comic DAYS initial dummy/front page (2026-10-28)
 
 Comic DAYS item 22405's site-local `dummy-front-double` normalization now skips

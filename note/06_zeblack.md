@@ -1,6 +1,123 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Current implementation snapshot (updated 2026-10-24)
+## Current implementation snapshot (updated 2026-10-29)
+
+## Conditional predecessor rereading (implemented 2026-10-29)
+
+Shared-Chrome/CDP observations of title `3957` (夜桜さんちの大作戦) and
+title `4930` (あやかしトライアングル), followed by read-only queries against
+the existing Catalog, confirmed a mismatch between positive Work Ticket stock
+and current ticket availability for pending acquisition candidates. Each title's
+detail page `/title/{title_id}` displayed `× 1` together with
+`チケットでさっそく読もう！` and an image whose alt was `チケット`.
+The complete `/chapter/list` page did not expose that stock text. Production now
+accepts the observed title-local, unique visible `img[alt="チケット"]` banner,
+with a bounded ancestor containing the exact numeric `× N` and exact message.
+It does not infer a new structured stock field. These initial observations were:
+
+- Title `3957`: 259 live chapters (`FREE=3`, `TICKET_AVAILABLE=173`,
+  `RENTAL=3`, `POINT=53`, `COIN=27`). None of the pending, acquisition-enabled
+  Catalog quota candidates matched a live `TICKET_AVAILABLE` chapter. The first
+  such candidate in site display order was chapter `464465`, position `180`,
+  `作戦179. ひふみVS二刃おばちゃん`, live `POINT`. Its immediate preceding
+  row was chapter `461759`, position `179`, `作戦178. 二刃おばちゃん`,
+  live `RENTAL` with positive remaining time and Catalog Item `completed`.
+- Title `4930`: 144 live chapters (`FREE=3`, `RENTAL=2`, `POINT=110`,
+  `COIN=29`), with no live `TICKET_AVAILABLE` chapters. The first pending,
+  acquisition-enabled Catalog quota candidate was chapter `50209`, position `6`,
+  `第6話 花鳥風月`, live `POINT`. Its immediate preceding row was chapter
+  `48288`, position `5`, `第5話 神速の祓忍`, live `RENTAL` with positive
+  remaining time and Catalog Item `completed`.
+
+Both complete DOM/protobuf chapter-ID sets matched exactly, without duplicate
+DOM IDs, and protobuf iteration order matched the observed oldest-first DOM
+order. Catalog `display_position` agreed at the inspected boundaries. Discovery
+still yields newest-first; callers must not interpret that iteration order as
+the requested top-to-bottom predecessor order. A global nonempty
+`ticket_available_ids` is insufficient to rule out this condition: title `3957`
+has available older chapters but no available pending candidate.
+
+`access_resolver.py` retains its existing one-list-load selection path when an
+input candidate is already live `TICKET_AVAILABLE`. If all input IDs exist but
+none matches, `recovery.py` checks positive title-local stock, refreshes the list,
+and first rechecks availability. If still unavailable, it validates stable,
+complete, duplicate-free top-to-bottom DOM/protobuf identity/order and finds the
+first input quota candidate, excluding live FREE and positive-time RENTAL.
+The predecessor is its immediate preceding full-list row, including paid rows;
+it need not be pending or an acquisition candidate. The user explicitly confirmed
+that title `4930` should reread chapter 5 before pending chapter 6, not chapter 3
+before already rented chapter 4. No chapter-number or ID arithmetic is used.
+
+Only FREE or RENTAL with more than 185 seconds remaining may be opened. This
+conservative margin exceeds the entire 180-second recovery budget. Paid returns
+`work_ticket_predecessor_paid`; expired, missing, nearly expired or unconfirmed
+rights (including a predecessor requiring a new ticket) return
+`work_ticket_predecessor_requires_access` with Japanese manual-handling guidance.
+Explicit Watchlist exclusions supplied by Batch return
+`work_ticket_predecessor_excluded`. No ticket/point/coin/purchase/reward control
+is used to obtain prerequisite access. These expected NGs skip the Work and
+allow later Works to proceed. Unknown/ambiguous DOM, timeout and access rejection
+retain the existing run-stop behavior.
+
+The same Page/AccessGuard reads the predecessor with a separate site-local
+`ZeblackAdapter` instance, without capture listeners, capture, packaging or
+Catalog calls. `ArrowRight` rewinds strictly backward to page_0 and the existing
+`ArrowLeft`/state/change checks advance through contiguous unseen content to
+END/NEXT_CONTENT. It never clicks next-story. Content is capped at 100 images,
+rewind and forward at 120 operations each, with a 180-second overall deadline.
+Runtime `page_turn_delay_ms` applies to content turns/rewinding outside each
+page-change wait. The observed native close component is one visible enabled
+empty `button.sc-bEHKTb`; changed/ambiguous controls stop safely. Return is
+validated by the exact same-title list URL, without requiring a new load event
+or API request from a cached native return.
+
+The explicit final list reload uses the production protobuf observer, which now
+accepts only matching requests issued after its listeners attach. Late responses
+from older list loads cannot contaminate the new observation or have their
+cancelled bodies read. The final document/snapshot alone is handed to the
+existing one-time prepared ticket entry. No second reread occurs when recovery
+does not restore an input candidate. Manual non-deferred quota entry is unchanged.
+No CLI/config flags or schema changes are required. The shared optional resolver
+configuration supplies pacing/exclusions and extends only Zeblack's total
+budget, leaving each observation bounded at its existing timeout. See
+`docs/DISCOVERY_AND_BATCH.md` for the adopted exception to ordinary single-load
+behavior and `note/00_core.md` for the generic hook.
+
+Live evidence: after a metadata-only complete reread and native close of title
+`4930` chapter `48288`, chapter `50209` changed from POINT to TICKET_AVAILABLE.
+The final production Executor/adapter/guard path was verified with title `7`
+(彼方のアストラ): pending chapter `101` had no ticket match despite stock 1;
+its live RENTAL predecessor `100` (#30) was reread and closed; the refreshed list
+selected `101` (#31) in about 17 seconds. The final same-document prepared handle
+was adopted successfully without initializing the consuming action. The
+isolated Catalog retained a pending Item, no quota timestamp and no Artifacts;
+no real ticket was consumed. Metadata-only evidence is under
+`output/zeblack_recovery_production_live_20261029_7/`. Initial probes are under
+`output/zeblack_reread_investigation_20261029/`; event evidence uses host/path
+metadata without URL queries, content images, credentials or storage state.
+An intermediate close implementation that incorrectly required an API request
+from cached native return failed on titles `3957` and `6131`; the final path
+uses URL validation and explicit fresh observation instead. Those failed probes
+did not consume tickets. Real expired/paid predecessor cases were not available;
+their no-open/no-consumption behavior is covered by artificial browser tests.
+
+Validation on the final implementation: **470 passed, 0 skipped** in two
+non-overlapping affected selections. Zeblack resolver/live observation/adapter/
+Discovery/policy Unit and recovery/entry/viewer browser Integration: **218
+passed**. Shared Executor, CLI and deferred grant Unit: **252 passed**. Coverage
+includes both ordinary modal variants, one-load fast paths, final document
+handoff, expired/paid/explicitly excluded predecessors, stock ambiguity/zero,
+strict display adjacency, active-rental exclusion, rewind, contiguous forward
+reading, no-change/max-pages/deadline bounds, single reread, validated resolver
+budgets and runtime pacing propagation. `ruff check src tests` and
+`git diff --check` passed. No research helper was promoted or changed, so the
+Research/Probe suite was not required. The whole 5,924-case suite was attempted
+but interrupted during unrelated browser coverage because of its runtime; it
+is **not a full-suite pass**. The changed contracts are covered by the completed
+affected selections. Real ticket consumption after restoration and real
+expired/paid predecessor states were not exercised; artificial entry/rights
+tests cover those guards. Normal operational Catalog/Watchlist/output was not
+modified by verification.
 
 ## Complete listing preview and exclusion replay (2026-10-27)
 
@@ -189,9 +306,11 @@ Batch candidates. It groups by Work/title, loads one live chapter/list
 protobuf snapshot per title, reuses `discovery_protobuf.py`, and intersects
 live `TICKET_AVAILABLE` IDs with Catalog `Source.external_id` values. It
 preserves snapshot order and selects the first matching pending candidate.
-Completed or missing Catalog targets are never used as an implicit fallback;
-missing matches return `work_ticket_target_not_in_catalog`, while an empty
-ticket set returns `work_ticket_unavailable`. The selected candidate retains
+Completed or missing Catalog targets are never selected as an implicit fallback.
+When pending IDs exist but have no live match, the conditional prerequisite
+reread described above may run once; otherwise missing matches return
+`work_ticket_target_not_in_catalog` and an empty ticket set returns
+`work_ticket_unavailable`. The selected candidate retains
 the bounded modal/direct-viewer guards. Explicit grant-only and the normal Batch
 grant phase reuse the observation on that same Page; manual quota retains its
 existing preflight.
@@ -244,7 +363,8 @@ no initial all-Work sweep. Work order remains Planner order. Target selection
 still intersects current native TICKET_AVAILABLE chapters with pending Catalog
 IDs in live list order. Missing Work identity, a foreign selected source, or
 multiple selected targets for one Work stops before grant entry. In both Batch
-grant paths, chapter/list loads once. Resolver captures the original document handle
+grant paths, chapter/list loads once on the ordinary path; prerequisite recovery
+explicitly refreshes it and hands off only its final document. Resolver captures the document handle
 before protobuf body observation and validates it within the same deadline;
 the adapter later verifies the identical Page/document/target and one-time use
 before adopting that exact snapshot. Same-URL reloads invalidate it. Runner skips

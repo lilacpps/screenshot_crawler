@@ -27,7 +27,7 @@ class AccessConsumption:
 
 @dataclass(frozen=True, slots=True)
 class AccessResourceResolution:
-    """Read-only selection result for one site-owned resource resolver."""
+    """Selection result for one site-owned resource resolver."""
 
     selected_source_ids: tuple[int, ...] = ()
     skipped_source_reasons: tuple[tuple[int, str], ...] = ()
@@ -98,6 +98,17 @@ class SiteAdapter(ABC):
                 f"{type(self).__name__} does not support "
                 f"quota_resource={quota_resource!r}"
             )
+
+    def configure_access_resource_resolution(
+        self, *, timeout_ms: int, page_turn_delay_ms: int,
+        blocked_external_ids: frozenset[str] = frozenset(),
+    ) -> int:
+        """Configure bounded non-consuming preparation and return its total budget.
+
+        The observation timeout remains separate. Default resolvers retain their
+        original budget and perform no prerequisite reading.
+        """
+        return timeout_ms
 
     async def resolve_access_resource_candidates(
         self,

@@ -498,7 +498,7 @@ class BatchExecutor:
         *,
         timeout_ms: int = 15_000,
     ) -> AccessResourceResolution:
-        """Run one site-owned read-only resolver under the shared AccessGuard."""
+        """Run one site-owned non-consuming resolver under the shared AccessGuard."""
 
         if not candidates:
             return AccessResourceResolution()
@@ -558,6 +558,38 @@ class BatchExecutor:
         # Entry after an await must read fresh rows, including newly observed grants.
         work_snapshots.clear()
         adapter = self.adapters.create(next(iter(sites)))
+        resolution_timeout_ms = timeout_ms
+        configure_resolution = getattr(adapter, "configure_access_resource_resolution", None)
+        if callable(configure_resolution):
+            blocked_ids: set[str] = set()
+            if self.watchlist is not None:
+                work_keys = {
+                    self.catalog.get_work(work_id).work_key
+                    for work_id in {
+                        candidate.work_id for candidate in pending_candidates
+                        if candidate.work_id is not None
+                    }
+                }
+                for target in self.watchlist.list_targets():
+                    if (
+                        target.site in sites and target.work_key in work_keys
+                        and target.discovery_scope is not None
+                    ):
+                        blocked_ids.update(target.discovery_scope.excluded_external_ids)
+            resolution_timeout_ms = configure_resolution(
+                timeout_ms=timeout_ms,
+                page_turn_delay_ms=(
+                    self.runtime_settings.page_turn_delay_ms
+                    if self.runtime_settings is not None else DEFAULT_PAGE_TURN_DELAY_MS
+                ),
+                blocked_external_ids=frozenset(blocked_ids),
+            )
+            if (
+                isinstance(resolution_timeout_ms, bool)
+                or not isinstance(resolution_timeout_ms, int)
+                or resolution_timeout_ms <= 0
+            ):
+                raise BatchExecutionError("Invalid access-resource resolver time budget")
         guard = AccessGuard.from_profile(
             site=next(iter(sites)),
             profile=adapter.get_access_profile(),
@@ -598,7 +630,7 @@ class BatchExecutor:
         try:
             done, _pending = await asyncio.wait(
                 {operation, stop},
-                timeout=(timeout_ms + 2_000) / 1000,
+                timeout=(resolution_timeout_ms + 2_000) / 1000,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if stop in done:

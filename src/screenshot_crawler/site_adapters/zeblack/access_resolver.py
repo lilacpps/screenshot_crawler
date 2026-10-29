@@ -7,7 +7,10 @@ from collections.abc import Sequence
 
 from screenshot_crawler.batch.models import BatchCandidate
 from screenshot_crawler.site_adapters.base import AccessResourceResolution
-from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import ConsumptionStatus
+from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
+    ConsumptionStatus,
+    map_zeblack_access_mode,
+)
 from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
     ZeblackChapterListSnapshot,
@@ -40,12 +43,14 @@ async def resolve_zeblack_work_ticket_candidates(
     *,
     timeout_ms: int = ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
     selected_snapshots: dict[int, ZeblackChapterListSnapshot] | None = None,
+    page_turn_delay_ms: int = 1000,
+    blocked_external_ids: frozenset[str] = frozenset(),
 ) -> AccessResourceResolution:
     """Select pending Work Ticket candidates from one live snapshot per title.
 
     The input is already the generic Planner's pending/quota/work-ticket set.
-    A missing live match is intentionally terminal for that title: another
-    Catalog candidate is never probed as an implicit fallback.
+    A missing live match permits one stock-confirmed, non-consuming predecessor
+    reread. Final selection still requires a live match to the input pool.
     """
 
     groups: dict[tuple[int | None, str], list[tuple[BatchCandidate, str]]] = defaultdict(list)
@@ -69,13 +74,43 @@ async def resolve_zeblack_work_ticket_candidates(
             timeout_ms=timeout_ms,
             **({"capture_document": True} if selected_snapshots is not None else {}),
         )
-        ticket_ids = snapshot.ticket_available_ids
         candidates_by_external_id = {
             chapter_id: candidate for candidate, chapter_id in group
         }
+        ticket_ids = snapshot.ticket_available_ids
+        recovery_reason = ""
+        if (
+            not set(ticket_ids).intersection(candidates_by_external_id)
+            and set(candidates_by_external_id).issubset(snapshot.by_id)
+            and candidates_by_external_id
+            and any(
+                chapter.chapter_id in candidates_by_external_id
+                and map_zeblack_access_mode(chapter.status_value) == "quota"
+                and not (
+                    chapter.status_value == ConsumptionStatus.RENTAL
+                    and (chapter.remaining_rental_time or 0) > 0
+                )
+                for chapter in snapshot.chapters
+            )
+        ):
+            from screenshot_crawler.site_adapters.zeblack.recovery import recover_work_ticket
+
+            recovered, recovery_reason = await recover_work_ticket(
+                page, snapshot, frozenset(candidates_by_external_id),
+                timeout_ms=timeout_ms, capture_document=selected_snapshots is not None,
+                page_turn_delay_ms=page_turn_delay_ms,
+                blocked_external_ids=blocked_external_ids,
+            )
+            if recovered is None:
+                skipped.extend(
+                    (candidate.source_id, recovery_reason) for candidate, _ in group
+                )
+                continue
+            snapshot = recovered
+            ticket_ids = snapshot.ticket_available_ids
         if not ticket_ids:
             skipped.extend(
-                (candidate.source_id, "work_ticket_unavailable")
+                (candidate.source_id, recovery_reason or "work_ticket_unavailable")
                 for candidate, _chapter_id in group
             )
             continue
@@ -90,7 +125,7 @@ async def resolve_zeblack_work_ticket_candidates(
                 break
         if chosen is None:
             skipped.extend(
-                (candidate.source_id, "work_ticket_target_not_in_catalog")
+                (candidate.source_id, recovery_reason or "work_ticket_target_not_in_catalog")
                 for candidate, _chapter_id in group
             )
             continue

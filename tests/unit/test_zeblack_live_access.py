@@ -58,6 +58,7 @@ class _Response:
 
     def __init__(self, body: bytes) -> None:
         self._body = body
+        self.request = type("Request", (), {"url": self.url})()
 
     async def body(self) -> bytes:
         return self._body
@@ -74,18 +75,25 @@ class _Page:
         self.url = "about:blank"
         self.payload = payload
         self.listeners: list[object] = []
+        self.request_listeners: list[object] = []
 
     def on(self, event: str, listener: object) -> None:
         if event == "response":
             self.listeners.append(listener)
+        elif event == "request":
+            self.request_listeners.append(listener)
 
     def remove_listener(self, event: str, listener: object) -> None:
         if event == "response" and listener in self.listeners:
             self.listeners.remove(listener)
+        elif event == "request" and listener in self.request_listeners:
+            self.request_listeners.remove(listener)
 
     async def goto(self, url: str, **_kwargs: object) -> None:
         self.url = url
         response = _Response(self.payload)
+        for listener in tuple(self.request_listeners):
+            listener(response.request)
         for listener in tuple(self.listeners):
             listener(response)  # type: ignore[operator]
 
@@ -97,6 +105,8 @@ class _HangingBodyPage(_Page):
     async def goto(self, url: str, **_kwargs: object) -> None:
         self.url = url
         response = _HangingResponse(self.payload)
+        for listener in tuple(self.request_listeners):
+            listener(response.request)
         for listener in tuple(self.listeners):
             listener(response)  # type: ignore[operator]
 
@@ -130,6 +140,7 @@ async def test_prepared_observation_binds_the_document_within_its_deadline(state
                 page, title_id="5123", timeout_ms=50, capture_document=True
             )
     assert page.listeners == []
+    assert page.request_listeners == []
 
 
 def test_zeblack_chapter_list_title_parser_is_strict() -> None:
@@ -161,6 +172,25 @@ async def test_live_access_returns_target_status_and_all_ticket_ids() -> None:
     assert state.status_value == 4
     assert state.target_main_name == "#18"
     assert state.ticket_available_ids == ("101", "303")
+
+
+async def test_chapter_observation_ignores_late_response_from_before_its_navigation():
+    class StaleResponse(_Response):
+        async def body(self):
+            pytest.fail("A previous navigation's response must never be read")
+
+    stale = StaleResponse(_payload(_chapter(999, 2, "old")))
+
+    class PageWithStaleResponse(_Page):
+        async def goto(self, url, **kwargs):
+            for listener in tuple(self.listeners):
+                listener(stale)
+            await super().goto(url, **kwargs)
+
+    page = PageWithStaleResponse(_payload(_chapter(101, 2, "new")))
+    snapshot = await observe_zeblack_chapter_list(page, title_id="5123", timeout_ms=100)
+    assert tuple(snapshot.by_id) == ("101",)
+    assert page.listeners == [] and page.request_listeners == []
 
 
 @pytest.mark.asyncio

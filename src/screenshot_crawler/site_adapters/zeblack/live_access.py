@@ -128,15 +128,20 @@ class _LiveProtobufObserver:
         self._payloads: list[bytes] = []
         self._errors: list[BaseException] = []
         self._listener = self._on_response
+        self._request_listener = self._on_request
+        self._requests: set[object] = set()
 
     def attach(self, page: Page) -> None:
         self._page = page
+        page.on("request", self._request_listener)
         page.on("response", self._listener)
 
     def close(self) -> None:
         if self._page is not None:
+            self._page.remove_listener("request", self._request_listener)
             self._page.remove_listener("response", self._listener)
             self._page = None
+        self._requests.clear()
         for task in self._tasks:
             if not task.done():
                 task.cancel()
@@ -219,8 +224,18 @@ class _LiveProtobufObserver:
                 self._errors.append(exc)
             self._processed.add(task)
 
+    def _on_request(self, request: object) -> None:
+        if _response_url_is_target(str(getattr(request, "url", ""))):
+            self._requests.add(request)
+
     def _on_response(self, response: object) -> None:
-        if _response_url_is_target(str(getattr(response, "url", ""))):
+        # A native viewer close may start a list request, or reuse a cached list.
+        # A later explicit observation must ignore late responses to requests
+        # issued before this observer attached (including cancelled old bodies).
+        if (
+            _response_url_is_target(str(getattr(response, "url", "")))
+            and getattr(response, "request", None) in self._requests
+        ):
             self._tasks.append(asyncio.create_task(self._capture(response)))
 
     async def _capture(self, response: object) -> bytes:

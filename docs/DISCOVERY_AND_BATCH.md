@@ -223,14 +223,16 @@ unchanged and no Catalog schema change is required.
 
 For the Work Ticket resource, Batch uses a small site-owned resolver. It
 groups the pending quota/work-ticket candidates by Work/title, loads the
-site-native chapter/list once per title, and reuses the production ChapterV3
+site-native chapter/list once on the ordinary path, and reuses the production ChapterV3
 decoder. The resolver intersects live `TICKET_AVAILABLE` chapter IDs with
 Catalog `sources.external_id`, preserves live list order, and selects the
 first matching pending candidate. Completed Items are not resolver input. A
-live ticket with no Catalog match fails closed with
-`work_ticket_target_not_in_catalog`; an empty live ticket set ends the pass
-with `work_ticket_unavailable`. It never probes another candidate as an
-implicit fallback. The selected candidate may still perform the existing
+live ticket with no Catalog match ordinarily ends with
+`work_ticket_target_not_in_catalog`; an empty live ticket set ordinarily ends
+with `work_ticket_unavailable`. When the pending IDs are present but have no
+live match, the bounded predecessor-reread exception below may first restore
+eligibility. It never acquires another chapter's rights as an implicit fallback.
+The selected candidate may still perform the existing
 production preflight before the exact ticket entry flow.
 
 The resolver's chapter-list navigation, protobuf response-body reads, and
@@ -325,7 +327,9 @@ and is closed once by its owning context; requests are not counted twice.
 resolver -> selected grant -> close Page -> delay -> next Work's resolver.
 Snapshot and entry are one logical operation, so no artificial delay or second
 Page is inserted inside that operation. Zeblack's chapter/list loads once per
-eligible Work in this path, followed by its existing chapter/modal/viewer flow.
+eligible Work on the ordinary path, followed by its existing chapter/modal/viewer
+flow. Conditional predecessor rereading below deliberately refreshes the list;
+only its final observation is handed to entry.
 A resolver with no target still requires the delay before the next site's
 operation. Catalog-only skips do not open a Page or introduce an extra delay.
 Grant-only `--limit` counts selected grant attempts, including unavailable or
@@ -385,9 +389,56 @@ newly granted direct candidates; no additional grant loop runs.
 Non-deferred sites retain their existing resource pass behavior. Exact modal checks,
 single ticket click, same-chapter viewer confirmation, grant persistence and
 no-capture/no-package/no-completion semantics are unchanged. This change requires
-no Catalog migration. The single-list-load guarantee applies to explicit
-deferred grant-only and the normal Batch grant phase. Manual quota entry retains
+no Catalog migration. The ordinary single-list-load guarantee applies to explicit
+deferred grant-only and the normal Batch grant phase, with the predecessor-reread
+exception below. Manual quota entry retains
 its existing preflight.
+
+### Zeblack conditional predecessor rereading (2026-10-29)
+
+Both deferred grant paths may perform one non-consuming prerequisite reread per
+Work when none of the pending candidate IDs is live `TICKET_AVAILABLE`. Older
+completed chapters being ticket-available do not prevent this check. Candidates
+must exist in the live list; the title detail page must show one visible native
+ticket banner with a positive numeric stock and exact
+`チケットでさっそく読もう！` message. Stock is permission to attempt this
+bounded preparation, never proof that a particular chapter can use a ticket.
+
+Refresh chapter/list after observing stock and stop preparing if a pending live
+ticket match has already appeared. Otherwise validate stable, duplicate-free,
+top-to-bottom DOM order against the complete protobuf ID set. From that order
+find the first input quota candidate, excluding live FREE and active RENTAL
+chapters, then take its immediate preceding row from the full list. Do not infer
+adjacency from chapter numbers, IDs, Planner order, or a quota-only subset.
+
+Open the predecessor only if it is live FREE or RENTAL whose observed remaining
+time exceeds 185 seconds (the 180-second recovery bound plus a navigation
+margin). Expired, missing, nearly expired or otherwise unconfirmed rights,
+including `TICKET_AVAILABLE` predecessors requiring a new ticket, return an NG
+reason indicating manual handling. Paid predecessors return a distinct paid NG.
+Explicit Watchlist exclusions supplied by Batch also prohibit rereading. No
+ticket, point, coin, purchase or advertisement-reward control acquires access
+for this prerequisite. Expected unavailability ends the current Work and allows
+the next Work to proceed; ambiguity, timeout and AccessGuard rejection retain
+the existing fatal-stop behavior.
+
+Use the same Page and AccessGuard to open that one predecessor, rewind with the
+observed reverse control until page_0, and advance through contiguous unseen
+content to the verified END/NEXT_CONTENT card. Never click next-story. Bound
+content at 100 images and rewind/forward at 120 operations each; apply runtime
+page-turn pacing to content turns, outside page-change waits. Use the observed
+native close control and confirm return to the same title's chapter/list. A
+cached native return need not emit a new API response. Explicitly reobserve the
+list and intersect the final live ticket IDs with the original candidate pool;
+the final Page/document/snapshot alone may enter the existing single-use prepared
+handoff and exact ticket confirmation flow. Do not reread again if restoration
+fails. Manual non-deferred quota entry is unchanged.
+
+Rereading persists site reading history, but creates no content files, package,
+Artifact, CrawlRun, Item completion, quota consumption timestamp or Work cooldown.
+Only the subsequent existing confirmed ticket action may record consumption.
+The ordinary path does not visit the title detail page or reread any chapter.
+No Catalog schema or CLI/configuration flag is added.
 
 ## Z5-6 Zeblack production Work Ticket entry flow
 

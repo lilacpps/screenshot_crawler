@@ -292,6 +292,8 @@ class ZeblackAdapter(SiteAdapter):
         self._listener_page: Page | None = None
         self._prepared_entry: _PreparedZeblackEntry | None = None
         self._protected_source_urls: set[str] = set()
+        self._resolution_page_turn_delay_ms = 1000
+        self._resolution_blocked_ids: frozenset[str] = frozenset()
 
     def get_access_profile(self) -> AccessProfile:
         return zeblack_access_profile()
@@ -352,6 +354,16 @@ class ZeblackAdapter(SiteAdapter):
             )
         self._quota_resource = quota_resource
 
+    def configure_access_resource_resolution(
+        self, *, timeout_ms: int, page_turn_delay_ms: int,
+        blocked_external_ids: frozenset[str] = frozenset(),
+    ) -> int:
+        from screenshot_crawler.site_adapters.zeblack.recovery import RECOVERY_TIMEOUT_MS
+
+        self._resolution_page_turn_delay_ms = page_turn_delay_ms
+        self._resolution_blocked_ids = blocked_external_ids
+        return max(timeout_ms, RECOVERY_TIMEOUT_MS)
+
     async def resolve_access_resource_candidates(
         self,
         page: Page,
@@ -375,6 +387,8 @@ class ZeblackAdapter(SiteAdapter):
             candidates,  # type: ignore[arg-type]
             timeout_ms=timeout_ms,
             selected_snapshots=snapshots,
+            page_turn_delay_ms=self._resolution_page_turn_delay_ms,
+            blocked_external_ids=self._resolution_blocked_ids,
         )
         if len(resolution.selected_source_ids) == 1:
             source_id = resolution.selected_source_ids[0]
