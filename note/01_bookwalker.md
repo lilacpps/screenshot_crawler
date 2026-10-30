@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-23
+最終同期: 2026-10-30
 
 ## Shared work-key scope inventory (2026-10-22)
 
@@ -43,7 +43,7 @@ crop時の必須画素比較を通った場合だけJPEGを返す。
 - 単ページ / 横長ページ / 見開き
 - 見開きを右→左の読書順で個別artifact化
 - loading待ちとbounded retry
-- 最終本文を保存した後のBookWalker logo等を保存しない
+- Terminal BookWalker notice/logo screens are excluded at their fixed N-1/N and N/N roles only after either the registered native artifact or the calibrated complete-canvas perceptual matcher, with pinned current canvas and stable counter/frame. Unknown, mixed, partial, or unstable screens remain content.
 - NEXT_CONTENTをcaptureせず停止
 - 商品情報からtitle / volume / author / genreを生成
 - END / NEXT_CONTENT正常終了時にZIP化
@@ -63,14 +63,12 @@ The default is read-only and does not open the viewer, call Discovery, consume
 access resources, or modify Catalog/files. Only completed Items with recorded
 successful ZIP Artifacts are inspected; orphan ZIPs are not discovered.
 
-JPEG-only archives and exactly one root `page-0001.png` plus a distinct JPEG
-body are `PREFERRED_ONLY`. Names/extensions are case-insensitive; the first PNG
-must be the only PNG, and no JPEG may share its `page-0001` stem. The exception
-does not suppress unexpected page formats. Accepted cover PNGs are reported as
-`allowed_fallback_count=1` and excluded from recrawl/apply. Body PNGs, PNG-only
-archives, extra PNGs, duplicate first-page PNG/JPEG, nonstandard PNG naming and
-unsupported formats remain problems under the extension policy. ZIP member
-order does not affect the saved-page naming rule.
+JPEG-only archives are `PREFERRED_ONLY`. A cover-only `page-0001.png` with at
+least one JPEG companion is also `PREFERRED_ONLY`; it remains eligible for
+recrawl without being counted as a fallback problem. Body PNGs, PNG-only
+archives, duplicate first-page PNG/JPEG, nonstandard PNG naming and unsupported
+formats remain problems under the extension policy. ZIP member order does not
+affect the saved-page naming rule. No terminal-image exception is applied.
 
 The scanner does not inspect image provenance or prove that the named first
 page is a cover. PNG classification is not a quality verdict: source-native
@@ -2915,3 +2913,313 @@ recorded in section 20.24. Production Reviewer confirmation remains the merge
 gate for this change.
 
 The final B1-B4 recheck window is immutable and separate from earlier files: LN2 `output/stage03-ln2-final-reviewfix-b1b4-20261008.json` (SHA-256 `E1ECA5D9C8EA224157E9DCB0519C18799480833ACFC8D2C414A3F10EC8CE9906`), LN3 `output/stage03-ln3-final-b1b4-20261008.json` (`6F6C968F1481364B0FB5B34E01B5BF8ED41A4B4A035310985968475AD8C42157`), and manga9 `output/stage03-manga9-final-b1b4-20261008.json` (`8B1297D7150D42F9B5EDEF7FA994A46541685CE5E3783D3B79C612B80DADD059`). Each restored its page-1 anchor; LN2 and the manga one-hop path passed three intrinsic comparisons with zero differences, while LN3 direct cropped capture passed native comparison with zero differences.
+
+### 20.26 V3 current BookWalker bounded probe (2026-10-29)
+
+The historical V3 ZIP PNG discrepancy remains unresolved. The current bounded
+probes used a diagnostic `800x1200` viewport, which may differ from the normal
+runner viewport. A window reached UI counters `29/269`, `30/269`, and `31/269`,
+but all three control pages returned no capture; the same result therefore does
+not reproduce an illustration-only PNG case. Counter equality alone does not
+identify the saved page-30 content.
+
+The adapter's `capture_page()` catches `CaptureUnavailableError` internally and
+returns `None`. The diagnostic trace observed the internal reason
+`BookWalker native capture requires draw geometry`; the public result was `None`.
+The debug default `returned_path=native_png` is not evidence that a PNG was
+returned. Viewer-epubs `image/jpeg` response traffic was observed, but the
+candidate cache remained zero; no source-body attribution or JPEG-to-visible-page
+mapping was established. The current probe saved no response bodies and made no
+production changes.
+
+The existing ignored ZIP inventory confirms only these historical observations:
+V2 saved PNG pages `7,69,70`; V3 `6,30,46,85,115,174,223,255`; and V4 `1`.
+No live V2 or V4 comparison was performed in this probe. The final reason probe
+closed at `11:56:45` with `page.is_closed=true`, `own_page_remaining=false`,
+`remaining_pages_in_context=5`, and a disconnected CDP session. The result remains
+D/fail-closed; the historical cause requires a probe with successful native
+geometry and candidate capture.
+
+### 20.27 Owned volume 124 PNG recheck (2026-10-29)
+
+The current owned-volume recheck targeted item/source124,
+`external442371b8-0d9e-47e8-80b3-5868e7aa3fa3`, product run16031. The prior
+ZIP saved PNG artifacts at saved positions 1, 316, and 320. Saved sequence
+numbers are not viewer counters: root's immutable decoded-RGB comparison of
+the isolated ZIP and the new captures established the following content
+mapping:
+
+| live viewer counter | old ZIP content | current result |
+| --- | --- | --- |
+| `317/322` | old `page-0316.png` (next-volume notice) | `native_png`, 722x1024 |
+| `321/322` | old `page-0320.png` (rights notice) | `native_png`, 960x1280 |
+| `320/322` | old `page-0319.jpg` (JPEG control) | `reconstructed_jpeg`, 960x1280 |
+
+The retained evidence is under the ignored
+`output/bookwalker-owned-png-20261029/tail-lead-101939737033/` directory.
+The helper's `result.json` contains per-page `returned_path`, candidate
+counts, lossless-shadow reasons, native source-crop snapshots, and close
+state. The temporary page closed successfully and the shared context count
+was 3 before the page, 3 after page close, and 3 after disconnect. The user
+ZIP and Catalog were not modified.
+
+For old page 316 (viewer counter `317/322`), the live debug retained 13
+candidates, one full exact JPEG candidate, exact raw-JPEG and coefficient
+checks, and source dimensions `1448x2048` versus visible dimensions
+`1443x2048` before the native `722x1024` display. The selected mapping was
+marked proven at the direct stage, but the scaled-canvas provenance
+cross-check failed (`scaled canvas upstream mapping failed provenance
+cross-check`); the crop chain proof was unavailable, so the capture remained
+native PNG. This is a recoverable research candidate, not a reason to relax
+the gate, and it does not establish that the source itself was PNG.
+
+For old page 320 (viewer counter `321/322`), 13 candidates were present but
+the selected renderer draw mapping identity was unavailable. The capture
+therefore remained native PNG. The nearby old page 319 control reconstructed
+to JPEG in the same bounded run with a direct completed-segment bijection,
+showing that the reconstruction path and candidate delivery were working.
+
+The full isolated `runner-r3` window, `tail-r1`, and the retained helper all
+kept the two requested contents as PNG; no simple-redo improvement was
+observed. The earlier `runner-r2` run also showed output-window variation:
+old JPEG pages 65--68 were decoded-RGB identical to current PNG artifacts
+3--6. This demonstrates capture-window format variation, not source-format
+proof. The known cover-1 PNG was confirmed offline only; it was not live
+revalidated in this phase.
+
+Initial sandbox diagnostics recorded `route.fetch` `connect EACCES` failures
+and a separate Playwright navigated-away response-body error. The
+network-permitted normal Runner then produced successful JPEG controls and
+the target debug above. These are environment and delivery-path confounds;
+the earlier 20.26 conclusion is not changed into a source attribution.
+
+No production behavior, diagnostic contract, or proof gate was changed. The
+timestamped helper is ignored research support and was not promoted to
+durable production code. The helper and current modules passed compile
+checks; pytest/full-suite were not run because production behavior was
+unchanged. Reviewer/Critic review was not required for this note-only
+research synchronization.
+
+### 20.28 Diagnostic lineage PoCs for owned volume 124 (2026-10-29)
+
+A bounded diagnostic-only PoC tested whether the old saved page 316 content can
+be recovered as JPEG when the scaled source canvas is preceded by a real full
+`clearRect` boundary. The corrected run is
+`output/bookwalker-owned-lineage-20261029/lineage-121912193662/`. It matched
+viewer `317/322` to old `page-0316.png` by RGB identity and returned a
+`1443x2048` reconstructed JPEG. The alternate
+`observed_clear_output_equivalence_v1` contract accepted one same-window clear
+boundary only when its arm nonce, canvas, operation, visible dimensions, epoch,
+unique full JPEG candidate, MCU bijection, raw/DCT/quantization checks, and
+immutable A/B/renderer-ROI chain were all exact. Every chain and current ROI
+comparison had zero differing pixels. The selected `722x1024` source crop was
+RGB-identical to the old saved PNG. This proves a state-dependent recoverable
+clearRect case; it does not prove that all PNG pages should become JPEG or that
+production should relabel the native source.
+
+A separate diagnostic wrapper tested carrying only a safe empty active segment
+across reset/arm boundaries for old saved page 320. Its immutable output is
+`output/bookwalker-owned-lineage-20261029/q320-witness-122637165128/`. The
+wrapper preserved only native-success full-clear witnesses with empty tiles and
+source IDs, `unknownMutation=false`, stable WeakMap canvas identity, hook
+lifetime, epoch/dimensions, and content version; all new clears or unsafe
+mutation remained invalidating. The target viewer `321/322` produced a
+`960x1280` reconstructed JPEG whose decoded RGB was identical to old
+`page-0320.png`, and the analyzer reported one exact candidate, complete 1,200
+MCU-aligned tiles, raw/DCT exactness, and no unsafe operations. The mapping was
+nevertheless a fresh direct segment (with its own clear/epoch), so the run does
+not prove that the carried blank witness caused the output. Current renderer
+ROI comparison remained a hard failure: 140 differing pixels, maximum channel
+difference 255, bbox `x=666,y=12,width=23,height=10`; no tolerance was used.
+The result is therefore recovery evidence only, not accepted production proof.
+
+The first Q316 PoC was invalidated because it joined clear events without a
+capture-window nonce and conflated coded (`1448x2048`) and visible
+(`1443x2048`) dimensions. The corrected helper keeps those fields separate.
+The Q320 helper now requires same-epoch witness joining and marks diagnostic ROI
+canvases as internal; its retained run is not retroactively reclassified. Both
+helpers are ignored research support, production validators and guards remain
+unchanged, and the user ZIP/Catalog were not modified. Page/context closure was
+verified for each live run (`3 -> 3 -> 3` tabs). Compile/ruff/git-diff checks
+passed; pytest/full suite and production live verification were not run because
+this phase made no production behavior change.
+
+The final focused Q320 observation is `q320-witness-122858846882/`. It retained actual and expected renderer ROI PNGs for viewer `321/322` plus a sanitized target-renderer operation ledger. The ROI remained dimensions-equal but differed at 140 pixels (`max=255`, bbox `x=666,y=12,w=23,h=10`; inclusive pixel extent `x=666..688,y=12..21`); every differing expected pixel was opaque white, whereas the actual ROI contains the counter `321`; no tolerance was applied. The boundary-witness join records `selectedDraw.canvasId='1'`, selected op 65819, and `nativeSuccess=true`; the selected 960x1280 renderer draw targets `(952,0,708,942)`. The same-canvas ledger records `fillText` op 65820 immediately after selected op 65819 with numeric arguments `[321,1641,18]`, and the visible actual ROI contains the page counter `321` at the matching right-aligned placement ending at x=689. This supports identifying the mismatch as a renderer page-counter overlay. Subsequent renderer calls included two `drawImage` calls from a `400x1` source to `(752,942,400,2)` at ops 65823 and 65829, plus UI `fillRect`/`fillText` operations. Independent font/state/input replay and full current-RGBA equality remain unimplemented, so overlay replay remains a hard-D condition; no production gate was relaxed.
+
+
+### 20.29 Owned volume 124 cover direct-JPEG production path (2026-10-29)
+
+The BookWalker adapter now has a narrow cover-only direct-JPEG path for the
+observed single-page shape ImageBitmap -> HTMLCanvasElement -> renderer. It
+runs only in native mode with enable_original_jpeg_capture, on the first
+page after the normal native geometry selection succeeds with exactly one
+selected draw. Geometry-missing, selected-none, union/spread, and ambiguous
+selection branches keep the existing native PNG or rendered-canvas fallback.
+The direct path never infers page completeness from filename, dimensions, or
+visual similarity.
+
+The selected native draw is joined to the direct ledger by trace operation
+index, actual target canvas identity, actual source identity, source rectangle,
+and destination geometry. A monotonic page-relevant geometry version is captured
+at selection and must remain equal at materialization and final atomic state; a
+new large page draw during any await invalidates the candidate. The ledger
+retains actual object references and bounded immutable A/B/renderer snapshots. A later renderer draw may replace an
+older invalidated chain only when the new chain independently passes the same
+proof; old invalidation is retained. Related chains are evicted together under
+the snapshot budget, so an orphan renderer record cannot be accepted.
+The direct attempt captures the hook token and page-relevant geometry version
+before geometry selection and requires the same stamp at materialization and
+the final atomic current-state check. If the bounded geometry ledger evicts a
+page-relevant entry, a sticky incomplete-history flag forces native PNG
+fallback for the page lifetime; a surviving draw cannot be treated as a
+complete cover proof.
+
+A unique raw JPEG candidate is returned only after full RGBA equality for
+candidate-to-A, A-to-B replay, B-to-renderer replay on the recorded backing
+canvas and destination (including the observed fractional right/bottom crop),
+renderer target ROI, and capture-time current ROI. The final token, page counter,
+current DOM canvas, operation, object identity, and content-version checks are
+revalidated after comparison. Known non-intersecting pixel writes remain
+eligible only when that exact current ROI proof holds; intersecting or unknown
+draws, clip/reset/resize/context loss, stale identity, missing snapshots, and
+comparison failures remain fail-closed. Comparison uses the viewer's ordinary
+2D context and adds no pixel tolerance. Internal comparison canvases are marked
+so validation does not enter the production draw ledger.
+
+The path is independent of BOOKWALKER_LOSSLESS_JPEG_OUTPUT; the legacy tiled
+reconstruction and native PNG paths are unchanged. It is not generalized to
+body pages, spreads, or a global canvas graph.
+
+While direct original capture is enabled for the first-page window, the
+existing page-geometry ledger is bounded at 8192 entries; disabled/body
+tracing retains its 500-entry bound. Eviction of a direct-enabled entry sets a
+sticky incomplete-history flag and forces PNG fallback. The limit is a bounded
+retention adjustment, not a proof relaxation.
+
+An earlier network-permitted normal production run used owned item 124 at
+persisted counter 1/322, retained the existing viewer, and created one fresh
+production page. It observed eight candidates and one unique exact candidate,
+returned one direct JPEG at
+output/bookwalker-jpeg-implementation-20261029/final-helper-142004257527/artifact-1.jpg
+(1443x2048, 596872 bytes, SHA-256
+4e75ab053da70c6019e3bc08a860e7977322ab137b1eaa5e48b46793a11f657a). Source,
+intermediate, source-B, target, and current comparisons all had diff count 0.
+The verified copy at
+output/bookwalker-cover-20261029/cover-original-verified.jpg has the same
+SHA-256. The research page closed and shared context remained 3 -> 3; the
+existing viewer, ZIP, Catalog, and Core runtime were unchanged.
+
+That run recorded selection token `1`, geometry version `2 -> 2`,
+geometry history limit `8192`, ledger length `2950`, and zero history
+evictions. Synthetic browser-backed coverage includes patterned fractional downscale,
+known non-intersecting sprite writes, ROI mutation rejection, renderer
+replacement re-selection, initial geometry-stamp transition rejection,
+validation-time pixel-write rejection, direct-capture distinct-byte ambiguity
+fallback, cover-union fail-closed behavior, and both the 8192 direct-window and 500
+legacy ledger bounds. The current BookWalker browser-backed suite passes 68 tests and the adapter/native/prepare unit selection passes 157 tests;
+Ruff, py_compile, and git diff --check pass.
+## Current BookWalker terminal diagnostics and recrawl behavior (2026-10-30)
+
+The R2 terminal matcher was calibrated from retained native notice/logo artifacts and checked against Root's 990-image original corpus: four registered positives passed, with positive Hamming distances 0, 0, 0, and 6; the 1905x944 padded transformations measured 40 for notice and 2 for logo. All 990 nonterminal negatives remained outside the provisional distance-64 bound (minimum 100 for notice and 102 for logo). The matcher uses no source/JPEG attribution and does not change cover/source capture; the complete-canvas check runs before geometry splitting and may recognize only the registered terminal roles. If it fails, the existing native terminal path is attempted; terminal output may be smaller or PNG.
+
+
+BookWalker capture now writes bounded, sanitized adapter-local JSONL diagnostics under output/diagnostics/bookwalker (or BOOKWALKER_DIAGNOSTICS_DIR) with a fresh run UUID. Before geometry splitting, the adapter reads the complete current visible canvas and may recognize only the N-1/N notice or N/N logo using a white-flattened foreground union, aspect-preserving 32x32 normalization, calibrated 256-bit perceptual hash, pinned actual canvas identity, known initial viewer cid, and an unchanged counter/frame. If that check fails, the existing native terminal path is attempted and remains fail-closed on missing selected operation/source/target identity, full source bounds, actual connected DOM canvas identity, actual viewer cid, stable counter, source and target content versions, geometry token/version, snapshot IDs, or mismatched initial/before/after anchors. A trace ID is optional. This layout classifier does not attribute a source or JPEG and does not save a cropped subregion. Unknown, mixed, unstable, or mismatched terminal images remain content.
+
+A terminal AD transition records its source identity so a native trace reset that temporarily demotes the same page to CONTENT cannot save it as body content; retry remains bounded and END/final navigation still wins. Ordinary body JPEG successes are compacted out of the bounded sidecar after the cover/tail slots, while cover, fallback, terminal and failure records remain. The cover-only page-0001 exception remains `PREFERRED_ONLY` when a JPEG companion exists; body and terminal PNGs remain fallback candidates. No terminal-image exception is applied by prepare_recrawl.py.
+
+A bounded historical owned item124 live check returned cover original JPEG 1443x2048 from eight candidates, matched the then-recorded notice/logo native hashes, reached END, and restored the shared context from two pages to two after closing the created page; it is not a guarantee for the later batch lifecycle.
+
+A bounded historical post-fix live check used the production path with no diagnostic hook or monkeypatch; it is historical evidence rather than a current batch-run guarantee: `output/bookwalker-tail-implementation-20261030/live-230245039196/result.json`. It returned the cover JPEG from eight candidates, classified the native notice at 321/322 and logo at 322/322, reached confirmed END, and restored the created-page context from 2 pages to 2 after close. The final diagnostics rows include the actual viewer cid, matching canvas/trace/selected identities, source and target content versions, geometry token/version, and stable anchors; no ZIP, Catalog, quota, or existing viewer tab was changed.
+
+The synthetic browser regression now covers non-consuming terminal AD navigation, unknown and real one-pixel mismatches, trace-reset demotion with bounded retry, hash-time counter/canvas mutation, and post-unknown normal capture quality. The two affected browser files pass 68 tests; the adapter/native/prepare unit selection passes 157 tests. Diagnostic record/byte bounds and write-failure isolation are covered. Ruff, py_compile, and git diff --check pass.
+
+### 20.32 Batch-like CrawlerRunner regression probe (2026-10-30)
+
+A single normal `CrawlerRunner` run for owned item124 matched the batch `access_strategy=direct` and `page_turn_delay_ms=200` settings, with `max_pages=2` used only as the isolated probe bound with the shared CDP browser at 1905x944/DPR1. It used a fresh page and isolated output/diagnostics; no packaging, ZIP, Catalog, or production source change occurred. The expected `MaxPagesExceededError` ended the bound and the created page closed with context 2 -> 2. Sanitized evidence is `output/bookwalker-regression-20261030/crawlrunner-024038686396/crawlrunner-summary.json`.
+
+On page 1/322, the selected native call was op2982 from source canvas4 (722x1024) to target canvas2 with sourceRect 721.5x1024 and destination `(620,0,666,942)`. The next renderer operation was an HTMLImageElement 400x1 sprite at op2985, destination `(752.5,942,400,2)`. Eight candidates were observed and the original attempt ran, but the direct record was invalidated after selection; the exact candidate count was 0 and capture returned native PNG 722x1024. This confirms the fractional renderer invalidation under the normal Runner lifecycle. The latest batch reason `native source calls did not match page geometry` did not reproduce, so its remaining subcause is D. Page 2/322 returned native PNG 722x1024 and did not enter the cover-only direct path.
+
+The separate full-ledger diagnostic run retained exactly 100 native calls while the visible renderer canvas had zero retained native calls; its 2,950-entry page-geometry ledger remained complete under the 8,192 limit. A local browser-backed sequence with one current-page draw plus 99 offscreen large-canvas writes retained the current call, while 100 writes evicted it and made the unchanged native selector return no match. This confirms a bounded global-native-ledger eviction mechanism. It does not prove that this mechanism caused the original batch cover failures: the historical selector inputs were not durable, and a fresh no-pre-capture standard Runner control retained the current call and selected op8871. The diagnostic full-ledger read itself can change prefetch timing, so the original batch attribution remains D. Evidence is isolated in `output/bookwalker-geometry-probe-20261030/live-024836504342-summary.json`, `live-selector-wrap-025153351582-summary.json`, and `native-cap-synthetic.json`.
+
+The interrupted pre-J2 page-2 run selected renderer edge `mapping-5905` with `resetKind=canvas_dimension_reset`, source canvas 4 (722x1024) to the current renderer canvas. Its lossless shadow separately analyzed upstream `mapping-5904`, source canvas 5 (1443x2048) to canvas 4 (722x1024), whose segment reset/mutation observer flags were false; `scaled_canvas_source_provenance=false` therefore rejected that upstream proof. The trace builder initializes those reset/mutation/take-record witness fields as false for a new segment, and the native width/height setter repopulates them; a `clearRect` boundary creates a fresh segment without repopulating the fields. This was the pre-J2 reason for PNG fallback. The J2 path now accepts this shape only when an actual executed-clear witness and the full immutable/current ROI chain are present; changing an enum or boolean alone remains unsafe. The terminal logo rule also remains fail-closed for the observed fractional sourceRect 721.5 versus full source width 722. In the three batch archives, page 2 remained PNG 722x1024 despite unique raw JPEG/full coefficient evidence in the retained lossless-shadow analysis; the terminal members were vol2 JPEG 1443x2048 and vol3/vol4 PNG 722x1024, with native logo AD matching unestablished. The earlier direct-JPEG success is a shape- and timing-specific proof, not a universal cover or logo result.
+
+The current J2 implementation selectively restores the previously proven
+single-part executed-full-clear scaled-source path. It restores the strict
+clear witness, mapping epoch/version joins, A-to-B-to-renderer immutable
+snapshots, current DOM ROI/identity validation, and one bounded same-source
+renderer re-selection. Missing witnesses, ambiguous selections, changed
+identity, stale anchors, or failed exact comparison remain fail-closed. A
+larger global cap would only move the eviction threshold and needs separate
+memory/retention validation; accepting a missing clearRect witness remains
+unsafe.
+
+### 20.33 Historical source-native repair plan (SUPERSEDED, 2026-10-30)
+
+The broader P1-P4 source-native repair plan formerly recorded after this
+checkpoint remains historical context and is not the current implementation
+contract. The current source/test baseline is the restored ordinary capture
+path plus the narrow J2 strict executed-clear subset described above, with the
+R2 complete-canvas terminal matcher applied as the explicit terminal policy.
+The restored implementation also includes the bounded P1/P1b native and page-geometry candidate retention filter, the P2 safe-axis non-intersection predicate, the P3 exact native crop registry/helper fallback, and the P4 strict clear/current-anchor and two-attempt rules. These remain bounded proof paths; they do not provide a universal cover JPEG or full-resolution PNG guarantee.
+
+Current behavior is the restored ordinary original-JPEG/native-PNG/renderer-PNG
+priority with the R2 terminal policy evaluated first on the complete pinned
+visible canvas. For a single selected scaled-source part, the J2 strict path
+may return the verified reconstructed JPEG only after the executed-clear and
+current ROI proof chain passes; other shapes remain on their existing fallback
+path. The R2 matcher uses the calibrated 256-bit pHash descriptor and role
+positions; it is source-independent and never converts a PNG to JPEG or
+attributes a JPEG by visual similarity. The retained calibration has 990
+nonterminal negatives with zero false matches and four independent positives;
+positive Hamming distances were 0, 0, 0, and 6, with a distance-64 bound.
+The transformed 0.8-scale notice failed its density check and was retained as
+CONTENT; this is not a universal arbitrary-scale acceptance rule.
+
+The cover path has no additional full-resolution PNG route. Existing direct
+JPEG recovery remains intermittent and the existing PNG fallbacks remain
+authoritative; PNG dimensions may be 722x1024 or 666x944 depending on the
+observed path, while a 1443x2048 source candidate is not a guarantee of output
+size. No upscaling, JPEG re-encoding, or candidate guessing was added.
+
+The cover-only `page-0001.png` recrawl policy is `PREFERRED_ONLY` when the
+archive contains at least one JPEG companion. Other PNGs remain fallback
+candidates; there is no body or terminal-image exception. The three isolated
+recrawl-check dry-run results are: source125 preferred-only with one allowed
+cover candidate, and sources124/126 fallback-included for extra PNGs. No
+Catalog or ZIP write was made by the dry run.
+
+The final bounded source126 entry probes did not establish a normal reader
+state: four attempts stopped before capture (direct product-to-viewer entry,
+observed viewer URL under strict direct, auto viewer loading timeout, and a
+read-only product-page diagnostic with no unambiguous owned read control).
+Therefore there is no new JPEG/tail success claim. The original shared tabs
+remained at two and all created pages were closed. The normal Catalog changed
+later through concurrent Manga ONE and Jump work. The target-record and
+three-original-ZIP comparison belongs to that earlier scoped check; it is not a
+claim that the whole Catalog stayed unchanged during later concurrent work.
+
+A post-restoration normal Runner check for source124 used the ordinary
+production adapter with direct access, max_pages=2, and the positioning-only
+Home protocol. Both captured pages were PNG 722x1024. Page 1 had one actual
+direct record (copy op12, renderer op13, source dimensions 1443x2048) but its
+row reason was `no JPEG candidate with source dimensions`; the top-level
+`no direct one-hop record` text was stale. Page 2 selected one native draw and
+had zero JPEG candidates, so it also returned PNG. The sanitized evidence is
+`output/bookwalker-j2-production-source124-first2/20261030T140657071556Z/sanitized-live-summary.json`.
+This is a current normal-production result, not a claim that the earlier
+proven JPEG artifact is reproducible in every lifecycle.
+
+One separate document-start observer run recorded one `createImageBitmap`
+input of type `image/png` and no JPEG Blob. Its only successful native-object
+join was the selected 722x1024 canvas; no JPEG bytes were read because no
+selected source object joined to a JPEG Blob. The first page also lacked page
+geometry under the observer, so its candidate count is not interpretable.
+Worker inputs, cache contents, and viewer source format therefore remain
+unobserved; this diagnostic does not prove source PNG or JPEG absence. Evidence
+is `output/bookwalker-j2-candidate-input-20261030/20261030T141706327771Z/sanitized-candidate-input-summary.json`.
+
+The current BookWalker source/test selection is 411 passed, 0 skipped, with
+Ruff, compilation, and diff checks passing. The restored P1/P1b/P2/P3/P4
+bounded proof paths and R2 approximate terminal policy remain current; they do
+not guarantee universal cover JPEG recovery or full-resolution PNG output.
+Earlier planning paragraphs are retained only as dated historical context.

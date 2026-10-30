@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import copy
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
 from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
-from screenshot_crawler.core.errors import CaptureUnavailableError
+from screenshot_crawler.core.errors import CaptureUnavailableError, UnknownPageStateError
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _DRAW_TRACE_SCRIPT,
@@ -14,6 +17,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
+    _p4b_stable_current_fallback_authority,
     _trace_payload_stats,
     parse_bookwalker_final_pixel_verify,
     parse_bookwalker_lossless_jpeg_output,
@@ -37,6 +41,10 @@ PNG_1X1 = (
     b"\x00\x00\x00\x0bIDAT\x08\xd7c\x9a\xc0\xf0\x1f\x00\x05\x01\x01\x02"
     b"\x1b\xc9\x8d\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+_blue_png_buffer = BytesIO()
+Image.new("RGBA", (1, 1), (0, 0, 255, 255)).save(_blue_png_buffer, format="PNG")
+PNG_BLUE_1X1 = _blue_png_buffer.getvalue()
 JPEG_1X1 = (
     b"\xff\xd8\xff\xe0\x00\x04\x00\x00"
     b"\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x03"
@@ -123,6 +131,26 @@ def test_native_safety_accepts_identity_source_over_without_filter() -> None:
     assert _native_call_is_safe(_safe_call())
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("transform", {"a": 1, "b": 0, "c": 1, "d": 1, "e": 0, "f": 0}),
+        ("globalAlpha", 0.5),
+        ("globalCompositeOperation", "multiply"),
+        ("filter", "blur(1px)"),
+    ],
+)
+def test_direct_one_hop_draw_safety_fails_closed(field: str, value: object) -> None:
+    record = {
+        "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        "globalAlpha": 1,
+        "globalCompositeOperation": "source-over",
+        "filter": "none",
+    }
+    record[field] = value
+    assert BookWalkerAdapter._direct_draw_is_safe(record) is False
+
+
 def test_native_safety_accepts_purchased_viewer_canvas_sources() -> None:
     call = _safe_call()
     call["source"]["constructor"] = "HTMLCanvasElement"
@@ -196,7 +224,58 @@ def test_native_selection_allows_repeated_source_when_snapshots_were_saved() -> 
     assert selected is not None
 
 
+def test_native_selection_debug_reports_normalization_and_ambiguity() -> None:
+    debug: dict[str, object] = {}
+    first = _native_call_fixture()
+    second = _native_call_fixture()
+    second["sourceId"] = "page-2"
+    selected = select_native_draw_calls(
+        [first, second],
+        canvas_id="content",
+        canvas_width=200,
+        canvas_height=100,
+        boxes=[{"x": 0, "y": 0, "width": 100, "height": 100}],
+        selection_debug=debug,
+    )
+    assert selected is None
+    assert debug == {
+        "draw_call_count": 2,
+        "canvas_draw_call_count": 2,
+        "normalized_candidate_count": 2,
+        "normalized_rejected_count": 0,
+        "box_count": 1,
+        "outcome": "rejected",
+        "rejection_branch": "ambiguous_source_id",
+        "rejection_box_index": 0,
+    }
+
+    boundary_debug: dict[str, object] = {}
+    boundary = _native_call_fixture()
+    boundary["destination"] = {
+        "x": 0,
+        "y": 0,
+        "width": 99.5,
+        "height": 100,
+    }
+    assert (
+        select_native_draw_calls(
+            [boundary],
+            canvas_id="content",
+            canvas_width=200,
+            canvas_height=100,
+            boxes=[{"x": 0, "y": 0, "width": 100, "height": 100}],
+            selection_debug=boundary_debug,
+        )
+        is not None
+    )
+    assert boundary_debug["normalized_candidate_count"] == 1
+    assert boundary_debug["outcome"] == "selected"
+
+
 class _FakeCanvas:
+    async def element_handle(self) -> None:
+        return None
+
     async def get_attribute(self, name: str) -> str | None:
         assert name == "data-bookwalker-trace-id"
         return "content"
@@ -206,6 +285,9 @@ class _FakeCanvas:
 
 
 class _FakeLocator:
+    async def count(self) -> int:
+        return 0
+
     async def evaluate_all(self, _expression: str) -> None:
         return None
 
@@ -268,6 +350,13 @@ def _native_call_fixture(*, constructor: str | None = "ImageBitmap") -> dict:
     }
 
 
+def test_executed_clear_promotion_requires_single_native_selection() -> None:
+    assert adapter_module._strict_executed_clear_capture_allowed(1, 1) is True
+    assert adapter_module._strict_executed_clear_capture_allowed(2, 2) is False
+    assert adapter_module._strict_executed_clear_capture_allowed(2, 1) is False
+    assert adapter_module._strict_executed_clear_capture_allowed(1, 2) is False
+
+
 async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace() -> None:
     success_page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
@@ -301,6 +390,20 @@ async def test_native_source_png_is_materialized_only_for_selected_calls() -> No
 
     assert result is not None
     assert page.materialize_count == 1
+
+
+async def test_direct_cover_path_respects_original_jpeg_capture_flag() -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    adapter.enable_original_jpeg_capture = False
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].mime_type == "image/png"
+    assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == (
+        "native_png"
+    )
 
 
 async def test_canvas_source_snapshot_is_materialized_after_selection() -> None:
@@ -461,11 +564,507 @@ def _evaluation(
     )
 
 
+def _stable_atomic_proof(*, exact: bool, reason: str) -> dict[str, object]:
+    anchor = {
+        "traceId": "content",
+        "actualCanvasId": "content",
+        "bookIdentity": "book-1",
+        "counter": "1/1",
+        "geometryToken": "geometry-1",
+        "traceEpoch": 1,
+        "geometryVersion": 1,
+        "resetEpoch": 1,
+        "canvasWidth": 960,
+        "canvasHeight": 1280,
+        "targetContentVersion": 2,
+        "connected": True,
+        "geometryHistoryIncomplete": False,
+        "unknownMutation": False,
+        "observerAvailable": True,
+        "observerTakeRecordsAvailable": True,
+        "observerFlushed": True,
+        "selected": {
+            "canvasId": "content",
+            "operationIndex": 1,
+            "sourceId": "source-1",
+            "sourceCanvasId": "source-canvas-1",
+            "traceEpoch": 1,
+            "sourceRect": {"x": 0, "y": 0, "width": 960, "height": 1280},
+            "destination": {"x": 0, "y": 0, "width": 960, "height": 1280},
+            "sourceContentVersion": 2,
+            "fullSourceSnapshotId": "snapshot-source",
+            "targetSnapshotId": "snapshot-target",
+            "targetContentVersionAfter": 2,
+        },
+    }
+    return {
+        "available": True,
+        "exact": exact,
+        "reason": reason,
+        "current": {
+            "available": True,
+            "dimensions_equal": True,
+            "exact": exact,
+            "differing_pixel_count": 0 if exact else 1,
+            "max_channel_difference": 0 if exact else 1,
+        },
+        "before": anchor,
+        "after": anchor.copy(),
+    }
+
+
+def _redraw_anchor(operation_index: int) -> dict[str, object]:
+    selected = {
+        "canvasId": "content",
+        "operationIndex": operation_index,
+        "sourceId": "page-1",
+        "sourceCanvasId": "source-canvas",
+        "traceEpoch": 1,
+        "sourceRect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "destination": {"x": 0, "y": 0, "width": 100, "height": 100},
+        "sourceContentVersion": 2,
+        "fullSourceSnapshotId": "snapshot-source",
+        "targetSnapshotId": "snapshot-target",
+        "targetContentVersionAfter": 2,
+    }
+    return {
+        "traceId": "content",
+        "actualCanvasId": "content",
+        "bookIdentity": "book-1",
+        "counter": "1/1",
+        "geometryToken": "geometry-1",
+        "traceEpoch": 1,
+        "connected": True,
+        "geometryHistoryIncomplete": False,
+        "unknownMutation": False,
+        "observerAvailable": True,
+        "observerTakeRecordsAvailable": True,
+        "observerFlushed": True,
+        "selected": selected,
+    }
+
+
+class _RedrawHandle:
+    def __init__(self, anchor: dict[str, object]) -> None:
+        self.anchor = anchor
+
+    async def evaluate(self, expression: str, operation_index: int) -> object:
+        del operation_index
+        if expression == adapter_module._BOOKWALKER_NATIVE_ANCHOR_SCRIPT:
+            return self.anchor
+        raise AssertionError("unexpected handle evaluation")
+
+
+class _RedrawCanvas:
+    def __init__(self, handle: _RedrawHandle) -> None:
+        self.handle = handle
+
+    async def element_handle(self) -> _RedrawHandle:
+        return self.handle
+
+    async def get_attribute(self, name: str) -> str | None:
+        assert name == "data-bookwalker-trace-id"
+        return "content"
+
+    async def evaluate(self, _expression: str) -> dict[str, int]:
+        return {"width": 100, "height": 100}
+
+
+class _RedrawPage:
+    def __init__(self, calls: list[dict[str, object]]) -> None:
+        self.calls = calls
+        self.same_identity_checks = 0
+
+    async def evaluate(self, expression: str, *_args: object) -> object:
+        if "original === current" in expression:
+            self.same_identity_checks += 1
+            return True
+        if "__bookwalkerNativeDrawCalls" in expression and ".filter" in expression:
+            return self.calls
+        return None
+
+
+def _redraw_part(proof: dict[str, object]) -> dict[str, object]:
+    exact_stage = {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": True,
+        "differing_pixel_count": 0,
+        "max_channel_difference": 0,
+    }
+    comparison = {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": True,
+        "source": dict(exact_stage),
+        "intermediate": dict(exact_stage),
+        "final": dict(exact_stage),
+        "p4b_atomic_current_roi": proof,
+    }
+    return {
+        "candidate_count_full_exact": 1,
+        "strict_mcu_aligned": True,
+        "quantization_tables_equal": True,
+        "mapping_proven": True,
+        "raw_jpeg_exact": True,
+        "coefficient_exact": True,
+        "component_quantization_selectors_equal": True,
+        "native_pixel_exact": True,
+        "executed_clear_provenance": True,
+        "cropped_chain_pixel_comparison": comparison,
+        "cropped_chain_pixel_exact": True,
+    }
+
+
 async def _no_original_capture(
     _page: object,
     _native: tuple[CaptureResult, ...],
 ) -> None:
     return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_reason",
+    ["current capture target identity changed", "atomic current ROI comparison failed"],
+)
+async def test_strict_executed_clear_identity_change_aborts_without_stale_png(
+    monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
+    failure_reason: str,
+) -> None:
+    """A strict proof failure must not fall through to the old native image."""
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_reconstruction_candidate(adapter, reconstruction_host)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+    async def no_direct(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        adapter,
+        "_capture_direct_one_hop_original_jpeg",
+        no_direct,
+    )
+    evaluation = _evaluation(adapter, None, spread_ready=False)
+    evaluation.debug["parts"] = [{
+        "executed_clear_provenance": True,
+        "cropped_chain_pixel_comparison": {
+            "p4b_atomic_current_roi": {
+                "exact": False,
+                "reason": failure_reason,
+            },
+        },
+    }]
+
+    async def evaluate(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        adapter._p4b_atomic_proof_active = True
+        return evaluation
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_strict_executed_clear_stable_proof_failure_keeps_png_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
+) -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_reconstruction_candidate(adapter, reconstruction_host)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+
+    async def no_direct(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_capture_direct_one_hop_original_jpeg", no_direct)
+    evaluation = _evaluation(adapter, None, spread_ready=False)
+    evaluation.debug["parts"] = [{
+        "executed_clear_provenance": True,
+        "cropped_chain_pixel_comparison": {
+            "p4b_atomic_current_roi": _stable_atomic_proof(
+                exact=True, reason="stable JPEG proof unavailable"
+            ),
+        },
+    }]
+
+    async def evaluate(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        adapter._p4b_atomic_proof_active = True
+        return evaluation
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].mime_type == "image/png"
+
+
+def test_strict_png_fallback_requires_exact_current_roi_and_association() -> None:
+    proof = _stable_atomic_proof(exact=True, reason="stable JPEG proof unavailable")
+    assert _p4b_stable_current_fallback_authority(proof) is True
+    proof["current"]["exact"] = False
+    assert _p4b_stable_current_fallback_authority(proof) is False
+    proof = _stable_atomic_proof(exact=True, reason="stable JPEG proof unavailable")
+    proof["before"]["selected"]["canvasId"] = "other-canvas"
+    assert _p4b_stable_current_fallback_authority(proof) is False
+
+
+@pytest.mark.asyncio
+async def test_strict_redraw_reselection_guard_allows_only_one_attempt() -> None:
+    adapter = _TestBookWalkerAdapter()
+    adapter._p4b_atomic_proof_active = True
+    adapter._p4b_redraw_attempted = True
+    first = _evaluation(adapter, None, spread_ready=False)
+    first.debug["parts"] = [{
+        "cropped_chain_pixel_comparison": {
+            "p4b_atomic_current_roi": {
+                "exact": False,
+                "reason": "initial renderer anchor changed",
+            },
+        },
+    }]
+
+    result = await adapter._maybe_reselect_lossless_reconstruction(
+        _FakePage([]),
+        first,
+        (CaptureResult(PNG_1X1, 1, 1),),
+        [_native_call_fixture()],
+        p4b_initial_anchor=None,
+        p4b_renderer_handle=None,
+    )
+
+    assert result is first
+
+
+@pytest.mark.asyncio
+async def test_strict_redraw_fallback_uses_fresh_native_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
+) -> None:
+    """A stable second proof failure must not return the pre-redraw PNG."""
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_reconstruction_candidate(adapter, reconstruction_host)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+
+    async def no_direct(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_capture_direct_one_hop_original_jpeg", no_direct)
+    first = _evaluation(adapter, None, spread_ready=False)
+
+    async def evaluate(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        adapter._p4b_atomic_proof_active = True
+        return first
+
+    fresh = CaptureResult(b"fresh-redraw-png", 1, 1)
+    second = _evaluation(adapter, None, spread_ready=False)
+    second.debug["parts"] = [{
+        "executed_clear_provenance": True,
+        "cropped_chain_pixel_comparison": {
+            "p4b_atomic_current_roi": _stable_atomic_proof(
+                exact=True, reason="current DOM ROI exact"
+            ),
+        },
+    }]
+
+    async def reselect(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        adapter._p4b_redraw_native_captures = (fresh,)
+        adapter._p4b_redraw_selected_draw_calls = [_native_call_fixture()]
+        return second
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+    monkeypatch.setattr(adapter, "_maybe_reselect_lossless_reconstruction", reselect)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].data == fresh.data
+
+
+def _redraw_proof(
+    anchor: dict[str, object], *, exact: bool, reason: str
+) -> dict[str, object]:
+    current = {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": exact,
+        "differing_pixel_count": 0 if exact else 1,
+        "max_channel_difference": 0 if exact else 1,
+    }
+    return {
+        "available": True,
+        "exact": exact,
+        "reason": reason,
+        "current": current,
+        "before": anchor,
+        "after": copy.deepcopy(anchor),
+    }
+
+
+def _redraw_calls() -> tuple[dict[str, object], dict[str, object]]:
+    old_call = _native_call_fixture()
+    old_call.update({
+        "canvasId": "content",
+        "sourceCanvasId": "source-canvas",
+        "traceEpoch": 1,
+        "traceOperationIndex": 10,
+        "sourceContentVersion": 2,
+        "fullSourceSnapshotId": "snapshot-source",
+        "targetSnapshotId": "snapshot-target",
+        "targetContentVersionAfter": 2,
+        "source": {
+            "constructor": "ImageBitmap",
+            "width": 1,
+            "height": 1,
+            "contentVersion": 2,
+        },
+        "sourceRect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "destination": {"x": 0, "y": 0, "width": 100, "height": 100},
+    })
+    new_call = copy.deepcopy(old_call)
+    new_call["traceOperationIndex"] = 11
+    return old_call, new_call
+
+
+@pytest.mark.asyncio
+async def test_production_redraw_driver_returns_fresh_png_after_stable_jpeg_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _TestBookWalkerAdapter()
+    adapter._p4b_atomic_proof_active = True
+    adapter._initial_content_id = "book-1"
+    old_call, new_call = _redraw_calls()
+    initial = _redraw_anchor(10)
+    handle = _RedrawHandle(_redraw_anchor(11))
+    page = _RedrawPage([new_call])
+    canvas = _RedrawCanvas(handle)
+    first = _evaluation(adapter, None, spread_ready=False)
+    first_part = _redraw_part(
+        _redraw_proof(initial, exact=False, reason="initial renderer anchor changed")
+    )
+    first.debug["parts"] = [first_part]
+    second = _evaluation(adapter, None, spread_ready=False)
+    second.debug["parts"] = [_redraw_part(
+        _redraw_proof(_redraw_anchor(11), exact=True, reason="stable JPEG proof unavailable")
+    )]
+    evaluate_calls = 0
+
+    async def evaluate(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        nonlocal evaluate_calls
+        evaluate_calls += 1
+        return second
+
+    async def materialize(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [{**new_call, "sourceCropPng": "data:image/png;base64," + base64.b64encode(PNG_BLUE_1X1).decode()}]
+
+    async def get_canvas(_page: object) -> _RedrawCanvas:
+        return canvas
+
+    monkeypatch.setattr(adapter, "get_capture_target", get_canvas)
+    monkeypatch.setattr(adapter, "_materialize_native_source_crops", materialize)
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+    result = await adapter._maybe_reselect_lossless_reconstruction(
+        page, first, (CaptureResult(PNG_1X1, 1, 1),), [old_call],
+        p4b_initial_anchor=initial, p4b_renderer_handle=handle,
+    )
+    assert result is second
+    assert evaluate_calls == 1
+    assert adapter._p4b_redraw_native_captures is not None
+    assert adapter._p4b_redraw_native_captures[0].data == PNG_BLUE_1X1
+    assert adapter._p4b_redraw_native_captures[0].data != PNG_1X1
+    assert adapter._p4b_redraw_selected_draw_calls == [new_call]
+    assert adapter._p4b_redraw_selected_draw_calls[0]["traceOperationIndex"] == 11
+    assert page.same_identity_checks == 1
+
+
+@pytest.mark.asyncio
+async def test_p4b_current_roi_rejects_selected_snapshot_identity_mismatch() -> None:
+    adapter = _TestBookWalkerAdapter()
+    adapter._initial_content_id = "book-1"
+    _old_call, selected_call = _redraw_calls()
+    initial = _redraw_anchor(selected_call["traceOperationIndex"])
+    selected_call["targetSnapshotId"] = "other-target"
+    proof = await adapter._p4b_current_roi_atomic_proof(
+        _RedrawPage([selected_call]),
+        selected_call,
+        initial,
+        _RedrawHandle(initial),
+        1,
+    )
+    assert proof["available"] is False
+    assert proof["reason"] == "selected native snapshot identity mismatch"
+
+
+@pytest.mark.asyncio
+async def test_production_redraw_driver_aborts_second_race_after_two_total_evaluations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _TestBookWalkerAdapter()
+    adapter._p4b_atomic_proof_active = True
+    adapter._initial_content_id = "book-1"
+    old_call, new_call = _redraw_calls()
+    initial = _redraw_anchor(10)
+    handle = _RedrawHandle(_redraw_anchor(11))
+    page = _RedrawPage([new_call])
+    canvas = _RedrawCanvas(handle)
+    first = _evaluation(adapter, None, spread_ready=False)
+    first.debug["parts"] = [_redraw_part(
+        _redraw_proof(initial, exact=False, reason="initial renderer anchor changed")
+    )]
+    second = _evaluation(adapter, None, spread_ready=False)
+    second.debug["parts"] = [_redraw_part(
+        _redraw_proof(_redraw_anchor(11), exact=False, reason="initial renderer anchor changed")
+    )]
+    evaluate_calls = 0
+
+    async def evaluate(*_args: object, **_kwargs: object) -> adapter_module.LosslessReconstructionEvaluation:
+        nonlocal evaluate_calls
+        evaluate_calls += 1
+        return second
+
+    async def materialize(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [{**new_call, "sourceCropPng": "data:image/png;base64," + base64.b64encode(PNG_1X1).decode()}]
+
+    async def get_canvas(_page: object) -> _RedrawCanvas:
+        return canvas
+
+    monkeypatch.setattr(adapter, "get_capture_target", get_canvas)
+    monkeypatch.setattr(adapter, "_materialize_native_source_crops", materialize)
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+    with pytest.raises(UnknownPageStateError, match="changed identity again"):
+        await adapter._maybe_reselect_lossless_reconstruction(
+            page, first, (CaptureResult(PNG_1X1, 1, 1),), [old_call],
+            p4b_initial_anchor=initial, p4b_renderer_handle=handle,
+        )
+    assert evaluate_calls == 1
+    assert adapter._p4b_redraw_attempted is True
+
+
+@pytest.mark.asyncio
+async def test_production_redraw_driver_aborts_missing_initial_proof_without_rpc(
+) -> None:
+    adapter = _TestBookWalkerAdapter()
+    adapter._p4b_atomic_proof_active = True
+    adapter._initial_content_id = "book-1"
+    old_call, _new_call = _redraw_calls()
+    initial = _redraw_anchor(10)
+    first = _evaluation(adapter, None, spread_ready=False)
+    missing_part = _redraw_part(
+        _redraw_proof(initial, exact=False, reason="initial renderer anchor changed")
+    )
+    missing_part["mapping_proven"] = False
+    first.debug["parts"] = [missing_part]
+    page = _RedrawPage([])
+    with pytest.raises(UnknownPageStateError, match="complete initial immutable proof"):
+        await adapter._maybe_reselect_lossless_reconstruction(
+            page, first, (CaptureResult(PNG_1X1, 1, 1),), [old_call],
+            p4b_initial_anchor=initial, p4b_renderer_handle=_RedrawHandle(initial),
+        )
+    assert page.same_identity_checks == 0
 
 
 @pytest.mark.asyncio

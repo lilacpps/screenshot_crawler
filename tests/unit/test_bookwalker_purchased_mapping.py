@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import copy
 from dataclasses import replace
@@ -673,6 +673,35 @@ def test_compact_decode_preserves_null_draw_target_for_empty_segment() -> None:
     assert decoded["completedMappings"][0]["segmentDrawTarget"] is None
 
 
+def test_compact_decode_preserves_copy_epoch_and_source_content_version() -> None:
+    record = _completed_record()
+    record["nonImageBitmapDraws"] = [{
+        "operationIndex": 105,
+        "traceEpoch": 7,
+        "source": {
+            "sourceId": "source-a",
+            "constructor": "HTMLCanvasElement",
+            "width": 32,
+            "height": 32,
+            "contentVersion": 8,
+            "canvasId": "canvas-a",
+        },
+        "target": {"canvasId": "canvas-b", "width": 32, "height": 32},
+        "sourceRect": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "destination": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "transform": dict(IDENTITY),
+        "globalAlpha": 1,
+        "globalCompositeOperation": "source-over",
+        "filter": "none",
+    }]
+    decoded = decode_compact_completed_mappings(_compact_payload(record))
+
+    assert decoded is not None
+    draw = decoded["completedMappings"][0]["nonImageBitmapDraws"][0]
+    assert draw["traceEpoch"] == 7
+    assert draw["source"]["contentVersion"] == 8
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -1006,6 +1035,7 @@ def _cropped_scaled_chain_fixture() -> tuple[dict, dict, dict, dict]:
     downstream["segmentMutationObserverAvailable"] = True
     downstream["segmentMutationObserverTakeRecordsAvailable"] = True
     downstream["segmentUnknownMutation"] = False
+    downstream["segmentTraceEpoch"] = 1
     downstream["segmentFirstTileOperationIndex"] = None
     downstream["segmentLastTileOperationIndex"] = None
     downstream["tileDraws"] = []
@@ -1022,6 +1052,7 @@ def _cropped_scaled_chain_fixture() -> tuple[dict, dict, dict, dict]:
         "transform": dict(IDENTITY), "globalAlpha": 1,
         "globalCompositeOperation": "source-over", "filter": "none",
         "imageSmoothingEnabled": True, "imageSmoothingQuality": "high",
+        "traceEpoch": 1,
     }]
     summary = {
         "mappingId": "mapping-cropped", "sourceCanvasId": "canvas-a", "targetCanvasId": "canvas-b",
@@ -1103,6 +1134,162 @@ def test_scaled_canvas_source_accepts_only_observed_cropped_one_hop() -> None:
     unknown["segmentUnknownMutation"] = True
     unknown_result = analyze_purchased_mapping({"completedMappings": [unknown]}, candidate.upstream_renderer_draw())
     assert not unknown_result.proven
+
+
+def test_opt_in_executed_full_clear_requires_continuous_versions_and_default_rejects() -> None:
+    upstream, downstream, summary, downstream_draw = _cropped_scaled_chain_fixture()
+    upstream.update({
+        "segmentResetKind": "clearRect",
+        "segmentTraceEpoch": 1,
+        "sourceSnapshotId": "snapshot-a",
+        "sourceSnapshotContentVersion": 8,
+        "segmentExecutedFullClearWitness": {
+            "version": 1,
+            "kind": "executed_full_clear",
+            "operationIndex": 1,
+            "canvasId": "canvas-a",
+            "targetCanvasId": "canvas-a",
+            "traceEpoch": 1,
+            "resetEpoch": 1,
+            "dimensionsBefore": {"width": 17, "height": 16},
+            "dimensionsAfter": {"width": 17, "height": 16},
+            "clearRectangle": {"x": 0, "y": 0, "width": 17, "height": 16},
+            "transformBefore": dict(IDENTITY),
+            "transformAfter": dict(IDENTITY),
+            "contextSafetyBefore": {"knownNoClip": True, "saveStackKnown": True, "saveStackDepth": 0},
+            "contextSafetyAfter": {"knownNoClip": True, "saveStackKnown": True, "saveStackDepth": 0},
+            "contextLostBefore": False,
+            "contextLostAfter": False,
+            "observerAvailable": True,
+            "takeRecordsAvailable": True,
+            "observerFlushedBefore": True,
+            "observerFlushedAfter": True,
+            "unknownMutationBefore": False,
+            "unknownMutationAfter": False,
+            "clearReturned": True,
+            "canvasResetObservationAvailable": True,
+            "contentVersionBefore": 1,
+            "contentVersionAfter": 2,
+        },
+    })
+    for index, tile in enumerate(upstream["tileDraws"]):
+        tile.update({
+            "targetContentVersionBefore": index + 2,
+            "targetContentVersionAfter": index + 3,
+        })
+    downstream_draw["traceEpoch"] = 1
+    downstream["nonImageBitmapDraws"][0]["source"]["contentVersion"] = 8
+    downstream["nonImageBitmapDraws"][0]["targetContentVersionBefore"] = 3
+    downstream["nonImageBitmapDraws"][0]["targetContentVersionAfter"] = 4
+    downstream_draw["source"].update({"contentVersion": 4, "resetEpoch": 2})
+    downstream_draw["fullSourceSnapshotId"] = "snapshot-b-full"
+    downstream_draw["targetSnapshotId"] = "snapshot-renderer"
+    default_downstream = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    candidate = resolve_scaled_canvas_source_candidate(
+        default_downstream, downstream_draw, [summary]
+    )
+    assert candidate is not None
+    assert candidate.copy_target_content_version_before == 3
+    assert candidate.copy_target_content_version_after == 4
+    assert candidate.selected_source_canvas_id == "canvas-b"
+    assert candidate.selected_source_content_version == 4
+    assert candidate.selected_source_snapshot_id == "snapshot-b-full"
+    assert candidate.selected_target_snapshot_id == "snapshot-renderer"
+    upstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [upstream]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(upstream_analysis, candidate)
+    assert validate_scaled_canvas_source_analysis(
+        upstream_analysis, candidate, allow_executed_full_clear=True
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        upstream_analysis,
+        replace(candidate, copy_trace_epoch=2),
+        allow_executed_full_clear=True,
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        upstream_analysis,
+        replace(candidate, parent_segment_trace_epoch=2),
+        allow_executed_full_clear=True,
+    )
+    for field, value in (
+        ("copy_target_content_version_after", 5),
+        ("selected_source_canvas_id", "other-canvas"),
+        ("selected_source_content_version", 5),
+        ("selected_source_snapshot_id", None),
+        ("selected_target_snapshot_id", None),
+        ("selected_source_reset_epoch", 1),
+    ):
+        assert not validate_scaled_canvas_source_analysis(
+            upstream_analysis,
+            replace(candidate, **{field: value}),
+            allow_executed_full_clear=True,
+        )
+    reordered = copy.deepcopy(upstream)
+    reordered["tileDraws"][0]["operationIndex"], reordered["tileDraws"][1]["operationIndex"] = (
+        reordered["tileDraws"][1]["operationIndex"],
+        reordered["tileDraws"][0]["operationIndex"],
+    )
+    reordered_analysis = analyze_purchased_mapping(
+        {"completedMappings": [reordered]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        reordered_analysis, candidate, allow_executed_full_clear=True
+    )
+    broken = copy.deepcopy(upstream)
+    broken["tileDraws"][2]["targetContentVersionBefore"] += 1
+    broken_analysis = analyze_purchased_mapping(
+        {"completedMappings": [broken]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        broken_analysis, candidate, allow_executed_full_clear=True
+    )
+    missing_witness = copy.deepcopy(upstream)
+    missing_witness.pop("segmentExecutedFullClearWitness")
+    missing_analysis = analyze_purchased_mapping(
+        {"completedMappings": [missing_witness]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        missing_analysis, candidate, allow_executed_full_clear=True
+    )
+    wrong_epoch = copy.deepcopy(upstream)
+    wrong_epoch["segmentExecutedFullClearWitness"]["traceEpoch"] = 2
+    wrong_epoch_analysis = analyze_purchased_mapping(
+        {"completedMappings": [wrong_epoch]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        wrong_epoch_analysis, candidate, allow_executed_full_clear=True
+    )
+    malformed_epoch = copy.deepcopy(upstream)
+    malformed_epoch["segmentTraceEpoch"] = "1"
+    malformed_epoch_analysis = analyze_purchased_mapping(
+        {"completedMappings": [malformed_epoch]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        malformed_epoch_analysis, candidate, allow_executed_full_clear=True
+    )
+    malformed_version = copy.deepcopy(upstream)
+    malformed_version["tileDraws"][0]["targetContentVersionBefore"] = True
+    malformed_version_analysis = analyze_purchased_mapping(
+        {"completedMappings": [malformed_version]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(
+        malformed_version_analysis, candidate, allow_executed_full_clear=True
+    )
+    for field, value in (
+        ("target_reset_observation_available", False),
+        ("target_mutation_observer_available", False),
+        ("target_mutation_observer_take_records_available", False),
+        ("target_unknown_mutation", True),
+        ("target_canvas_generation", candidate.target_canvas_generation + 1),
+    ):
+        assert not validate_scaled_canvas_source_analysis(
+            upstream_analysis,
+            replace(candidate, **{field: value}),
+            allow_executed_full_clear=True,
+        )
 
 
 @pytest.mark.parametrize(

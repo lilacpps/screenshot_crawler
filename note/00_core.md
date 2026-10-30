@@ -2665,10 +2665,12 @@ Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
 MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback. Hanayume's
 mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
 mapping was added on 2026-10-19 after the fractional-destination capture correction.
-BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback,
-subject to the strict saved-first-page PNG exception described below. This
-is an extension-based recrawl policy, not proof that every PNG has reduced fidelity:
-a verified native-size PNG retained after codec failure is also classified as a fallback format.
+BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback.
+A cover-only `page-0001.png` is `PREFERRED_ONLY` when the archive also contains
+at least one JPEG companion; all other PNGs remain recrawl candidates. This is
+an extension-based recrawl policy, not proof that every PNG has reduced
+fidelity: a verified native-size PNG retained after codec failure is also
+classified as a fallback format.
 An explicitly unknown
 site fails closed; work-only scans skip sources whose policy is undefined.
 
@@ -2871,3 +2873,34 @@ checks cover 50,000 Events, 50,000 log lines over 5 MiB, timer responsiveness,
 bounded rendering, manual anchor/follow, history, rerun, and input-hash
 preservation. No real site or CDP was accessed, and no operational Catalog,
 Watchlist, Books, quota, or ticket input was used; all fixtures were synthetic.
+## BookWalker PNG recrawl and durable diagnostics (2026-10-30)
+
+BookWalker archive inspection treats a cover-only `page-0001.png` as
+`PREFERRED_ONLY` when the same archive has at least one JPEG companion; the
+cover may then be selected for recrawl, but this is not a body or terminal
+exception. All other PNGs, including PNG-only covers and terminal-looking
+images, remain `FALLBACK_INCLUDED`. The adapter may classify a positively
+identified terminal notice/logo as an AD screen during normal navigation, but
+this state decision does not alter ZIP or Catalog recrawl policy. Unknown
+terminal images remain content.
+
+BookWalker capture attempts write bounded, sanitized, site-local JSONL under
+`output/diagnostics/bookwalker/` (or `BOOKWALKER_DIAGNOSTICS_DIR`). Records keep
+the run UUID, page counter, capture stage/reason, candidate count and selected
+draw/geometry metadata without URLs, credentials, signed query values, or image
+bytes. Diagnostic write failures never change capture output. This is an
+adapter-local diagnostic sidecar; Core capture and packaging contracts are
+unchanged.
+
+
+## BookWalker capture diagnostics contract (2026-10-30)
+
+The terminal AD gate first inspects the complete pinned visible canvas with the
+calibrated source-independent descriptor. It requires the authorized content
+identity, counter, actual canvas identity, and stable frame before and after the
+read; a trace ID is optional. Notice is recognized only at N-1/N and logo only
+at N/N, using the registered role descriptors. If the complete-canvas read is
+unavailable or does not match, the ordinary exact native artifact path remains
+the fallback. Screen dimensions, filenames, timing, and source/JPEG similarity
+are never attribution evidence. Unknown or unstable artifacts remain content,
+and existing END/final-navigation checks remain authoritative.

@@ -495,6 +495,64 @@ continues to use the rendered-canvas fallback.
 
 For mutable purchased-viewer canvas sources, draw-time pixel snapshots are allowed, but PNG encoding occurs only after the selected draw calls are known.
 
+BookWalker also has a narrow direct one-hop original-JPEG path for a single
+full-frame `ImageBitmap -> HTMLCanvasElement` copy followed by one
+`HTMLCanvasElement -> renderer` draw. It retains actual object references,
+hook token, operation order, content versions, draw state, immutable A/B/ROI
+snapshots, and the current DOM canvas identity. A candidate is returned as
+the original JPEG only when it is unique and full-RGBA exact to A, the replay
+of A into B and B into the observed renderer backing/destination (including
+fractional source crops) is exact, and the immediate ROI is exact to the
+current ROI. Known post-draw pixel writes may remain eligible only when that
+exact current-ROI check and final token/operation/version check hold. A
+follow-up `drawImage` is eligible only for an observed integer-aligned,
+identity-transform, opaque source-over draw with no filter or shadow, a fully
+in-range source rectangle, and a destination rectangle proven strictly outside
+the selected ROI; fractional, transformed, shadowed, clipped, or uncertain
+draws remain hard failures. A known unclipped `save`/`restore` stack is tracked
+per context after a successful canvas reset; trace-window resets do not erase
+that state. Unknown/state/clip/reset mutation, stale or missing identity,
+ambiguous candidates, unions/spreads, PNG sources, or any comparison failure
+fall back to the existing native PNG path. This direct shape is independent
+of `BOOKWALKER_LOSSLESS_JPEG_OUTPUT`; it is still gated by native capture and
+`enable_original_jpeg_capture`, and the legacy tiled reconstruction contract
+is unchanged. When a page performs a later renderer draw, the earlier chain
+remains invalidated; bounded retention may select the newest renderer anchor
+only when that new actual-object chain independently satisfies the same exact
+proof. Retention evicts whole source/intermediate/renderer chains under the
+snapshot budget, so an orphaned renderer record cannot be accepted.
+The direct attempt captures the hook token and page-relevant geometry version
+before geometry selection; materialization and final atomic state must match
+that same stamp. If the bounded geometry ledger evicts a page-relevant entry,
+a sticky incomplete-history flag forces native PNG fallback for the page
+lifetime rather than treating the surviving rightmost draw as complete cover
+geometry.
+
+The existing page-geometry ledger is bounded at 8192 entries only while direct
+original capture is enabled for the first-page window; disabled/body tracing
+retains its 500-entry bound.
+
+BookWalker also emits a bounded, sanitized site-local JSONL diagnostic record
+for each capture attempt. It retains the run UUID, explicit matcher attempt and
+candidate counts, capture stage/reason, counter, selected native draw and
+current-canvas geometry. It never stores image bytes, credentials, headers, or
+signed URLs, and a diagnostic write failure cannot alter capture output.
+
+The adapter's terminal AD policy is separate from source capture. It first
+inspects the complete current visible canvas without arming or clearing capture
+state and may recognize only the calibrated source-independent terminal
+descriptor at its fixed role (notice at N-1/N, logo at N/N). RGBA is flattened
+onto white, the full foreground union is aspect-preserving letterboxed, and a
+256-bit low-frequency perceptual hash is compared with the verified roles. The
+pinned DOM canvas, authorized content identity, counter, and frame must remain
+stable; no trace-id is required. When the complete-canvas read is unavailable or
+does not match, the adapter may use the ordinary exact native draw call and
+source snapshot as a fallback, with stable counter/content identity, single
+geometry, source bounds, and trace anchor before/after materialization. The
+native fallback never attributes JPEG/source or saves a crop. Unknown, partial,
+stale, changed, or role-mismatched images remain CONTENT; the existing
+final-navigation and END confirmation remain authoritative.
+
 The BookWalker `BOOKWALKER_CAPTURE_MODE=canvas` mode is retained as a diagnostic lower-level control and bypasses native/original capture.
 
 ### Manga ONE

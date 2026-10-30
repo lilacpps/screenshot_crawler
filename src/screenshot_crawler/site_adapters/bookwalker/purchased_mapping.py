@@ -10,6 +10,7 @@ ambiguous or incomplete trace.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 from collections import Counter
@@ -103,6 +104,14 @@ class PurchasedMapping:
     visible_dimensions: tuple[int, int] | None = None
     tile_dimensions_uniform: bool = True
     tile_dimension_variants: tuple[tuple[int, int], ...] = ()
+    # P4B diagnostic-only clearRect lineage.  These are optional so the
+    # ordinary dimension-reset and legacy contracts remain byte-for-byte
+    # compatible when the opt-in proof is disabled.
+    segment_trace_epoch: int | None = None
+    source_snapshot_content_version: int | None = None
+    segment_executed_full_clear_witness: dict[str, Any] | None = None
+    tile_content_versions: tuple[dict[str, int | None], ...] = ()
+    tile_operation_indices: tuple[int, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """Return the small JSON-compatible contract used by diagnostics."""
@@ -158,6 +167,11 @@ class PurchasedMapping:
                 {"width": width, "height": height}
                 for width, height in self.tile_dimension_variants
             ],
+            "segment_trace_epoch": self.segment_trace_epoch,
+            "source_snapshot_content_version": self.source_snapshot_content_version,
+            "segment_executed_full_clear_witness": self.segment_executed_full_clear_witness,
+            "tile_content_versions": [dict(item) for item in self.tile_content_versions],
+            "tile_operation_indices": list(self.tile_operation_indices),
             "source_canvas_generation": self.source_canvas_generation,
             "source_snapshot_id": self.source_snapshot_id,
             "segment_reset_kind": self.segment_reset_kind,
@@ -216,6 +230,11 @@ class MappingAnalysis:
     segment_unknown_mutation: bool | None = None
     segment_clear_canvas_generation: int | None = None
     segment_clear_dimensions: tuple[int, int] | None = None
+    segment_trace_epoch: int | None = None
+    source_snapshot_content_version: int | None = None
+    segment_executed_full_clear_witness: dict[str, Any] | None = None
+    tile_content_versions: tuple[dict[str, int | None], ...] = ()
+    tile_operation_indices: tuple[int, ...] = ()
 
     @property
     def proven(self) -> bool:
@@ -266,6 +285,11 @@ class MappingAnalysis:
                 list(self.segment_clear_dimensions)
                 if self.segment_clear_dimensions is not None else None
             ),
+            "segment_trace_epoch": self.segment_trace_epoch,
+            "source_snapshot_content_version": self.source_snapshot_content_version,
+            "segment_executed_full_clear_witness": self.segment_executed_full_clear_witness,
+            "tile_content_versions": [dict(item) for item in self.tile_content_versions],
+            "tile_operation_indices": list(self.tile_operation_indices),
         }
         if self.mapping is not None:
             result.update({
@@ -304,6 +328,13 @@ class MappingAnalysis:
                     list(self.mapping.segment_clear_dimensions)
                     if self.mapping.segment_clear_dimensions is not None else None
                 ),
+                "segment_trace_epoch": self.mapping.segment_trace_epoch,
+                "source_snapshot_content_version": self.mapping.source_snapshot_content_version,
+                "segment_executed_full_clear_witness": self.mapping.segment_executed_full_clear_witness,
+                "tile_content_versions": [
+                    dict(item) for item in self.mapping.tile_content_versions
+                ],
+                "tile_operation_indices": list(self.mapping.tile_operation_indices),
             })
         return result
 
@@ -339,6 +370,18 @@ class ScaledCanvasSourceCandidate:
     target_mutation_observer_take_records_available: bool | None = None
     target_unknown_mutation: bool | None = None
     target_clear_canvas_generation: int | None = None
+    source_content_version: int | None = None
+    renderer_trace_epoch: int | None = None
+    renderer_operation_index: int | None = None
+    copy_trace_epoch: int | None = None
+    parent_segment_trace_epoch: int | None = None
+    copy_target_content_version_before: int | None = None
+    copy_target_content_version_after: int | None = None
+    selected_source_canvas_id: str | None = None
+    selected_source_content_version: int | None = None
+    selected_source_snapshot_id: str | None = None
+    selected_target_snapshot_id: str | None = None
+    selected_source_reset_epoch: int | None = None
 
     @property
     def scale_x(self) -> float:
@@ -395,6 +438,18 @@ class ScaledCanvasSourceCandidate:
             "provenance_target_mutation_observer_take_records_available": self.target_mutation_observer_take_records_available,
             "provenance_target_unknown_mutation": self.target_unknown_mutation,
             "provenance_target_clear_canvas_generation": self.target_clear_canvas_generation,
+            "provenance_source_content_version": self.source_content_version,
+            "provenance_renderer_trace_epoch": self.renderer_trace_epoch,
+            "provenance_renderer_operation_index": self.renderer_operation_index,
+            "provenance_copy_trace_epoch": self.copy_trace_epoch,
+            "provenance_parent_segment_trace_epoch": self.parent_segment_trace_epoch,
+            "provenance_copy_target_content_version_before": self.copy_target_content_version_before,
+            "provenance_copy_target_content_version_after": self.copy_target_content_version_after,
+            "provenance_selected_source_canvas_id": self.selected_source_canvas_id,
+            "provenance_selected_source_content_version": self.selected_source_content_version,
+            "provenance_selected_source_snapshot_id": self.selected_source_snapshot_id,
+            "provenance_selected_target_snapshot_id": self.selected_target_snapshot_id,
+            "provenance_selected_source_reset_epoch": self.selected_source_reset_epoch,
         }
 
 
@@ -443,6 +498,13 @@ def _integer(value: object) -> int:
     if number != round(number):
         raise ValueError("non-integer trace geometry")
     return int(number)
+
+
+def _strict_integer(value: object) -> int:
+    """Decode proof identity/version fields without coercing JSON values."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("strict trace integer has an impossible type")
+    return value
 
 
 def _rect(value: object) -> tuple[int, int, int, int] | None:
@@ -671,6 +733,26 @@ def _decode_compact_tiles(
             "globalCompositeOperation": composite,
             "filter": filter_value,
         })
+    if "tileVersions" in mapping:
+        versions = mapping["tileVersions"]
+        if not isinstance(versions, list) or len(versions) != len(tiles):
+            raise ValueError("compact tile versions do not match tile rows")
+        for tile, version_row in zip(tiles, versions, strict=True):
+            if not isinstance(version_row, list) or len(version_row) != 3:
+                raise ValueError("compact tile version row has the wrong length")
+            keys = (
+                "sourceContentVersion",
+                "targetContentVersionBefore",
+                "targetContentVersionAfter",
+            )
+            for key, raw in zip(keys, version_row, strict=True):
+                if raw is None:
+                    tile[key] = None
+                    continue
+                number = _compact_integer(raw)
+                if number < 0:
+                    raise ValueError("compact tile content version is negative")
+                tile[key] = number
     return tiles
 
 
@@ -695,6 +777,11 @@ def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]
             "width": _compact_number(_compact_required(source_value, "width")),
             "height": _compact_number(_compact_required(source_value, "height")),
         }
+        if source_value.get("contentVersion") is not None:
+            source_content_version = _compact_integer(source_value["contentVersion"])
+            if source_content_version < 0:
+                raise ValueError("compact provenance source content version is negative")
+            source["contentVersion"] = source_content_version
         canvas_id = source_value.get("canvasId", source_value.get("sourceCanvasId"))
         if canvas_id is not None and not isinstance(canvas_id, str):
             raise TypeError("compact provenance source canvas id has an impossible type")
@@ -714,6 +801,17 @@ def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]
             "globalCompositeOperation": _compact_required(item, "globalCompositeOperation"),
             "filter": _compact_required(item, "filter"),
         }
+        if item.get("traceEpoch") is not None:
+            trace_epoch = _compact_integer(item["traceEpoch"])
+            if trace_epoch < 0:
+                raise ValueError("compact provenance trace epoch is negative")
+            draw["traceEpoch"] = trace_epoch
+        for key in ("targetContentVersionBefore", "targetContentVersionAfter"):
+            if item.get(key) is not None:
+                content_version = _compact_integer(item[key])
+                if content_version < 0:
+                    raise ValueError(f"compact provenance {key} is negative")
+                draw[key] = content_version
         if "imageSmoothingEnabled" in item:
             smoothing_enabled = item["imageSmoothingEnabled"]
             if not isinstance(smoothing_enabled, bool):
@@ -800,6 +898,112 @@ def _decode_compact_mapping_summaries(value: object) -> list[dict[str, Any]]:
             result["unknownMutation"] = item["unknownMutation"]
         summaries.append(result)
     return summaries
+
+
+def _decode_executed_full_clear_witness(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("compact clear witness is not an object")
+    if (
+        isinstance(value.get("version"), bool)
+        or not isinstance(value.get("version"), int)
+        or value.get("version") != 1
+        or value.get("kind") != "executed_full_clear"
+    ):
+        raise ValueError("compact clear witness version/kind is invalid")
+    canvas_id = value.get("canvasId")
+    if not isinstance(canvas_id, str) or not canvas_id:
+        raise TypeError("compact clear witness canvas identity is invalid")
+    integer_fields = (
+        "operationIndex", "traceEpoch", "resetEpoch",
+        "contentVersionBefore", "contentVersionAfter",
+    )
+    result: dict[str, Any] = {"version": 1, "kind": "executed_full_clear", "canvasId": canvas_id}
+    target_canvas_id = value.get("targetCanvasId")
+    if target_canvas_id is not None and (
+        not isinstance(target_canvas_id, str) or not target_canvas_id
+    ):
+        raise TypeError("compact clear witness target canvas identity is invalid")
+    result["targetCanvasId"] = target_canvas_id
+    for key in integer_fields:
+        number = _compact_integer(_compact_required(value, key))
+        if number < 0:
+            raise ValueError("compact clear witness index/version is negative")
+        result[key] = number
+    if result["contentVersionAfter"] <= result["contentVersionBefore"]:
+        raise ValueError("compact clear witness content version did not advance")
+    for key in ("dimensionsBefore", "dimensionsAfter"):
+        dimensions = _compact_required(value, key)
+        if not isinstance(dimensions, Mapping):
+            raise TypeError("compact clear witness dimensions are invalid")
+        width = _compact_integer(_compact_required(dimensions, "width"))
+        height = _compact_integer(_compact_required(dimensions, "height"))
+        if width <= 0 or height <= 0:
+            raise ValueError("compact clear witness dimensions are invalid")
+        result[key] = {"width": width, "height": height}
+    result["clearRectangle"] = _compact_rectangle(
+        _compact_required(value, "clearRectangle")
+    )
+    if result["dimensionsBefore"] != result["dimensionsAfter"]:
+        raise ValueError("compact clear witness dimensions changed")
+    dimensions = result["dimensionsAfter"]
+    rectangle = result["clearRectangle"]
+    if (
+        rectangle["x"] != 0
+        or rectangle["y"] != 0
+        or rectangle["width"] != dimensions["width"]
+        or rectangle["height"] != dimensions["height"]
+    ):
+        raise ValueError("compact clear witness is not a full clear")
+    for key in ("transformBefore", "transformAfter"):
+        result[key] = _compact_transform(_compact_required(value, key))
+        if result[key] != {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}:
+            raise ValueError("compact clear witness transform is not identity")
+    for key in ("contextSafetyBefore", "contextSafetyAfter"):
+        safety = _compact_required(value, key)
+        if not isinstance(safety, Mapping):
+            raise TypeError("compact clear witness context safety is invalid")
+        for safety_key in ("knownNoClip", "saveStackKnown"):
+            if not isinstance(_compact_required(safety, safety_key), bool):
+                raise TypeError("compact clear witness safety flag is invalid")
+        depth = _compact_integer(_compact_required(safety, "saveStackDepth"))
+        if depth < 0:
+            raise ValueError("compact clear witness save stack depth is negative")
+        result[key] = {
+            "knownNoClip": safety["knownNoClip"],
+            "saveStackKnown": safety["saveStackKnown"],
+            "saveStackDepth": depth,
+        }
+        if not safety["knownNoClip"] or not safety["saveStackKnown"]:
+            raise ValueError("compact clear witness context safety is unknown")
+    for key in (
+        "contextLostBefore", "contextLostAfter", "observerAvailable",
+        "takeRecordsAvailable", "observerFlushedBefore", "observerFlushedAfter",
+        "unknownMutationBefore", "unknownMutationAfter", "clearReturned",
+        "canvasResetObservationAvailable",
+    ):
+        flag = value.get(key) if key == "canvasResetObservationAvailable" else _compact_required(value, key)
+        if key == "canvasResetObservationAvailable" and flag is None:
+            result[key] = None
+            continue
+        if not isinstance(flag, bool):
+            raise TypeError("compact clear witness flag is invalid")
+        result[key] = flag
+    if result["contextLostBefore"] or result["contextLostAfter"]:
+        raise ValueError("compact clear witness reports a lost context")
+    if not all(result[key] for key in (
+        "observerAvailable", "takeRecordsAvailable",
+        "observerFlushedBefore", "observerFlushedAfter", "clearReturned",
+    )):
+        raise ValueError("compact clear witness observer/return proof is incomplete")
+    if result["unknownMutationBefore"] or result["unknownMutationAfter"]:
+        raise ValueError("compact clear witness has unknown mutation")
+    reset_available = result.get("canvasResetObservationAvailable")
+    if reset_available is not None and not isinstance(reset_available, bool):
+        raise TypeError("compact clear witness reset observation flag is invalid")
+    result["canvasResetObservationAvailable"] = reset_available
+    return result
 
 
 def _decode_compact_mapping(value: object) -> dict[str, Any]:
@@ -934,6 +1138,21 @@ def _decode_compact_mapping(value: object) -> dict[str, Any]:
         if snapshot_error is not None and not isinstance(snapshot_error, str):
             raise TypeError("compact source snapshot error has an impossible type")
         optional_fields["sourceSnapshotError"] = snapshot_error
+    if "segmentExecutedFullClearWitness" in value:
+        optional_fields["segmentExecutedFullClearWitness"] = (
+            _decode_executed_full_clear_witness(value["segmentExecutedFullClearWitness"])
+        )
+    if "segmentExecutedFullClearWitnessRejection" in value:
+        rejection = value["segmentExecutedFullClearWitnessRejection"]
+        if rejection is not None and not isinstance(rejection, Mapping):
+            raise TypeError("compact clear witness rejection is invalid")
+        optional_fields["segmentExecutedFullClearWitnessRejection"] = rejection
+    for key in ("segmentTraceEpoch", "sourceSnapshotContentVersion"):
+        if key in value:
+            number = _compact_integer(value[key])
+            if number < 0:
+                raise ValueError(f"compact {key} is negative")
+            optional_fields[key] = number
     return {
         "mappingId": mapping_id,
         "rendererOperationIndex": renderer_operation_index,
@@ -1645,12 +1864,199 @@ def resolve_scaled_canvas_source_candidate(
         ),
         target_unknown_mutation=downstream_analysis.segment_unknown_mutation,
         target_clear_canvas_generation=target_clear_canvas_generation,
+        source_content_version=(
+            _operation_identity(source.get("contentVersion"))
+        ),
+        renderer_trace_epoch=(
+            _operation_identity(downstream_renderer_draw.get("traceEpoch"))
+        ),
+        renderer_operation_index=downstream_renderer_index,
+        copy_trace_epoch=_operation_identity(non_image.get("traceEpoch")),
+        parent_segment_trace_epoch=downstream_analysis.segment_trace_epoch,
+        copy_target_content_version_before=_operation_identity(
+            non_image.get("targetContentVersionBefore")
+            if non_image.get("targetContentVersionBefore") is not None
+            else (target or {}).get("contentVersion")
+        ),
+        copy_target_content_version_after=_operation_identity(
+            non_image.get("targetContentVersionAfter")
+        ),
+        selected_source_canvas_id=(
+            str(
+                selected_source.get("canvasId")
+                or selected_source.get("sourceCanvasId")
+                or ""
+            )
+            if isinstance(selected_source, Mapping)
+            else None
+        ),
+        selected_source_content_version=(
+            _operation_identity(selected_source.get("contentVersion"))
+            if isinstance(selected_source, Mapping)
+            else None
+        ),
+        selected_source_snapshot_id=(
+            str(downstream_renderer_draw.get("fullSourceSnapshotId"))
+            if downstream_renderer_draw.get("fullSourceSnapshotId") is not None
+            else None
+        ),
+        selected_target_snapshot_id=(
+            str(downstream_renderer_draw.get("targetSnapshotId"))
+            if downstream_renderer_draw.get("targetSnapshotId") is not None
+            else None
+        ),
+        selected_source_reset_epoch=selected_source_generation,
     )
+
+
+def _validate_executed_full_clear_source_analysis(
+    analysis: MappingAnalysis,
+    candidate: ScaledCanvasSourceCandidate,
+) -> bool:
+    """Validate the opt-in clearRect A→B lineage contract.
+
+    This deliberately sits beside the legacy dimension-reset contract.  It
+    is diagnostic-only until a caller explicitly opts in; missing lineage
+    fields fail closed rather than inheriting a reset flag or version.
+    """
+    mapping = analysis.mapping
+    witness = mapping.segment_executed_full_clear_witness if mapping else None
+    if mapping is None or not isinstance(witness, Mapping):
+        return False
+    if mapping.segment_reset_kind != "clearRect":
+        return False
+    if witness.get("kind") != "executed_full_clear":
+        return False
+    if witness.get("canvasResetObservationAvailable") is not True:
+        return False
+    if witness.get("canvasId") != mapping.source_canvas_id:
+        return False
+    if witness.get("targetCanvasId") != mapping.source_canvas_id:
+        return False
+    if mapping.segment_trace_epoch is None or witness.get("traceEpoch") != mapping.segment_trace_epoch:
+        return False
+    if mapping.source_snapshot_id is None or mapping.source_snapshot_content_version is None:
+        return False
+    if candidate.source_content_version is None or (
+        candidate.source_content_version != mapping.source_snapshot_content_version
+    ):
+        return False
+    if (
+        candidate.renderer_operation_index is None
+        or candidate.renderer_operation_index <= candidate.copy_operation_index
+    ):
+        return False
+    clear_index = mapping.clear_boundary_operation_index
+    renderer_index = mapping.renderer_draw_operation_index
+    if clear_index is None or renderer_index is None:
+        return False
+    if witness.get("operationIndex") != clear_index:
+        return False
+    if witness.get("resetEpoch") != mapping.segment_clear_canvas_generation:
+        return False
+    if witness.get("dimensionsAfter") != {
+        "width": mapping.visible_dimensions[0] if mapping.visible_dimensions else 0,
+        "height": mapping.visible_dimensions[1] if mapping.visible_dimensions else 0,
+    }:
+        return False
+    if witness.get("contentVersionAfter") != witness.get("contentVersionBefore", -1) + 1:
+        return False
+    if not all(
+        witness.get(key) is True
+        for key in (
+            "observerAvailable",
+            "takeRecordsAvailable",
+            "observerFlushedBefore",
+            "observerFlushedAfter",
+            "clearReturned",
+        )
+    ):
+        return False
+    if any(witness.get(key) is not False for key in (
+        "contextLostBefore", "contextLostAfter",
+        "unknownMutationBefore", "unknownMutationAfter",
+    )):
+        return False
+    if mapping.segment_overflow or mapping.segment_unknown_mutation:
+        return False
+    if mapping.unsafe_operation_count or mapping.unsafe_operation_types:
+        return False
+    operation_indices = mapping.tile_operation_indices
+    versions = mapping.tile_content_versions
+    if not operation_indices or len(operation_indices) != len(versions):
+        return False
+    if len(set(operation_indices)) != len(operation_indices):
+        return False
+    if any(
+        current <= previous
+        for previous, current in itertools.pairwise(operation_indices)
+    ):
+        return False
+    if not clear_index < min(operation_indices) <= max(operation_indices) < candidate.copy_operation_index < candidate.renderer_operation_index:
+        return False
+    expected_before = witness.get("contentVersionAfter")
+    for version in versions:
+        if any(version.get(key) is None for key in (
+            "targetContentVersionBefore",
+            "targetContentVersionAfter",
+        )):
+            return False
+        if version["targetContentVersionBefore"] != expected_before:
+            return False
+        if version["targetContentVersionAfter"] != expected_before + 1:
+            return False
+        if (
+            version.get("sourceContentVersion") is not None
+            and version["sourceContentVersion"] != mapping.source_snapshot_content_version
+        ):
+            return False
+        expected_before = version["targetContentVersionAfter"]
+    if expected_before != mapping.source_snapshot_content_version:
+        return False
+    epoch_chain = (
+        mapping.segment_trace_epoch,
+        candidate.copy_trace_epoch,
+        candidate.parent_segment_trace_epoch,
+        candidate.renderer_trace_epoch,
+    )
+    if any(epoch is None for epoch in epoch_chain) or len(set(epoch_chain)) != 1:
+        return False
+    # Executed-clear proofs must bind the copy's actual target to the
+    # renderer's actual B source.  Dimensions and operation order alone are
+    # insufficient because a different canvas can have the same shape.
+    if (
+        candidate.copy_target_content_version_before is None
+        or candidate.copy_target_content_version_after is None
+        or candidate.selected_source_canvas_id is None
+        or candidate.selected_source_canvas_id != candidate.target_canvas_id
+        or candidate.selected_source_content_version is None
+        or candidate.copy_target_content_version_after
+        != candidate.selected_source_content_version
+        or candidate.selected_source_reset_epoch is None
+        or candidate.selected_source_reset_epoch != candidate.target_canvas_generation
+        or not candidate.selected_source_snapshot_id
+        or not candidate.selected_target_snapshot_id
+        or candidate.copy_target_content_version_after
+        != candidate.copy_target_content_version_before + 1
+    ):
+        return False
+    coded_dimensions = mapping.coded_dimensions or mapping.source_dimensions
+    visible_dimensions = mapping.visible_dimensions or mapping.destination_dimensions
+    if coded_dimensions == visible_dimensions:
+        return False
+    return mapping.renderer_source_rect == {
+        "x": 0.0,
+        "y": 0.0,
+        "width": float(visible_dimensions[0]),
+        "height": float(visible_dimensions[1]),
+    }
 
 
 def validate_scaled_canvas_source_analysis(
     analysis: MappingAnalysis,
     candidate: ScaledCanvasSourceCandidate,
+    *,
+    allow_executed_full_clear: bool = False,
 ) -> bool:
     """Cross-check a full upstream proof against the downstream copy trace.
 
@@ -1675,13 +2081,9 @@ def validate_scaled_canvas_source_analysis(
     coded_dimensions = mapping.coded_dimensions or mapping.source_dimensions
     visible_dimensions = mapping.visible_dimensions or mapping.destination_dimensions
     equal_size = coded_dimensions == visible_dimensions
-    cropped = (
+    cropped_common = (
         not equal_size
         and mapping.mapping_provenance == "direct"
-        and mapping.segment_reset_kind == "canvas_dimension_reset"
-        and mapping.segment_reset_observation_available is True
-        and mapping.segment_mutation_observer_available is True
-        and mapping.segment_mutation_observer_take_records_available is True
         and candidate.target_reset_observation_available is True
         and candidate.target_mutation_observer_available is True
         and candidate.target_mutation_observer_take_records_available is True
@@ -1705,6 +2107,18 @@ def validate_scaled_canvas_source_analysis(
         and _numeric_rect(mapping.renderer_source_rect)
         == (0.0, 0.0, float(visible_dimensions[0]), float(visible_dimensions[1]))
     )
+    legacy_cropped = cropped_common and (
+        mapping.segment_reset_kind == "canvas_dimension_reset"
+        and mapping.segment_reset_observation_available is True
+        and mapping.segment_mutation_observer_available is True
+        and mapping.segment_mutation_observer_take_records_available is True
+    )
+    executed_cropped = (
+        allow_executed_full_clear
+        and cropped_common
+        and _validate_executed_full_clear_source_analysis(analysis, candidate)
+    )
+    cropped = legacy_cropped or executed_cropped
     if not equal_size and not cropped:
         return False
     if equal_size and (
@@ -1961,6 +2375,39 @@ def _analyze_completed_mapping(
     )
     if source_snapshot_id is not None and not isinstance(source_snapshot_id, str):
         return _reject_result("source canvas snapshot identity is invalid")
+    segment_trace_epoch_value = _record_segment_value(
+        record, segment, "segmentTraceEpoch", "segment_trace_epoch", "traceEpoch", "trace_epoch"
+    )
+    source_snapshot_content_version_value = _record_segment_value(
+        record, segment, "sourceSnapshotContentVersion", "source_snapshot_content_version"
+    )
+    segment_trace_epoch: int | None = None
+    source_snapshot_content_version: int | None = None
+    try:
+        if segment_trace_epoch_value is not None:
+            segment_trace_epoch = _strict_integer(segment_trace_epoch_value)
+        if source_snapshot_content_version_value is not None:
+            source_snapshot_content_version = _strict_integer(
+                source_snapshot_content_version_value
+            )
+    except (TypeError, ValueError):
+        return _reject_result("completed segment version metadata is invalid")
+    if (segment_trace_epoch is not None and segment_trace_epoch < 0) or (
+        source_snapshot_content_version is not None
+        and source_snapshot_content_version < 0
+    ):
+        return _reject_result("completed segment version metadata is invalid")
+    clear_witness_value = _record_segment_value(
+        record,
+        segment,
+        "segmentExecutedFullClearWitness",
+        "segment_executed_full_clear_witness",
+    )
+    if clear_witness_value is not None:
+        try:
+            clear_witness_value = _decode_executed_full_clear_witness(clear_witness_value)
+        except (TypeError, ValueError):
+            return _reject_result("completed segment clear witness is invalid")
     unknown_mutation_value = _record_segment_value(
         record, segment, "segmentUnknownMutation", "segment_unknown_mutation", "unknownMutation", "unknown_mutation"
     )
@@ -2011,6 +2458,11 @@ def _analyze_completed_mapping(
         "source_canvas_id": record_source_canvas_id,
         "source_canvas_generation": draw_target_epoch if draw_target_epoch is not None else reset_epoch,
         "source_snapshot_id": source_snapshot_id,
+        "segment_trace_epoch": segment_trace_epoch,
+        "source_snapshot_content_version": source_snapshot_content_version,
+        "segment_executed_full_clear_witness": (
+            dict(clear_witness_value) if isinstance(clear_witness_value, Mapping) else None
+        ),
         "segment_reset_kind": reset_kind_value if isinstance(reset_kind_value, str) else None,
         "segment_reset_observation_available": reset_observation,
         "segment_mutation_observer_available": observer_available,
@@ -2150,6 +2602,7 @@ def _analyze_completed_mapping(
     source_positions: list[tuple[int, int]] = []
     destination_positions: list[tuple[int, int]] = []
     operation_indices: list[int] = []
+    tile_content_versions: list[dict[str, int | None]] = []
     source_out_of_bounds = 0
     destination_out_of_bounds = 0
     coded_dimensions: tuple[int, int] | None = None
@@ -2205,9 +2658,37 @@ def _analyze_completed_mapping(
         # Coded S may be wider/taller than the draw-time canvas V.  Bounds
         # are recomputed against S after all tile source dimensions are known.
         try:
-            operation_indices.append(_integer(_first(tile, "operationIndex", "operation_index")))
+            operation_indices.append(
+                _strict_integer(_first(tile, "operationIndex", "operation_index"))
+            )
         except (TypeError, ValueError):
             return _reject_result("tile operation identity is unavailable", **base)
+        version_row: dict[str, int | None] = {}
+        for key in (
+            "sourceContentVersion",
+            "targetContentVersionBefore",
+            "targetContentVersionAfter",
+        ):
+            raw_version = _first(
+                tile,
+                key,
+                {
+                    "sourceContentVersion": "source_content_version",
+                    "targetContentVersionBefore": "target_content_version_before",
+                    "targetContentVersionAfter": "target_content_version_after",
+                }[key],
+            )
+            if raw_version is None:
+                version_row[key] = None
+                continue
+            try:
+                version_number = _strict_integer(raw_version)
+            except (TypeError, ValueError):
+                return _reject_result("tile content version metadata is invalid", **base)
+            if version_number < 0:
+                return _reject_result("tile content version metadata is invalid", **base)
+            version_row[key] = version_number
+        tile_content_versions.append(version_row)
         mappings.append({
             "source_x": sx,
             "source_y": sy,
@@ -2397,6 +2878,13 @@ def _analyze_completed_mapping(
         segment_clear_canvas_generation=clear_target_epoch,
         segment_clear_dimensions=clear_target_dimensions,
         source_snapshot_id=source_snapshot_id,
+        segment_trace_epoch=segment_trace_epoch,
+        source_snapshot_content_version=source_snapshot_content_version,
+        segment_executed_full_clear_witness=(
+            dict(clear_witness_value) if isinstance(clear_witness_value, Mapping) else None
+        ),
+        tile_content_versions=tuple(tile_content_versions),
+        tile_operation_indices=tuple(operation_indices),
     )
     return MappingAnalysis(
         status=MAPPING_PROVEN,
@@ -2423,6 +2911,13 @@ def _analyze_completed_mapping(
         segment_unknown_mutation=unknown_mutation_value,
         segment_clear_canvas_generation=clear_target_epoch,
         segment_clear_dimensions=clear_target_dimensions,
+        segment_trace_epoch=segment_trace_epoch,
+        source_snapshot_content_version=source_snapshot_content_version,
+        segment_executed_full_clear_witness=(
+            dict(clear_witness_value) if isinstance(clear_witness_value, Mapping) else None
+        ),
+        tile_content_versions=tuple(tile_content_versions),
+        tile_operation_indices=tuple(operation_indices),
     )
 
 

@@ -89,6 +89,7 @@ async ({sourceId}) => {
   const source = window.__bookwalkerNativeSourceObjects?.get(String(sourceId));
   if (!source || source.constructor?.name !== 'ImageBitmap') return null;
   const canvas = document.createElement('canvas');
+  window.__bookwalkerMarkInternalCanvas?.(canvas);
   canvas.width = 64;
   canvas.height = 64;
   const context = canvas.getContext('2d', {willReadFrequently: true});
@@ -137,6 +138,7 @@ async ({encoded, mimeType, sourceId}) => {
       };
     }
     const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
     canvas.width = source.width;
     canvas.height = source.height;
     const context = canvas.getContext('2d', {willReadFrequently: true});

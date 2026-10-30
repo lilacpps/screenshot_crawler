@@ -57,10 +57,14 @@ snapshot, eager B snapshot, and selected renderer destination ROI in-browser.
 The final replay keeps the renderer's actual backing-canvas dimensions and
 destination offset. Every comparison must be available, dimension-equal, and
 zero-difference, even when
-`BOOKWALKER_FINAL_PIXEL_VERIFY` is disabled; any unavailable, mismatched, or
-exceptional comparison returns native PNG for the whole spread. The current source-native priority is verified original JPEG, verified
-lossless reconstructed JPEG, source/native PNG, then rendered-canvas PNG fallback.
-Unavailable spread-native capture still falls back to the complete Core PNG path.
+`BOOKWALKER_FINAL_PIXEL_VERIFY` is disabled. An unavailable or mismatched proof
+returns the associated native PNG only while the selected native association
+and current page identity remain valid; a stale, missing, or ambiguous proof
+remains UNKNOWN and cannot reuse an old buffer. The current source-native
+priority is verified original JPEG, verified lossless reconstructed JPEG,
+source/native PNG, then rendered-canvas PNG fallback. Unavailable spread-native
+capture falls back to the complete Core PNG path only after the normal current
+identity checks pass.
 
 ## Spread and order
 
@@ -84,11 +88,30 @@ The URL `cid` is stored as content/work/source ID.
 
 - `#eobNext` → `NEXT_CONTENT`
 - visible `#endOfBook` → `END`
-- known final navigation from page counter `N/N` is handled so the following BookWalker logo canvas is not captured as content
+- the adapter first checks a bounded, source-independent complete-canvas image
+  matcher for the registered notice/logo roles, before geometry splitting. If
+  that complete-canvas read is unavailable or does not match, it may fall
+  through to the observed native notice at `N-1/N` and native logo artifact at
+  `N/N`. Both paths remain terminal-only; the existing final-navigation/END
+  checks remain authoritative
 - known ad markers → `AD`
 - otherwise ambiguous state → `UNKNOWN`
 
 Do not simplify this to a single END signal without live verification.
+
+Terminal classification is non-consuming. The approximate path first reads the
+complete current canvas before any geometry split and uses a white-flattened
+foreground union bbox, aspect-preserving 32x32 image normalization, and a
+calibrated 256-bit perceptual hash. If that read is unavailable or does not
+match, the native path reuses the ordinary selected draw call and source
+snapshot shape without arming or clearing capture state. Both paths require a
+stable pinned canvas identity and unchanged counter/frame. A missing/unstable
+native call, partial crop, changed counter, unknown image, mixed canvas, or role
+mismatch remains content. The known-image registry stores compact hashes and
+calibration metrics only; the approximate matcher never infers JPEG/source
+identity from filename, extension, or visual similarity. Successful and fallback
+capture attempts also write bounded, sanitized diagnostics JSONL under
+`output/diagnostics/bookwalker/` (override with `BOOKWALKER_DIAGNOSTICS_DIR`).
 
 ## Browser Session policy
 
@@ -137,6 +160,11 @@ Live headed-CDP checks confirmed:
 - spread capture in right-to-left order
 - renderer geometry-based page split
 - final `59/59` transition where the BookWalker logo appears in the canvas while `#endOfBook` becomes visible
+
+The prepare-recrawl scanner treats a cover-only `page-0001.png` with a JPEG
+companion as `PREFERRED_ONLY`; body and PNG-only pages remain
+`FALLBACK_INCLUDED`. Terminal-image handling is an adapter navigation decision
+and does not create a recrawl exception.
 
 These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
 

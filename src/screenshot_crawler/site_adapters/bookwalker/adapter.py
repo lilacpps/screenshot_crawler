@@ -10,13 +10,17 @@ import asyncio
 import base64
 import copy
 import hashlib
+import json
+import math
 import os
 import re
 import time
 from binascii import Error as BinasciiError
 from dataclasses import dataclass, replace
-from typing import Any
+from pathlib import Path
+from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
@@ -27,6 +31,7 @@ from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
 from screenshot_crawler.core.errors import (
     CaptureUnavailableError,
     PageChangeTimeoutError,
+    UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
@@ -66,6 +71,12 @@ from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     classify_reader_control,
     is_reader_control_candidate,
 )
+from screenshot_crawler.site_adapters.bookwalker.terminal_match import (
+    TERMINAL_DESCRIPTOR_SCRIPT,
+    decode_terminal_data_url,
+    describe_terminal_png,
+    match_terminal_descriptor,
+)
 
 _DRAW_TRACE_SCRIPT = """
 (() => {
@@ -75,9 +86,58 @@ _DRAW_TRACE_SCRIPT = """
   window.__bookwalkerCaptureMode = window.__bookwalkerCaptureMode || 'native';
   window.__bookwalkerNativeCaptureEnabled =
     window.__bookwalkerCaptureMode === 'native';
+  window.__bookwalkerDirectOriginalEnabled =
+    window.__bookwalkerDirectOriginalEnabled === true;
   window.__bookwalkerNativeDrawCalls = [];
   window.__bookwalkerNativeSourceObjects = new Map();
   window.__bookwalkerNativeSnapshots = new Map();
+  window.__bookwalkerNativeCaptureDiagnostics = {
+    nativeCallsSeen: 0,
+    nativeCallsAdmitted: 0,
+    nativeCallsRetained: 0,
+    nativeCallsEvicted: 0,
+    definitelySmallCallsDropped: 0,
+    geometrySmallCallsDropped: 0,
+    executedFullClearWitnessCount: 0,
+    rejectedFullClearWitnessCount: 0,
+  };
+  window.__bookwalkerResetNativeCaptureDiagnostics = () => {
+    window.__bookwalkerNativeCaptureDiagnostics = {
+      nativeCallsSeen: 0,
+      nativeCallsAdmitted: 0,
+      nativeCallsRetained: 0,
+      nativeCallsEvicted: 0,
+      definitelySmallCallsDropped: 0,
+      geometrySmallCallsDropped: 0,
+      executedFullClearWitnessCount: 0,
+      rejectedFullClearWitnessCount: 0,
+    };
+  };
+  // A direct one-hop record is deliberately separate from the tiled native
+  // mapping.  The cover path is a single ImageBitmap -> canvas copy followed
+  // by one canvas -> renderer draw.  Keep object references and canvas copies
+  // here; materialization/PNG encoding happens after the draw hook returns.
+  window.__bookwalkerDirectOneHopRecords = [];
+  window.__bookwalkerDirectOneHopSnapshots = new Map();
+  let nextDirectOneHopToken = 1;
+  let directOneHopSnapshotBytes = 0;
+  const directGeometryVersions = new WeakMap();
+  const directGeometryEvictedCanvasIds = new Set();
+  const DIRECT_GEOMETRY_LEDGER_LIMIT = 8192;
+  let directGeometryHistoryEvictions = 0;
+  window.__bookwalkerDirectOneHopToken = String(nextDirectOneHopToken++);
+  window.__bookwalkerResetDirectOneHop = () => {
+    window.__bookwalkerDirectOneHopRecords = [];
+    window.__bookwalkerDirectOneHopSnapshots.clear();
+    directOneHopSnapshotBytes = 0;
+    window.__bookwalkerDirectOneHopToken = String(nextDirectOneHopToken++);
+  };
+  const directGeometryVersionFor = canvas => Number(
+    directGeometryVersions.get(canvas) || 0,
+  );
+  const directGeometryHistoryIncompleteFor = canvas => (
+    Boolean(canvas) && directGeometryEvictedCanvasIds.has(getCanvasId(canvas))
+  );
 
   // These bounds replace the old global operation-list limit.  16,384 tile
   // records cover normal pages and 4K-class 32x32 tile grids with room for
@@ -99,13 +159,20 @@ _DRAW_TRACE_SCRIPT = """
   const knownAttributeMutations = new WeakMap();
   const canvasMutationObservers = new WeakMap();
   const canvasMutationObserverStates = new WeakMap();
+  const canvasContentVersions = new WeakMap();
+  const contextSafetyUnknown = new WeakMap();
+  const contextStates = new WeakMap();
+  const canvasContexts = new WeakMap();
+  const contextLossObserved = new WeakSet();
   const internalCanvases = new WeakSet();
   window.__bookwalkerCanvasResetObservationAvailable = false;
   window.__bookwalkerMarkInternalCanvas = canvas => {
     if (canvas) internalCanvases.add(canvas);
   };
 
+  let transformTraceEpoch = 0;
   const newTrace = () => ({
+    traceEpoch: ++transformTraceEpoch,
     nextOperationIndex: 0,
     activeSegments: {},
     completedMappings: [],
@@ -116,6 +183,8 @@ _DRAW_TRACE_SCRIPT = """
       observedOperationCount: 0,
       drawImageCount: 0,
       clearRectCount: 0,
+      executedFullClearWitnessCount: 0,
+      rejectedFullClearWitnessCount: 0,
       unsafeOperationCount: 0,
         canvasResetObservationAvailable: window.__bookwalkerCanvasResetObservationAvailable === true,
         canvasResetFailureCount: 0,
@@ -135,6 +204,67 @@ _DRAW_TRACE_SCRIPT = """
       try { canvas.dataset.bookwalkerTraceId = id; } catch (error) {}
     }
     return id;
+  };
+  // Read-only identity export for diagnostics; it is backed by the actual
+  // WeakMap object identity rather than a mutable DOM data attribute.
+  window.__bookwalkerCanvasIdentity = canvas => canvas ? getCanvasId(canvas) : null;
+  window.__bookwalkerCanvasResetEpoch = canvas => (
+    canvas ? Number(canvasResetEpochs.get(canvas) || 0) : null
+  );
+  const contentVersion = canvas => Number(canvasContentVersions.get(canvas) || 0);
+  const advanceContentVersion = canvas => {
+    if (!canvas) return 0;
+    const next = contentVersion(canvas) + 1;
+    canvasContentVersions.set(canvas, next);
+    return next;
+  };
+  const ensureContextState = context => {
+    if (!context) return null;
+    let state = contextStates.get(context);
+    if (!state) {
+      state = {
+        knownNoClip: (canvasResetEpochs.get(context.canvas) || 0) > 0,
+        saveStack: [],
+      };
+      contextStates.set(context, state);
+      const canvas = context.canvas;
+      const contexts = canvasContexts.get(canvas) || new Set();
+      contexts.add(context);
+      canvasContexts.set(canvas, contexts);
+    }
+    return state;
+  };
+  const markContextKnownFresh = context => {
+    const state = ensureContextState(context);
+    if (!state) return;
+    state.knownNoClip = true;
+    state.saveStack = [];
+    contextSafetyUnknown.delete(context);
+  };
+  const markCanvasContextsKnownFresh = canvas => {
+    for (const context of canvasContexts.get(canvas) || []) {
+      markContextKnownFresh(context);
+    }
+  };
+  const contextSafetyInfo = context => {
+    const state = ensureContextState(context);
+    return state ? {
+      knownNoClip: state.knownNoClip === true,
+      saveStackKnown: state.knownNoClip === true,
+      saveStackDepth: state.saveStack.length,
+    } : null;
+  };
+  const observeContextLoss = canvas => {
+    if (!canvas || contextLossObserved.has(canvas)
+        || typeof canvas.addEventListener !== 'function') return;
+    try {
+      canvas.addEventListener('contextlost', () => {
+        const trace = window.__bookwalkerTransformTrace;
+        directRecordMutation(canvas, Number(trace?.nextOperationIndex || 0) + 1, 'contextlost');
+        advanceContentVersion(canvas);
+      });
+      contextLossObserved.add(canvas);
+    } catch (error) {}
   };
   const getSourceId = source => {
     let id = sourceIds.get(source);
@@ -179,6 +309,19 @@ _DRAW_TRACE_SCRIPT = """
     }
     return {sourceRect: null, destination: null};
   };
+  // Keep only rectangles that are definitely unselectable out of the native
+  // candidate pool. Fractional, clipped, negative, and otherwise uncertain
+  // rectangles remain for the authoritative Python selector to decide.
+  const definitelySmallNativeDestination = destination => {
+    if (!destination) return false;
+    const values = [destination.x, destination.y, destination.width, destination.height]
+      .map(value => Number(value));
+    if (!values.every(Number.isFinite)) return false;
+    const [, , width, height] = values;
+    if (width < 0 || height < 0
+        || !Number.isInteger(width) || !Number.isInteger(height)) return false;
+    return width < 100 || height < 100;
+  };
   const readTransform = context => {
     try {
       const matrix = context.getTransform();
@@ -198,6 +341,8 @@ _DRAW_TRACE_SCRIPT = """
       constructor,
       width: Number.isFinite(source?.width) ? Number(source.width) : null,
       height: Number.isFinite(source?.height) ? Number(source.height) : null,
+      contentVersion: constructor === 'HTMLCanvasElement'
+        ? contentVersion(source) : null,
     };
     if (constructor === 'HTMLCanvasElement') {
       info.canvasId = getCanvasId(source);
@@ -212,29 +357,39 @@ _DRAW_TRACE_SCRIPT = """
     width: Number(canvas?.width),
     height: Number(canvas?.height),
     resetEpoch: canvasResetEpochs.get(canvas) || 0,
+    contentVersion: contentVersion(canvas),
   });
-  const recordOperation = (operation, context, details = {}) => {
+  const recordOperation = (operationName, context, details = {}) => {
     const trace = window.__bookwalkerTransformTrace;
     if (!trace || window.__bookwalkerCaptureMode !== 'native') return null;
     const canvas = context?.canvas;
     if (!canvas) return null;
     if (internalCanvases.has(canvas)) return null;
+    observeContextLoss(canvas);
     flushCanvasMutationObserver(canvas);
     const index = ++trace.nextOperationIndex;
     trace.diagnostics.observedOperationCount = index;
-    trace.diagnostics[`${operation}Count`] =
-      (trace.diagnostics[`${operation}Count`] || 0) + 1;
-    return {
+    trace.diagnostics[`${operationName}Count`] =
+      (trace.diagnostics[`${operationName}Count`] || 0) + 1;
+    const operation = {
       index,
-      operation,
+      operation: operationName,
+      traceEpoch: trace.traceEpoch,
       target: targetInfo(canvas),
       transform: readTransform(context),
       globalAlpha: Number.isFinite(context.globalAlpha)
         ? Number(context.globalAlpha) : null,
       globalCompositeOperation: context.globalCompositeOperation || null,
       filter: context.filter || null,
+      shadowBlur: Number.isFinite(context.shadowBlur) ? Number(context.shadowBlur) : null,
+      shadowColor: context.shadowColor || null,
+      shadowOffsetX: Number.isFinite(context.shadowOffsetX) ? Number(context.shadowOffsetX) : null,
+      shadowOffsetY: Number.isFinite(context.shadowOffsetY) ? Number(context.shadowOffsetY) : null,
+      contextSafety: contextSafetyInfo(context),
       ...details,
     };
+    directRecordMutation(canvas, index, operationName, operation);
+    return operation;
   };
   const isSafeDraw = operation => {
     const transform = operation?.transform;
@@ -252,6 +407,29 @@ _DRAW_TRACE_SCRIPT = """
     return close(rectangle.x, 0) && close(rectangle.y, 0)
       && close(rectangle.width, canvas.width)
       && close(rectangle.height, canvas.height);
+  };
+  const hasPrimitiveFiniteFullClearArguments = (canvas, args) => (
+    Array.isArray(args) && args.length === 4
+    && args.every(value => typeof value === 'number' && Number.isFinite(value))
+    && args[0] === 0 && args[1] === 0
+    && args[2] === canvas.width && args[3] === canvas.height
+  );
+  const identityTransform = transform => Boolean(transform)
+    && transform.a === 1 && transform.b === 0
+    && transform.c === 0 && transform.d === 1
+    && transform.e === 0 && transform.f === 0;
+  const contextLostState = context => {
+    if (!context || typeof context.isContextLost !== 'function') {
+      return {available: false, value: null};
+    }
+    try {
+      const value = context.isContextLost();
+      return typeof value === 'boolean'
+        ? {available: true, value}
+        : {available: false, value: null};
+    } catch (error) {
+      return {available: false, value: null};
+    }
   };
   const markUnsafe = (canvas, operationIndex, type) => {
     const trace = window.__bookwalkerTransformTrace;
@@ -308,6 +486,106 @@ _DRAW_TRACE_SCRIPT = """
       expectedTileCount: null,
     };
     return active[canvasId];
+  };
+  const recordExecutedFullClearWitness = (
+    context, args, operation, observerState, flushedBefore,
+    transformBefore, safetyBefore, lostBefore, contentVersionBefore,
+    resetEpochBefore, traceEpochBefore, dimensionsBefore,
+    unknownMutationBefore,
+  ) => {
+    const canvas = context?.canvas;
+    const trace = window.__bookwalkerTransformTrace;
+    if (!canvas || !trace || !operation) return false;
+    const observerFlushedAfter = flushCanvasMutationObserver(canvas);
+    const transformAfter = readTransform(context);
+    const safetyAfter = contextSafetyInfo(context);
+    const lostAfter = contextLostState(context);
+    const dimensionsAfter = {
+      width: Number(canvas.width), height: Number(canvas.height),
+    };
+    const resetEpochAfter = Number(canvasResetEpochs.get(canvas) || 0);
+    const contentVersionAfter = contentVersion(canvas);
+    const canvasId = getCanvasId(canvas);
+    const resetObservationAvailable =
+      window.__bookwalkerCanvasResetObservationAvailable === true;
+    const segment = trace.activeSegments?.[canvasId];
+    const unknownBefore = unknownMutationBefore === true;
+    const unknownAfter = canvasUnknownMutations.has(canvas);
+    const reasons = [];
+    if (!hasPrimitiveFiniteFullClearArguments(canvas, args)) reasons.push('arguments');
+    if (!isFullClear(canvas, operation.relevantRectangle)) reasons.push('rectangle');
+    if (!identityTransform(transformBefore) || !identityTransform(transformAfter)) {
+      reasons.push('transform');
+    }
+    if (!safetyBefore?.knownNoClip || !safetyBefore?.saveStackKnown
+        || !safetyAfter?.knownNoClip || !safetyAfter?.saveStackKnown) {
+      reasons.push('context_safety');
+    }
+    if (!lostBefore.available || lostBefore.value || !lostAfter.available || lostAfter.value) {
+      reasons.push('context_lost');
+    }
+    if (!observerState?.available || !observerState?.takeRecordsAvailable
+        || !flushedBefore || !observerFlushedAfter) {
+      reasons.push('observer');
+    }
+    if (trace.traceEpoch !== traceEpochBefore) reasons.push('trace_epoch');
+    if (resetEpochBefore !== resetEpochAfter) reasons.push('reset_epoch');
+    if (dimensionsBefore.width !== dimensionsAfter.width
+        || dimensionsBefore.height !== dimensionsAfter.height) reasons.push('dimensions');
+    if (contentVersionAfter <= contentVersionBefore) reasons.push('content_version');
+    if (trace.nextOperationIndex !== operation.index) reasons.push('reentrant_operation');
+    if (!resetObservationAvailable) reasons.push('reset_observation');
+    if (operation.target?.canvasId !== canvasId) reasons.push('target_canvas');
+    if (unknownBefore || unknownAfter || canvasUnknownMutations.has(canvas)) {
+      reasons.push('unknown_mutation');
+    }
+    if (!segment || segment.clearOperationIndex !== operation.index) reasons.push('segment');
+    if (reasons.length) {
+      trace.diagnostics.rejectedFullClearWitnessCount += 1;
+      const nativeDiagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+      if (nativeDiagnostics) nativeDiagnostics.rejectedFullClearWitnessCount += 1;
+      if (segment) {
+        segment.executedFullClearWitnessRejection = {
+          version: 1,
+          operationIndex: operation.index,
+          reasons: [...new Set(reasons)],
+        };
+      }
+      return false;
+    }
+    const witness = {
+      version: 1,
+      kind: 'executed_full_clear',
+      operationIndex: operation.index,
+      canvasId,
+      traceEpoch: traceEpochBefore,
+      resetEpoch: resetEpochAfter,
+      dimensionsBefore,
+      dimensionsAfter,
+      clearRectangle: {...operation.relevantRectangle},
+      transformBefore,
+      transformAfter,
+      contextSafetyBefore: safetyBefore,
+      contextSafetyAfter: safetyAfter,
+      contextLostBefore: lostBefore.value,
+      contextLostAfter: lostAfter.value,
+      observerAvailable: observerState.available === true,
+      takeRecordsAvailable: observerState.takeRecordsAvailable === true,
+      observerFlushedBefore: flushedBefore === true,
+      observerFlushedAfter: observerFlushedAfter === true,
+      contentVersionBefore,
+      contentVersionAfter,
+      unknownMutationBefore: unknownBefore,
+      unknownMutationAfter: unknownAfter,
+      clearReturned: true,
+      canvasResetObservationAvailable: resetObservationAvailable,
+      targetCanvasId: operation.target?.canvasId ?? null,
+    };
+    segment.executedFullClearWitness = witness;
+    trace.diagnostics.executedFullClearWitnessCount += 1;
+    const nativeDiagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+    if (nativeDiagnostics) nativeDiagnostics.executedFullClearWitnessCount += 1;
+    return true;
   };
   const updateExpectedTileCount = (segment, tile) => {
     if (segment.expectedTileCount !== null) return;
@@ -393,13 +671,19 @@ _DRAW_TRACE_SCRIPT = """
       segmentClearTarget: segment.clearTarget,
       segmentResetKind: segment.resetKind,
       segmentResetEpoch: segment.resetEpoch,
+      segmentTraceEpoch: trace.traceEpoch,
       segmentDrawTarget: segment.tileTarget,
       segmentUnknownMutation: segment.unknownMutation,
       segmentResetObservationAvailable: segment.resetObservationAvailable,
       segmentMutationObserverAvailable: segment.mutationObserverAvailable,
       segmentMutationObserverTakeRecordsAvailable: segment.mutationObserverTakeRecordsAvailable,
+      segmentExecutedFullClearWitness: segment.executedFullClearWitness || null,
+      segmentExecutedFullClearWitnessRejection:
+        segment.executedFullClearWitnessRejection || null,
       sourceSnapshotId,
       sourceSnapshotError,
+      sourceSnapshotContentVersion: sourceObject?.constructor?.name === 'HTMLCanvasElement'
+        ? contentVersion(sourceObject) : null,
     };
     retainCompletedMapping(mapping);
     return {mappingId, sourceCanvasId: sourceInfo.canvasId};
@@ -419,15 +703,20 @@ _DRAW_TRACE_SCRIPT = """
     const sourceInfo = operation.source;
     const canvasId = getCanvasId(canvas);
     const segment = window.__bookwalkerTransformTrace?.activeSegments?.[canvasId];
+    let tileRecord = null;
+    let nonImageBitmapRecord = null;
     if (segment) {
       const safe = isSafeDraw(operation);
       if (sourceInfo?.constructor !== 'ImageBitmap') {
         markUnsafe(canvas, operation.index, 'non_image_bitmap_draw');
         if (segment.nonImageBitmapDraws.length < MAX_NON_IMAGE_BITMAP_DRAW_RECORDS) {
-          segment.nonImageBitmapDraws.push({
+          nonImageBitmapRecord = {
             operationIndex: operation.index,
+            traceEpoch: operation.traceEpoch,
             source: sourceInfo ? {...sourceInfo} : null,
             target: operation.target ? {...operation.target} : null,
+            targetContentVersionBefore: operation.target?.contentVersion ?? null,
+            targetContentVersionAfter: null,
             sourceRect: geometry.sourceRect ? {...geometry.sourceRect} : null,
             destination: geometry.destination ? {...geometry.destination} : null,
             transform: operation.transform ? {...operation.transform} : null,
@@ -438,7 +727,8 @@ _DRAW_TRACE_SCRIPT = """
               ? context.imageSmoothingEnabled : null,
             imageSmoothingQuality: typeof context.imageSmoothingQuality === 'string'
               ? context.imageSmoothingQuality : null,
-          });
+          };
+          segment.nonImageBitmapDraws.push(nonImageBitmapRecord);
         }
       } else if (!safe) {
         if (operation.transform && (
@@ -472,10 +762,13 @@ _DRAW_TRACE_SCRIPT = """
           segment.unknownMutation = true;
         }
         if (segment.unknownMutation) return;
-        const tile = {
+        tileRecord = {
           operationIndex: operation.index,
           source: sourceInfo,
           target: operation.target,
+          sourceContentVersion: sourceInfo?.contentVersion ?? null,
+          targetContentVersionBefore: operation.target?.contentVersion ?? null,
+          targetContentVersionAfter: null,
           sourceRect: geometry.sourceRect,
           destination: geometry.destination,
           transform: operation.transform,
@@ -483,16 +776,18 @@ _DRAW_TRACE_SCRIPT = """
           globalCompositeOperation: operation.globalCompositeOperation,
           filter: operation.filter,
         };
-        segment.tileDraws.push(tile);
+        segment.tileDraws.push(tileRecord);
         if (!segment.sourceIds.includes(sourceInfo.sourceId)) {
           segment.sourceIds.push(sourceInfo.sourceId);
         }
-        updateExpectedTileCount(segment, tile);
+        updateExpectedTileCount(segment, tileRecord);
       }
     }
     return {
       operation,
       completed: freezeCompletedMapping(operation, sourceInfo, geometry, source),
+      tileRecord,
+      nonImageBitmapRecord,
     };
   };
   const snapshotSourceCrop = (source, sourceRect) => {
@@ -531,6 +826,513 @@ _DRAW_TRACE_SCRIPT = """
       x: 0, y: 0, width: source.width, height: source.height,
     });
   };
+  const directRectangleIsFullFrame = (source, rectangle, destination, target) => {
+    if (!source || !rectangle || !destination || !target) return false;
+    const close = (left, right) => Math.abs(Number(left) - Number(right)) <= 1e-7;
+    return close(rectangle.x, 0) && close(rectangle.y, 0)
+      && close(rectangle.width, Number(source.width))
+      && close(rectangle.height, Number(source.height))
+      && close(destination.x, 0) && close(destination.y, 0)
+      && close(destination.width, Number(target.width))
+      && close(destination.height, Number(target.height));
+  };
+  const directExternalDrawIsNonIntersecting = (record, operation) => {
+    if (!record || !operation || operation.operation !== 'drawImage') return false;
+    const source = operation.source;
+    const sourceRect = operation.sourceRect;
+    const destination = operation.destination;
+    const roi = record.destination;
+    const transform = operation.transform;
+    const finite = value => Number.isFinite(Number(value));
+    const integerBoundary = value => finite(value)
+      && Math.abs(Number(value) - Math.round(Number(value))) <= 1e-9;
+    const integerSeparatingAxis = (start, size, roiStart, roiSize) => {
+      if (![start, size, roiStart, roiSize].every(finite)) return false;
+      const end = Number(start) + Number(size);
+      const roiEnd = Number(roiStart) + Number(roiSize);
+      if (end <= Number(roiStart)) {
+        return integerBoundary(end) && integerBoundary(roiStart);
+      }
+      if (roiEnd <= Number(start)) {
+        return integerBoundary(roiEnd) && integerBoundary(start);
+      }
+      return false;
+    };
+    if (!source || !sourceRect || !destination || !roi || !transform) return false;
+    if (source.width === null || source.height === null
+        || sourceRect.x < 0 || sourceRect.y < 0
+        || sourceRect.width <= 0 || sourceRect.height <= 0
+        || sourceRect.x + sourceRect.width > source.width
+        || sourceRect.y + sourceRect.height > source.height) return false;
+    if (![destination.x, destination.y, destination.width, destination.height,
+      roi.x, roi.y, roi.width, roi.height].every(finite)
+      || destination.width <= 0 || destination.height <= 0
+      || roi.width <= 0 || roi.height <= 0) return false;
+    if (transform.a !== 1 || transform.b !== 0 || transform.c !== 0
+        || transform.d !== 1 || transform.e !== 0 || transform.f !== 0
+        || operation.globalAlpha !== 1
+        || operation.globalCompositeOperation !== 'source-over'
+        || operation.filter !== 'none') return false;
+    if (operation.shadowBlur !== 0 || operation.shadowOffsetX !== 0
+        || operation.shadowOffsetY !== 0
+        || !['rgba(0, 0, 0, 0)', 'transparent'].includes(operation.shadowColor)) {
+      return false;
+    }
+    return integerSeparatingAxis(
+      destination.x, destination.width, roi.x, roi.width,
+    ) || integerSeparatingAxis(
+      destination.y, destination.height, roi.y, roi.height,
+    );
+  };
+  const directRecordMutation = (canvas, operationIndex, kind, operation = null) => {
+    for (const record of window.__bookwalkerDirectOneHopRecords) {
+      if (record.rendererTargetObject !== canvas) continue;
+      if (operationIndex <= record.rendererOperationIndex) continue;
+      if (kind !== 'unsupportedMutation' && !record.rendererMutation) {
+        record.rendererMutation = kind;
+        record.rendererMutationOperationIndex = operationIndex;
+      }
+      record.rendererLastMutation = kind;
+      const safeSaveRestore = (kind === 'save' || kind === 'restore')
+        && operation?.contextSafety?.knownNoClip === true
+        && operation?.contextSafety?.saveStackKnown === true;
+      const safeExternalDraw = kind === 'drawImage'
+        && directExternalDrawIsNonIntersecting(record, operation);
+      if (safeExternalDraw) {
+        record.rendererNonIntersectingDraw = true;
+      }
+      if (['clip', 'transformChange', 'canvas_dimension_reset', 'unknownMutation',
+        'clearRect', 'contextlost'].includes(kind)
+        || (['save', 'restore'].includes(kind) && !safeSaveRestore)
+        || (kind === 'drawImage' && !safeExternalDraw)) {
+        if (!record.rendererFirstHardInvalid) {
+          record.rendererFirstHardInvalid = {
+            kind,
+            operationIndex,
+            source: operation?.source ? {...operation.source}
+              : record.sourceInfo ? {...record.sourceInfo} : null,
+            target: operation?.target ? {...operation.target}
+              : record.targetInfo ? {...record.targetInfo} : null,
+            sourceRect: operation?.sourceRect ? {...operation.sourceRect}
+              : record.sourceRect ? {...record.sourceRect} : null,
+            destination: operation?.destination ? {...operation.destination}
+              : operation?.relevantRectangle ? {...operation.relevantRectangle}
+              : record.destination ? {...record.destination} : null,
+            transform: operation?.transform ? {...operation.transform}
+              : record.transform ? {...record.transform} : null,
+            globalAlpha: operation?.globalAlpha ?? record.globalAlpha,
+            globalCompositeOperation: operation?.globalCompositeOperation
+              ?? record.globalCompositeOperation,
+            filter: operation?.filter ?? record.filter,
+            method: operation?.method || null,
+            sourceContentVersion: record.sourceContentVersion,
+            targetContentVersionBefore: record.targetContentVersionBefore,
+          };
+        }
+        record.rendererUnsafeMutation = kind;
+        record.rendererInvalidated = true;
+        record.rendererInvalidationOperationIndex = operationIndex;
+      }
+    }
+  };
+  const markContextSafetyUnknown = context => {
+    if (!context) return;
+    const state = ensureContextState(context);
+    if (state) {
+      state.knownNoClip = false;
+      state.saveStack = [];
+    }
+    contextSafetyUnknown.set(context, true);
+  };
+  const directSnapshot = (source, rectangle) => {
+    const snapshot = snapshotSourceCrop(source, rectangle);
+    if (snapshot.snapshotId) {
+      const id = String(snapshot.snapshotId);
+      const canvas = window.__bookwalkerNativeSnapshots.get(id);
+      if (canvas) {
+        window.__bookwalkerNativeSnapshots.delete(id);
+        window.__bookwalkerDirectOneHopSnapshots.set(id, canvas);
+      }
+    }
+    return snapshot;
+  };
+  const directFullSnapshot = source => {
+    if (!source || source.constructor?.name !== 'HTMLCanvasElement') {
+      return {snapshotId: null, error: 'full canvas snapshot requires HTMLCanvasElement'};
+    }
+    return directSnapshot(source, {
+      x: 0, y: 0, width: source.width, height: source.height,
+    });
+  };
+  const directSnapshotCanvas = id => (
+    window.__bookwalkerDirectOneHopSnapshots.get(String(id))
+      || window.__bookwalkerNativeSnapshots.get(String(id))
+  );
+  const directDropRecordSnapshots = record => {
+    for (const id of [record?.sourceSnapshotId, record?.intermediateSnapshotId,
+      record?.targetSnapshotId]) {
+      if (id !== null && id !== undefined) {
+        window.__bookwalkerDirectOneHopSnapshots.delete(String(id));
+      }
+    }
+  };
+  const directEvictChain = record => {
+    if (!record) return;
+    const sourceObject = record.kind === 'source_to_canvas'
+      ? record.targetObject : record.sourceObject;
+    const chain = window.__bookwalkerDirectOneHopRecords.filter(candidate => (
+      candidate && candidate.token === record.token
+      && (candidate === record
+        || (candidate.kind === 'source_to_canvas' && candidate.targetObject === sourceObject)
+        || (candidate.kind === 'canvas_to_renderer' && candidate.sourceObject === sourceObject))
+    ));
+    if (!chain.length) return;
+    const chainSet = new Set(chain);
+    for (const item of chain) {
+      directDropRecordSnapshots(item);
+      directOneHopSnapshotBytes = Math.max(
+        0, directOneHopSnapshotBytes - Number(item.snapshotBytes || 0),
+      );
+    }
+    window.__bookwalkerDirectOneHopRecords =
+      window.__bookwalkerDirectOneHopRecords.filter(item => !chainSet.has(item));
+  };
+  const directPrepareSnapshotBudget = (requiredBytes, targetObject) => {
+    while (directOneHopSnapshotBytes + requiredBytes > 32 * 1024 * 1024) {
+      const oldest = window.__bookwalkerDirectOneHopRecords
+        .slice()
+        .sort((left, right) => Number(left.operationIndex || 0) - Number(right.operationIndex || 0))[0];
+      if (!oldest) break;
+      const sameTargetChain = window.__bookwalkerDirectOneHopRecords.find(item => (
+        item && item.kind === 'source_to_canvas' && item.targetObject === targetObject
+      ));
+      directEvictChain(sameTargetChain || oldest);
+    }
+    return directOneHopSnapshotBytes + requiredBytes <= 32 * 1024 * 1024;
+  };
+  const directTrimRecords = () => {
+    while (window.__bookwalkerDirectOneHopRecords.length > 4) {
+      const oldest = window.__bookwalkerDirectOneHopRecords
+        .slice()
+        .sort((left, right) => Number(left.operationIndex || 0) - Number(right.operationIndex || 0))[0];
+      directEvictChain(oldest);
+    }
+  };
+  const directBeforeDraw = (context, source, geometry, operation) => {
+    if (!window.__bookwalkerNativeCaptureEnabled
+        || window.__bookwalkerDirectOriginalEnabled !== true
+        || !source || !operation) return null;
+    const target = context?.canvas;
+    if (!target || !geometry?.sourceRect || !geometry?.destination) return null;
+    const safety = ensureContextState(context);
+    if (!safety || safety.knownNoClip !== true
+        || contextSafetyUnknown.get(context) === true) return null;
+    const sourceName = source.constructor?.name || null;
+    const targetName = target.constructor?.name || null;
+    const isCopy = sourceName === 'ImageBitmap'
+      && directRectangleIsFullFrame(source, geometry.sourceRect, geometry.destination, target)
+      && Number(target.width) <= 1000 && Number(target.height) > 500;
+    const isRenderer = sourceName === 'HTMLCanvasElement'
+      && targetName === 'HTMLCanvasElement'
+      && Number(source.width) > 0 && Number(source.height) > 0
+      && Number(target.width) > 1000 && Number(target.height) > 500
+      && Math.abs(Number(geometry.sourceRect.x)) <= 1e-7
+      && Math.abs(Number(geometry.sourceRect.y)) <= 1e-7
+      && Number(geometry.sourceRect.width) > 0
+      && Number(geometry.sourceRect.height) > 0
+      && Number(source.width) - Number(geometry.sourceRect.width) >= 0
+      && Number(source.width) - Number(geometry.sourceRect.width) <= 0.5
+      && Number(source.height) - Number(geometry.sourceRect.height) >= 0
+      && Number(source.height) - Number(geometry.sourceRect.height) <= 0.5
+      && Number(geometry.sourceRect.x) + Number(geometry.sourceRect.width) <= Number(source.width) + 0.5
+      && Number(geometry.sourceRect.y) + Number(geometry.sourceRect.height) <= Number(source.height) + 0.5;
+    const hasOriginCopy = window.__bookwalkerDirectOneHopRecords.some(candidate => (
+      candidate && candidate.kind === 'source_to_canvas'
+      && candidate.targetObject === source
+      && candidate.token === String(window.__bookwalkerDirectOneHopToken)
+    ));
+    if (isRenderer && !hasOriginCopy) return null;
+    if (!isCopy && !isRenderer) return null;
+    const snapshotBytes = isCopy
+      ? Number(source.width) * Number(source.height) * 4
+        + Number(target.width) * Number(target.height) * 4
+      : Number(source.width) * Number(source.height) * 4
+        + Math.ceil(Number(geometry.destination.width))
+          * Math.ceil(Number(geometry.destination.height)) * 4;
+    if (!Number.isFinite(snapshotBytes) || snapshotBytes <= 0
+        || !directPrepareSnapshotBudget(snapshotBytes, isCopy ? target : source)) return null;
+    const sourceSnapshot = isCopy
+      ? directSnapshot(source, geometry.sourceRect)
+      : directFullSnapshot(source);
+    return {
+      kind: isCopy ? 'source_to_canvas' : 'canvas_to_renderer',
+      token: String(window.__bookwalkerDirectOneHopToken),
+      frameToken: String(window.__bookwalkerDirectOneHopToken),
+      sourceObject: source,
+      targetObject: target,
+      sourceId: getSourceId(source),
+      sourceInfo: traceSourceInfo(source),
+      targetInfo: targetInfo(target),
+      sourceRect: {...geometry.sourceRect},
+      destination: {...geometry.destination},
+      transform: operation.transform,
+      globalAlpha: operation.globalAlpha,
+      globalCompositeOperation: operation.globalCompositeOperation,
+      filter: operation.filter,
+      imageSmoothingEnabled: typeof context.imageSmoothingEnabled === 'boolean'
+        ? context.imageSmoothingEnabled : null,
+      imageSmoothingQuality: typeof context.imageSmoothingQuality === 'string'
+        ? context.imageSmoothingQuality : null,
+      operationIndex: operation.index,
+      sourceContentVersion: sourceName === 'HTMLCanvasElement' ? contentVersion(source) : null,
+      targetContentVersionBefore: contentVersion(target),
+      geometryVersion: directGeometryVersionFor(target),
+      sourceSnapshotId: sourceSnapshot.snapshotId,
+      sourceSnapshotError: sourceSnapshot.error,
+      rendererMutation: null,
+      rendererMutationOperationIndex: null,
+      rendererUnsafeMutation: null,
+      rendererLastMutation: null,
+      rendererInvalidated: false,
+      rendererInvalidationOperationIndex: null,
+      rendererFirstHardInvalid: null,
+      rendererNonIntersectingDraw: false,
+      snapshotBytes,
+    };
+  };
+  const directAfterDraw = (record, context) => {
+    if (!record) return;
+    if (directOneHopSnapshotBytes + record.snapshotBytes > 32 * 1024 * 1024) {
+      directDropRecordSnapshots(record);
+      return;
+    }
+    const target = context?.canvas;
+    const targetVersion = advanceContentVersion(target);
+    record.targetContentVersionAfter = targetVersion;
+    record.operationOrder = [record.operationIndex];
+    if (record.kind === 'source_to_canvas') {
+      const full = directFullSnapshot(target);
+      record.intermediateSnapshotId = full.snapshotId;
+      record.intermediateSnapshotError = full.error;
+      record.targetSnapshotId = full.snapshotId;
+    } else {
+      const roi = directSnapshot(target, record.destination);
+      record.targetSnapshotId = roi.snapshotId;
+      record.targetSnapshotError = roi.error;
+      record.rendererTargetObject = target;
+      record.rendererOperationIndex = record.operationIndex;
+    }
+    window.__bookwalkerDirectOneHopRecords.push(record);
+    directOneHopSnapshotBytes += record.snapshotBytes;
+    directTrimRecords();
+  };
+  window.__bookwalkerMaterializeDirectOneHop = currentCanvas => {
+    flushCanvasMutationObserver(currentCanvas);
+    const materialize = canvas => {
+      if (!canvas) return {dataUrl: null, error: 'snapshot canvas unavailable'};
+      try { return {dataUrl: canvas.toDataURL('image/png'), error: null}; }
+      catch (error) { return {dataUrl: null, error: String(error)}; }
+    };
+    const cropCurrent = (canvas, rectangle) => {
+      if (!canvas || !rectangle) return {dataUrl: null, error: 'current canvas unavailable'};
+      const snapshot = snapshotSourceCrop(canvas, rectangle);
+      if (!snapshot.snapshotId) return {dataUrl: null, error: snapshot.error};
+      const result = materialize(window.__bookwalkerNativeSnapshots.get(String(snapshot.snapshotId)));
+      window.__bookwalkerNativeSnapshots.delete(String(snapshot.snapshotId));
+      return result;
+    };
+    const result = [];
+    for (const record of window.__bookwalkerDirectOneHopRecords) {
+      if (!record || record.kind !== 'canvas_to_renderer') continue;
+      const copy = window.__bookwalkerDirectOneHopRecords.find(candidate => (
+        candidate && candidate.kind === 'source_to_canvas'
+        && candidate.targetObject === record.sourceObject
+        && candidate.token === record.token
+        && candidate.targetContentVersionAfter === record.sourceContentVersion
+        && candidate.operationIndex < record.operationIndex
+      ));
+      const sourceSnapshot = copy
+        ? materialize(directSnapshotCanvas(copy.sourceSnapshotId)) : null;
+      const intermediate = copy
+        ? materialize(directSnapshotCanvas(copy.intermediateSnapshotId)) : null;
+      const sourceB = materialize(
+        directSnapshotCanvas(record.sourceSnapshotId),
+      );
+      const renderer = materialize(directSnapshotCanvas(record.targetSnapshotId));
+      const current = record.rendererTargetObject === currentCanvas
+        ? cropCurrent(currentCanvas, record.destination) : {dataUrl: null, error: 'current canvas identity mismatch'};
+      result.push({
+        token: record.token,
+        frameToken: record.frameToken,
+        currentToken: String(window.__bookwalkerDirectOneHopToken),
+        pageUrl: String(window.location.href),
+        pageCounter: document.querySelector('#pageSliderCounter')?.textContent || null,
+        currentConnected: Boolean(currentCanvas?.isConnected && document.contains(currentCanvas)),
+        copy: copy ? {
+          sourceId: copy.sourceId,
+          sourceInfo: copy.sourceInfo,
+          targetInfo: copy.targetInfo,
+          sourceRect: copy.sourceRect,
+          destination: copy.destination,
+          transform: copy.transform,
+          globalAlpha: copy.globalAlpha,
+          globalCompositeOperation: copy.globalCompositeOperation,
+          filter: copy.filter,
+          imageSmoothingEnabled: copy.imageSmoothingEnabled,
+          imageSmoothingQuality: copy.imageSmoothingQuality,
+          operationIndex: copy.operationIndex,
+          targetContentVersionAfter: copy.targetContentVersionAfter,
+          sourceSnapshot: sourceSnapshot?.dataUrl || null,
+          sourceSnapshotError: sourceSnapshot?.error || copy.sourceSnapshotError,
+          intermediate: intermediate?.dataUrl || null,
+          intermediateError: intermediate?.error || copy.intermediateSnapshotError,
+        } : null,
+        renderer: {
+          sourceId: record.sourceId,
+          sourceInfo: record.sourceInfo,
+          targetInfo: record.targetInfo,
+          sourceRect: record.sourceRect,
+          destination: record.destination,
+          transform: record.transform,
+          globalAlpha: record.globalAlpha,
+          globalCompositeOperation: record.globalCompositeOperation,
+          filter: record.filter,
+          imageSmoothingEnabled: record.imageSmoothingEnabled,
+          imageSmoothingQuality: record.imageSmoothingQuality,
+          operationIndex: record.operationIndex,
+          sourceContentVersion: record.sourceContentVersion,
+          geometryVersion: record.geometryVersion,
+          currentGeometryVersion: directGeometryVersionFor(record.rendererTargetObject),
+          geometryHistoryIncomplete: directGeometryHistoryIncompleteFor(
+            record.rendererTargetObject
+          ),
+          targetContentVersionAfter: record.targetContentVersionAfter,
+          targetSnapshot: renderer?.dataUrl || null,
+          targetSnapshotError: renderer?.error || record.targetSnapshotError,
+          mutation: record.rendererMutation,
+          mutationOperationIndex: record.rendererMutationOperationIndex,
+          unsafeMutation: record.rendererUnsafeMutation,
+          lastMutation: record.rendererLastMutation,
+          invalidated: record.rendererInvalidated,
+          invalidationOperationIndex: record.rendererInvalidationOperationIndex,
+          firstHardInvalid: record.rendererFirstHardInvalid,
+          nonIntersectingDraw: record.rendererNonIntersectingDraw,
+          sameCurrentObject: record.rendererTargetObject === currentCanvas,
+          currentContentVersion: record.rendererTargetObject === currentCanvas
+            ? contentVersion(currentCanvas) : null,
+          current: current.dataUrl,
+          currentError: current.error,
+          sourceB: sourceB.dataUrl,
+          sourceBError: sourceB.error || record.sourceSnapshotError,
+        },
+      });
+    }
+    return result;
+  };
+  window.__bookwalkerDirectOneHopCurrentState = currentCanvas => {
+    flushCanvasMutationObserver(currentCanvas);
+    return {
+      token: String(window.__bookwalkerDirectOneHopToken || ''),
+      pageUrl: String(window.location.href),
+      pageCounter: document.querySelector('#pageSliderCounter')?.textContent || null,
+      connected: Boolean(currentCanvas?.isConnected && document.contains(currentCanvas)),
+      activeOperationIndex: window.__bookwalkerDirectOneHopRecords
+        .filter(record => record && record.rendererTargetObject === currentCanvas)
+        .reduce((latest, record) => Math.max(latest, Number(record.rendererOperationIndex || 0)), 0),
+      geometryVersion: directGeometryVersionFor(currentCanvas),
+      geometryHistoryIncomplete: directGeometryHistoryIncompleteFor(currentCanvas),
+      records: window.__bookwalkerDirectOneHopRecords
+        .filter(record => record && record.rendererTargetObject === currentCanvas)
+        .map(record => ({
+          operationIndex: record.rendererOperationIndex,
+          mutation: record.rendererMutation,
+          unsafeMutation: record.rendererUnsafeMutation,
+          lastMutation: record.rendererLastMutation,
+          invalidated: record.rendererInvalidated,
+          firstHardInvalid: record.rendererFirstHardInvalid,
+          nonIntersectingDraw: record.rendererNonIntersectingDraw,
+          targetContentVersionAfter: record.targetContentVersionAfter,
+          currentContentVersion: contentVersion(currentCanvas),
+        })),
+    };
+  };
+  window.__bookwalkerDirectOneHopGeometryState = currentCanvas => ({
+    observerFlushed: flushCanvasMutationObserver(currentCanvas),
+    observerAvailable: canvasMutationObserverStates.get(currentCanvas)?.available === true,
+    observerTakeRecordsAvailable:
+      canvasMutationObserverStates.get(currentCanvas)?.takeRecordsAvailable === true,
+    token: String(window.__bookwalkerDirectOneHopToken || ''),
+    traceEpoch: Number(window.__bookwalkerTransformTrace?.traceEpoch || 0),
+    geometryVersion: directGeometryVersionFor(currentCanvas),
+    contentVersion: contentVersion(currentCanvas),
+    geometryHistoryIncomplete: directGeometryHistoryIncompleteFor(currentCanvas),
+    canvasId: currentCanvas ? getCanvasId(currentCanvas) : null,
+    connected: Boolean(currentCanvas?.isConnected && document.contains(currentCanvas)),
+    unknownMutation: currentCanvas ? canvasUnknownMutations.has(currentCanvas) : null,
+    resetEpoch: currentCanvas ? Number(canvasResetEpochs.get(currentCanvas) || 0) : null,
+    width: currentCanvas ? Number(currentCanvas.width) : null,
+    height: currentCanvas ? Number(currentCanvas.height) : null,
+    bookIdentity: (() => {
+      try { return new URL(window.location.href).searchParams.get('cid') || null; }
+      catch (error) { return null; }
+    })(),
+    geometryHistoryLimit: DIRECT_GEOMETRY_LEDGER_LIMIT,
+    geometryLedgerLength: window.__bookwalkerDrawCalls.length,
+    geometryHistoryEvictions: directGeometryHistoryEvictions,
+  });
+  // One raw anchor builder is shared by the diagnostic capture-before and
+  // capture-after checks.  Keeping the object identity and field shape here
+  // avoids comparing a legacy summary with the stricter final anchor.
+  window.__bookwalkerP4BCurrentAnchor = (element, expectedOperationIndex) => {
+    const traceId = element?.getAttribute('data-bookwalker-trace-id') || null;
+    const actualCanvasId = element ? String(getCanvasId(element) || '') : null;
+    const calls = (window.__bookwalkerNativeDrawCalls || [])
+      .filter(call => call?.canvasId === traceId);
+    const selected = calls.find(call => (
+      (call?.operation?.index ?? call?.traceOperationIndex ?? null)
+      === expectedOperationIndex
+    )) || null;
+    const geometry = window.__bookwalkerDirectOneHopGeometryState?.(element) || null;
+    let bookIdentity = null;
+    try { bookIdentity = new URL(window.location.href).searchParams.get('cid') || null; }
+    catch (error) {}
+    return {
+      traceId,
+      actualCanvasId,
+      connected: Boolean(element?.isConnected && document.contains(element)),
+      bookIdentity,
+      counter: document.querySelector('#pageSliderCounter')?.textContent || null,
+      nativeCallCount: calls.length,
+      operationIndices: calls.map(call =>
+        call?.operation?.index ?? call?.traceOperationIndex ?? null),
+      geometryToken: geometry?.token ?? null,
+      traceEpoch: geometry?.traceEpoch ?? null,
+      geometryVersion: geometry?.geometryVersion ?? null,
+      geometryHistoryIncomplete: geometry?.geometryHistoryIncomplete ?? null,
+      observerFlushed: geometry?.observerFlushed ?? null,
+      observerAvailable: geometry?.observerAvailable ?? null,
+      observerTakeRecordsAvailable: geometry?.observerTakeRecordsAvailable ?? null,
+      unknownMutation: geometry?.unknownMutation ?? null,
+      resetEpoch: geometry?.resetEpoch ?? null,
+      canvasWidth: geometry?.width ?? null,
+      canvasHeight: geometry?.height ?? null,
+      targetContentVersion: geometry?.contentVersion ?? null,
+      selected: selected ? {
+        canvasId: selected.canvasId ?? null,
+        operationIndex: selected?.operation?.index ?? selected?.traceOperationIndex ?? null,
+        sourceId: selected.sourceId ?? null,
+        sourceCanvasId: selected.sourceCanvasId ?? null,
+        traceEpoch: selected?.operation?.traceEpoch ?? selected?.traceEpoch ?? null,
+        snapshotId: selected.snapshotId ?? null,
+        sourceContentVersion: selected.sourceContentVersion ?? null,
+        fullSourceSnapshotId: selected.fullSourceSnapshotId ?? null,
+        targetSnapshotId: selected.targetSnapshotId ?? null,
+        targetContentVersionAfter: selected.targetContentVersionAfter ?? null,
+        sourceRect: selected.sourceRect ?? null,
+        destination: selected.destination ?? null,
+      } : null,
+    };
+  };
   const materializeNativeCrop = ({sourceId, snapshotId, sourceConstructor, sourceRect}) => {
     if (sourceConstructor === 'HTMLCanvasElement') {
       const snapshot = window.__bookwalkerNativeSnapshots.get(String(snapshotId));
@@ -568,10 +1370,20 @@ _DRAW_TRACE_SCRIPT = """
     if (internalCanvases.has(this.canvas)) return original.apply(this, args);
     let recorded = null;
     let nativeCall = null;
+    let directRecord = null;
     try {
       const values = args.slice(1).map(value => Number(value));
       const geometry = sourceRectAndDestination(args[0], values);
       recorded = recordDraw(this, args[0], geometry);
+      if (this.canvas && this.canvas.width > 1000 && this.canvas.height > 500
+          && geometry.destination
+          && geometry.destination.width >= 100
+          && geometry.destination.height >= 100) {
+        directGeometryVersions.set(
+          this.canvas, directGeometryVersionFor(this.canvas) + 1,
+        );
+      }
+      directRecord = directBeforeDraw(this, args[0], geometry, recorded?.operation);
       const canvas = this.canvas;
       if (canvas && canvas.width > 1000 && canvas.height > 500) {
         const destination = values.length >= 8
@@ -582,54 +1394,87 @@ _DRAW_TRACE_SCRIPT = """
                 geometry.destination.width, geometry.destination.height,
               ]
             : null;
-        if (destination) {
+        if (destination && !definitelySmallNativeDestination(geometry.destination)) {
           window.__bookwalkerDrawCalls.push({
             canvasId: getCanvasId(canvas),
             canvasWidth: canvas.width,
             canvasHeight: canvas.height,
             destination,
+            operationIndex: recorded?.operation?.index || null,
+            traceEpoch: window.__bookwalkerTransformTrace?.traceEpoch || null,
+            resetEpoch: canvasResetEpochs.get(canvas) || 0,
           });
-          if (window.__bookwalkerDrawCalls.length > 500) {
-            window.__bookwalkerDrawCalls.shift();
+          const geometryLedgerLimit = window.__bookwalkerDirectOriginalEnabled === true
+            ? DIRECT_GEOMETRY_LEDGER_LIMIT : 500;
+          if (window.__bookwalkerDrawCalls.length > geometryLedgerLimit) {
+            const evicted = window.__bookwalkerDrawCalls.shift();
+            if (window.__bookwalkerDirectOriginalEnabled === true) {
+              directGeometryHistoryEvictions += 1;
+              if (evicted?.canvasId) directGeometryEvictedCanvasIds.add(evicted.canvasId);
+            }
           }
+        } else if (destination) {
+          const diagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+          if (diagnostics) diagnostics.geometrySmallCallsDropped += 1;
         }
         if (window.__bookwalkerNativeCaptureEnabled && args[0] && geometry.destination) {
-          const source = args[0];
-          const sourceInfo = recorded?.operation?.source || traceSourceInfo(source);
-          nativeCall = {
-            timestamp: performance.now(),
-            canvasId: getCanvasId(canvas),
-            canvasWidth: canvas.width,
-            canvasHeight: canvas.height,
-            sourceId: sourceInfo?.sourceId || getSourceId(source),
-            source: sourceInfo,
-            _bookwalkerSourceObject: source,
-            sourceCanvasId: sourceInfo?.canvasId || null,
-            sourceRect: geometry.sourceRect,
-            destination: geometry.destination,
-            argumentForm: values.length + 1,
-            traceOperationIndex: recorded?.operation?.index || null,
-            mappingId: recorded?.completed?.mappingId || null,
-            transform: recorded?.operation?.transform || readTransform(this),
-            globalAlpha: this.globalAlpha,
-            globalCompositeOperation: this.globalCompositeOperation,
-            filter: this.filter,
-            imageSmoothingEnabled: typeof this.imageSmoothingEnabled === 'boolean'
-              ? this.imageSmoothingEnabled : null,
-            imageSmoothingQuality: typeof this.imageSmoothingQuality === 'string'
-              ? this.imageSmoothingQuality : null,
-          };
-          if (source?.constructor?.name === 'HTMLCanvasElement') {
-            const snapshot = snapshotSourceCrop(source, geometry.sourceRect);
-            nativeCall.snapshotId = snapshot.snapshotId;
-            nativeCall.snapshotError = snapshot.error;
+          const diagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+          if (diagnostics) diagnostics.nativeCallsSeen += 1;
+          if (definitelySmallNativeDestination(geometry.destination)) {
+            if (diagnostics) diagnostics.definitelySmallCallsDropped += 1;
+          } else {
+            const source = args[0];
+            const sourceInfo = recorded?.operation?.source || traceSourceInfo(source);
+            nativeCall = {
+              timestamp: performance.now(),
+              canvasId: getCanvasId(canvas),
+              canvasWidth: canvas.width,
+              canvasHeight: canvas.height,
+              sourceId: sourceInfo?.sourceId || getSourceId(source),
+              source: sourceInfo,
+              _bookwalkerSourceObject: source,
+              sourceCanvasId: sourceInfo?.canvasId || null,
+              sourceContentVersion: sourceInfo?.contentVersion ?? null,
+              traceEpoch: window.__bookwalkerTransformTrace?.traceEpoch || null,
+              targetResetEpoch: canvasResetEpochs.get(canvas) || 0,
+              sourceRect: geometry.sourceRect,
+              destination: geometry.destination,
+              argumentForm: values.length + 1,
+              traceOperationIndex: recorded?.operation?.index || null,
+              mappingId: recorded?.completed?.mappingId || null,
+              transform: recorded?.operation?.transform || readTransform(this),
+              globalAlpha: this.globalAlpha,
+              globalCompositeOperation: this.globalCompositeOperation,
+              filter: this.filter,
+              imageSmoothingEnabled: typeof this.imageSmoothingEnabled === 'boolean'
+                ? this.imageSmoothingEnabled : null,
+              imageSmoothingQuality: typeof this.imageSmoothingQuality === 'string'
+                ? this.imageSmoothingQuality : null,
+            };
+            if (source?.constructor?.name === 'HTMLCanvasElement') {
+              const snapshot = snapshotSourceCrop(source, geometry.sourceRect);
+              nativeCall.snapshotId = snapshot.snapshotId;
+              nativeCall.snapshotError = snapshot.error;
+            }
+            nativeCall._bookwalkerPendingTargetSnapshot = true;
+            nativeCall._bookwalkerPendingFullSourceSnapshot = source?.constructor?.name === 'HTMLCanvasElement';
           }
-          nativeCall._bookwalkerPendingTargetSnapshot = true;
-          nativeCall._bookwalkerPendingFullSourceSnapshot = source?.constructor?.name === 'HTMLCanvasElement';
         }
       }
     } catch (error) {}
     const result = original.apply(this, args);
+    if (directRecord) {
+      try { directAfterDraw(directRecord, this); } catch (error) {}
+    } else {
+      const targetContentVersionAfter = advanceContentVersion(this.canvas);
+      if (recorded?.operation?.index !== null
+          && recorded?.operation?.index !== undefined) {
+        const activeTile = recorded?.tileRecord;
+        if (activeTile) activeTile.targetContentVersionAfter = targetContentVersionAfter;
+        const activeNonImage = recorded?.nonImageBitmapRecord;
+        if (activeNonImage) activeNonImage.targetContentVersionAfter = targetContentVersionAfter;
+      }
+    }
     if (nativeCall) {
       try {
         if (nativeCall._bookwalkerPendingFullSourceSnapshot) {
@@ -646,12 +1491,19 @@ _DRAW_TRACE_SCRIPT = """
         nativeCall.targetSnapshotId = null;
         nativeCall.targetSnapshotError = String(error);
       }
+      nativeCall.targetContentVersionAfter = contentVersion(this.canvas);
       delete nativeCall._bookwalkerPendingTargetSnapshot;
       delete nativeCall._bookwalkerPendingFullSourceSnapshot;
       delete nativeCall._bookwalkerSourceObject;
       window.__bookwalkerNativeDrawCalls.push(nativeCall);
+      const diagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+      if (diagnostics) diagnostics.nativeCallsAdmitted += 1;
       if (window.__bookwalkerNativeDrawCalls.length > 100) {
         window.__bookwalkerNativeDrawCalls.shift();
+        if (diagnostics) diagnostics.nativeCallsEvicted += 1;
+      }
+      if (diagnostics) {
+        diagnostics.nativeCallsRetained = window.__bookwalkerNativeDrawCalls.length;
       }
     }
     return result;
@@ -684,6 +1536,7 @@ _DRAW_TRACE_SCRIPT = """
       canvasUnknownMutations.add(canvas);
       const trace = window.__bookwalkerTransformTrace;
       if (trace?.diagnostics) trace.diagnostics.unknownCanvasMutationCount += 1;
+      directRecordMutation(canvas, Number(trace?.nextOperationIndex || 0) + 1, 'unknownMutation');
       const active = trace?.activeSegments?.[getCanvasId(canvas)];
       if (active) active.unknownMutation = true;
     }
@@ -710,8 +1563,9 @@ _DRAW_TRACE_SCRIPT = """
   };
   const flushCanvasMutationObserver = canvas => {
     const observer = canvasMutationObservers.get(canvas);
-    if (!observer || typeof observer.takeRecords !== 'function') return;
+    if (!observer || typeof observer.takeRecords !== 'function') return false;
     processCanvasMutationRecords(canvas, observer.takeRecords());
+    return true;
   };
   const queueKnownAttributeMutation = (canvas, attributeName, oldValue, newValue) => {
     const queue = knownAttributeMutations.get(canvas) || [];
@@ -766,6 +1620,7 @@ _DRAW_TRACE_SCRIPT = """
             if (active) active.unknownMutation = true;
             throw error;
           }
+          markCanvasContextsKnownFresh(canvas);
           if (!shouldObserve) return result;
           flushCanvasMutationObserver(canvas);
           const pendingQueue = knownAttributeMutations.get(canvas);
@@ -781,6 +1636,7 @@ _DRAW_TRACE_SCRIPT = """
           const canvasId = getCanvasId(canvas);
           const operationIndex = ++trace.nextOperationIndex;
           trace.diagnostics.observedOperationCount = operationIndex;
+          directRecordMutation(canvas, operationIndex, 'canvas_dimension_reset');
           const resetEpoch = (canvasResetEpochs.get(canvas) || 0) + 1;
           canvasResetEpochs.set(canvas, resetEpoch);
           const active = trace.activeSegments?.[canvasId];
@@ -806,6 +1662,7 @@ _DRAW_TRACE_SCRIPT = """
               && resetSegment.mutationObserverTakeRecordsAvailable
             );
           }
+          advanceContentVersion(canvas);
           return result;
         },
       });
@@ -827,8 +1684,42 @@ _DRAW_TRACE_SCRIPT = """
   if (typeof clearRect === 'function') {
     CanvasRenderingContext2D.prototype.clearRect = function(...args) {
       let operation = null;
+      let observerState = null;
+      let observerFlushedBefore = false;
+      let transformBefore = null;
+      let safetyBefore = null;
+      let lostBefore = {available: false, value: null};
+      let contentVersionBefore = null;
+      let resetEpochBefore = null;
+      let traceEpochBefore = null;
+      let dimensionsBefore = null;
+      let unknownMutationBefore = false;
       try {
-        const details = rectangleDetails(args);
+        const traceBefore = window.__bookwalkerTransformTrace;
+        if (traceBefore && window.__bookwalkerCaptureMode === 'native'
+            && !internalCanvases.has(this.canvas)) {
+          observerState = observeCanvasMutations(this.canvas);
+          observerFlushedBefore = flushCanvasMutationObserver(this.canvas);
+          transformBefore = readTransform(this);
+          safetyBefore = contextSafetyInfo(this);
+          lostBefore = contextLostState(this);
+          contentVersionBefore = contentVersion(this.canvas);
+          resetEpochBefore = Number(canvasResetEpochs.get(this.canvas) || 0);
+          traceEpochBefore = traceBefore.traceEpoch;
+          dimensionsBefore = {
+            width: Number(this.canvas.width), height: Number(this.canvas.height),
+          };
+          unknownMutationBefore = canvasUnknownMutations.has(this.canvas);
+        }
+      } catch (error) {
+        observerState = null;
+        dimensionsBefore = null;
+        traceEpochBefore = null;
+      }
+      try {
+        const details = args.every(value => typeof value === 'number')
+          ? rectangleDetails(args)
+          : {arguments: [], relevantRectangle: null};
         operation = recordOperation('clearRect', this, details);
         if (operation && isFullClear(this.canvas, details.relevantRectangle)) {
           newSegment(this.canvas, operation.index, details.relevantRectangle);
@@ -836,7 +1727,26 @@ _DRAW_TRACE_SCRIPT = """
           markUnsafe(this.canvas, operation.index, 'partial_clear');
         }
       } catch (error) {}
-      return clearRect.apply(this, args);
+      const result = clearRect.apply(this, args);
+      advanceContentVersion(this.canvas);
+      if (operation && observerState && dimensionsBefore && traceEpochBefore !== null) {
+        try {
+          recordExecutedFullClearWitness(
+            this, args, operation, observerState, observerFlushedBefore,
+            transformBefore, safetyBefore, lostBefore, contentVersionBefore,
+            resetEpochBefore, traceEpochBefore, dimensionsBefore,
+            unknownMutationBefore,
+          );
+        } catch (error) {
+          try {
+            const trace = window.__bookwalkerTransformTrace;
+            if (trace?.diagnostics) trace.diagnostics.rejectedFullClearWitnessCount += 1;
+            const diagnostics = window.__bookwalkerNativeCaptureDiagnostics;
+            if (diagnostics) diagnostics.rejectedFullClearWitnessCount += 1;
+          } catch (ignored) {}
+        }
+      }
+      return result;
     };
   }
   if (typeof fillRect === 'function') {
@@ -844,7 +1754,9 @@ _DRAW_TRACE_SCRIPT = """
       let operation = null;
       try { operation = recordOperation('fillRect', this, rectangleDetails(args)); } catch (error) {}
       if (operation) markUnsafe(this.canvas, operation.index, 'fill_rect');
-      return fillRect.apply(this, args);
+      const result = fillRect.apply(this, args);
+      advanceContentVersion(this.canvas);
+      return result;
     };
   }
   if (typeof putImageData === 'function') {
@@ -852,20 +1764,376 @@ _DRAW_TRACE_SCRIPT = """
       let operation = null;
       try { operation = recordOperation('putImageData', this, {arguments: args.slice(1).map(value => Number(value))}); } catch (error) {}
       if (operation) markUnsafe(this.canvas, operation.index, 'put_image_data');
-      return putImageData.apply(this, args);
+      const result = putImageData.apply(this, args);
+      advanceContentVersion(this.canvas);
+      return result;
     };
   }
-  for (const name of ['setTransform', 'resetTransform', 'transform', 'translate', 'rotate', 'scale']) {
+  for (const name of ['setTransform', 'resetTransform', 'transform', 'translate', 'rotate', 'scale', 'reset']) {
     const originalMethod = CanvasRenderingContext2D.prototype[name];
     if (typeof originalMethod !== 'function') continue;
     CanvasRenderingContext2D.prototype[name] = function(...args) {
       let operation = null;
+      if (name === 'reset') markContextSafetyUnknown(this);
       try { operation = recordOperation('transformChange', this, {method: name}); } catch (error) {}
       if (operation) markUnsafe(this.canvas, operation.index, 'transform_change');
-      return originalMethod.apply(this, args);
+      const result = originalMethod.apply(this, args);
+      if (name === 'reset') {
+        markContextKnownFresh(this);
+        advanceContentVersion(this.canvas);
+      }
+      return result;
+    };
+  }
+  for (const name of ['fillText', 'strokeText', 'fill', 'stroke', 'clip', 'save', 'restore']) {
+    const originalMethod = CanvasRenderingContext2D.prototype[name];
+    if (typeof originalMethod !== 'function') continue;
+    CanvasRenderingContext2D.prototype[name] = function(...args) {
+      let operation = null;
+      const state = ensureContextState(this);
+      if (name === 'clip') markContextSafetyUnknown(this);
+      if (name === 'save' && state?.knownNoClip === true) state.saveStack.push(true);
+      if (name === 'restore' && state?.knownNoClip === true && state.saveStack.length) {
+        state.saveStack.pop();
+      }
+      try {
+        operation = recordOperation('unsupportedMutation', this, {
+          method: name,
+          arguments: args.slice(0, 4).map(value => Number(value)),
+        });
+        if (operation) directRecordMutation(this.canvas, operation.index, name, operation);
+      } catch (error) {}
+      if (operation) markUnsafe(this.canvas, operation.index, `unsupported_${name}`);
+      const result = originalMethod.apply(this, args);
+      if (name === 'save' && state?.knownNoClip !== true) markContextSafetyUnknown(this);
+      if (name === 'restore' && state?.knownNoClip !== true) markContextSafetyUnknown(this);
+      if (!['clip', 'save', 'restore'].includes(name)) advanceContentVersion(this.canvas);
+      return result;
     };
   }
 })();
+"""
+
+
+def _strict_executed_clear_capture_allowed(
+    native_capture_count: int,
+    selected_draw_count: int,
+) -> bool:
+    """Keep the strict executed-clear promotion single-part only."""
+    return native_capture_count == 1 and selected_draw_count == 1
+
+_BOOKWALKER_NATIVE_RGBA_HASH_SCRIPT = """
+async dataUrl => {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+    return null;
+  }
+  try {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const canvas = document.createElement('canvas');
+      window.__bookwalkerMarkInternalCanvas?.(canvas);
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext('2d', {willReadFrequently: true});
+      if (!context) return null;
+      context.drawImage(bitmap, 0, 0);
+      const rgba = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      const digest = await crypto.subtle.digest('SHA-256', rgba);
+      const hash = Array.from(new Uint8Array(digest), value =>
+        value.toString(16).padStart(2, '0')).join('');
+      return {width: bitmap.width, height: bitmap.height, rgbaSha256: hash};
+    } finally {
+      bitmap.close();
+    }
+  } catch (error) {
+    return null;
+  }
+}
+"""
+
+_BOOKWALKER_NATIVE_ANCHOR_SCRIPT = """
+(element, expectedOperationIndex) => {
+  if (typeof window.__bookwalkerP4BCurrentAnchor === 'function') {
+    return window.__bookwalkerP4BCurrentAnchor(element, expectedOperationIndex);
+  }
+  const traceId = element?.getAttribute('data-bookwalker-trace-id') || null;
+  const actualCanvasId = element ? String(
+    window.__bookwalkerCanvasIdentity?.(element)
+      || element?.getAttribute('data-bookwalker-trace-id') || '',
+  ) : null;
+  const calls = (window.__bookwalkerNativeDrawCalls || [])
+    .filter(call => call.canvasId === traceId);
+  const selected = calls.find(call =>
+    (call?.operation?.index ?? call?.traceOperationIndex ?? null)
+      === expectedOperationIndex) || null;
+  const geometry = window.__bookwalkerDirectOneHopGeometryState?.(element) || null;
+  const counter = document.querySelector('#pageSliderCounter')?.textContent || null;
+  const geometryVersion = geometry?.geometryVersion ?? null;
+  const targetContentVersion = geometry?.contentVersion ?? null;
+  let bookIdentity = null;
+  try {
+    bookIdentity = new URL(window.location.href).searchParams.get('cid') || null;
+  } catch (error) {}
+  return {
+    traceId,
+    actualCanvasId,
+    connected: Boolean(element?.isConnected && document.contains(element)),
+    bookIdentity,
+    counter,
+    nativeCallCount: calls.length,
+    operationIndices: calls.map(call =>
+      call?.operation?.index ?? call?.traceOperationIndex ?? null),
+    selected: selected ? {
+      canvasId: selected?.canvasId ?? null,
+      operationIndex: selected?.operation?.index ?? selected?.traceOperationIndex ?? null,
+      sourceId: selected?.sourceId ?? null,
+      sourceCanvasId: selected?.sourceCanvasId ?? null,
+      traceEpoch: selected?.operation?.traceEpoch ?? selected?.traceEpoch ?? null,
+      targetContentVersionAfter: selected?.targetContentVersionAfter ?? null,
+      snapshotId: selected?.snapshotId ?? null,
+      fullSourceSnapshotId: selected?.fullSourceSnapshotId ?? null,
+      targetSnapshotId: selected?.targetSnapshotId ?? null,
+      sourceRect: selected?.sourceRect ?? null,
+      destination: selected?.destination ?? null,
+      sourceContentVersion: selected?.sourceContentVersion ?? null,
+    } : null,
+    geometryToken: geometry?.token ?? null,
+    traceEpoch: geometry?.traceEpoch ?? null,
+    targetContentVersion,
+    geometryVersion,
+    geometryHistoryIncomplete: geometry?.geometryHistoryIncomplete ?? null,
+    observerFlushed: geometry?.observerFlushed ?? null,
+    observerAvailable: geometry?.observerAvailable ?? null,
+    observerTakeRecordsAvailable: geometry?.observerTakeRecordsAvailable ?? null,
+    unknownMutation: geometry?.unknownMutation ?? null,
+    resetEpoch: geometry?.resetEpoch ?? null,
+    canvasWidth: geometry?.width ?? null,
+    canvasHeight: geometry?.height ?? null,
+  };
+}
+"""
+
+_BOOKWALKER_P4B_CURRENT_ROI_ANCHOR_SCRIPT = """
+({expected, initialAnchor, destination, originalElement}) => {
+  // Keep this target resolution aligned with BookWalkerAdapter._visible_canvas:
+  // the current screen is authoritative when present, and a visible canvas
+  // must be the exact object captured before the asynchronous proof work.
+  const currentScreen = [
+    ...document.querySelectorAll('#renderer .currentScreen canvas:not(.dummy)'),
+  ];
+  const pool = currentScreen.length
+    ? currentScreen
+    : [...document.querySelectorAll('#renderer canvas:not(.dummy)')];
+  const visible = pool.filter(element => {
+    if (!element?.isConnected || !document.contains(element)) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden'
+      && style.display !== 'none'
+      && rect.width > 0
+      && rect.height > 0
+      && Number(element.width) > 0
+      && Number(element.height) > 0;
+  });
+  if (!originalElement || !originalElement.isConnected
+      || !document.contains(originalElement)) {
+    return {available: false, exact: false, reason: 'original renderer element is unavailable'};
+  }
+  if (visible.length !== 1 || visible[0] !== originalElement) {
+    return {available: false, exact: false, reason: 'current renderer canvas is missing or ambiguous'};
+  }
+  const element = originalElement;
+  const actualTraceId = element.getAttribute('data-bookwalker-trace-id') || null;
+  const actualCanvasId = String(window.__bookwalkerCanvasIdentity?.(element) || '');
+  if (actualTraceId !== expected.traceId || actualCanvasId !== expected.actualCanvasId) {
+    return {available: false, exact: false, reason: 'current capture target identity changed'};
+  }
+  const makeAnchor = () => {
+    if (typeof window.__bookwalkerP4BCurrentAnchor === 'function') {
+      return window.__bookwalkerP4BCurrentAnchor(element, expected.operationIndex);
+    }
+    const traceId = element.getAttribute('data-bookwalker-trace-id') || null;
+    const actualCanvasId = String(window.__bookwalkerCanvasIdentity?.(element) || '');
+    const calls = (window.__bookwalkerNativeDrawCalls || [])
+      .filter(call => call?.canvasId === traceId);
+    const selected = calls.find(call => (
+      (call?.operation?.index ?? call?.traceOperationIndex ?? null)
+      === expected.operationIndex
+    )) || null;
+    const geometry = window.__bookwalkerDirectOneHopGeometryState?.(element) || null;
+    let bookIdentity = null;
+    try { bookIdentity = new URL(window.location.href).searchParams.get('cid') || null; }
+    catch (error) {}
+    return {
+      traceId,
+      actualCanvasId,
+      connected: Boolean(element.isConnected && document.contains(element)),
+      bookIdentity,
+      counter: document.querySelector('#pageSliderCounter')?.textContent || null,
+      geometryToken: geometry?.token ?? null,
+      geometryVersion: geometry?.geometryVersion ?? null,
+      geometryHistoryIncomplete: geometry?.geometryHistoryIncomplete ?? null,
+      observerFlushed: geometry?.observerFlushed ?? null,
+      observerAvailable: geometry?.observerAvailable ?? null,
+      observerTakeRecordsAvailable: geometry?.observerTakeRecordsAvailable ?? null,
+      unknownMutation: geometry?.unknownMutation ?? null,
+      resetEpoch: geometry?.resetEpoch ?? null,
+      canvasWidth: geometry?.width ?? null,
+      canvasHeight: geometry?.height ?? null,
+      targetContentVersion: geometry?.contentVersion ?? null,
+      selected: selected ? {
+        canvasId: selected.canvasId ?? null,
+        operationIndex: selected?.operation?.index ?? selected?.traceOperationIndex ?? null,
+        sourceId: selected.sourceId ?? null,
+        sourceCanvasId: selected.sourceCanvasId ?? null,
+        sourceContentVersion: selected.sourceContentVersion ?? null,
+        fullSourceSnapshotId: selected.fullSourceSnapshotId ?? null,
+        targetSnapshotId: selected.targetSnapshotId ?? null,
+        targetContentVersionAfter: selected.targetContentVersionAfter ?? null,
+        sourceRect: selected.sourceRect ?? null,
+        destination: selected.destination ?? null,
+      } : null,
+    };
+  };
+  const valuePresent = value => (
+    value !== null && value !== undefined && value !== ''
+  );
+  const sameValue = (left, right) => (
+    left === right || JSON.stringify(left) === JSON.stringify(right)
+  );
+  const latestCallSummary = () => (window.__bookwalkerNativeDrawCalls || [])
+    .filter(call => call?.canvasId === expected.traceId)
+    .slice(-4)
+    .map(call => ({
+      operationIndex: call?.operation?.index ?? call?.traceOperationIndex ?? null,
+      traceEpoch: call?.operation?.traceEpoch ?? call?.traceEpoch ?? null,
+      canvasId: call?.canvasId ?? null,
+      sourceId: call?.sourceId ?? null,
+      sourceCanvasId: call?.sourceCanvasId ?? null,
+      sourceContentVersion: call?.sourceContentVersion ?? null,
+      targetContentVersionAfter: call?.targetContentVersionAfter ?? null,
+      sourceRect: call?.sourceRect ?? null,
+      destination: call?.destination ?? null,
+      fullSourceSnapshotId: call?.fullSourceSnapshotId ?? null,
+      targetSnapshotId: call?.targetSnapshotId ?? null,
+    }));
+  const requiredFields = [
+    'traceId', 'actualCanvasId', 'connected', 'bookIdentity', 'counter',
+    'geometryToken', 'traceEpoch', 'geometryVersion', 'targetContentVersion',
+    'geometryHistoryIncomplete', 'observerFlushed', 'observerAvailable',
+    'observerTakeRecordsAvailable', 'unknownMutation', 'resetEpoch',
+    'canvasWidth', 'canvasHeight',
+  ];
+  const selectedFields = [
+    'canvasId', 'operationIndex', 'sourceId', 'sourceCanvasId',
+    'traceEpoch', 'sourceContentVersion', 'fullSourceSnapshotId', 'targetSnapshotId',
+    'targetContentVersionAfter', 'sourceRect', 'destination',
+  ];
+  const sameAnchor = (left, right) => {
+    if (!left || !right) return false;
+    if (requiredFields.some(field => (
+      !valuePresent(left[field]) || !valuePresent(right[field])
+      || !sameValue(left[field], right[field])
+    ))) return false;
+    if (left.connected !== true || right.connected !== true
+        || left.geometryHistoryIncomplete !== false
+        || right.geometryHistoryIncomplete !== false
+        || left.observerFlushed !== true || right.observerFlushed !== true
+        || left.observerAvailable !== true || right.observerAvailable !== true
+        || left.observerTakeRecordsAvailable !== true
+        || right.observerTakeRecordsAvailable !== true
+        || left.unknownMutation !== false || right.unknownMutation !== false) return false;
+    if (!left.selected || !right.selected) return false;
+    if (!Number.isInteger(left.traceEpoch) || left.traceEpoch <= 0
+        || !Number.isInteger(right.traceEpoch) || right.traceEpoch <= 0
+        || !Number.isInteger(left.selected.traceEpoch) || left.selected.traceEpoch <= 0
+        || !Number.isInteger(right.selected.traceEpoch) || right.selected.traceEpoch <= 0
+        || left.traceEpoch !== left.selected.traceEpoch
+        || right.traceEpoch !== right.selected.traceEpoch) return false;
+    return selectedFields.every(field => (
+      valuePresent(left.selected[field])
+      && valuePresent(right.selected[field])
+      && sameValue(left.selected[field], right.selected[field])
+    ));
+  };
+  const before = makeAnchor();
+  if (!sameAnchor(initialAnchor, before)) {
+    return {
+      available: false, exact: false, reason: 'initial renderer anchor changed',
+      initial: initialAnchor, before, latestNativeCalls: latestCallSummary(),
+    };
+  }
+  const selected = before.selected;
+  if (!selected || selected.canvasId !== expected.traceId
+      || selected.operationIndex !== expected.operationIndex
+      || selected.sourceId !== expected.sourceId
+      || selected.sourceCanvasId !== expected.sourceCanvasId
+      || selected.traceEpoch !== expected.selectedTraceEpoch
+      || selected.sourceContentVersion !== expected.sourceContentVersion
+      || selected.fullSourceSnapshotId !== expected.fullSourceSnapshotId
+      || selected.targetSnapshotId !== expected.targetSnapshotId
+      || selected.targetContentVersionAfter !== expected.targetContentVersionAfter
+      || !sameValue(selected.sourceRect, expected.sourceRect)
+      || !sameValue(selected.destination, expected.destination)) {
+    return {available: false, exact: false, reason: 'selected renderer B anchor mismatch', before};
+  }
+  const expectedSnapshot = window.__bookwalkerNativeSnapshots?.get(
+    String(expected.targetSnapshotId)
+  );
+  if (!expectedSnapshot) {
+    return {available: false, exact: false, reason: 'immutable renderer ROI snapshot unavailable', before};
+  }
+  let current = null;
+  try {
+    const x = Number(destination?.x), y = Number(destination?.y);
+    const width = Number(destination?.width), height = Number(destination?.height);
+    if (![x, y, width, height].every(Number.isInteger)
+        || width <= 0 || height <= 0
+        || x < 0 || y < 0 || x + width > element.width || y + height > element.height
+        || expectedSnapshot.width !== width || expectedSnapshot.height !== height) {
+      return {available: false, exact: false, reason: 'current ROI geometry unavailable', before};
+    }
+    const expectedCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(expectedCanvas);
+    expectedCanvas.width = width; expectedCanvas.height = height;
+    const expectedContext = expectedCanvas.getContext('2d');
+    const currentContext = element.getContext('2d');
+    if (!expectedContext || !currentContext) {
+      return {available: false, exact: false, reason: 'current ROI context unavailable', before};
+    }
+    expectedContext.drawImage(expectedSnapshot, 0, 0);
+    const actualData = currentContext.getImageData(x, y, width, height).data;
+    const expectedData = expectedContext.getImageData(0, 0, width, height).data;
+    let differingPixels = 0; let maxChannelDifference = 0;
+    for (let index = 0; index < actualData.length; index += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(actualData[index + channel] - expectedData[index + channel]);
+        maxChannelDifference = Math.max(maxChannelDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differingPixels += 1;
+    }
+    current = {
+      available: true,
+      dimensions_equal: true,
+      exact: differingPixels === 0,
+      differing_pixel_count: differingPixels,
+      max_channel_difference: maxChannelDifference,
+    };
+  } finally {}
+  const after = makeAnchor();
+  if (!sameAnchor(before, after) || !sameAnchor(initialAnchor, after)) {
+    return {
+      available: true, exact: false, reason: 'final renderer anchor changed',
+      current, before, after, latestNativeCalls: latestCallSummary(),
+    };
+  }
+  return {available: true, exact: current?.exact === true, current, before, after,
+    reason: current?.exact === true ? 'current DOM ROI exact' : 'current DOM ROI mismatch'};
+}
 """
 
 _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
@@ -937,6 +2205,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
       const filters = [];
       const filterIndexes = new Map();
       const tileRows = [];
+      const tileVersions = [];
       const tiles = required(mapping, 'tileDraws');
       if (!Array.isArray(tiles)) throw new Error('compact tile records are not a list');
       for (const tile of tiles) {
@@ -988,6 +2257,11 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
           compositeIndex,
           filterIndex,
         ]);
+        tileVersions.push([
+          tile.sourceContentVersion ?? null,
+          tile.targetContentVersionBefore ?? null,
+          tile.targetContentVersionAfter ?? null,
+        ]);
       }
       const compact = {};
       for (const key of [
@@ -1019,8 +2293,12 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         'segmentResetObservationAvailable',
         'segmentMutationObserverAvailable',
         'segmentMutationObserverTakeRecordsAvailable',
+        'segmentExecutedFullClearWitness',
+        'segmentExecutedFullClearWitnessRejection',
+        'segmentTraceEpoch',
         'sourceSnapshotId',
         'sourceSnapshotError',
+        'sourceSnapshotContentVersion',
       ]) {
         if (has(mapping, key)) compact[key] = mapping[key];
       }
@@ -1032,6 +2310,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
       compact.composites = composites;
       compact.filters = filters;
       compact.tileRows = tileRows;
+      compact.tileVersions = tileVersions;
       return compact;
     };
     const tileCount = mappings => mappings.reduce((total, mapping) => (
@@ -1075,6 +2354,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         mutationObserverAvailable: mapping.segmentMutationObserverAvailable === true,
         mutationObserverTakeRecordsAvailable:
           mapping.segmentMutationObserverTakeRecordsAvailable === true,
+        executedFullClearWitness: mapping.segmentExecutedFullClearWitness || null,
       };
     };
     const activeTileCount = activeSegments.reduce((total, segment) => (
@@ -1269,6 +2549,133 @@ async ({reconstructed, native, sourceRect, destination, targetDimensions,
   } finally {
     left.close();
     right.close();
+  }
+}
+"""
+
+
+_DIRECT_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT = """
+async ({candidate, sourceSnapshot, intermediate, sourceB, targetSnapshot, current,
+        copySourceRect, copyDestination, rendererSourceRect, rendererDestination,
+        intermediateDimensions, rendererDimensions, copySmoothingEnabled,
+        copySmoothingQuality, rendererSmoothingEnabled, rendererSmoothingQuality}) => {
+  async function load(dataUrl) {
+    if (typeof dataUrl !== 'string' || !dataUrl) return null;
+    const response = await fetch(dataUrl);
+    return await createImageBitmap(await response.blob());
+  }
+  const raw = await load(candidate);
+  const expectedA = await load(sourceSnapshot);
+  const expectedB = await load(intermediate);
+  const expectedSourceB = await load(sourceB);
+  const expectedTarget = await load(targetSnapshot);
+  const expectedCurrent = await load(current);
+  if (!raw || !expectedA || !expectedB || !expectedSourceB || !expectedTarget || !expectedCurrent) {
+    raw?.close(); expectedA?.close(); expectedB?.close();
+    expectedSourceB?.close();
+    expectedTarget?.close(); expectedCurrent?.close();
+    return {available: false, exact: false, reason: 'direct immutable snapshot unavailable'};
+  }
+  const compare = (actual, expected, width, height, x = 0, y = 0) => {
+    if (!expected || expected.width !== width || expected.height !== height) {
+      return {available: true, dimensions_equal: false, exact: false,
+        differing_pixel_count: null, max_channel_difference: null};
+    }
+    if (x < 0 || y < 0 || x + width > actual.canvas.width || y + height > actual.canvas.height) {
+      return {available: true, dimensions_equal: true, exact: false,
+        reason: 'comparison rectangle outside replay canvas'};
+    }
+    const expectedCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(expectedCanvas);
+    expectedCanvas.width = width; expectedCanvas.height = height;
+    const expectedContext = expectedCanvas.getContext('2d');
+    if (!expectedContext) return {available: false, exact: false, reason: 'expected context unavailable'};
+    expectedContext.drawImage(expected, 0, 0);
+    const actualData = actual.getImageData(x, y, width, height).data;
+    const expectedData = expectedContext.getImageData(0, 0, width, height).data;
+    let differing = 0; let maxDifference = 0;
+    for (let index = 0; index < actualData.length; index += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(actualData[index + channel] - expectedData[index + channel]);
+        maxDifference = Math.max(maxDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differing += 1;
+    }
+    return {available: true, dimensions_equal: true, exact: differing === 0,
+      differing_pixel_count: differing, max_channel_difference: maxDifference};
+  };
+  const makeCanvas = (width, height) => {
+    const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
+    canvas.width = width; canvas.height = height;
+    return canvas;
+  };
+  try {
+    if (typeof copySmoothingEnabled !== 'boolean'
+        || !['low', 'medium', 'high'].includes(copySmoothingQuality)
+        || typeof rendererSmoothingEnabled !== 'boolean'
+        || !['low', 'medium', 'high'].includes(rendererSmoothingQuality)) {
+      return {available: false, exact: false, reason: 'smoothing metadata unavailable'};
+    }
+    const sourceCanvas = makeCanvas(raw.width, raw.height);
+    const sourceContext = sourceCanvas.getContext('2d');
+    if (!sourceContext) return {available: false, exact: false, reason: 'source context unavailable'};
+    sourceContext.drawImage(raw, 0, 0);
+    const aCompare = compare(sourceContext, expectedA, raw.width, raw.height);
+    if (!aCompare.exact) return {available: true, exact: false, source: aCompare, reason: 'candidate to A mismatch'};
+
+    const bWidth = Number(intermediateDimensions?.width);
+    const bHeight = Number(intermediateDimensions?.height);
+    if (!Number.isInteger(bWidth) || !Number.isInteger(bHeight) || bWidth <= 0 || bHeight <= 0) {
+      return {available: false, exact: false, reason: 'intermediate dimensions unavailable'};
+    }
+    const bCanvas = makeCanvas(bWidth, bHeight);
+    const bContext = bCanvas.getContext('2d');
+    if (!bContext) return {available: false, exact: false, reason: 'intermediate context unavailable'};
+    bContext.imageSmoothingEnabled = copySmoothingEnabled;
+    bContext.imageSmoothingQuality = copySmoothingQuality;
+    const csx = Number(copySourceRect?.x), csy = Number(copySourceRect?.y);
+    const csw = Number(copySourceRect?.width), csh = Number(copySourceRect?.height);
+    const cdx = Number(copyDestination?.x), cdy = Number(copyDestination?.y);
+    const cdw = Number(copyDestination?.width), cdh = Number(copyDestination?.height);
+    if (![csx,csy,csw,csh,cdx,cdy,cdw,cdh].every(Number.isFinite)) {
+      return {available: false, exact: false, reason: 'copy geometry unavailable'};
+    }
+    bContext.drawImage(sourceCanvas, csx, csy, csw, csh, cdx, cdy, cdw, cdh);
+    const bCompare = compare(bContext, expectedB, bWidth, bHeight);
+    if (!bCompare.exact) return {available: true, exact: false, source: aCompare, intermediate: bCompare, reason: 'A to B mismatch'};
+    const sourceBCompare = compare(bContext, expectedSourceB, bWidth, bHeight);
+    if (!sourceBCompare.exact) return {available: true, exact: false, source: aCompare, intermediate: bCompare, sourceB: sourceBCompare, reason: 'B source changed between hops'};
+
+    const rw = Number(rendererDimensions?.width), rh = Number(rendererDimensions?.height);
+    if (!Number.isInteger(rw) || !Number.isInteger(rh) || rw <= 0 || rh <= 0) {
+      return {available: false, exact: false, reason: 'renderer dimensions unavailable'};
+    }
+    const rendererCanvas = makeCanvas(rw, rh);
+    const rendererContext = rendererCanvas.getContext('2d');
+    if (!rendererContext) return {available: false, exact: false, reason: 'renderer context unavailable'};
+    rendererContext.imageSmoothingEnabled = rendererSmoothingEnabled;
+    rendererContext.imageSmoothingQuality = rendererSmoothingQuality;
+    const rsx = Number(rendererSourceRect?.x), rsy = Number(rendererSourceRect?.y);
+    const rsw = Number(rendererSourceRect?.width), rsh = Number(rendererSourceRect?.height);
+    const rdx = Number(rendererDestination?.x), rdy = Number(rendererDestination?.y);
+    const rdw = Number(rendererDestination?.width), rdh = Number(rendererDestination?.height);
+    if (![rsx,rsy,rsw,rsh,rdx,rdy,rdw,rdh].every(Number.isFinite)) {
+      return {available: false, exact: false, reason: 'renderer geometry unavailable'};
+    }
+    rendererContext.drawImage(bCanvas, rsx, rsy, rsw, rsh, rdx, rdy, rdw, rdh);
+    const targetWidth = expectedTarget.width, targetHeight = expectedTarget.height;
+    const targetCompare = compare(rendererContext, expectedTarget, targetWidth, targetHeight, rdx, rdy);
+    if (!targetCompare.exact) return {available: true, exact: false, source: aCompare, intermediate: bCompare, sourceB: sourceBCompare, target: targetCompare, reason: 'B to target mismatch'};
+    const currentCompare = compare(rendererContext, expectedCurrent, targetWidth, targetHeight, rdx, rdy);
+    return {available: true, exact: currentCompare.exact, source: aCompare,
+      intermediate: bCompare, sourceB: sourceBCompare, target: targetCompare, current: currentCompare,
+      reason: currentCompare.exact ? 'direct one-hop output-equivalence exact' : 'current ROI mismatch'};
+  } finally {
+    raw.close(); expectedA.close(); expectedB.close(); expectedSourceB.close();
+    expectedTarget.close(); expectedCurrent.close();
   }
 }
 """
@@ -1515,6 +2922,7 @@ def _capture_timing_defaults() -> dict[str, float]:
         "original_match_scan_ms": 0.0,
         "original_retry_wait_ms": 0.0,
         "original_total_ms": 0.0,
+        "direct_original_jpeg_ms": 0.0,
         "lossless_evaluation_total_ms": 0.0,
         "capture_total_ms": 0.0,
         "capture_unaccounted_ms": 0.0,
@@ -1729,6 +3137,98 @@ def _native_call_is_safe(call: dict[str, Any]) -> bool:
     )
 
 
+def _initial_proof_ready_for_redraw(part: object) -> bool:
+    """Check immutable proof stages before a bounded same-source redraw."""
+
+    if not isinstance(part, dict):
+        return False
+    required_flags = (
+        "mapping_proven",
+        "raw_jpeg_exact",
+        "coefficient_exact",
+        "component_quantization_selectors_equal",
+        "native_pixel_exact",
+    )
+    comparison = part.get("cropped_chain_pixel_comparison")
+    stages_exact = (
+        isinstance(comparison, dict)
+        and comparison.get("available") is True
+        and comparison.get("dimensions_equal") is True
+        and comparison.get("exact") is True
+        and all(
+            isinstance(comparison.get(stage), dict)
+            and comparison[stage].get("available") is True
+            and comparison[stage].get("dimensions_equal") is True
+            and comparison[stage].get("exact") is True
+            and comparison[stage].get("differing_pixel_count") == 0
+            and comparison[stage].get("max_channel_difference") == 0
+            for stage in ("source", "intermediate", "final")
+        )
+    )
+    return (
+        part.get("candidate_count_full_exact") == 1
+        and part.get("strict_mcu_aligned") is True
+        and part.get("quantization_tables_equal") is True
+        and all(part.get(flag) is True for flag in required_flags)
+        and stages_exact
+    )
+
+
+def _p4b_stable_current_fallback_authority(proof: object) -> bool:
+    """Require a live, unchanged anchor before retaining a strict PNG fallback."""
+
+    if not isinstance(proof, dict) or proof.get("available") is not True:
+        return False
+    before = proof.get("before")
+    after = proof.get("after")
+    current = proof.get("current")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    if (
+        not isinstance(current, dict)
+        or current.get("available") is not True
+        or current.get("dimensions_equal") is not True
+        or current.get("exact") is not True
+        or current.get("differing_pixel_count") != 0
+        or current.get("max_channel_difference") != 0
+    ):
+        return False
+    required = (
+        "traceId", "actualCanvasId", "bookIdentity", "counter",
+        "geometryToken", "traceEpoch", "geometryVersion", "resetEpoch",
+        "canvasWidth", "canvasHeight", "targetContentVersion",
+    )
+    for anchor in (before, after):
+        if any(anchor.get(field) in (None, "") for field in required):
+            return False
+        if (
+            anchor.get("connected") is not True
+            or anchor.get("geometryHistoryIncomplete") is not False
+            or anchor.get("unknownMutation") is not False
+            or anchor.get("observerAvailable") is not True
+            or anchor.get("observerTakeRecordsAvailable") is not True
+            or anchor.get("observerFlushed") is not True
+        ):
+            return False
+        selected = anchor.get("selected")
+        if not isinstance(selected, dict) or any(
+            selected.get(field) in (None, "")
+            for field in (
+                "canvasId", "operationIndex", "sourceId", "sourceCanvasId",
+                "traceEpoch", "sourceRect", "destination",
+                "sourceContentVersion", "fullSourceSnapshotId",
+                "targetSnapshotId", "targetContentVersionAfter",
+            )
+        ):
+            return False
+        if (
+            selected.get("canvasId") != anchor.get("actualCanvasId")
+            or selected.get("traceEpoch") != anchor.get("traceEpoch")
+        ):
+            return False
+    return before == after
+
+
 class BookWalkerStrictEntryError(RuntimeError):
     """Raised when a strict BookWalker entry cannot be proved safe."""
 
@@ -1769,6 +3269,40 @@ class LosslessReconstructionEvaluation:
 
 class BookWalkerAdapter(SiteAdapter):
     """Canvas viewer adapter for one BookWalker content ID."""
+
+    # These are decoded RGBA hashes of the native artifacts observed for the
+    # terminal BookWalker notice/logo screens.  They identify policy-known AD
+    # artifacts; they are not source fixtures and are never used without the
+    # terminal counter role and a single native draw proof.
+    _known_terminal_native_artifacts: ClassVar[dict[tuple[int, int, str], str]] = {
+        (960, 1280, "f20c0701d0333b77bc99d092849846c1bd1ad28dbfc3481bf69d4e0f4cd1ccb5"): "notice",
+        (1443, 2048, "fd87c452a40a1049339b4dc31e62914c2a58d290a569d9b1d1bc07d37974b6af"): "logo",
+        (1443, 2048, "d51b8376a7895636d98c346ad6191a592f7ad68bc77af90e8331c5e536af4889"): "logo",
+        (1443, 2048, "e42a47424da6fb7c30fd33f5f33c67d638385b069c2a291143e977028df02f78"): "logo",
+    }
+    # Verified native-fallback crop variants.  The crop signature is part of
+    # the key so a hash cannot be reused across a different source rectangle
+    # or output shape.  These entries are policy data, not image fixtures.
+    _known_terminal_native_crop_artifacts: ClassVar[
+        dict[tuple[str, tuple[int, int], tuple[float, float, float, float], tuple[int, int], str], str]
+    ] = {
+        (
+            "logo",
+            (722, 1024),
+            (0.0, 0.0, 721.5, 1024.0),
+            (722, 1024),
+            "28413cad8746077e0c9cb0abca5a4311778847ff1353a5239d0d86be4f68542b",
+        ): "logo",
+        (
+            "logo",
+            (722, 1024),
+            (0.0, 0.0, 721.5, 1024.0),
+            (722, 1024),
+            "f231fbafc36022177876cd4a68eda515cd57865fdd3ce0f381e2714b639ceb20",
+        ): "logo",
+    }
+    _diagnostic_max_records = 256
+    _diagnostic_max_bytes = 4 * 1024 * 1024
 
     # Use deferred source-native capture followed by conservative JPEG
     # matching in production. A failed match still returns the native PNG.
@@ -1832,6 +3366,27 @@ class BookWalkerAdapter(SiteAdapter):
         self._output_genre = "小説"
         self._series_count: int | None = None
         self._final_navigation_pending = False
+        self._diagnostics_dir: Path | None = None
+        self._diagnostics_run_id = uuid4().hex
+        self._diagnostics_records = 0
+        self._diagnostics_omitted_successes = 0
+        self._diagnostics_path: Path | None = None
+        self._last_terminal_diagnostic_key: tuple[object, ...] | None = None
+        self._last_terminal_artifact_failure: dict[str, Any] | None = None
+        # Internal, non-persisted anchor join state.  Diagnostic sanitization
+        # intentionally redacts opaque token fields, so retry authority must
+        # not be reconstructed from the JSON-safe failure projection.
+        self._terminal_reinspection_anchor_state: dict[str, Any] | None = None
+        self._terminal_reinspection_raw_success_anchor: dict[str, Any] | None = None
+        # P4B atomic proof is activated per capture only after the strict
+        # executed-clear provenance predicate succeeds.  The separate
+        # diagnostic flag remains available for isolated proof fixtures.
+        self._diagnostic_p4b_atomic_proof = False
+        self._p4b_atomic_proof_active = False
+        self._p4b_redraw_attempted = False
+        self._p4b_redraw_native_captures: tuple[CaptureResult, ...] | None = None
+        self._p4b_redraw_selected_draw_calls: list[dict[str, Any]] | None = None
+        self._terminal_skip_identity: ContentIdentity | None = None
         self._original_candidates = OriginalJpegCache()
         self._original_response_tasks: set[asyncio.Task[None]] = set()
         self._original_candidate_generation = 0
@@ -1879,6 +3434,838 @@ class BookWalkerAdapter(SiteAdapter):
             )
         self._access_strategy = access_strategy
         self._auto_login_attempted = False
+        diagnostics_root = Path(
+            os.environ.get(
+                "BOOKWALKER_DIAGNOSTICS_DIR", "output/diagnostics/bookwalker"
+            )
+        )
+        self._diagnostics_dir = diagnostics_root
+        self._diagnostics_run_id = uuid4().hex
+        self._diagnostics_path = diagnostics_root / (
+            f"run-{self._diagnostics_run_id}.jsonl"
+        )
+        self._last_terminal_artifact_failure = None
+        self._terminal_reinspection_anchor_state = None
+        self._terminal_reinspection_raw_success_anchor = None
+        self._diagnostics_records = 0
+        self._diagnostics_omitted_successes = 0
+        self._last_terminal_diagnostic_key = None
+        self._terminal_skip_identity = None
+
+    def _append_diagnostic(self, record: dict[str, Any]) -> None:
+        """Best-effort bounded JSONL diagnostics; never affect capture state."""
+
+        path = self._diagnostics_path
+        if path is None or self._diagnostics_records >= self._diagnostic_max_records:
+            return
+        try:
+            sanitized = self._safe_diagnostic_value(record)
+            if not isinstance(sanitized, dict):
+                return
+            payload = {
+                "schema": "bookwalker.capture-diagnostic.v1",
+                "run_id": self._diagnostics_run_id,
+                **sanitized,
+            }
+            encoded = (
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+            if len(encoded) > 128 * 1024:
+                return
+            if path.exists() and path.stat().st_size + len(encoded) > self._diagnostic_max_bytes:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("ab") as stream:
+                stream.write(encoded)
+            self._diagnostics_records += 1
+        except (OSError, TypeError, ValueError):
+            # Diagnostics are deliberately non-authoritative and must not
+            # change the source-native capture result.
+            return
+
+    @staticmethod
+    def _safe_diagnostic_value(value: object) -> object:
+        if isinstance(value, str):
+            lowered = value.casefold().strip()
+            if (
+                "://" in value
+                or "?" in value
+                or "&" in value
+                or lowered.startswith(("data:", "blob:", "bearer "))
+                or any(
+                    marker in lowered
+                    for marker in (
+                        "authorization:",
+                        "password=",
+                        "credential=",
+                        "signature=",
+                        "signed",
+                        "access_token=",
+                    )
+                )
+            ):
+                return "<redacted>"
+            return value[:512]
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            return {
+                str(key): BookWalkerAdapter._safe_diagnostic_value(item)
+                for key, item in value.items()
+                if not any(
+                    marker in str(key).lower()
+                    for marker in (
+                        "url", "header", "cookie", "body", "data", "token",
+                        "secret", "password", "authorization", "credential",
+                        "signature", "query", "bearer",
+                    )
+                )
+            }
+        if isinstance(value, (list, tuple)):
+            return [BookWalkerAdapter._safe_diagnostic_value(item) for item in value]
+        return "<unsupported>"
+
+    async def _read_page_counter_pair(
+        self, page: Page
+    ) -> tuple[int | None, int | None, str | None]:
+        try:
+            raw = await page.locator("#pageSliderCounter").inner_text(timeout=1000)
+        except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            return None, None, None
+        normalized = " ".join(raw.split())
+        match = re.fullmatch(r"(\d+)\s*/\s*(\d+)", normalized)
+        if match is None:
+            return None, None, normalized or None
+        return int(match.group(1)), int(match.group(2)), normalized
+
+    async def _native_terminal_artifact(
+        self, page: Page, canvas: Locator
+    ) -> dict[str, Any] | None:
+        """Read the current native draw using the normal selected-call shape.
+
+        This helper is intentionally non-consuming: it does not arm, clear,
+        reset, or call capture_page. If the same selected native call cannot
+        be materialized safely, the terminal image remains CONTENT.
+        """
+
+        self._last_terminal_artifact_failure = {
+            "stage": "unknown",
+            "reason": "native artifact inspection did not complete",
+        }
+        self._terminal_reinspection_anchor_state = None
+        self._terminal_reinspection_raw_success_anchor = None
+
+        def reject(stage: str, reason: str, **details: object) -> None:
+            failure: dict[str, Any] = {"stage": stage, "reason": reason}
+            for key, value in details.items():
+                failure[key] = self._safe_diagnostic_value(value)
+            self._last_terminal_artifact_failure = failure
+
+        try:
+            trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
+            size = await canvas.evaluate(
+                "element => ({width: element.width, height: element.height})"
+            )
+            if not trace_id or not isinstance(size, dict):
+                reject("geometry", "trace id or canvas size unavailable")
+                return None
+            width = int(size["width"])
+            height = int(size["height"])
+            initial_anchor = await canvas.evaluate(
+                _BOOKWALKER_NATIVE_ANCHOR_SCRIPT, None
+            )
+            if not isinstance(initial_anchor, dict):
+                reject("anchor", "initial anchor unavailable")
+                return None
+            draw_calls = await page.evaluate(
+                """
+                traceId => (window.__bookwalkerNativeDrawCalls || [])
+                  .filter(call => call.canvasId === traceId)
+                """,
+                trace_id,
+            )
+            diagnostic_draw_calls = [
+                {
+                    "canvasId": call.get("canvasId"),
+                    "sourceId": call.get("sourceId"),
+                    "sourceCanvasId": call.get("sourceCanvasId"),
+                    "traceOperationIndex": call.get("traceOperationIndex"),
+                    "traceEpoch": call.get("traceEpoch"),
+                    "targetResetEpoch": call.get("targetResetEpoch"),
+                    "sourceContentVersion": call.get("sourceContentVersion"),
+                    "targetContentVersionAfter": call.get("targetContentVersionAfter"),
+                    "sourceRect": call.get("sourceRect"),
+                    "destination": call.get("destination"),
+                    "sourceDimensions": (
+                        {
+                            "width": call["source"].get("width"),
+                            "height": call["source"].get("height"),
+                        }
+                        if isinstance(call.get("source"), dict)
+                        else None
+                    ),
+                }
+                for call in draw_calls
+                if isinstance(call, dict)
+            ]
+            boxes = await self._page_draw_rectangles(page, canvas)
+            if len(boxes) != 1:
+                geometry_rows = await page.evaluate(
+                    """
+                    traceId => {
+                      const rows = (window.__bookwalkerDrawCalls || [])
+                        .filter(call => call.canvasId === traceId)
+                        .map(call => ({
+                        canvasId: call.canvasId,
+                        operationIndex: call.operationIndex,
+                        traceEpoch: call.traceEpoch,
+                        resetEpoch: call.resetEpoch,
+                        destination: call.destination,
+                        }));
+                      const limit = 32;
+                      if (rows.length <= limit) {
+                        return {total: rows.length, omitted: 0, rows};
+                      }
+                      const head = rows.slice(0, limit / 2);
+                      const tail = rows.slice(-limit / 2);
+                      return {
+                        total: rows.length,
+                        omitted: rows.length - limit,
+                        rows: [...head, ...tail],
+                      };
+                    }
+                    """,
+                    trace_id,
+                )
+                reject(
+                    "geometry",
+                    "expected one page draw rectangle",
+                    box_count=len(boxes),
+                    boxes=boxes,
+                    native_calls=diagnostic_draw_calls,
+                    geometry_rows=geometry_rows,
+                    counter=initial_anchor.get("counter"),
+                    canvas_id=trace_id,
+                )
+                return None
+            selected = select_native_draw_calls(
+                draw_calls,
+                canvas_id=trace_id,
+                canvas_width=width,
+                canvas_height=height,
+                boxes=boxes,
+            )
+            if selected is None or len(selected) != 1:
+                reject(
+                    "selection",
+                    "native selector returned no unique call",
+                    draw_call_count=len(draw_calls),
+                    selected_count=0 if selected is None else len(selected),
+                )
+                return None
+            selected_call = selected[0]
+            if not _native_call_is_safe(selected_call):
+                reject("safety", "selected native call failed safety gate")
+                return None
+            operation_index = selected_call.get("traceOperationIndex")
+            if not isinstance(operation_index, int):
+                reject("selection", "selected operation index unavailable")
+                return None
+            before = await canvas.evaluate(
+                _BOOKWALKER_NATIVE_ANCHOR_SCRIPT, operation_index
+            )
+            if not isinstance(before, dict) or before.get("selected") is None:
+                reject("anchor", "selected call missing from before anchor")
+                return None
+            source = selected_call.get("source")
+            source_rect = selected_call.get("sourceRect")
+            if not isinstance(source, dict) or not isinstance(source_rect, dict):
+                reject("source_bounds", "source or source rectangle unavailable")
+                return None
+            source_width = float(source.get("width", 0))
+            source_height = float(source.get("height", 0))
+            source_x = float(source_rect.get("x", -1))
+            source_y = float(source_rect.get("y", -1))
+            source_rect_width = float(source_rect.get("width", 0))
+            source_rect_height = float(source_rect.get("height", 0))
+            if not all(
+                math.isfinite(value)
+                for value in (
+                    source_width,
+                    source_height,
+                    source_x,
+                    source_y,
+                    source_rect_width,
+                    source_rect_height,
+                )
+            ):
+                reject("source_bounds", "source geometry is non-finite")
+                return None
+            full_source_rect = (
+                source_width <= 0
+                or source_height <= 0
+                or source_x < 0
+                or source_y < 0
+                or source_rect_width <= 0
+                or source_rect_height <= 0
+                or source_x + source_rect_width > source_width
+                or source_y + source_rect_height > source_height
+                or source_x != 0
+                or source_y != 0
+                or source_rect_width != source_width
+                or source_rect_height != source_height
+            ) is False
+            crop_variant = (
+                source.get("constructor") == "HTMLCanvasElement"
+                and (round(source_width), round(source_height)) == (722, 1024)
+                and source_x == 0
+                and source_y == 0
+                and source_rect_width == 721.5
+                and source_rect_height == 1024
+            )
+            if not full_source_rect and not crop_variant:
+                reject(
+                    "source_bounds",
+                    "source rectangle is neither full-frame nor verified crop",
+                    source_dimensions=(source_width, source_height),
+                    source_rect=(source_x, source_y, source_rect_width, source_rect_height),
+                )
+                return None
+            materialized = await self._materialize_native_source_crops(page, selected)
+            if len(materialized) != 1:
+                reject("materialize", "native source materialization was not unique", count=len(materialized))
+                return None
+            materialized_call = materialized[0]
+            source_png = materialized_call.get("sourceCropPng")
+            if not source_png:
+                reject("materialize", "native source crop was unavailable")
+                return None
+            source_capture = _capture_from_data_url(source_png)
+            if (source_capture.width, source_capture.height) != (
+                round(source_rect_width),
+                round(source_rect_height),
+            ):
+                reject(
+                    "materialize",
+                    "materialized crop dimensions mismatch",
+                    actual_dimensions=(source_capture.width, source_capture.height),
+                    expected_dimensions=(round(source_rect_width), round(source_rect_height)),
+                )
+                return None
+            decoded = await page.evaluate(
+                _BOOKWALKER_NATIVE_RGBA_HASH_SCRIPT, source_png
+            )
+            after = await canvas.evaluate(
+                _BOOKWALKER_NATIVE_ANCHOR_SCRIPT, operation_index
+            )
+            if (
+                not isinstance(after, dict)
+                or after.get("selected") is None
+                or operation_index not in after.get("operationIndices", [])
+            ):
+                reject("anchor", "selected call missing or changed after materialization")
+                return None
+            required_anchor_fields = (
+                "bookIdentity",
+                "counter",
+                "actualCanvasId",
+                "connected",
+                "targetContentVersion",
+                "geometryToken",
+                "geometryVersion",
+            )
+
+            def anchor_summary(anchor: object) -> dict[str, Any] | None:
+                if not isinstance(anchor, dict):
+                    return None
+                summary: dict[str, Any] = {
+                    field: self._safe_diagnostic_value(anchor.get(field))
+                    for field in (
+                        "bookIdentity",
+                        "counter",
+                        "traceId",
+                        "actualCanvasId",
+                        "connected",
+                        "targetContentVersion",
+                        "geometryToken",
+                        "geometryVersion",
+                        "geometryHistoryIncomplete",
+                    )
+                }
+                selected = anchor.get("selected")
+                if isinstance(selected, dict):
+                    summary["selected"] = {
+                        field: self._safe_diagnostic_value(selected.get(field))
+                        for field in (
+                            "canvasId",
+                            "operationIndex",
+                            "sourceId",
+                            "sourceCanvasId",
+                            "snapshotId",
+                            "fullSourceSnapshotId",
+                            "targetSnapshotId",
+                            "sourceContentVersion",
+                            "targetContentVersionAfter",
+                        )
+                    }
+                return summary
+
+            anchors = (initial_anchor, before, after)
+            for anchor in anchors:
+                if any(anchor.get(field) in (None, "") for field in required_anchor_fields):
+                    reject("anchor", "required anchor field unavailable")
+                    return None
+                if anchor.get("connected") is not True:
+                    reject("anchor", "target canvas is disconnected")
+                    return None
+                if anchor.get("actualCanvasId") != trace_id:
+                    reject("anchor", "actual canvas identity changed")
+                    return None
+                if (
+                    self._initial_content_id is not None
+                    and anchor.get("bookIdentity") != self._initial_content_id
+                ):
+                    reject("anchor", "book identity changed")
+                    return None
+            for field in required_anchor_fields:
+                if not (initial_anchor.get(field) == before.get(field) == after.get(field)):
+                    self._terminal_reinspection_anchor_state = {
+                        "field": field,
+                        "initial_anchor": {
+                            key: initial_anchor.get(key)
+                            for key in (
+                                "traceId",
+                                *required_anchor_fields,
+                                "geometryHistoryIncomplete",
+                            )
+                        },
+                        "anchor_before": {
+                            key: before.get(key)
+                            for key in (
+                                "traceId",
+                                *required_anchor_fields,
+                                "geometryHistoryIncomplete",
+                            )
+                        },
+                        "anchor_after": {
+                            key: after.get(key)
+                            for key in (
+                                "traceId",
+                                *required_anchor_fields,
+                                "geometryHistoryIncomplete",
+                            )
+                        },
+                        "history_incomplete_before": before.get(
+                            "geometryHistoryIncomplete"
+                        ),
+                        "history_incomplete_after": after.get(
+                            "geometryHistoryIncomplete"
+                        ),
+                    }
+                    reject(
+                        "anchor",
+                        "anchor field changed during inspection",
+                        field=field,
+                        initial_anchor=anchor_summary(initial_anchor),
+                        anchor_before=anchor_summary(before),
+                        anchor_after=anchor_summary(after),
+                        history_incomplete_before=before.get("geometryHistoryIncomplete"),
+                        history_incomplete_after=after.get("geometryHistoryIncomplete"),
+                    )
+                    return None
+            selected_before = before.get("selected")
+            selected_after = after.get("selected")
+            if not isinstance(selected_before, dict) or not isinstance(selected_after, dict):
+                reject("anchor", "selected snapshot unavailable")
+                return None
+            if selected_before != selected_after:
+                reject("anchor", "selected call changed during inspection")
+                return None
+            if selected_before.get("sourceContentVersion") is None:
+                reject("anchor", "source content version unavailable")
+                return None
+            if selected_before.get("targetContentVersionAfter") is None:
+                reject("anchor", "target content version unavailable")
+                return None
+            if selected_before.get("canvasId") != trace_id:
+                reject("anchor", "selected canvas identity mismatch")
+                return None
+            snapshot_fields = ("snapshotId", "fullSourceSnapshotId", "targetSnapshotId")
+            if any(selected_before.get(field) is None for field in snapshot_fields):
+                reject("anchor", "immutable snapshot reference unavailable")
+                return None
+            if (
+                isinstance(before, dict)
+                and isinstance(after, dict)
+                and (
+                    before.get("traceId") != after.get("traceId")
+                    or before.get("geometryToken") != after.get("geometryToken")
+                    or before.get("geometryVersion") != after.get("geometryVersion")
+                    or before.get("geometryHistoryIncomplete")
+                    or after.get("geometryHistoryIncomplete")
+                    or before.get("selected") != after.get("selected")
+                )
+            ):
+                changed_fields = [
+                    field
+                    for field in (
+                        "traceId",
+                        "geometryToken",
+                        "geometryVersion",
+                        "geometryHistoryIncomplete",
+                        "selected",
+                    )
+                    if before.get(field) != after.get(field)
+                ]
+                before_selected = before.get("selected")
+                after_selected = after.get("selected")
+                selected_fields = (
+                    "canvasId",
+                    "operationIndex",
+                    "sourceId",
+                    "sourceCanvasId",
+                    "snapshotId",
+                    "fullSourceSnapshotId",
+                    "targetSnapshotId",
+                    "sourceContentVersion",
+                    "targetContentVersionAfter",
+                )
+                before_selected_summary = (
+                    {
+                        field: before_selected.get(field)
+                        for field in selected_fields
+                        if field in before_selected
+                    }
+                    if isinstance(before_selected, dict)
+                    else None
+                )
+                after_selected_summary = (
+                    {
+                        field: after_selected.get(field)
+                        for field in selected_fields
+                        if field in after_selected
+                    }
+                    if isinstance(after_selected, dict)
+                    else None
+                )
+                reject(
+                    "anchor",
+                    "trace or geometry anchor changed",
+                    changed_fields=changed_fields,
+                    history_incomplete_before=before.get("geometryHistoryIncomplete"),
+                    history_incomplete_after=after.get("geometryHistoryIncomplete"),
+                    trace_id_before=before.get("traceId"),
+                    trace_id_after=after.get("traceId"),
+                    geometry_token_before=before.get("geometryToken"),
+                    geometry_token_after=after.get("geometryToken"),
+                    geometry_version_before=before.get("geometryVersion"),
+                    geometry_version_after=after.get("geometryVersion"),
+                    selected_before=before_selected_summary,
+                    selected_after=after_selected_summary,
+                    initial_anchor=anchor_summary(initial_anchor),
+                    anchor_before=anchor_summary(before),
+                    anchor_after=anchor_summary(after),
+                )
+                return None
+            if not isinstance(decoded, dict):
+                reject("hash", "native crop hash unavailable")
+                return None
+            if (
+                initial_anchor.get("geometryToken") is None
+                or initial_anchor.get("geometryVersion") is None
+                or after.get("geometryToken") is None
+                or after.get("geometryVersion") is None
+            ):
+                reject("anchor", "geometry token unavailable")
+                return None
+            self._terminal_reinspection_raw_success_anchor = dict(initial_anchor)
+            return {
+                "traceId": trace_id,
+                "operationIndex": operation_index,
+                "sourceId": selected_call.get("sourceId"),
+                "sourceCanvasId": selected_call.get("sourceCanvasId"),
+                "sourceConstructor": (selected_call.get("source") or {}).get("constructor"),
+                "sourceDimensions": [round(source_width), round(source_height)],
+                "sourceContentVersion": selected_call.get("sourceContentVersion"),
+                "targetContentVersionAfter": selected_call.get(
+                    "targetContentVersionAfter"
+                ),
+                "sourceRect": self._safe_diagnostic_value(selected_call.get("sourceRect")),
+                "cropVariant": crop_variant,
+                "destination": self._safe_diagnostic_value(selected_call.get("destination")),
+                "targetDimensions": [width, height],
+                "width": decoded.get("width"),
+                "height": decoded.get("height"),
+                "rgbaSha256": decoded.get("rgbaSha256"),
+                "cropSignature": {
+                    "sourceDimensions": [round(source_width), round(source_height)],
+                    "sourceRect": [source_x, source_y, source_rect_width, source_rect_height],
+                    "outputDimensions": [decoded.get("width"), decoded.get("height")],
+                },
+                "anchorBefore": self._safe_diagnostic_value(before),
+                "anchorAfter": self._safe_diagnostic_value(after),
+                "initialAnchor": self._safe_diagnostic_value(initial_anchor),
+            }
+        except (
+            BinasciiError,
+            KeyError,
+            LookupError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            reject("exception", "native artifact inspection raised a bounded exception", exception_type=type(exc).__name__)
+            return None
+
+    async def _approx_terminal_canvas(
+        self,
+        canvas: Locator,
+        role: str,
+        *,
+        expected_content_id: str,
+        expected_counter: str,
+    ) -> dict[str, Any] | None:
+        """Match a complete, stable rendered terminal canvas by image descriptor.
+
+        This is intentionally independent of native source identity and JPEG
+        candidates.  The canvas is read as one complete image before any
+        geometry splitting, and both reads must describe the same actual DOM
+        canvas.  A non-white canvas or any unstable
+        read fails closed.
+        """
+
+        try:
+            if not expected_content_id.strip() or not expected_counter.strip():
+                return None
+            # Pin the resolved DOM element.  Re-evaluating the Locator could
+            # otherwise retarget a replacement renderer canvas between reads.
+            element = await canvas.element_handle()
+            if element is None:
+                return None
+            before_raw = await element.evaluate(TERMINAL_DESCRIPTOR_SCRIPT)
+            if not isinstance(before_raw, dict):
+                return None
+            before_png = decode_terminal_data_url(before_raw.get("dataUrl"))
+            before = describe_terminal_png(before_png) if before_png else None
+            if before is None:
+                return None
+            if (
+                before_raw.get("contentId") != expected_content_id
+                or before_raw.get("counter") != expected_counter
+            ):
+                return None
+            trace_id = before_raw.get("traceId")
+            matched, details = match_terminal_descriptor(before, role)
+            if not matched:
+                return None
+            after_raw = await element.evaluate(TERMINAL_DESCRIPTOR_SCRIPT)
+            if not isinstance(after_raw, dict):
+                return None
+            after_png = decode_terminal_data_url(after_raw.get("dataUrl"))
+            after = describe_terminal_png(after_png) if after_png else None
+            if after is None:
+                return None
+            if any(before_raw.get(field) != after_raw.get(field) for field in (
+                "contentId", "counter", "width", "height"
+            )):
+                return None
+            if (
+                after_raw.get("contentId") != expected_content_id
+                or after_raw.get("counter") != expected_counter
+            ):
+                return None
+            before_trace = before_raw.get("traceId")
+            after_trace = after_raw.get("traceId")
+            if before_trace and after_trace and before_trace != after_trace:
+                return None
+            if before.get("frameSha256") != after.get("frameSha256"):
+                return None
+            matched_after, after_details = match_terminal_descriptor(after, role)
+            if not matched_after or after_details.get("role") != role:
+                return None
+            return {
+                "kind": "approximate_complete_canvas",
+                "role": role,
+                "traceId": trace_id,
+                "contentId": before_raw.get("contentId"),
+                "counter": before_raw.get("counter"),
+                "width": before.get("width"),
+                "height": before.get("height"),
+                "frameSha256": before.get("frameSha256"),
+                "descriptor": details,
+            }
+        except (
+            AttributeError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+    async def _terminal_ad_state(self, page: Page) -> tuple[bool, dict[str, Any]]:
+        current, total, counter_text = await self._read_page_counter_pair(page)
+        result: dict[str, Any] = {
+            "counter": counter_text,
+            "current": current,
+            "total": total,
+            "role": None,
+            "matched": False,
+            "reason": "counter unavailable",
+        }
+        if current is None or total is None or total <= 1:
+            return False, result
+        if current == total - 1:
+            role = "notice"
+        elif current == total:
+            role = "logo"
+        else:
+            result["reason"] = "not terminal role position"
+            return False, result
+        result["role"] = role
+        if not isinstance(self._initial_content_id, str) or not self._initial_content_id.strip():
+            result["reason"] = "authorized content identity unavailable"
+            return False, result
+        try:
+            canvas = await self.get_capture_target(page)
+        except (
+            LookupError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+        ):
+            result["reason"] = "capture target unavailable"
+            return False, result
+        approximate = await self._approx_terminal_canvas(
+            canvas,
+            role,
+            expected_content_id=self._initial_content_id,
+            expected_counter=counter_text,
+        )
+        if approximate is not None:
+            after_current, after_total, after_counter = await self._read_page_counter_pair(page)
+            approximate_cid = approximate.get("contentId")
+            cid_stable = (
+                isinstance(approximate_cid, str)
+                and approximate_cid.casefold() == self._initial_content_id.casefold()
+            )
+            if (
+                (after_current, after_total) == (current, total)
+                and after_counter == counter_text
+                and cid_stable
+            ):
+                result["artifact"] = approximate
+                result["matched"] = True
+                result["reason"] = "stable complete-canvas terminal image"
+                key = (role, current, total, "approx", approximate["frameSha256"])
+                if self._last_terminal_diagnostic_key != key:
+                    self._append_diagnostic({"kind": "terminal_artifact", **result})
+                    self._last_terminal_diagnostic_key = key
+                return True, result
+        try:
+            artifact = await self._native_terminal_artifact(page, canvas)
+        except (
+            LookupError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+        ):
+            artifact = None
+        if artifact is None:
+            result["reason"] = "native artifact unavailable or terminal layout unmatched"
+            key = (role, current, total, "unavailable")
+            if self._last_terminal_diagnostic_key != key:
+                self._append_diagnostic({"kind": "terminal_artifact", **result})
+                self._last_terminal_diagnostic_key = key
+            return False, result
+        result["artifact"] = artifact
+        after_current, after_total, after_counter = await self._read_page_counter_pair(page)
+        if (
+            (after_current, after_total) != (current, total)
+            or after_counter != counter_text
+        ):
+            result["reason"] = "counter changed during native artifact inspection"
+            artifact["counterStable"] = False
+        else:
+            artifact["counterStable"] = True
+        key = (
+            role,
+            current,
+            total,
+            artifact.get("width"),
+            artifact.get("height"),
+            artifact.get("rgbaSha256"),
+        )
+        expected_role = self._known_terminal_native_artifacts.get(
+            (
+                artifact.get("width"),
+                artifact.get("height"),
+                artifact.get("rgbaSha256"),
+            )
+        )
+        if expected_role != role:
+            result["reason"] = "unknown native artifact or role mismatch"
+        elif artifact.get("counterStable") is not True:
+            result["reason"] = "counter changed during native artifact inspection"
+        else:
+            result["matched"] = True
+            result["reason"] = "known native terminal artifact"
+        if self._last_terminal_diagnostic_key != key:
+            self._append_diagnostic({"kind": "terminal_artifact", **result})
+            self._last_terminal_diagnostic_key = key
+        return result["matched"] is True, result
+
+    async def _persist_capture_diagnostic(self, page: Page) -> None:
+        if self._diagnostics_path is None:
+            return
+        capture = self._capture_debug.get("bookwalker_capture", {})
+        current, total, counter = await self._read_page_counter_pair(page)
+        if (
+            capture.get("returned_path") in {
+                "original_jpeg",
+                "direct_original_jpeg",
+                "reconstructed_jpeg",
+            }
+            and current not in {1, total}
+            and capture.get("failure_reason") is None
+        ):
+            self._diagnostics_omitted_successes += 1
+            return
+        selected = capture.get("selected_draw", [])
+        self._append_diagnostic(
+            {
+                "kind": "capture",
+                "omitted_successful_captures_before": self._diagnostics_omitted_successes,
+                "counter": counter,
+                "current": current,
+                "total": total,
+                "returned_path": capture.get("returned_path"),
+                "failure_reason": capture.get("failure_reason"),
+                "candidate_count": len(self._original_candidates),
+                "matcher_attempted": bool(
+                    (capture.get("original_match") or {}).get(
+                        "original_attempt_count"
+                    )
+                ),
+                "native_selection": self._safe_diagnostic_value(
+                    capture.get("native_selection")
+                ),
+                "original_match": self._safe_diagnostic_value(
+                    capture.get("original_match")
+                ),
+                "selected_draw": self._safe_diagnostic_value(selected),
+                "direct_original_jpeg": self._safe_diagnostic_value(
+                    capture.get("direct_original_jpeg")
+                ),
+                "lossless_shadow": self._safe_diagnostic_value(
+                    capture.get("lossless_shadow")
+                ),
+            }
+        )
 
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
         """Allow the bounded BookWalker login navigation budget to complete."""
@@ -2706,6 +5093,8 @@ class BookWalkerAdapter(SiteAdapter):
         native_mode_script = (
             "window.__bookwalkerCaptureMode = "
             f"{self.capture_mode!r};"
+            "window.__bookwalkerDirectOriginalEnabled = "
+            f"{str(self.capture_mode == 'native' and self.enable_original_jpeg_capture).lower()};"
         )
         await page.add_init_script(native_mode_script + "\n" + _DRAW_TRACE_SCRIPT)
         if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
@@ -3317,11 +5706,517 @@ class BookWalkerAdapter(SiteAdapter):
             "reason": "browser chain comparison returned invalid data",
         }
 
+    async def _p4b_current_roi_atomic_proof(
+        self,
+        page: Page,
+        selected_call: dict[str, Any],
+        initial_anchor: dict[str, Any] | None,
+        renderer_handle: Any | None = None,
+        proof_trace_epoch: Any | None = None,
+    ) -> dict[str, Any]:
+        """Check the strict cropped proof against the live DOM in one task."""
+        selected_source = selected_call.get("source")
+        source_canvas_id = (
+            selected_source.get("canvasId")
+            if isinstance(selected_source, dict)
+            else selected_call.get("sourceCanvasId")
+        )
+        operation_index = selected_call.get("traceOperationIndex")
+        selected_trace_epoch = selected_call.get("traceEpoch")
+        if (
+            not isinstance(initial_anchor, dict)
+            or not isinstance(operation_index, int)
+            or renderer_handle is None
+            or not isinstance(selected_trace_epoch, int)
+            or isinstance(selected_trace_epoch, bool)
+            or selected_trace_epoch <= 0
+            or not isinstance(proof_trace_epoch, int)
+            or isinstance(proof_trace_epoch, bool)
+            or proof_trace_epoch <= 0
+            or selected_trace_epoch != proof_trace_epoch
+        ):
+            return {"available": False, "exact": False, "reason": "initial P4B anchor unavailable"}
+        if (
+            self._initial_content_id is None
+            or initial_anchor.get("bookIdentity") != self._initial_content_id
+            or initial_anchor.get("traceEpoch") != selected_trace_epoch
+        ):
+            return {"available": False, "exact": False, "reason": "authorized book identity unavailable"}
+        expected_selected = initial_anchor.get("selected")
+        if not isinstance(expected_selected, dict):
+            return {"available": False, "exact": False, "reason": "initial selected B anchor unavailable"}
+        actual_source = selected_call.get("source")
+        actual_source_content_version = selected_call.get("sourceContentVersion")
+        if isinstance(actual_source, dict) and actual_source_content_version is None:
+            actual_source_content_version = actual_source.get("contentVersion")
+        actual_selected = {
+            "operationIndex": operation_index,
+            "traceEpoch": selected_trace_epoch,
+            "sourceId": selected_call.get("sourceId"),
+            "sourceCanvasId": source_canvas_id,
+            "sourceContentVersion": actual_source_content_version,
+            "fullSourceSnapshotId": selected_call.get("fullSourceSnapshotId"),
+            "targetSnapshotId": selected_call.get("targetSnapshotId"),
+            "targetContentVersionAfter": selected_call.get("targetContentVersionAfter"),
+            "sourceRect": selected_call.get("sourceRect"),
+            "destination": selected_call.get("destination"),
+        }
+        selected_fields = tuple(actual_selected)
+        if any(
+            actual_selected[field] is None
+            or expected_selected.get(field) is None
+            or actual_selected[field] != expected_selected.get(field)
+            for field in selected_fields
+        ):
+            return {"available": False, "exact": False, "reason": "selected native snapshot identity mismatch"}
+        expected = {
+            "traceId": initial_anchor.get("traceId"),
+            "actualCanvasId": initial_anchor.get("actualCanvasId"),
+            "traceEpoch": initial_anchor.get("traceEpoch"),
+            "operationIndex": operation_index,
+            "sourceId": expected_selected.get("sourceId"),
+            "sourceCanvasId": source_canvas_id,
+            "selectedTraceEpoch": expected_selected.get("traceEpoch"),
+            "sourceContentVersion": expected_selected.get("sourceContentVersion"),
+            "fullSourceSnapshotId": expected_selected.get("fullSourceSnapshotId"),
+            "targetSnapshotId": expected_selected.get("targetSnapshotId"),
+            "targetContentVersionAfter": expected_selected.get(
+                "targetContentVersionAfter"
+            ),
+            "sourceRect": expected_selected.get("sourceRect"),
+            "destination": expected_selected.get("destination"),
+        }
+        if not expected.get("targetSnapshotId"):
+            return {"available": False, "exact": False, "reason": "immutable renderer ROI unavailable"}
+        try:
+            result = await page.evaluate(
+                _BOOKWALKER_P4B_CURRENT_ROI_ANCHOR_SCRIPT,
+                {
+                    "expected": expected,
+                    "initialAnchor": initial_anchor,
+                    "destination": selected_call.get("destination"),
+                    "originalElement": renderer_handle,
+                },
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            return {"available": False, "exact": False, "reason": "atomic current ROI comparison failed"}
+        return result if isinstance(result, dict) else {
+            "available": False,
+            "exact": False,
+            "reason": "atomic current ROI comparison returned invalid data",
+        }
+
+    async def _capture_direct_one_hop_original_jpeg(
+        self,
+        page: Page,
+        canvas: Locator,
+        selected_draw_call: dict[str, Any],
+        selection_geometry_state: dict[str, Any],
+        renderer_handle: Any | None = None,
+    ) -> tuple[CaptureResult, ...] | None:
+        """Return a byte-preserving JPEG for one verified cover draw chain.
+
+        This path is intentionally independent of tiled reconstruction.  The
+        page hook retains only bounded canvas snapshots and actual object
+        references; this method materializes and compares them after drawing.
+        Any missing identity, mutation, ambiguity, or pixel mismatch falls
+        through to the existing native PNG/reconstruction paths.
+        """
+
+        direct_debug: dict[str, Any] = {
+            "attempted": True,
+            "accepted": False,
+            "reason": "no direct one-hop record",
+            "candidate_count": 0,
+            "exact_candidate_count": 0,
+            "records": [],
+            "selected_native_draw": (
+                {
+                    "trace_operation_index": selected_draw_call.get("traceOperationIndex"),
+                    "canvas_id": selected_draw_call.get("canvasId"),
+                    "source_id": selected_draw_call.get("sourceId"),
+                    "source_rect": selected_draw_call.get("sourceRect"),
+                    "destination": selected_draw_call.get("destination"),
+                }
+                if isinstance(selected_draw_call, dict)
+                else None
+            ),
+        }
+        self._capture_debug["bookwalker_capture"]["direct_original_jpeg"] = direct_debug
+        direct_canvas = renderer_handle or canvas
+        try:
+            records = await direct_canvas.evaluate(
+                "element => window.__bookwalkerMaterializeDirectOneHop?.(element) || []"
+            )
+        except (
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            TypeError,
+        ):
+            direct_debug["reason"] = "direct one-hop materialization failed"
+            return None
+        if not isinstance(records, list):
+            direct_debug["reason"] = "direct one-hop records invalid"
+            return None
+        direct_debug["record_count"] = len(records)
+        candidates = tuple(self._original_candidates.values())
+        direct_debug["candidate_count"] = len(candidates)
+        direct_debug["selection_geometry_state"] = (
+            {
+                "token": selection_geometry_state.get("token"),
+                "geometry_version": selection_geometry_state.get("geometryVersion"),
+                "geometry_history_incomplete": selection_geometry_state.get(
+                    "geometryHistoryIncomplete"
+                ),
+                "geometry_history_limit": selection_geometry_state.get(
+                    "geometryHistoryLimit"
+                ),
+                "geometry_ledger_length": selection_geometry_state.get(
+                    "geometryLedgerLength"
+                ),
+                "geometry_history_evictions": selection_geometry_state.get(
+                    "geometryHistoryEvictions"
+                ),
+            }
+            if isinstance(selection_geometry_state, dict)
+            else None
+        )
+        selected_trace_operation = selected_draw_call.get("traceOperationIndex")
+        if not isinstance(selected_trace_operation, int):
+            direct_debug["reason"] = "selected native draw operation unavailable"
+            return None
+        selection_token = (
+            selection_geometry_state.get("token")
+            if isinstance(selection_geometry_state, dict) else None
+        )
+        selection_geometry_version = (
+            selection_geometry_state.get("geometryVersion")
+            if isinstance(selection_geometry_state, dict) else None
+        )
+        if (
+            not isinstance(selection_token, str)
+            or not isinstance(selection_geometry_version, int)
+            or not isinstance(selection_geometry_state, dict)
+            or selection_geometry_state.get("geometryHistoryIncomplete") is True
+        ):
+            direct_debug["reason"] = (
+                "direct cover geometry history incomplete"
+                if isinstance(selection_geometry_state, dict)
+                and selection_geometry_state.get("geometryHistoryIncomplete") is True
+                else "direct cover geometry selection state unavailable"
+            )
+            return None
+        latest_renderer_operation = max(
+            (
+                int((item.get("renderer") or {}).get("operationIndex"))
+                for item in records
+                if isinstance(item, dict)
+                and isinstance(item.get("renderer"), dict)
+                and item.get("renderer", {}).get("sameCurrentObject") is True
+                and isinstance(item.get("renderer", {}).get("operationIndex"), int)
+            ),
+            default=0,
+        )
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            copy_record = record.get("copy")
+            renderer_record = record.get("renderer")
+            if not isinstance(copy_record, dict) or not isinstance(renderer_record, dict):
+                continue
+            row: dict[str, Any] = {
+                "token": record.get("token"),
+                "page_url": record.get("pageUrl"),
+                "page_counter": record.get("pageCounter"),
+                "copy_operation": copy_record.get("operationIndex"),
+                "renderer_operation": renderer_record.get("operationIndex"),
+                "renderer_geometry_version": renderer_record.get("geometryVersion"),
+                "current_geometry_version": renderer_record.get("currentGeometryVersion"),
+                "geometry_history_incomplete": renderer_record.get(
+                    "geometryHistoryIncomplete"
+                ),
+                "same_current_object": renderer_record.get("sameCurrentObject") is True,
+                "renderer_mutation": renderer_record.get("mutation"),
+                "renderer_last_mutation": renderer_record.get("lastMutation"),
+                "renderer_unsafe_mutation": renderer_record.get("unsafeMutation"),
+                "renderer_invalidated": renderer_record.get("invalidated"),
+                "renderer_invalidation_operation": renderer_record.get(
+                    "invalidationOperationIndex"
+                ),
+                "renderer_first_hard_invalid": renderer_record.get("firstHardInvalid"),
+                "renderer_non_intersecting_draw": renderer_record.get(
+                    "nonIntersectingDraw"
+                ),
+                "source_id": copy_record.get("sourceId"),
+                "source_dimensions": [
+                    (copy_record.get("sourceInfo") or {}).get("width"),
+                    (copy_record.get("sourceInfo") or {}).get("height"),
+                ],
+            }
+            direct_debug["records"].append(row)
+            if record.get("token") != record.get("frameToken"):
+                row["reason"] = "frame token mismatch"
+                continue
+            if record.get("token") != record.get("currentToken"):
+                row["reason"] = "stale direct hook token"
+                continue
+            if renderer_record.get("sameCurrentObject") is not True:
+                row["reason"] = "renderer target is not current DOM canvas"
+                continue
+            if renderer_record.get("operationIndex") != selected_trace_operation:
+                row["reason"] = "renderer operation is not the selected native draw"
+                continue
+            selected_canvas_id = selected_draw_call.get("canvasId")
+            selected_source_id = selected_draw_call.get("sourceId")
+            selected_source_rect = selected_draw_call.get("sourceRect")
+            selected_destination = selected_draw_call.get("destination")
+            if (
+                not isinstance(selected_canvas_id, str)
+                or not isinstance(selected_source_id, str)
+                or renderer_record.get("targetInfo", {}).get("canvasId")
+                != selected_canvas_id
+                or renderer_record.get("sourceInfo", {}).get("sourceId")
+                != selected_source_id
+                or renderer_record.get("sourceRect") != selected_source_rect
+                or renderer_record.get("destination") != selected_destination
+            ):
+                row["reason"] = "selected native draw identity or geometry mismatch"
+                continue
+            page_counter = record.get("pageCounter")
+            if page_counter is None:
+                row["reason"] = "direct cover page counter unavailable"
+                continue
+            page_number, _page_id = self.parse_page_counter(str(page_counter))
+            if page_number != 1:
+                row["reason"] = "direct cover record is not page one"
+                continue
+            if renderer_record.get("geometryHistoryIncomplete") is True:
+                row["reason"] = "direct cover geometry history incomplete"
+                continue
+            if (
+                record.get("token") != selection_token
+                or renderer_record.get("geometryVersion") != selection_geometry_version
+                or renderer_record.get("currentGeometryVersion") != selection_geometry_version
+            ):
+                row["reason"] = "direct cover geometry changed before validation"
+                continue
+            if renderer_record.get("geometryVersion") != renderer_record.get(
+                "currentGeometryVersion"
+            ):
+                row["reason"] = "renderer geometry changed during validation"
+                continue
+            if renderer_record.get("operationIndex") != latest_renderer_operation:
+                row["reason"] = "superseded by newer current renderer anchor"
+                continue
+            if record.get("currentConnected") is not True:
+                row["reason"] = "current DOM canvas is disconnected"
+                continue
+            if renderer_record.get("invalidated") is True:
+                row["reason"] = "renderer record was invalidated after selection"
+                continue
+            mutation = renderer_record.get("mutation")
+            allowed_pixel_mutations = {
+                "drawImage",
+                "save",
+                "restore",
+                "fillRect",
+                "putImageData",
+                "fillText",
+                "strokeText",
+                "fill",
+                "stroke",
+            }
+            if renderer_record.get("unsafeMutation") is not None:
+                row["reason"] = "renderer post-draw state or reset mutation"
+                continue
+            if (
+                mutation is not None
+                and renderer_record.get("lastMutation") not in allowed_pixel_mutations
+            ):
+                row["reason"] = "renderer post-draw unsupported mutation"
+                continue
+            if (
+                mutation == "drawImage"
+                and renderer_record.get("nonIntersectingDraw") is not True
+            ):
+                row["reason"] = "renderer follow-up drawImage is not proven non-intersecting"
+                continue
+            if not self._direct_draw_is_safe(copy_record) or not self._direct_draw_is_safe(
+                renderer_record
+            ):
+                row["reason"] = "direct draw composition or transform is unsafe"
+                continue
+            if not isinstance(copy_record.get("operationIndex"), int) or not isinstance(
+                renderer_record.get("operationIndex"), int
+            ) or copy_record["operationIndex"] >= renderer_record["operationIndex"]:
+                row["reason"] = "direct operation order is invalid"
+                continue
+            if not isinstance(copy_record.get("sourceSnapshot"), str) or not isinstance(
+                copy_record.get("intermediate"), str
+            ) or not isinstance(renderer_record.get("sourceB"), str):
+                row["reason"] = "immutable A/B snapshot unavailable"
+                continue
+            if not isinstance(renderer_record.get("targetSnapshot"), str) or not isinstance(
+                renderer_record.get("current"), str
+            ):
+                row["reason"] = "immutable renderer/current snapshot unavailable"
+                continue
+            if copy_record.get("targetContentVersionAfter") != renderer_record.get(
+                "sourceContentVersion"
+            ):
+                row["reason"] = "A/B content version join unavailable"
+                continue
+            # A known post-draw pixel write may be outside the selected ROI.
+            # The immediate immutable ROI versus the current ROI comparison
+            # below is the authority for that case.  State-changing and
+            # reset/clip operations remain fail-closed above.
+            source_info = copy_record.get("sourceInfo")
+            if not isinstance(source_info, dict) or source_info.get("constructor") != "ImageBitmap":
+                row["reason"] = "direct source is not ImageBitmap"
+                continue
+            source_id = source_info.get("sourceId")
+            if not isinstance(source_id, str):
+                row["reason"] = "ImageBitmap source identity unavailable"
+                continue
+            source_dimensions = (
+                source_info.get("width"),
+                source_info.get("height"),
+            )
+            dimension_candidates = tuple(
+                candidate
+                for candidate in candidates
+                if (candidate.width, candidate.height) == source_dimensions
+            )
+            if not dimension_candidates:
+                row["reason"] = "no JPEG candidate with source dimensions"
+                continue
+            exact_candidates = []
+            for candidate in dimension_candidates:
+                match = await imagebitmap_pixel_exact_match(
+                    page,
+                    candidate.data,
+                    source_id,
+                    candidate.mime_type,
+                )
+                if isinstance(match, dict) and match.get("exact") is True:
+                    exact_candidates.append(candidate)
+            row["exact_candidate_count"] = len(exact_candidates)
+            direct_debug["exact_candidate_count"] += len(exact_candidates)
+            if len(exact_candidates) != 1:
+                row["reason"] = "direct JPEG candidate is not unique"
+                continue
+            candidate = exact_candidates[0]
+            encoded = base64.b64encode(candidate.data).decode("ascii")
+            try:
+                comparison = await page.evaluate(
+                    _DIRECT_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+                    {
+                        "candidate": f"data:image/jpeg;base64,{encoded}",
+                        "sourceSnapshot": copy_record["sourceSnapshot"],
+                        "intermediate": copy_record["intermediate"],
+                        "sourceB": renderer_record["sourceB"],
+                        "targetSnapshot": renderer_record["targetSnapshot"],
+                        "current": renderer_record["current"],
+                        "copySourceRect": copy_record.get("sourceRect"),
+                        "copyDestination": copy_record.get("destination"),
+                        "rendererSourceRect": renderer_record.get("sourceRect"),
+                        "rendererDestination": renderer_record.get("destination"),
+                        "intermediateDimensions": {
+                            "width": (copy_record.get("targetInfo") or {}).get("width"),
+                            "height": (copy_record.get("targetInfo") or {}).get("height"),
+                        },
+                        "rendererDimensions": {
+                            "width": (renderer_record.get("targetInfo") or {}).get("width"),
+                            "height": (renderer_record.get("targetInfo") or {}).get("height"),
+                        },
+                        "copySmoothingEnabled": copy_record.get("imageSmoothingEnabled"),
+                        "copySmoothingQuality": copy_record.get("imageSmoothingQuality"),
+                        "rendererSmoothingEnabled": renderer_record.get("imageSmoothingEnabled"),
+                        "rendererSmoothingQuality": renderer_record.get("imageSmoothingQuality"),
+                    },
+                )
+            except (
+                PlaywrightError,
+                PlaywrightTimeoutError,
+                TimeoutError,
+                TypeError,
+                ValueError,
+            ):
+                row["reason"] = "direct output-equivalence comparison failed"
+                continue
+            row["comparison"] = comparison
+            if not isinstance(comparison, dict) or comparison.get("exact") is not True:
+                row["reason"] = "direct output-equivalence mismatch"
+                continue
+            try:
+                current_state = await direct_canvas.evaluate(
+                    """
+                    element => window.__bookwalkerDirectOneHopCurrentState?.(element) || null
+                    """
+                )
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+                current_state = None
+            states = current_state.get("records") if isinstance(current_state, dict) else None
+            stable = isinstance(states, list) and any(
+                isinstance(state, dict)
+                and state.get("operationIndex") == renderer_record.get("operationIndex")
+                and state.get("unsafeMutation") is None
+                and state.get("lastMutation") == renderer_record.get("lastMutation")
+                and state.get("currentContentVersion") == renderer_record.get(
+                    "currentContentVersion"
+                )
+                for state in states
+            )
+            if (
+                not isinstance(current_state, dict)
+                or current_state.get("token") != record.get("currentToken")
+                or current_state.get("pageUrl") != record.get("pageUrl")
+                or current_state.get("connected") is not True
+                or current_state.get("activeOperationIndex")
+                != renderer_record.get("operationIndex")
+                or current_state.get("geometryVersion")
+                != renderer_record.get("currentGeometryVersion")
+                or current_state.get("geometryHistoryIncomplete") is True
+                or current_state.get("token") != selection_token
+                or current_state.get("geometryVersion") != selection_geometry_version
+                or current_state.get("pageCounter") != record.get("pageCounter")
+                or self.parse_page_counter(str(current_state.get("pageCounter") or ""))[0] != 1
+                or not stable
+            ):
+                row["reason"] = "direct hook changed during validation"
+                continue
+            row["reason"] = "direct output-equivalence exact"
+            direct_debug.update({
+                "accepted": True,
+                "reason": "unique raw JPEG and A/B/renderer/current RGBA exact",
+                "candidate_sha256": candidate.sha256,
+                "source_id": source_id,
+            })
+            return (candidate_capture(candidate),)
+        return None
+
+    @staticmethod
+    def _direct_draw_is_safe(record: dict[str, Any]) -> bool:
+        transform = record.get("transform")
+        return (
+            isinstance(transform, dict)
+            and all(transform.get(key) == value for key, value in {
+                "a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0,
+            }.items())
+            and record.get("globalAlpha") == 1
+            and record.get("globalCompositeOperation") == "source-over"
+            and record.get("filter") == "none"
+        )
+
     async def _evaluate_lossless_reconstruction(
         self,
         page: Page,
         native_captures: tuple[CaptureResult, ...],
         selected_draw_calls: list[dict[str, Any]],
+        *,
+        p4b_initial_anchor: dict[str, Any] | None = None,
+        p4b_renderer_handle: Any | None = None,
     ) -> LosslessReconstructionEvaluation:
         """Evaluate supported source JPEG reconstruction and retain verified captures."""
 
@@ -3438,6 +6333,28 @@ class BookWalkerAdapter(SiteAdapter):
         shadow["retained_completed_mapping_summaries"] = trace.get(
             "retainedCompletedMappingSummaries", []
         )
+        selected_clear_evidence: list[dict[str, Any]] = []
+        requested_mapping_ids_set = set(requested_mapping_ids)
+        for mapping in trace.get("completedMappings", []):
+            if not isinstance(mapping, dict):
+                continue
+            mapping_id = mapping.get("mappingId")
+            if str(mapping_id) not in requested_mapping_ids_set:
+                continue
+            selected_clear_evidence.append({
+                "mappingId": mapping_id,
+                "trace": "selected",
+                "segmentClearOperationIndex": mapping.get(
+                    "segmentClearOperationIndex"
+                ),
+                "segmentExecutedFullClearWitness": mapping.get(
+                    "segmentExecutedFullClearWitness"
+                ),
+                "segmentExecutedFullClearWitnessRejection": mapping.get(
+                    "segmentExecutedFullClearWitnessRejection"
+                ),
+            })
+        shadow["selected_mapping_clear_evidence"] = selected_clear_evidence
 
         initial_analyses: list[MappingAnalysis] = []
         initial_analysis_times: list[float] = []
@@ -3484,6 +6401,28 @@ class BookWalkerAdapter(SiteAdapter):
             evaluation_timing["upstream_trace_decode_ms"] = _elapsed_ms(
                 upstream_decode_started
             )
+        if isinstance(upstream_trace, dict):
+            upstream_mapping_ids_set = set(upstream_mapping_ids)
+            for mapping in upstream_trace.get("completedMappings", []):
+                if not isinstance(mapping, dict):
+                    continue
+                mapping_id = mapping.get("mappingId")
+                if str(mapping_id) not in upstream_mapping_ids_set:
+                    continue
+                selected_clear_evidence.append({
+                    "mappingId": mapping_id,
+                    "trace": "upstream",
+                    "segmentClearOperationIndex": mapping.get(
+                        "segmentClearOperationIndex"
+                    ),
+                    "segmentExecutedFullClearWitness": mapping.get(
+                        "segmentExecutedFullClearWitness"
+                    ),
+                    "segmentExecutedFullClearWitnessRejection": mapping.get(
+                        "segmentExecutedFullClearWitnessRejection"
+                    ),
+                })
+        shadow["selected_mapping_clear_evidence"] = selected_clear_evidence
         evaluation_timing["trace_fetch_ms"] = (
             evaluation_timing["selected_trace_fetch_ms"]
             + evaluation_timing["upstream_trace_fetch_ms"]
@@ -3494,12 +6433,17 @@ class BookWalkerAdapter(SiteAdapter):
         )
 
         analyses: list[MappingAnalysis] = []
+        strict_executed_clear_flags: list[bool] = []
+        strict_single_capture = _strict_executed_clear_capture_allowed(
+            len(native_captures), len(selected_draw_calls)
+        )
         analysis_times: list[float] = []
         for initial_analysis, candidate in zip(
             initial_analyses, provenance_candidates, strict=True
         ):
             if candidate is None:
                 analyses.append(initial_analysis)
+                strict_executed_clear_flags.append(False)
                 analysis_times.append(0.0)
                 continue
             upstream_analysis: MappingAnalysis
@@ -3522,7 +6466,18 @@ class BookWalkerAdapter(SiteAdapter):
                 upstream_elapsed = _elapsed_ms(upstream_started)
                 evaluation_timing["trace_python_analysis_ms"] += upstream_elapsed
                 evaluation_timing["mapping_analysis"] += upstream_elapsed
-            if validate_scaled_canvas_source_analysis(upstream_analysis, candidate):
+            legacy_valid = validate_scaled_canvas_source_analysis(
+                upstream_analysis,
+                candidate,
+            )
+            strict_executed_clear_valid = False
+            if not legacy_valid and strict_single_capture:
+                strict_executed_clear_valid = validate_scaled_canvas_source_analysis(
+                    upstream_analysis,
+                    candidate,
+                    allow_executed_full_clear=True,
+                )
+            if legacy_valid or strict_executed_clear_valid:
                 assert upstream_analysis.mapping is not None
                 scaled_mapping = replace(
                     upstream_analysis.mapping,
@@ -3541,7 +6496,12 @@ class BookWalkerAdapter(SiteAdapter):
                     ),
                 )
             analyses.append(upstream_analysis)
+            strict_executed_clear_flags.append(strict_executed_clear_valid)
             analysis_times.append(upstream_elapsed)
+        self._p4b_atomic_proof_active = (
+            self._diagnostic_p4b_atomic_proof
+            or (strict_single_capture and any(strict_executed_clear_flags))
+        )
 
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
@@ -3552,6 +6512,7 @@ class BookWalkerAdapter(SiteAdapter):
             provenance_candidate,
             initial_analysis_time,
             upstream_analysis_time,
+            strict_executed_clear_valid,
         ) in zip(
             native_captures,
             selected_draw_calls,
@@ -3559,6 +6520,7 @@ class BookWalkerAdapter(SiteAdapter):
             provenance_candidates,
             initial_analysis_times,
             analysis_times,
+            strict_executed_clear_flags,
             strict=True,
         ):
             part = self._shadow_part_defaults(
@@ -3574,6 +6536,7 @@ class BookWalkerAdapter(SiteAdapter):
             part["selected_mapping_id"] = draw_call.get(
                 "mappingId", draw_call.get("mapping_id")
             )
+            part["executed_clear_provenance"] = strict_executed_clear_valid
             if provenance_candidate is not None:
                 part.update(provenance_candidate.to_debug())
             analysis_debug = analysis.to_debug()
@@ -3783,6 +6746,16 @@ class BookWalkerAdapter(SiteAdapter):
                             mapping,
                             source_snapshot,
                         )
+                        if self._p4b_atomic_proof_active and len(selected_draw_calls) == 1:
+                            comparison["p4b_atomic_current_roi"] = (
+                                await self._p4b_current_roi_atomic_proof(
+                                    page,
+                                    draw_call,
+                                    p4b_initial_anchor,
+                                        p4b_renderer_handle,
+                                        part.get("provenance_renderer_trace_epoch"),
+                                )
+                            )
                         part["cropped_chain_pixel_comparison"] = comparison
                         stage_comparisons = (
                             comparison.get("source"),
@@ -3801,6 +6774,13 @@ class BookWalkerAdapter(SiteAdapter):
                                 for stage in stage_comparisons
                             )
                         )
+                        if self._p4b_atomic_proof_active:
+                            p4b_atomic = comparison.get("p4b_atomic_current_roi")
+                            if not isinstance(p4b_atomic, dict) or p4b_atomic.get("exact") is not True:
+                                part["cropped_chain_pixel_exact"] = False
+                                part["reason"] = (
+                                    "P4B current DOM ROI or final atomic anchor unavailable"
+                                )
                     elif (
                         provenance_candidate is not None
                         and part.get("mapping_provenance")
@@ -3939,6 +6919,247 @@ class BookWalkerAdapter(SiteAdapter):
         finish_timing()
         return LosslessReconstructionEvaluation(shadow, captures)
 
+    async def _maybe_reselect_lossless_reconstruction(
+        self,
+        page: Page,
+        first: LosslessReconstructionEvaluation,
+        native_captures: tuple[CaptureResult, ...],
+        selected_draw_calls: list[dict[str, Any]],
+        *,
+        p4b_initial_anchor: dict[str, Any] | None,
+        p4b_renderer_handle: Any | None,
+    ) -> LosslessReconstructionEvaluation:
+        """Retry one strict clear proof after a same-source renderer redraw.
+
+        This is deliberately limited to the newly validated executed-clear
+        path. Legacy dimension-reset and ordinary PNG paths never enter here.
+        A failed identity/anchor check remains fail-closed; the caller must
+        not return the old native pixels under a changed DOM target.
+        """
+
+        if (
+            self._diagnostic_p4b_atomic_proof
+            or not self._p4b_atomic_proof_active
+            or self._p4b_redraw_attempted
+        ):
+            return first
+        parts = [
+            part
+            for part in first.debug.get("parts", [])
+            if isinstance(part, dict)
+        ]
+        atomic_failures = []
+        for part in parts:
+            comparison = part.get("cropped_chain_pixel_comparison")
+            proof = comparison.get("p4b_atomic_current_roi") if isinstance(comparison, dict) else None
+            if isinstance(proof, dict) and proof.get("exact") is not True:
+                atomic_failures.append(proof)
+        if not atomic_failures:
+            return first
+        failure = atomic_failures[0]
+        if failure.get("reason") != "initial renderer anchor changed":
+            if failure.get("reason") in {
+                "current capture target identity changed",
+                "current renderer canvas is missing or ambiguous",
+                "original renderer element is unavailable",
+                "final renderer anchor changed",
+                "selected renderer B anchor mismatch",
+            }:
+                raise UnknownPageStateError(
+                    "BookWalker strict clear proof anchor changed outside a retryable race"
+                )
+            # A stable proof failure (for example an unavailable immutable
+            # snapshot) may safely keep the normal PNG fallback. Only an
+            # identity transition must bypass the optional-capture fallback.
+            return first
+        if len(parts) != 1 or not _initial_proof_ready_for_redraw(parts[0]):
+            raise UnknownPageStateError(
+                "BookWalker strict clear proof lacks complete initial immutable proof"
+            )
+        initial = p4b_initial_anchor
+        before = failure.get("before")
+        old_call = selected_draw_calls[0] if len(selected_draw_calls) == 1 else None
+        if not isinstance(initial, dict) or not isinstance(before, dict) or not isinstance(old_call, dict):
+            raise UnknownPageStateError(
+                "BookWalker strict clear proof lacks initial anchor or selected draw"
+            )
+        anchor_fields = (
+            "traceId", "actualCanvasId", "bookIdentity", "counter",
+            "geometryToken", "traceEpoch",
+        )
+        for anchor in (initial, before):
+            if any(anchor.get(field) in (None, "") for field in anchor_fields):
+                raise UnknownPageStateError(
+                    "BookWalker strict clear proof anchor identity is incomplete"
+                )
+            if (
+                anchor.get("connected") is not True
+                or anchor.get("geometryHistoryIncomplete") is not False
+                or anchor.get("unknownMutation") is not False
+                or self._initial_content_id is None
+                or anchor.get("bookIdentity") != self._initial_content_id
+            ):
+                raise UnknownPageStateError(
+                    "BookWalker strict clear proof initial anchor is not stable"
+                )
+        if any(initial.get(field) != before.get(field) for field in anchor_fields):
+            raise UnknownPageStateError(
+                "BookWalker strict clear proof changed before retry"
+            )
+        initial_selected = initial.get("selected")
+        old_operation = old_call.get("traceOperationIndex")
+        selected_fields = (
+            "canvasId", "operationIndex", "sourceId", "sourceCanvasId",
+            "traceEpoch", "sourceRect", "destination",
+        )
+        if (
+            not isinstance(initial_selected, dict)
+            or any(initial_selected.get(field) in (None, "") for field in selected_fields)
+            or old_operation != initial_selected.get("operationIndex")
+            or not isinstance(old_operation, int)
+            or isinstance(old_operation, bool)
+        ):
+            raise UnknownPageStateError(
+                "BookWalker strict clear proof selected draw identity is incomplete"
+            )
+        self._p4b_redraw_attempted = True
+        redraw: dict[str, Any] = {
+            "attempted": True,
+            "initial_operation": old_operation,
+            "reason": failure.get("reason"),
+            "selected": False,
+        }
+        try:
+            canvas = await self.get_capture_target(page)
+            current_handle = await canvas.element_handle()
+            if current_handle is None or p4b_renderer_handle is None:
+                raise CaptureUnavailableError("renderer element handle unavailable")
+            same_renderer = await page.evaluate(
+                "([original, current]) => original === current",
+                [p4b_renderer_handle, current_handle],
+            )
+            if same_renderer is not True:
+                raise CaptureUnavailableError("renderer element identity changed before redraw")
+            size = await canvas.evaluate(
+                "element => ({width: element.width, height: element.height})"
+            )
+            trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
+            boxes = await self._page_draw_rectangles(page, canvas)
+            calls = await page.evaluate(
+                "traceId => (window.__bookwalkerNativeDrawCalls || []).filter(call => call.canvasId === traceId)",
+                trace_id,
+            )
+            selection_debug: dict[str, Any] = {"box_count": len(boxes)}
+            current = select_native_draw_calls(
+                calls if isinstance(calls, list) else [],
+                canvas_id=trace_id,
+                canvas_width=int(size["width"]),
+                canvas_height=int(size["height"]),
+                boxes=boxes,
+                selection_debug=selection_debug,
+            )
+            redraw["selector"] = selection_debug
+            if not current or len(current) != len(boxes) or len(current) != 1:
+                raise CaptureUnavailableError("current draw was not uniquely selected")
+            new_call = current[0]
+            new_operation = new_call.get("traceOperationIndex")
+            redraw["new_operation"] = new_operation
+            if (
+                not isinstance(new_operation, int)
+                or isinstance(new_operation, bool)
+                or new_operation <= old_operation
+            ):
+                raise CaptureUnavailableError("no newer current redraw operation")
+            for key in ("sourceId", "sourceCanvasId", "sourceRect", "destination"):
+                if new_call.get(key) != old_call.get(key):
+                    raise CaptureUnavailableError(f"redraw {key} changed")
+            if new_call.get("traceEpoch") != old_call.get("traceEpoch"):
+                raise CaptureUnavailableError("redraw trace epoch changed")
+            if not _native_call_is_safe(new_call):
+                raise CaptureUnavailableError("redraw native safety gate failed")
+            materialized = await self._materialize_native_source_crops(page, current)
+            if len(materialized) != 1:
+                raise CaptureUnavailableError("redraw materialization was not unique")
+            source_rect = new_call.get("sourceRect")
+            source = new_call.get("source")
+            if not isinstance(source_rect, dict) or not isinstance(source, dict):
+                raise CaptureUnavailableError("redraw source geometry unavailable")
+            expected_width = round(float(source_rect["width"]))
+            expected_height = round(float(source_rect["height"]))
+            source_width = float(source["width"])
+            source_height = float(source["height"])
+            if (
+                source_rect.get("x") != 0
+                or source_rect.get("y") != 0
+                or expected_width <= 0
+                or expected_height <= 0
+                or expected_width > source_width
+                or expected_height > source_height
+            ):
+                raise CaptureUnavailableError("redraw source bounds are invalid")
+            current_capture = _capture_from_data_url(materialized[0].get("sourceCropPng"))
+            if (current_capture.width, current_capture.height) != (expected_width, expected_height):
+                raise CaptureUnavailableError("redraw native PNG dimensions do not match")
+            new_anchor = await current_handle.evaluate(
+                _BOOKWALKER_NATIVE_ANCHOR_SCRIPT,
+                new_operation,
+            )
+            new_selected = new_anchor.get("selected") if isinstance(new_anchor, dict) else None
+            if not isinstance(new_selected, dict):
+                raise CaptureUnavailableError("redraw anchor is incomplete")
+            if any(new_anchor.get(field) != initial.get(field) for field in anchor_fields):
+                raise CaptureUnavailableError("redraw page or canvas identity changed")
+            for field in selected_fields:
+                if new_selected.get(field) != (new_operation if field == "operationIndex" else initial_selected.get(field)):
+                    raise CaptureUnavailableError("redraw selected anchor changed")
+            redraw["selected"] = True
+            rerun = await self._evaluate_lossless_reconstruction(
+                page,
+                (current_capture,),
+                materialized,
+                p4b_initial_anchor=new_anchor,
+                p4b_renderer_handle=current_handle,
+            )
+            rerun_parts = [
+                part for part in rerun.debug.get("parts", [])
+                if isinstance(part, dict)
+                and part.get("executed_clear_provenance") is True
+            ]
+            if len(rerun_parts) != 1:
+                raise UnknownPageStateError(
+                    "BookWalker strict redraw proof is missing its fresh part"
+                )
+            rerun_proof = (
+                rerun_parts[0].get("cropped_chain_pixel_comparison") or {}
+            ).get("p4b_atomic_current_roi")
+            if not isinstance(rerun_proof, dict):
+                raise UnknownPageStateError(
+                    "BookWalker strict redraw proof is missing its fresh anchor"
+                )
+            if rerun_proof.get("reason") in {
+                "current capture target identity changed",
+                "current renderer canvas is missing or ambiguous",
+                "original renderer element is unavailable",
+                "initial renderer anchor changed",
+                "final renderer anchor changed",
+                "selected renderer B anchor mismatch",
+            }:
+                raise UnknownPageStateError(
+                    "BookWalker strict redraw proof changed identity again"
+                )
+            self._p4b_redraw_native_captures = (current_capture,)
+            self._p4b_redraw_selected_draw_calls = current
+            rerun.debug["p4b_redraw_reselection"] = redraw
+            return rerun
+        except (CaptureUnavailableError, PlaywrightError, PlaywrightTimeoutError, TimeoutError, KeyError, TypeError, ValueError) as exc:
+            redraw["reason"] = f"redraw reselection failed: {type(exc).__name__}"
+        first.debug["p4b_redraw_reselection"] = redraw
+        self._capture_debug["bookwalker_capture"]["lossless_shadow"] = first.debug
+        self._capture_debug["bookwalker_capture"]["strict_abort_reason"] = redraw["reason"]
+        raise UnknownPageStateError(
+            "BookWalker strict clear proof could not complete a fresh same-source redraw"
+        )
+
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
         return copy.deepcopy(self._capture_debug)
@@ -3964,6 +7185,7 @@ class BookWalkerAdapter(SiteAdapter):
                 """
                 () => {
                   window.__bookwalkerDrawCalls = [];
+                  window.__bookwalkerResetDirectOneHop?.();
                   window.__bookwalkerResetTransformTrace?.();
                 }
                 """
@@ -3979,10 +7201,17 @@ class BookWalkerAdapter(SiteAdapter):
                 """
                 () => {
                   window.__bookwalkerNativeDrawCalls = [];
+                  window.__bookwalkerResetNativeCaptureDiagnostics?.();
+                  window.__bookwalkerResetDirectOneHop?.();
                   window.__bookwalkerNativeSourceObjects?.clear();
                   window.__bookwalkerNativeSnapshots?.clear();
                   window.__bookwalkerResetTransformTrace?.();
                   window.__bookwalkerNativeCaptureEnabled = true;
+                  // The direct one-hop ledger is a cover-only path.  Initial
+                  // page capture uses the prepare-page flag; navigation arms
+                  // native tracing for body pages without retaining full-frame
+                  // direct snapshots.
+                  window.__bookwalkerDirectOriginalEnabled = false;
                 }
                 """
             )
@@ -4043,22 +7272,52 @@ class BookWalkerAdapter(SiteAdapter):
         self._reset_capture_debug()
         capture_started = time.perf_counter()
         selected_draw_calls: list[dict[str, Any]] = []
+        self._p4b_atomic_proof_active = self._diagnostic_p4b_atomic_proof
+        self._p4b_redraw_attempted = False
+        self._p4b_redraw_native_captures = None
+        self._p4b_redraw_selected_draw_calls = None
         try:
             canvas = await self.get_capture_target(page)
-            trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
+            p4b_renderer_handle: Any | None = None
+            try:
+                # Locator.element_handle() is the supported Playwright API.
+                # Keep the real capture path independent of test-double shape.
+                p4b_renderer_handle = await canvas.element_handle()
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                p4b_renderer_handle = None
+            if self._diagnostic_p4b_atomic_proof and p4b_renderer_handle is None:
+                raise CaptureUnavailableError(
+                    "BookWalker P4B renderer element handle is unavailable"
+                )
+            capture_canvas = p4b_renderer_handle or canvas
+            trace_id = await capture_canvas.get_attribute("data-bookwalker-trace-id")
             if not trace_id:
                 raise CaptureUnavailableError("BookWalker canvas trace id is missing")
-            size = await canvas.evaluate(
+            size = await capture_canvas.evaluate(
                 "element => ({width: element.width, height: element.height})"
             )
             width = int(size["width"])
             height = int(size["height"])
-            boxes = await self._page_draw_rectangles(page, canvas)
+            selection_geometry_state = await capture_canvas.evaluate(
+                "element => window.__bookwalkerDirectOneHopGeometryState?.(element) || null",
+            )
+            boxes = await self._page_draw_rectangles(page, capture_canvas)
+            selection_debug: dict[str, Any] = {
+                "outcome": "rejected",
+                "rejection_branch": None,
+                "box_count": len(boxes),
+            }
+            self._capture_debug["bookwalker_capture"][
+                "native_selection"
+            ] = selection_debug
+            first_page = await self._is_first_page(page)
             if not boxes:
+                selection_debug["rejection_branch"] = "no_page_boxes"
                 raise CaptureUnavailableError(
                     "BookWalker native capture requires draw geometry"
                 )
-            if len(boxes) > 1 and await self._is_first_page(page):
+            if len(boxes) > 1 and first_page:
+                selection_debug["rejection_branch"] = "cover_spread_requires_union"
                 raise CaptureUnavailableError(
                     "BookWalker cover spread needs one fallback union crop"
                 )
@@ -4069,21 +7328,65 @@ class BookWalkerAdapter(SiteAdapter):
                 """,
                 trace_id,
             )
+            if not isinstance(draw_calls, list):
+                draw_calls = []
             selected = select_native_draw_calls(
                 draw_calls,
                 canvas_id=trace_id,
                 canvas_width=width,
                 canvas_height=height,
                 boxes=boxes,
+                selection_debug=selection_debug,
             )
+            try:
+                runtime_selection = await page.evaluate(
+                    "() => window.__bookwalkerNativeCaptureDiagnostics || null"
+                )
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                runtime_selection = None
+            if isinstance(runtime_selection, dict):
+                selection_debug["runtime"] = self._safe_diagnostic_value(
+                    runtime_selection
+                )
             if selected is None or len(selected) != len(boxes):
+                selection_debug.setdefault(
+                    "rejection_branch", "selector_rejected"
+                )
                 raise CaptureUnavailableError(
                     "BookWalker native source calls did not match page geometry"
                 )
+            selection_debug["outcome"] = "selected"
+            selection_debug["selected_count"] = len(selected)
             selected_draw_calls = selected
+            p4b_initial_anchor: dict[str, Any] | None = None
+            if p4b_renderer_handle is not None and len(selected) == 1:
+                selected_operation_index = selected[0].get("traceOperationIndex")
+                if isinstance(selected_operation_index, int):
+                    try:
+                        p4b_initial_anchor = await capture_canvas.evaluate(
+                            _BOOKWALKER_NATIVE_ANCHOR_SCRIPT,
+                            selected_operation_index,
+                        )
+                    except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                        p4b_initial_anchor = None
             materialization_started = time.perf_counter()
             selected = await self._materialize_native_source_crops(page, selected)
             selected_draw_calls = selected
+            self._capture_debug["bookwalker_capture"]["selected_draw"] = [
+                {
+                    "traceOperationIndex": call.get("traceOperationIndex"),
+                    "canvasId": call.get("canvasId"),
+                    "sourceId": call.get("sourceId"),
+                    "sourceCanvasId": call.get("sourceCanvasId"),
+                    "sourceConstructor": (call.get("source") or {}).get("constructor"),
+                    "source": call.get("source"),
+                    "sourceRect": call.get("sourceRect"),
+                    "destination": call.get("destination"),
+                    "target": call.get("target"),
+                    "mappingId": call.get("mappingId"),
+                }
+                for call in selected
+            ]
             self._capture_debug["bookwalker_capture"]["timing_ms"][
                 "native_materialization_ms"
             ] = _elapsed_ms(materialization_started)
@@ -4155,19 +7458,120 @@ class BookWalkerAdapter(SiteAdapter):
                 }
                 await self._clear_geometry_trace(page)
                 return original_captures
+            direct_started = time.perf_counter()
+            direct_captures = None
+            if first_page:
+                direct_captures = await self._capture_direct_one_hop_original_jpeg(
+                    page,
+                    canvas,
+                    selected_draw_calls[0],
+                    selection_geometry_state,
+                    p4b_renderer_handle,
+                )
+            else:
+                self._capture_debug["bookwalker_capture"]["direct_original_jpeg"] = {
+                    "attempted": False,
+                    "accepted": False,
+                    "reason": "direct one-hop path is cover-only",
+                    "candidate_count": 0,
+                    "exact_candidate_count": 0,
+                    "records": [],
+                }
+            self._capture_debug["bookwalker_capture"]["timing_ms"][
+                "direct_original_jpeg_ms"
+            ] = _elapsed_ms(direct_started)
+            if direct_captures is not None:
+                self._capture_debug["bookwalker_capture"]["returned_path"] = (
+                    "direct_original_jpeg"
+                )
+                self._capture_debug["bookwalker_capture"]["lossless_shadow"] = {
+                    "attempted": False,
+                    "spread_ready": False,
+                    "output_enabled": self.lossless_jpeg_output_enabled,
+                    "output_used": False,
+                    "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+                    "final_pixel_compare_performed": False,
+                    "parts": [],
+                    "reason": "direct one-hop original JPEG exact match",
+                }
+                await self._clear_geometry_trace(page)
+                return direct_captures
             reconstruction_candidates = tuple(
                 candidate
                 for candidate in self._original_candidates.values()
                 if is_reconstruction_jpeg_candidate(candidate)
             )
             if reconstruction_candidates:
+                strict_proof_required = False
                 try:
-                    evaluation = await self._evaluate_lossless_reconstruction(
-                        page,
-                        native_captures,
-                        selected_draw_calls,
-                    )
-                except Exception as exc:  # noqa: BLE001 - JPEG output is optional
+                    if self._diagnostic_p4b_atomic_proof or p4b_renderer_handle is not None:
+                        evaluation = await self._evaluate_lossless_reconstruction(
+                            page,
+                            native_captures,
+                            selected_draw_calls,
+                            p4b_initial_anchor=p4b_initial_anchor,
+                            p4b_renderer_handle=p4b_renderer_handle,
+                        )
+                    else:
+                        evaluation = await self._evaluate_lossless_reconstruction(
+                            page,
+                            native_captures,
+                            selected_draw_calls,
+                        )
+                    # Preserve the obligation for this capture attempt.  A
+                    # bounded same-page redraw evaluates a fresh lineage and
+                    # may update the mutable per-attempt flag; that must not
+                    # make a failed second proof look like an ordinary PNG
+                    # fallback.
+                    strict_proof_required = self._p4b_atomic_proof_active
+                    if strict_proof_required and not self._diagnostic_p4b_atomic_proof:
+                        evaluation = await self._maybe_reselect_lossless_reconstruction(
+                            page,
+                            evaluation,
+                            native_captures,
+                            selected_draw_calls,
+                            p4b_initial_anchor=p4b_initial_anchor,
+                            p4b_renderer_handle=p4b_renderer_handle,
+                        )
+                        if self._p4b_redraw_native_captures is not None:
+                            # The redraw is a new proof attempt.  Never let a
+                            # later stable failure return the pre-redraw
+                            # native buffer under the new selected lineage.
+                            native_captures = self._p4b_redraw_native_captures
+                            selected_draw_calls = (
+                                self._p4b_redraw_selected_draw_calls
+                                or selected_draw_calls
+                            )
+                            self._capture_debug["bookwalker_capture"][
+                                "selected_draw"
+                            ] = [
+                                {
+                                    "traceOperationIndex": call.get(
+                                        "traceOperationIndex"
+                                    ),
+                                    "canvasId": call.get("canvasId"),
+                                    "sourceId": call.get("sourceId"),
+                                    "sourceCanvasId": call.get("sourceCanvasId"),
+                                    "sourceConstructor": (
+                                        (call.get("source") or {}).get(
+                                            "constructor"
+                                        )
+                                    ),
+                                    "source": call.get("source"),
+                                    "sourceRect": call.get("sourceRect"),
+                                    "destination": call.get("destination"),
+                                    "target": call.get("target"),
+                                    "mappingId": call.get("mappingId"),
+                                }
+                                for call in selected_draw_calls
+                            ]
+                except UnknownPageStateError:
+                    raise
+                except Exception as exc:
+                    if strict_proof_required or self._p4b_atomic_proof_active:
+                        raise UnknownPageStateError(
+                            "BookWalker strict clear proof evaluation failed"
+                        ) from exc
                     evaluation = LosslessReconstructionEvaluation(
                         debug={
                             "attempted": True,
@@ -4181,6 +7585,57 @@ class BookWalkerAdapter(SiteAdapter):
                         },
                         captures=None,
                     )
+                if strict_proof_required or self._p4b_atomic_proof_active:
+                    strict_parts = [
+                        part
+                        for part in evaluation.debug.get("parts", [])
+                        if isinstance(part, dict)
+                        and part.get("executed_clear_provenance") is True
+                    ]
+                    if len(native_captures) == 1 and not strict_parts:
+                        raise UnknownPageStateError(
+                            "BookWalker strict clear proof part is missing"
+                        )
+                    strict_anchor_failures = [
+                        (part.get("cropped_chain_pixel_comparison") or {})
+                        .get("p4b_atomic_current_roi")
+                        for part in strict_parts
+                    ]
+                    if len(native_captures) == 1 and any(
+                        proof is None for proof in strict_anchor_failures
+                    ):
+                        raise UnknownPageStateError(
+                            "BookWalker strict clear proof anchor is missing"
+                        )
+                    if len(native_captures) == 1 and any(
+                        isinstance(proof, dict)
+                        and not _p4b_stable_current_fallback_authority(proof)
+                        for proof in strict_anchor_failures
+                    ):
+                        raise UnknownPageStateError(
+                            "BookWalker strict clear proof lacks stable current anchor"
+                        )
+                    if any(
+                        isinstance(proof, dict)
+                        and proof.get("reason") in {
+                            "current capture target identity changed",
+                            "current renderer canvas is missing or ambiguous",
+                            "original renderer element is unavailable",
+                            "initial renderer anchor changed",
+                            "final renderer anchor changed",
+                            "selected renderer B anchor mismatch",
+                        }
+                        for proof in strict_anchor_failures
+                    ):
+                        # A strict executed-clear proof has already consumed the
+                        # old renderer identity.  Letting this become the normal
+                        # optional-capture exception would make Core fall back to
+                        # a stale native PNG under the new DOM state.  Abort the
+                        # page instead; ordinary legacy/PNG paths retain their
+                        # existing optional fallback behavior.
+                        raise UnknownPageStateError(
+                            "BookWalker strict clear proof target identity changed"
+                        )
                 self._capture_debug["bookwalker_capture"]["lossless_shadow"] = (
                     evaluation.debug
                 )
@@ -4207,8 +7662,11 @@ class BookWalkerAdapter(SiteAdapter):
             await self._clear_geometry_trace(page)
             self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
             return native_captures
-        except CaptureUnavailableError:
+        except CaptureUnavailableError as exc:
+            self._capture_debug["bookwalker_capture"]["failure_reason"] = str(exc)
             return None
+        except UnknownPageStateError:
+            raise
         except (
             BinasciiError,
             KeyError,
@@ -4218,7 +7676,10 @@ class BookWalkerAdapter(SiteAdapter):
             TimeoutError,
             TypeError,
             ValueError,
-        ):
+        ) as exc:
+            self._capture_debug["bookwalker_capture"]["failure_reason"] = (
+                f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
+            )
             return None
         finally:
             await self._clear_native_capture(page)
@@ -4231,6 +7692,10 @@ class BookWalkerAdapter(SiteAdapter):
                 - capture_timing.get("lossless_evaluation_total_ms", 0.0),
                 2,
             )
+            try:
+                await self._persist_capture_diagnostic(page)
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                pass
 
     async def detect_state(self, page: Page) -> PageState:
         current_content_id = self.content_id_from_url(page.url)
@@ -4258,6 +7723,15 @@ class BookWalkerAdapter(SiteAdapter):
         if await self._renderer_ready(page):
             if await self._last_page_end_marker_visible(page):
                 return PageState.END
+            terminal_ad, terminal_debug = await self._terminal_ad_state(page)
+            if terminal_ad:
+                # The role is intentionally tied to the current native
+                # artifact.  The existing END/final-navigation checks above
+                # remain authoritative for N/N after the final action.
+                self._capture_debug["bookwalker_capture"]["terminal_ad"] = (
+                    terminal_debug
+                )
+                return PageState.AD
             return PageState.CONTENT
         return PageState.UNKNOWN
 
@@ -4562,6 +8036,20 @@ class BookWalkerAdapter(SiteAdapter):
         return ContentContext(content_id=content_id, work_id=content_id, title=title)
 
     async def go_next(self, page: Page) -> None:
+        try:
+            previous_identity = await self.get_content_identity(page)
+        except AttributeError:
+            previous_identity = None
+        current, total, _counter = await self._read_page_counter_pair(page)
+        if (
+            current is not None
+            and total is not None
+            and total > 1
+            and current in {total - 1, total}
+        ):
+            self._terminal_skip_identity = previous_identity
+        else:
+            self._terminal_skip_identity = None
         self._final_navigation_pending = await self._is_last_page_counter(page)
         # The viewer's keyboard handler advances reliably even when a
         # viewport click is accepted by Playwright but ignored by the viewer.
@@ -4604,13 +8092,31 @@ class BookWalkerAdapter(SiteAdapter):
         while elapsed_ms < deadline_ms:
             state = await self.detect_state(page)
             can_retry_advance = False
-            if state in {PageState.AD, PageState.END, PageState.NEXT_CONTENT}:
+            if state in {PageState.END, PageState.NEXT_CONTENT}:
+                self._terminal_skip_identity = None
                 return
+            if state is PageState.AD:
+                current = await self.get_content_identity(page)
+                if (
+                    self._terminal_skip_identity is None
+                    or current != self._terminal_skip_identity
+                ):
+                    self._terminal_skip_identity = None
+                    return
+                can_retry_advance = True
             if state is PageState.CONTENT:
                 current = await self.get_content_identity(page)
-                if previous_identity is None:
+                if self._terminal_skip_identity is not None:
+                    if current == self._terminal_skip_identity:
+                        can_retry_advance = True
+                    else:
+                        self._terminal_skip_identity = None
+                        await self._wait_for_render_ready(page)
+                        return
+                elif previous_identity is None:
                     return
-                if current != previous_identity:
+                elif current != previous_identity:
+                    self._terminal_skip_identity = None
                     await self._wait_for_render_ready(page)
                     return
                 # Some BookWalker trial readers keep the final content canvas
