@@ -8,7 +8,7 @@ importantly, keeps selection independent from filtering and projection mode.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -25,6 +25,9 @@ from screenshot_crawler.management.models import (
 
 NODE_ROLE = Qt.ItemDataRole.UserRole + 1
 IDENTITY_ROLE = Qt.ItemDataRole.UserRole + 2
+DISCOVERY_COLUMN = 10
+DISCOVERY_ROLE = Qt.ItemDataRole.UserRole + 3
+DISCOVERY_HELP = "Discovery対象の設定です。Batchの取得対象には影響しません。"
 
 
 class ViewMode(StrEnum):
@@ -81,10 +84,11 @@ class InventoryTreeModel(QAbstractItemModel):
     checkedKeysChanged = Signal(object)
     selectionRemoved = Signal(object)
     focusNodeChanged = Signal(object)
+    discoveryToggleRequested = Signal(str, bool)
 
     HEADERS = (
-        "対象", "取得済 / 対象", "直取候補", "Quota対象残", "有償未取得",
-        "状態", "最終確認", "外部取得", "スキップ", "担当外Source",
+        "実行対象", "取得済 / 対象", "直取候補", "Quota対象残", "有償未取得",
+        "状態", "最終確認", "外部取得", "スキップ", "担当外Source", "Discovery",
     )
 
     def __init__(self, snapshot: InventorySnapshot | None = None, parent: Any = None) -> None:
@@ -102,6 +106,9 @@ class InventoryTreeModel(QAbstractItemModel):
         self._key_by_id: dict[str, KeyInventory] = {}
         self._key_by_identity: dict[str, KeyInventory] = {}
         self._key_order: dict[str, int] = {}
+        # Only MainWindow opts into writes; editor Inventory trees stay read-only.
+        self.discovery_guard: Callable[[], str] = lambda: "メイン画面から変更してください"
+        self.discovery_pending_key: str | None = None
         if snapshot is not None:
             self.set_snapshot(snapshot)
 
@@ -267,7 +274,10 @@ class InventoryTreeModel(QAbstractItemModel):
         for child in parent.children:
             self._sort_children(child)
 
-    def _sort_value(self, node: TreeNode, column: int) -> int | str:
+    def _sort_value(self, node: TreeNode, column: int) -> int | float | str:
+        if column == DISCOVERY_COLUMN:
+            targets = self.discovery_targets(node)
+            return sum(target.enabled for target in targets) / len(targets) if targets else -1
         summary = self.summary_for(node)
         counts = _summary_counts(summary)
         if counts is None:
@@ -378,6 +388,11 @@ class InventoryTreeModel(QAbstractItemModel):
         return self.createIndex(row, 0, parent)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if orientation is Qt.Orientation.Horizontal and role == Qt.ItemDataRole.ToolTipRole:
+            if section == DISCOVERY_COLUMN:
+                return DISCOVERY_HELP
+            if section == 0:
+                return "今回実行するkeyを選択します。WatchlistのON/OFFは変更しません。"
         if orientation is Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.HEADERS[section]
         return None
@@ -390,11 +405,17 @@ class InventoryTreeModel(QAbstractItemModel):
             return node
         if role == IDENTITY_ROLE:
             return node.key_identity or node.node_id
+        if role == DISCOVERY_ROLE:
+            key = self._key_by_id.get(node.node_id)
+            return key.target.enabled if key is not None and key.target is not None else None
         if role == Qt.ItemDataRole.CheckStateRole and index.column() == 0:
             return self.check_state(node)
         if role == Qt.ItemDataRole.DisplayRole:
             return self.display_value(node, index.column())
         if role == Qt.ItemDataRole.ToolTipRole:
+            if index.column() == DISCOVERY_COLUMN:
+                reason = self.discovery_guard()
+                return DISCOVERY_HELP + (f"\n{reason}" if reason else "\n切り替えると即保存します。")
             return self.tooltip(node)
         if role == Qt.ItemDataRole.ForegroundRole and node.kind == "key" and self._key_by_id.get(node.node_id, None) is not None:
             key = self._key_by_id[node.node_id]
@@ -408,11 +429,25 @@ class InventoryTreeModel(QAbstractItemModel):
             return Qt.ItemFlag.NoItemFlags
         node = index.internalPointer()
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() == DISCOVERY_COLUMN and self._managed(node):
+            if (self.snapshot is None or not self.snapshot.watchlist_revision
+                    or self.discovery_guard()):
+                return Qt.ItemFlag.ItemIsSelectable
+            return flags | Qt.ItemFlag.ItemIsEditable
         if index.column() == 0 and (node.kind in ("site", "work") and any(node.key_descendants()) or node.kind == "key" and self._managed(node)):
             flags |= Qt.ItemFlag.ItemIsUserCheckable
         return flags
 
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if index.isValid() and index.column() == DISCOVERY_COLUMN:
+            if (role != Qt.ItemDataRole.EditRole or not isinstance(value, bool)
+                    or not self.flags(index) & Qt.ItemFlag.ItemIsEditable):
+                return False
+            key = self._key_by_id[index.internalPointer().node_id]
+            if key.target.enabled == value:
+                return False
+            self.discoveryToggleRequested.emit(key.identity, value)
+            return True
         if role != Qt.ItemDataRole.CheckStateRole or not index.isValid() or index.column() != 0:
             return False
         node = index.internalPointer()
@@ -490,6 +525,13 @@ class InventoryTreeModel(QAbstractItemModel):
     def display_value(self, node: TreeNode, column: int) -> str:
         if column == 0:
             return node.label
+        if column == DISCOVERY_COLUMN:
+            if self.discovery_pending_key is not None and node.key_identity == self.discovery_pending_key:
+                return "保存中"
+            targets = self.discovery_targets(node)
+            if node.kind == "key":
+                return ("ON" if targets[0].enabled else "OFF") if targets else "—"
+            return f"有効{sum(target.enabled for target in targets)}／全{len(targets)}件" if targets else "—"
         summary = self.summary_for(node)
         counts = _summary_counts(summary)
         stale = bool(summary and (summary.sync_status not in ("synced", "ok") or summary.diagnostics))
@@ -512,6 +554,10 @@ class InventoryTreeModel(QAbstractItemModel):
         if column == 9:
             return _count_text(counts.out_of_scope if counts else None, stale=stale)
         return "—"
+
+    def discovery_targets(self, node: TreeNode) -> tuple:
+        nodes = (node,) if node.kind == "key" else node.key_descendants()
+        return tuple(self._key_by_id[child.node_id].target for child in nodes if self._managed(child))
 
     @staticmethod
     def _status_label(summary: InventorySummary | None, counts: InventoryCounts | None) -> str:

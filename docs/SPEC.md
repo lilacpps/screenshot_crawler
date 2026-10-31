@@ -67,6 +67,19 @@ confirmation, pauses session queue dispatch and preserves interrupted/unknown
 consumption semantics. Shared Chrome remains open; queued jobs require explicit
 start afterward. Unverified worker survival blocks new execution.
 
+## Watchlist Discovery switches (2026-10-31)
+
+The main Inventory screen exposes an immediately saved ON/OFF switch per
+Watchlist key in a Discovery column. Existing execution checkboxes remain
+independent. Parent rows show read-only enabled/total counts, including hidden
+descendants; unmanaged Catalog rows cannot be edited. `enabled` controls
+Discovery only, never Batch acquisition or Source assignment. Switching does
+not start Discovery or display a Full confirmation. Saves reuse Watchlist
+revision CAS/atomic replace and never write Catalog or archives. Active or
+unverified workers, stale/loading Inventory, dirty or busy editors and pending
+saves block switching. Saving also blocks GUI job starts. Queued configuration
+fingerprints remain unchanged and configuration drift stops them as before.
+
 ## 3. Browser Session Model
 
 Real-site automationの標準は、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する方式**とする。

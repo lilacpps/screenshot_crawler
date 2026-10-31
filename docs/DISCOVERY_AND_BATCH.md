@@ -2506,6 +2506,13 @@ crawl_pages          # page単位履歴が本当に必要になった場合
 
 ## 17. Windows GUI P2/P3 selected execution and job management
 
+Main-window Discovery switches immediately persist a key's Watchlist `enabled`
+using revision CAS; they do not start a job, alter execution checks, apply scope
+flags or change Batch selection. OFF keys remain selectable for Batch. Parent
+counts include all registered descendants. Save/refresh excludes GUI starts and
+active jobs/dirty editors exclude switching. Existing queued requests are not
+re-signed after a toggle: their Watchlist configuration drift check still applies.
+
 The Windows GUI reuses this Discovery/Catalog/Batch contract through a
 Qt-independent selected-execution request. A checked Watchlist key set is passed to
 `BatchPlanner.plan(selected_keys=...)` before candidate and quota allocation;

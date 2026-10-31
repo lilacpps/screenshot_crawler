@@ -40,6 +40,7 @@ def fingerprints(paths):
 
 def test_snapshot_invariants_scope_unmanaged_and_immutable(inventory_inputs):
     snapshot = load(inventory_inputs)
+    assert snapshot.watchlist_revision == WatchlistService(inventory_inputs[1]).revision()
     assert len(snapshot.sources) == 96
     assert len(snapshot.keys) == 10
     keys = {key.identity: key for key in snapshot.keys}

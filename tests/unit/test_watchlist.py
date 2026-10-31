@@ -680,13 +680,34 @@ def test_crlf_revision_and_lossless_edit_preserve_line_endings(tmp_path: Path) -
         b"    label: One\r\n"
     )
     service = WatchlistService(path)
-    before = service.revision()
+    targets, before = service.read_snapshot()
+    assert targets == tuple(service.list_targets())
+    assert before == service.revision()
     service.update_target("one", label="Updated", expected_revision=before)
     written = path.read_bytes()
     assert b"\r\n" in written
     assert b"\n" not in written.replace(b"\r\n", b"")
     assert b"# retain\r\n" in written
     assert WatchlistService(path).get("one").label == "Updated"
+
+
+def test_read_snapshot_parses_and_hashes_one_read(tmp_path, monkeypatch):
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    add_target(service)
+    original_read = service._read_content
+    reads = []
+
+    def read_once():
+        content = original_read()
+        reads.append(content)
+        if len(reads) > 1:
+            pytest.fail("snapshot must not read revision separately")
+        return content
+
+    monkeypatch.setattr(service, "_read_content", read_once)
+    targets, revision = service.read_snapshot()
+    assert len(reads) == 1 and targets[0].key == "one"
+    assert revision == service._content_digest(reads[0])
 
 
 def test_apply_edit_combines_scope_and_work_order_in_one_replace(tmp_path: Path, monkeypatch) -> None:

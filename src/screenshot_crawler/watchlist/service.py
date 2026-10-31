@@ -84,6 +84,12 @@ class WatchlistService:
 
     content_digest = revision
 
+    def read_snapshot(self) -> tuple[tuple[WatchlistTarget, ...], str]:
+        """Parse targets and compute their revision from the same file read."""
+
+        content = self._read_content()
+        return tuple(self._load_content(content)), self._content_digest(content)
+
     def edit_lock(self) -> CatalogJobLock:
         """Return the per-Watchlist CAS/replace lock.
 

@@ -44,13 +44,21 @@ from screenshot_crawler.management.execution import (
 from screenshot_crawler.management.inventory import InventoryService
 
 from .details import DetailPane
+from .discovery_toggle import DiscoverySaveWorker, DiscoverySwitchDelegate, ToggleResult
 
 # Kept as a module export for integrations that construct the legacy dialog;
 # ordinary execution uses the compact QMessageBox confirmation below.
 from .execution_dialog import ExecutionPreviewDialog  # noqa: F401
 from .execution_monitor import ExecutionMonitor
 from .jobs_page import JobsPage
-from .model import InventoryTreeModel, StatusFilter, ViewMode
+from .model import (
+    DISCOVERY_COLUMN,
+    DISCOVERY_HELP,
+    DISCOVERY_ROLE,
+    InventoryTreeModel,
+    StatusFilter,
+    ViewMode,
+)
 from .watchlist_editor import WatchlistEditorPage
 
 LOGGER = logging.getLogger(__name__)
@@ -151,7 +159,12 @@ class InventoryTreeView(QTreeView):
         self._checkbox_press = False
 
     def _in_checkbox(self, index: Any, point: Any) -> bool:
-        if not index.isValid() or index.column() != 0:
+        if not index.isValid():
+            return False
+        if index.column() == DISCOVERY_COLUMN:
+            return (index.data(DISCOVERY_ROLE) is not None
+                    and DiscoverySwitchDelegate.switch_rect(self.visualRect(index)).contains(point))
+        if index.column() != 0:
             return False
         option = QStyleOptionViewItem()
         # ``initStyleOption`` belongs to QStyledItemDelegate.  QTreeView has
@@ -169,7 +182,7 @@ class InventoryTreeView(QTreeView):
 
 
 class MainWindow(QMainWindow):
-    """Read-only inventory browser.
+    """Inventory browser with explicit Watchlist editing and selected execution.
 
     ``auto_load=False`` is useful for tests and for callers that already have
     a snapshot.  ``set_snapshot`` never writes any of the input files.
@@ -192,6 +205,11 @@ class MainWindow(QMainWindow):
         self.management_path = str(management_path)
         self._closed = False
         self._loading = False
+        self._inventory_stale = False
+        self._discovery_save_worker = None
+        self._discovery_refresh = False
+        self._discovery_notice = ""
+        self._discovery_controls_state = None
         self._reload_again = False
         self._worker: _LoadWorker | None = None
         self._job_store = None
@@ -213,6 +231,8 @@ class MainWindow(QMainWindow):
         # lifetime for all model resets while a worker may still be delivering
         # its queued load result.
         self.model = InventoryTreeModel(parent=self)
+        self.model.discovery_guard = self._discovery_block_reason
+        self.model.discoveryToggleRequested.connect(self._toggle_discovery)
         self.tree = InventoryTreeView()
         self.tree.setModel(self.model)
         self.tree.setAlternatingRowColors(True)
@@ -226,6 +246,10 @@ class MainWindow(QMainWindow):
         self.tree.header().sortIndicatorChanged.connect(self._on_sort_requested)
         self.tree.setUniformRowHeights(True)
         self.tree.setColumnWidth(0, 300)
+        self.tree.setItemDelegateForColumn(DISCOVERY_COLUMN, DiscoverySwitchDelegate(self.tree))
+        self.tree.setColumnWidth(DISCOVERY_COLUMN, 132)
+        # Keep existing logical column identities for sort/count integrations.
+        self.tree.header().moveSection(DISCOVERY_COLUMN, 1)
         for column, width in ((1, 120), (2, 90), (3, 100), (4, 100), (5, 120), (6, 145), (7, 90), (8, 80), (9, 100)):
             self.tree.setColumnWidth(column, width)
         self.tree.nodeClicked.connect(self._on_tree_clicked)
@@ -238,13 +262,17 @@ class MainWindow(QMainWindow):
         self.detail.set_snapshot(None)
         self.detail.keySelected.connect(self._focus_key_from_detail)
         self._build_ui()
+        self._discovery_controls_timer = QTimer(self)
+        self._discovery_controls_timer.setInterval(250)
+        self._discovery_controls_timer.timeout.connect(self._refresh_discovery_controls)
+        self._discovery_controls_timer.start()
         self.resize(1400, 850)
         self.setMinimumSize(980, max(600, self.minimumHeight()))
         if auto_load:
             self.reload()
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Screenshot Crawler — 作品管理（閲覧専用）")
+        self.setWindowTitle("Screenshot Crawler — 作品管理")
         root = QWidget(self)
         root_layout = QVBoxLayout(root)
         emergency = QHBoxLayout()
@@ -339,8 +367,13 @@ class MainWindow(QMainWindow):
         self.collapse_button = QPushButton("全折畳")
         self.collapse_button.clicked.connect(self.tree.collapseAll)
         toolbar.addWidget(self.collapse_button)
-        toolbar.addWidget(QLabel("  Catalog / Watchlist 読み取り専用"))
+        toolbar.addWidget(QLabel("  Catalog 閲覧 / Watchlist 編集"))
         outer.addWidget(toolbar)
+        self.discovery_help = QLabel(
+            DISCOVERY_HELP + " 切り替えると即保存します。待機中ジョブは設定変更で停止する場合があります。"
+        )
+        self.discovery_help.setWordWrap(True)
+        outer.addWidget(self.discovery_help)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.tree)
@@ -463,7 +496,145 @@ class MainWindow(QMainWindow):
 
     # --- loading ---------------------------------------------------------------
 
+    def _discovery_busy(self) -> bool:
+        return self._discovery_save_worker is not None or self._discovery_refresh
+
+    def _discovery_block_reason(self) -> str:
+        if self._closed or self._discovery_busy():
+            return "Watchlistを保存・再読込中です"
+        if self._loading or self._inventory_stale:
+            return "最新の一覧を再読込してから変更してください"
+        snapshot = self.model.snapshot
+        if (snapshot is None or not snapshot.watchlist_revision
+                or Path(snapshot.watchlist_path).resolve() != Path(self.watchlist_path).resolve()
+                or Path(snapshot.catalog_path).resolve() != Path(self.catalog_path).resolve()):
+            return "現在の入力ファイルを再読込してから変更してください"
+        controller = self._job_controller
+        if controller is not None and (
+            controller.active_job_id is not None
+            or getattr(controller, "orphaned_live_worker", False)
+            or getattr(controller, "supervision_error", False)
+        ):
+            return "実行中、または終了未確認のJobがあります"
+        editor = getattr(self, "_watchlist_editor", None)
+        if editor is not None and not getattr(editor, "_closed", False):
+            if getattr(editor, "_dirty", False):
+                return "Watchlist管理の未保存変更を保存または破棄してください"
+            if getattr(editor, "_busy", lambda: False)():
+                return "Watchlist管理の処理完了を待ってください"
+        editor = self._work_editor
+        if editor is not None:
+            if getattr(editor, "dirty", False):
+                return "作品編集の未保存変更を保存または破棄してください"
+            if getattr(editor, "task", None) is not None:
+                return "作品編集の処理完了を待ってください"
+        return ""
+
+    def _refresh_discovery_controls(self) -> None:
+        if self._closed:
+            return
+        busy = self._discovery_busy()
+        controller = self._job_controller
+        active = controller is not None and controller.active_job_id is not None
+        state = (busy, self._loading, active, self._discovery_block_reason(), self.model.discovery_pending_key)
+        if state == self._discovery_controls_state:
+            return
+        self._discovery_controls_state = state
+        for control in (*self._path_controls, self.reload_button):
+            control.setEnabled(not busy and not self._loading)
+        self.watchlist_button.setEnabled(not busy)
+        self.work_editor_button.setEnabled(not busy)
+        for editor in (getattr(self, "_watchlist_editor", None), self._work_editor):
+            if editor is not None and not getattr(editor, "_closed", False):
+                editor.set_active_job(active or busy)
+        if self._jobs_page is not None:
+            self._jobs_page.set_start_blocked(busy)
+        self._on_checked_changed(self.model.selected_keys)
+        self.tree.viewport().update()
+
+    @Slot(str, bool)
+    def _toggle_discovery(self, key: str, enabled: bool) -> None:
+        reason = self._discovery_block_reason()
+        target = self.model.key_inventory(key)
+        if reason or target is None or target.target is None:
+            self.error_label.setText(reason or "Watchlist項目が見つかりません。再読込してください")
+            return
+        if target.target.enabled == enabled:
+            return
+        snapshot = self.model.snapshot
+        worker = DiscoverySaveWorker(snapshot.watchlist_path, key, enabled, snapshot.watchlist_revision)
+        self._discovery_save_worker = worker
+        self.model.discovery_pending_key = key
+        self._discovery_notice = ""
+        self.error_label.clear()
+        worker.signals.succeeded.connect(self._discovery_saved, Qt.ConnectionType.QueuedConnection)
+        worker.signals.failed.connect(self._discovery_save_failed, Qt.ConnectionType.QueuedConnection)
+        worker.signals.savedButUnverified.connect(self._discovery_saved_unverified, Qt.ConnectionType.QueuedConnection)
+        self._refresh_discovery_controls()
+        self.statusBar().showMessage(f"{key}: Discovery設定を保存中…")
+        self.thread_pool.start(worker)
+
+    def _sync_discovery_editors(self, snapshot) -> None:
+        targets = tuple(key.target for key in snapshot.keys if key.target is not None)
+        for editor in (getattr(self, "_watchlist_editor", None), self._work_editor):
+            if editor is not None and not getattr(editor, "_closed", False):
+                editor.accept_watchlist_update(targets, snapshot.watchlist_revision, snapshot)
+
+    @Slot(object)
+    def _discovery_saved(self, result: ToggleResult) -> None:
+        self._discovery_save_worker = None
+        self._discovery_refresh = True
+        self.model.discovery_pending_key = None
+        saved = {target.key: target for target in result.targets}
+        snapshot = replace(
+            self.model.snapshot,
+            keys=tuple(replace(key, target=saved[key.identity]) if key.identity in saved else key
+                       for key in self.model.snapshot.keys),
+            watchlist_revision=result.revision,
+        )
+        self.set_snapshot(snapshot)
+        self._discovery_notice = f"{result.key}: Discovery設定を保存しました"
+        try:
+            self._sync_discovery_editors(snapshot)
+        except Exception as exc:  # noqa: BLE001 - saving already committed
+            self.error_label.setText(f"保存済み・編集画面の更新失敗: {exc}")
+        self._reload_again = False
+        self.reload()
+
+    @Slot(str)
+    def _discovery_saved_unverified(self, message: str) -> None:
+        """The mutation committed but its subsequent read failed."""
+        worker = self._discovery_save_worker
+        key, enabled = worker.key, worker.enabled
+        self._discovery_save_worker = None
+        self._discovery_refresh = True
+        self.model.discovery_pending_key = None
+        snapshot = self.model.snapshot
+        self.set_snapshot(replace(
+            snapshot,
+            keys=tuple(replace(row, target=replace(row.target, enabled=enabled))
+                       if row.identity == key else row for row in snapshot.keys),
+            watchlist_revision=None,
+        ))
+        self._discovery_notice = f"{key}: 保存済み。保存後の確認失敗から再読込しました"
+        self.error_label.setText("Discovery設定は保存済み・保存後の確認失敗: " + message)
+        self._reload_again = False
+        self.reload()
+
+    @Slot(str)
+    def _discovery_save_failed(self, message: str) -> None:
+        self._discovery_save_worker = None
+        self.model.discovery_pending_key = None
+        self._inventory_stale = True
+        self._reload_again = False
+        self.error_label.setText("保存できませんでした。再読込して確認してください: " + message)
+        self.statusBar().showMessage("Discovery設定の保存失敗（自動再試行なし）")
+        self._refresh_discovery_controls()
+
     def _invalidate_watchlist_editor_for_path_change(self) -> bool:
+        if self._discovery_busy():
+            self.statusBar().showMessage("Watchlistの保存・再読込完了を待ってください")
+            return False
         work_editor = self._work_editor
         if work_editor is not None:
             if work_editor.task is not None or not work_editor._discard():
@@ -520,6 +691,9 @@ class MainWindow(QMainWindow):
     def reload(self) -> None:
         if self._closed:
             return
+        if self._discovery_save_worker is not None:
+            self._reload_again = True
+            return
         if self._loading:
             self._reload_again = True
             return
@@ -555,6 +729,14 @@ class MainWindow(QMainWindow):
             self._work_editor._enabled()
         self.error_label.clear()
         self.statusBar().showMessage(f"読み込み完了: {snapshot.loaded_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        if self._discovery_refresh:
+            try:
+                self._sync_discovery_editors(snapshot)
+            except Exception as exc:  # noqa: BLE001 - keep the committed state visible
+                self.error_label.setText(f"保存済み・編集画面の更新失敗: {exc}")
+            self._discovery_refresh = False
+            self.statusBar().showMessage(self._discovery_notice)
+        self._refresh_discovery_controls()
         pending = self._pending_rerun
         self._pending_rerun = None
         if pending is not None:
@@ -593,6 +775,7 @@ class MainWindow(QMainWindow):
         if self._closed:
             return
         self._loading = False
+        self._inventory_stale = True
         if self._reload_again:
             self._reload_again = False
             self.reload()
@@ -603,6 +786,11 @@ class MainWindow(QMainWindow):
         prefix = "読み込み失敗（前回の表示は古い可能性があります）: " if self.model.snapshot else "読み込み失敗: "
         self.error_label.setText(prefix + message)
         self.statusBar().showMessage("読み込みに失敗しました")
+        if self._discovery_refresh:
+            self._discovery_refresh = False
+            self.error_label.setText("Discovery設定は保存済み・表示更新失敗: " + message)
+            self.statusBar().showMessage("保存済みです。一覧を再読込してください")
+        self._refresh_discovery_controls()
         if self._pending_rerun is not None:
             self._pending_rerun = None
             self._rerun_original_id = None
@@ -611,6 +799,8 @@ class MainWindow(QMainWindow):
         self._pending_work_full = None
 
     def set_snapshot(self, snapshot: object) -> None:
+        scroll = (self.tree.horizontalScrollBar().value(), self.tree.verticalScrollBar().value())
+        self._inventory_stale = False
         old_focus = self.model._nodes.get(self.model.focused_node_id or "")
         old_focus_key = old_focus.key_identity if old_focus and old_focus.kind == "key" else None
         old_focus_work = old_focus.work_key if old_focus and old_focus.kind == "work" else None
@@ -631,6 +821,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._sync_upper_geometry_minimum)
         self._on_checked_changed(self.model.checked_keys)
         self._refresh_site_resource_controls()
+        self.tree.horizontalScrollBar().setValue(scroll[0])
+        self.tree.verticalScrollBar().setValue(scroll[1])
 
     def _sync_upper_geometry_minimum(self) -> None:
         """Refresh the upper-pane clamp after detail content changes."""
@@ -793,6 +985,8 @@ class MainWindow(QMainWindow):
         if self.model.snapshot is not None:
             self._refresh_site_resource_controls()
         enabled = bool(checked) and self.model.snapshot is not None and not self._loading
+        if self._discovery_busy():
+            enabled = False
         if self._job_controller is not None and getattr(self._job_controller, "orphaned_live_worker", False):
             enabled = False
         for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
@@ -811,6 +1005,9 @@ class MainWindow(QMainWindow):
         The GUI signs only the already loaded selection and execution inputs;
         the worker performs the latest Catalog planning under its job lock.
         """
+        if self._discovery_busy():
+            self.error_label.setText("Watchlistの保存・再読込完了を待ってから実行してください")
+            return
         snapshot = self.model.snapshot
         selected_identities = frozenset(
             self.model.selected_keys if selected_keys is None else selected_keys
@@ -915,6 +1112,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage('Full Discoveryジョブをキューに登録しました')
     @Slot(object)
     def _start_execution(self, request: object) -> None:
+        if self._discovery_busy():
+            self.error_label.setText("Watchlistの保存・再読込完了を待ってから実行してください")
+            return
         if not isinstance(request, JobExecutionRequest):
             return
         controller = self._ensure_jobs()
@@ -1011,6 +1211,7 @@ class MainWindow(QMainWindow):
                 LOGGER.debug("execution monitor initialization failed", exc_info=True)
             try:
                 self._jobs_page = JobsPage(self._job_store, self._job_controller, self)
+                self._jobs_page.set_start_blocked(self._discovery_busy())
                 self._jobs_page.rerunRequested.connect(self._rerun_job)
             except Exception:
                 self._jobs_page = None
@@ -1031,6 +1232,9 @@ class MainWindow(QMainWindow):
 
     def _open_watchlist_editor(self) -> None:
         """Open an independent editor page without changing Inventory checks."""
+
+        if self._discovery_busy():
+            return
 
         if getattr(self, "_watchlist_editor", None) is None or self._watchlist_editor._closed:
             self._watchlist_editor = WatchlistEditorPage(
@@ -1057,6 +1261,8 @@ class MainWindow(QMainWindow):
         self._watchlist_editor.activateWindow()
 
     def _open_work_editor(self) -> None:
+        if self._discovery_busy():
+            return
         from .work_editor import WorkEditorDialog
 
         if self._work_editor is None:
@@ -1092,10 +1298,10 @@ class MainWindow(QMainWindow):
         state = self._job_controller.poll()
         self._refresh_emergency_controls()
         if self._work_editor is not None:
-            self._work_editor.set_active_job(self._job_controller.active_job_id is not None)
+            self._work_editor.set_active_job(self._job_controller.active_job_id is not None or self._discovery_busy())
         editor = getattr(self, "_watchlist_editor", None)
         if editor is not None:
-            editor.set_active_job(self._job_controller.active_job_id is not None)
+            editor.set_active_job(self._job_controller.active_job_id is not None or self._discovery_busy())
         # Views are observers only.  A malformed event, missing log, or widget
         # failure must never prevent controller state handling or queue advance.
         try:
@@ -1123,7 +1329,7 @@ class MainWindow(QMainWindow):
             if state != "succeeded":
                 self.statusBar().showMessage(f"ジョブ停止: {state}（自動再試行なし）")
                 return
-            if self._job_controller.active_job_id is None:
+            if self._job_controller.active_job_id is None and not self._discovery_busy():
                 for queued_id in tuple(self._session_job_ids):
                     try:
                         if self._job_store is not None and self._job_store.get_job(queued_id)["state"] == "queued":
@@ -1139,6 +1345,8 @@ class MainWindow(QMainWindow):
                         continue
 
     def _rerun_job(self, job_id: str) -> None:
+        if self._discovery_busy():
+            return
         if self._job_store is None:
             return
         payload = self._job_store.request_for(job_id)
@@ -1158,6 +1366,10 @@ class MainWindow(QMainWindow):
         self.model._emit_check_updates()
 
     def closeEvent(self, event: Any) -> None:
+        if self._discovery_busy():
+            self.statusBar().showMessage("Watchlistの保存・再読込完了を待ってから閉じてください")
+            event.ignore()
+            return
         if self._work_editor is not None:
             if self._work_editor.task is not None or not self._work_editor._discard():
                 event.ignore()

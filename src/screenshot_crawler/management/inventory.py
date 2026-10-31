@@ -117,7 +117,7 @@ class InventoryService:
         if not Path(watchlist_path).is_file():
             raise InventoryLoadError(f"Watchlistが見つかりません: {watchlist_path}")
         try:
-            targets = tuple(WatchlistService(watchlist_path).list_targets())
+            targets, watchlist_revision = WatchlistService(watchlist_path).read_snapshot()
             settings = load_runtime_settings(runtime_path)
         except (ValueError, OSError) as exc:
             raise InventoryLoadError(f"Watchlist / runtime設定を読み込めません: {exc}") from exc
@@ -359,4 +359,5 @@ class InventoryService:
             MappingProxyType({key: tuple(value) for key, value in artifacts.items()}),
             MappingProxyType(archive_positions), MappingProxyType(resources), tuple(grants),
             perf_counter() - start,
+            watchlist_revision=watchlist_revision,
         )

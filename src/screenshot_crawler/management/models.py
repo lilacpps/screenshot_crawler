@@ -89,3 +89,4 @@ class InventorySnapshot:
     resources: Mapping[str, ResourceOverview]
     grants: tuple[GrantEstimate, ...]
     load_seconds: float
+    watchlist_revision: str | None = None

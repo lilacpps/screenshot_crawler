@@ -226,6 +226,7 @@ def test_work_editor_can_close_during_background_job(app, tmp_path, monkeypatch,
     else:
         QTest.keyClick(editor, Qt.Key.Key_Escape)
     assert editor.isVisible() == (not closed)
+    assert editor.dirty == (dirty and not closed)
     assert len(questions) == int(dirty)
     assert editor.active_job  # Closing the editor never changes the background job state.
     assert not editor._guard()  # Editing remains blocked while the job runs.

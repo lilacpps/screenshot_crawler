@@ -6,7 +6,13 @@
 Qt-independent immutable inventory projections and a dedicated SQLite read-only
 snapshot reader. Existing Watchlist parsing, Site Policies, ScopeReconciler
 (through in-memory read-only facades) and archive-order planning are reused.
-P1 inventory reads remain strictly read-only. Selected execution uses a lightweight
+P1 inventory reads remain strictly read-only. The main screen's separate Discovery-switch worker
+writes only a key's Watchlist `enabled` field through the existing locked/CAS
+service. InventorySnapshot carries the Watchlist revision computed from the same
+read as its parsed targets. Qt model/delegate emit intent; the main window owns
+save serialization, editor rebasing and GUI job-start exclusion. Saved values
+are committed before Inventory refresh; refresh failure never reports a failed
+save or rolls back the file. Selected execution uses a lightweight
 configuration-bound request without a candidate preview; P3 queues each request in a separate,
 versioned `management.sqlite` and runs it in one serial worker subprocess. The
 worker writes structured JSONL events while the GUI imports them idempotently;

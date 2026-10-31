@@ -1689,6 +1689,18 @@ class WatchlistEditorPage(QWidget):
         if self._listing is None and (target := self._selected_target()) is not None:
             self._show_catalog_reference(target)
 
+    def accept_watchlist_update(self, targets, revision, snapshot) -> None:
+        """Rebase a clean editor after MainWindow committed a basic-field edit."""
+        if self._dirty or self._busy():
+            raise ValueError("編集または処理中のため再読込が必要です")
+        self._generation += 1
+        self.targets = tuple(targets)
+        self.revision = revision
+        self._listing = None
+        self._set_targets(self.targets)
+        self.receive_snapshot(snapshot)
+        self.status.setPlainText("メイン画面のDiscovery設定変更を反映しました。以前のプレビューは無効です。")
+
     def closeEvent(self, event: Any) -> None:
         if self._busy():
             self.status.setPlainText("An asynchronous Watchlist/Catalog operation is running; wait before closing")

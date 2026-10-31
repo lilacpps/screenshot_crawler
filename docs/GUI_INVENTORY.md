@@ -113,6 +113,31 @@ cannot become execution targets. Search matches title, label, key and site;
 matching descendants retain ancestors. Sorting is among siblings, numeric for
 counts; unsorted key order uses archive_order or Watchlist file order.
 
+The main tree labels the execution checkbox column `実行対象` and visually places
+the `Discovery` switch column next to it. Its logical column is appended so
+existing numeric-count/sort columns retain their identities. Managed key rows
+display ON/OFF, while site/Work parents display read-only enabled/total counts
+over all managed descendants, including filtered-out keys. Catalog-only groups
+display a dash. A painted delegate supports switch clicks and Space/Select;
+switch interaction does not change execution checks or focused details. Editor
+Inventory trees retain read-only Discovery values.
+
+Switching immediately saves only Watchlist enabled through a worker and the
+existing path lock, expected revision and atomic replace. Inventory carries a
+revision read from the same content as its targets. Pending saves are serialized;
+all switches, path changes, editor writes, window close and GUI job starts
+(including history Resume/rerun) are blocked until save/refresh finishes. Active
+or unverified workers, loading/stale Inventory, missing revision/path mismatches
+and dirty/busy editors reject changes at the handler as well as the view.
+Success updates the committed value, aggregate counts and details, rebases clean
+editors and invalidates old previews; selection, focus, expansion, view, search,
+sort and scroll are preserved. Failed saves retain the old display and require
+reload without auto-retry. A post-commit read or Inventory refresh failure is
+explicitly saved-but-unverified/stale, never a rollback. No Discovery/Full starts
+or confirmation occurs. OFF keys remain visible/selectable for Batch. Existing
+queued jobs retain their configuration fingerprints; the visible warning explains
+that changing Watchlist can stop them, even when another key was edited.
+
 Inventory loading and its Policy/Scope calculations run on a worker. Snapshot replacement
 is atomic on the GUI thread. A failed reload keeps an explicitly stale display.
 The Jobs page is a separate history view; process launch, network, CDP and

@@ -411,6 +411,63 @@ CLI reason/continuation cases pass with an explicitly isolated Catalog path.
 
 ## Windows inventory GUI, execution, and jobs (P2/P3, 2026-10-24)
 
+The main window now includes a `Discovery` ON/OFF column beside `実行対象`
+(2026-10-31). Each managed Watchlist key has a delegate-painted switch with
+mouse and Space/Select support; parents show enabled/total counts over all
+managed descendants, including hidden keys. Catalog-only rows show a dash.
+The logical column is appended to retain existing numeric column/sort identities.
+Editor Inventory models remain read-only. `enabled` continues to control only
+Discovery: OFF keys stay visible and Batch-selectable, and acquisition flags,
+numbering, Catalog and ZIP data are unaffected. No Discovery or Full prompt is
+triggered. The former main-window read-only label now distinguishes Catalog
+viewing from Watchlist editing.
+
+`WatchlistService.read_snapshot()` returns targets and their SHA-256 revision
+from one content read; `InventorySnapshot.watchlist_revision` binds the displayed
+targets to CAS. Legacy/synthetic snapshots without a revision cannot toggle.
+`gui/discovery_toggle.py` contains the switch delegate and a Watchlist-only
+QRunnable that uses `update_target(enabled=..., expected_revision=...)` under
+the existing per-path lock/atomic replacement. Saves run serially without blocking
+the UI. Active/unverified workers, stale/loading/path-mismatched snapshots,
+dirty/busy editors and pending saves reject toggles. During save/refresh, editors,
+path changes, close and GUI starts (main/history/automatic dispatch) are blocked.
+Clean editors rebase their saved targets/revision and discard old previews.
+Closing the reusable Work editor with Discard also resets its hidden draft and
+dirty flag, so it cannot continue blocking the main-window switches.
+The main selection, focus, expansion, view/filter/sort and scroll are preserved.
+Write failure leaves the prior display, requires reload and never retries;
+post-commit read/Inventory refresh failure is reported as saved with stale display,
+not as an unsaved edit. A visible warning explains that waiting jobs retain their
+old configuration fingerprint and may stop after any Watchlist edit. No CLI,
+schema, browser or site behavior changes are introduced.
+
+Verification uses isolated synthetic Catalog/Watchlist/management fixtures, Qt
+mouse/keyboard events, CAS/write/read-failure injection and existing GUI/execution
+regressions. The final affected group passed 299 tests, zero skipped
+(`.tmp/discovery-toggle-affected-final.xml`); the final Work-editor/discovery
+group passed 44 tests, zero skipped after the Discard fix
+(`.tmp/discovery-toggle-editor-final.xml`). Whole-tree ruff and diff checks pass.
+`tools/gui_discovery_switch_screenshots.py` renders only synthetic inputs; native
+Windows captures at 1400x850 and 980x700, DPR 1.5, plus saving and saved/refresh-
+failure states are in `.tmp/discovery-native-final-screens/` with actual metadata.
+The initial full-suite attempt displayed an artificial-browser failure and
+stopped progressing while ComicFUZ tests were running; it was interrupted rather
+than counted as a pass. Its failing node/cause was not captured and is unresolved.
+The unchanged ComicFUZ adapter browser file then passed all 69 tests, zero skipped
+in isolation (`.tmp/discovery-comicfuz-check.xml`), so the initial issue did not
+reproduce there. The remaining suite completed with 6,040 passed and four failures,
+zero skipped (`.tmp/discovery-toggle-broad.xml`, 3,223 seconds). These four
+Hanayume Discovery browser cases hit Windows directory
+path limits (WinError 206) under the long test base directory. The same four
+cases passed unchanged using the shorter `.tmp/h` base (4 passed, zero skipped;
+`.tmp/discovery-hanayume-short.xml`). No application, site or machine setting was
+changed to work around this test-output-path issue.
+Together these partitioned runs cover all 6,113 collected cases (Unit,
+browser-backed Integration and Research regression tests), zero skipped; every
+failed case has a passing short-path rerun. This is not a successful single
+uninterrupted full-suite run, and the initial interruption remains unexplained.
+No live-site or account operation is needed for this UI.
+
 `screenshot-crawler-gui` / `python -m screenshot_crawler.gui` is an optional
 PySide6 inventory, selected-execution, and job-management UI. Install `.[gui]`;
 the regular CLI has no Qt dependency.
@@ -489,8 +546,9 @@ compatibility and Full Yes/No. The final affected set passed **155 tests, 0
 skipped** with 55 warnings (`.tmp/gui-startup-affected-final.xml`); whole-tree
 `ruff check src tests` and `git diff --check` passed. A broad full-suite attempt
 was interrupted in unchanged artificial-browser tests after the last displayed 4% progress; it did
-not produce a final report and is not counted as passing. Full-suite completion
-and the cause of that delay remain unverified. No live/Research test or normal
+not produce a final report and is not counted as passing. The 2026-10-31
+partitioned regression coverage above supersedes that older coverage limitation;
+the earlier interruption remains unexplained. No live/Research test or normal
 Catalog/ZIP operation was performed because adapter/browser execution behavior
 is unchanged. GUI startup improvement is structural; no production timing
 benchmark has been claimed.

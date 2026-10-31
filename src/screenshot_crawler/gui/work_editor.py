@@ -374,6 +374,18 @@ class WorkEditorDialog(QDialog):
         self._fill_works()
         self._render()
 
+    def accept_watchlist_update(self, targets, revision, snapshot):
+        """Replace only a clean draft; never overwrite pending operator edits."""
+        if self.dirty or self.task is not None:
+            raise ValueError("編集または処理中のため再読込が必要です")
+        key = self.draft.work_key
+        self.saved, self.revision, self.snapshot = tuple(targets), revision, snapshot
+        self.draft = WorkDraft(self.saved, key)
+        self.preview = None
+        self._fill_works()
+        self._render()
+        self.status.setPlainText("メイン画面のDiscovery設定変更を反映しました。以前のプレビューは無効です。")
+
     def add_target(self, _checked=False, *, new_work=False):
         if not self._guard():
             return False
@@ -641,10 +653,21 @@ class WorkEditorDialog(QDialog):
 
     def reject(self):
         if self._close_guard() and self._discard():
+            self._discard_closed_draft()
             super().reject()
+
+    def _discard_closed_draft(self):
+        # This dialog is reused by MainWindow. An accepted Discard must not
+        # leave a hidden dirty draft blocking main-window Watchlist changes.
+        if self.dirty:
+            self.dirty, self.preview = False, None
+            self.draft = WorkDraft(self.saved, self.draft.work_key)
+            self._fill_works()
+            self._render()
 
     def closeEvent(self, event):
         if not self._close_guard() or not self._discard():
             event.ignore()
         else:
+            self._discard_closed_draft()
             event.accept()

@@ -57,6 +57,7 @@ class JobsPage(QWidget):
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.store = store
         self.controller = controller
+        self._start_blocked = False
         self.setWindowTitle("Screenshot Crawler — ジョブ履歴")
         root = QVBoxLayout(self)
         self.health_label = QLabel()
@@ -230,8 +231,14 @@ class JobsPage(QWidget):
         self.stop_button.setEnabled(active)
         self.force_button.setEnabled(active)
         self.cancel_button.setEnabled(row["state"] == "queued")
-        self.resume_button.setEnabled(row["state"] == "queued" and self.controller.active_job_id is None)
-        self.rerun_button.setEnabled(row["state"] in TERMINAL_JOB_STATES)
+        self.resume_button.setEnabled(not self._start_blocked and row["state"] == "queued" and self.controller.active_job_id is None)
+        self.rerun_button.setEnabled(not self._start_blocked and row["state"] in TERMINAL_JOB_STATES)
+
+    def set_start_blocked(self, blocked: bool) -> None:
+        if self._start_blocked == blocked:
+            return
+        self._start_blocked = blocked
+        self._show_selected(self.list_widget.currentRow())
 
     def _selected_job_id(self) -> str | None:
         index = self.list_widget.currentRow()
@@ -265,11 +272,15 @@ class JobsPage(QWidget):
             self.refresh()
 
     def _request_rerun(self) -> None:
+        if self._start_blocked:
+            return
         job_id = self._selected_job_id()
         if job_id is not None:
             self.rerunRequested.emit(job_id)
 
     def _resume_selected(self) -> None:
+        if self._start_blocked:
+            return
         job_id = self._selected_job_id()
         if job_id is None or self.controller.active_job_id is not None:
             return
