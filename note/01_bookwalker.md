@@ -4,7 +4,75 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-30
+最終同期: 2026-10-31
+
+## Current normal-crawl initial position guard (2026-10-31)
+
+`BookWalkerAdapter.initialize()` now verifies the viewer's authorized `cid`,
+the `1/N` counter, and a non-empty visible canvas before the first normal
+capture. This applies to `auto`, `direct`, and `quota` initialization after a
+viewer is reached. If the restored counter is middle or final, the adapter
+focuses the viewer and sends Playwright `Home` at most twice within the
+existing `page_change_timeout_ms` budget. It accepts the rewind only when the
+same content and total remain, the canvas has positive DOM/backing dimensions,
+and a new 64x64 canvas signature is observed before the normal render-stability
+wait. That pre-ready candidate may repaint while render readiness settles; the
+post-ready stable and final observations must then share the same CID, `1/N`
+counter, connected canvas identity, content version, dimensions, and non-empty
+signature, with the final signature equal to the stable signature and different
+from the pre-Home signature. Counter-first transitions with stale pixels, a
+changed post-ready frame, or a second identity mutation fail closed as
+`UnknownPageStateError`. Missing or changing identity, missing counter/canvas,
+ignored Home, and unstable rendering stop before the first save. Already stable
+`1/N` viewers do not receive Home; normal `go_next()` is unchanged. The
+entry-only/grant path keeps its existing reader position and only waits for
+render readiness. Browser-backed synthetic coverage includes delayed viewer
+mount, Home counter-before-paint behavior, and entry-only position retention.
+The final affected W1/W2 selection is 442 passed, 0 skipped; Ruff and diff
+checks pass. The renewed logged-in source-124 focused live check observed a
+real End transition from `1/322` (signature `[2732494671,1489]`) to `322/322`
+(signature `[3810581606,84]`), then invoked the production Home rewind on that
+same page. Normal initialization and the subsequent forced End-to-Home check
+completed; two focus attempts were recorded across the adapter lifecycle.
+Cleanup restored
+the created page to `1/322` with render readiness and closed it; the original
+context returned to two pages. No W2 capture, live JPEG, or image artifact was
+produced. The safe manifest is under
+`.tmp/bw-owned-source124-w1-forced-home/20261030T211343129229Z/manifest.json`.
+
+## Exact two-part executed-clear JPEG promotion (2026-10-31)
+
+The existing one-part source-native and legacy paths remain unchanged. For an
+ordinary body-page spread with exactly two integer, non-overlapping selected
+renderer regions, the lossless shadow may use the executed-clear proof only
+when both parts have complete native B tuples and one common renderer anchor.
+The anchor joins the pre-selection `cid`/counter/canvas/geometry/trace stamp to
+both selected calls, including each part's own source content version,
+snapshot IDs, rectangle, and epoch. Historical per-part B versions are kept
+separate from the current common renderer stamp.
+
+After all asynchronous candidate matching, coefficient checks, and pixel
+reconstruction finish, one synchronous browser task rechecks both current ROIs
+against their immutable target snapshots and verifies the common stamp and
+both call tuples before JPEG output. A missing or changed common proof is
+unknown and stops the page. A stable JPEG-stage failure, such as one candidate
+being unavailable, may fall back to both fresh native PNG parts only after the
+final common-frame proof supplies exact current authority for both ROIs. A
+final ROI mismatch or changed identity/geometry/snapshot/common-frame authority
+is `UNKNOWN` and cannot reuse an old PNG. Output is all-or-none for the two
+parts. Ambiguous/overlapping geometry and a second redraw race fail closed. The
+bounded same-source redraw retry is limited to one fresh exact-two selection and
+proof attempt. The normal single-part guard and source-PNG behavior are
+retained.
+
+Browser-backed synthetic coverage reuses one upstream/intermediate chain for
+two distinct source JPEGs, draws the first part then redraws the shared chain
+for the second, verifies two distinct JPEG outputs, and checks a final ROI
+mutation fails the batch proof. This synthetic coverage is not live-site
+verification. The bounded live checks verified the W1 Home path only; the
+separate page-317 diagnostic observed four geometry boxes but no matching
+destination and zero JPEG candidates, so the new exact-two live path remains
+unexercised and has no live JPEG claim.
 
 ## Shared work-key scope inventory (2026-10-22)
 
@@ -3218,8 +3286,15 @@ Worker inputs, cache contents, and viewer source format therefore remain
 unobserved; this diagnostic does not prove source PNG or JPEG absence. Evidence
 is `output/bookwalker-j2-candidate-input-20261030/20261030T141706327771Z/sanitized-candidate-input-summary.json`.
 
-The current BookWalker source/test selection is 411 passed, 0 skipped, with
-Ruff, compilation, and diff checks passing. The restored P1/P1b/P2/P3/P4
+The 411-passed source/test selection above is the historical J2 checkpoint,
+not the current W1/W2 result. The current W1/W2 related selection is 442
+passed, 0 skipped; Ruff and diff checks pass. The latest logged-in source-124
+focused live check observed a real End transition from `1/322`
+(signature `[2732494671,1489]`) to `322/322` (signature `[3810581606,84]`),
+then completed the production Home rewind in two bounded attempts. Cleanup
+restored `1/322`, closed the created page, and preserved the two-page original
+context. No live JPEG or image artifact was produced, and W2 capture was not
+reached. The restored P1/P1b/P2/P3/P4
 bounded proof paths and R2 approximate terminal policy remain current; they do
 not guarantee universal cover JPEG recovery or full-resolution PNG output.
 Earlier planning paragraphs are retained only as dated historical context.

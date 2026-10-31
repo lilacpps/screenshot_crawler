@@ -4,6 +4,52 @@
 
 The crawler accepts a direct viewer URL or a BookWalker product URL such as `/de<content-id>/`. For a product URL, `initialize()` locates the product reading control and follows the best reader candidate in the same tab.
 
+Before the first capture of an ordinary `auto`, `direct`, or `quota` run,
+`initialize()` verifies the authorized `cid` and the viewer counter. If the
+viewer restored a middle or final position, it focuses the viewer and sends
+`Home` at most twice within the existing bounded initialization deadline. A
+rewind is accepted only after the counter is `1/N`, the same content remains
+authorized, the current canvas has positive DOM and backing dimensions, and
+the canvas signature changes from the pre-rewind frame before the normal
+render-stability checks pass. The pre-ready frame may repaint while that wait
+settles; its stable and final observations must join the same CID, `1/N`
+counter, canvas identity/content version, dimensions, and non-empty signature.
+An already visible `1/N` page does not receive a Home key. Missing identity, a
+counter/CID change, ignored Home, or stale pixels fails before the first save.
+Normal `go_next()` navigation is unchanged.
+Grant-only/entry-only initialization keeps the current reader position and
+waits only for render readiness.
+
+For a body-page spread with exactly two selected, integer, non-overlapping
+regions, BookWalker can promote source-native JPEGs through the strict
+executed-clear path. Both parts must join one pre-selection renderer/CID/counter
+anchor and retain their own immutable B snapshots and historical content
+versions. After all asynchronous JPEG and coefficient checks, one synchronous
+browser task reads both current ROIs from that same renderer frame and compares
+them with both immutable snapshots. The result is all-or-none: both JPEGs are
+returned only with a complete common proof. A stable JPEG-stage failure, such
+as a missing candidate, may return both fresh current native PNGs only when the
+same final task proves both ROIs exact and joined to the common frame. A final
+ROI mismatch, missing snapshot, identity/geometry change, or an unresolved
+redraw race, including a second race after the bounded retry, is `UNKNOWN` and
+cannot return an old PNG. Existing single-part and legacy paths remain
+unchanged.
+
+The final affected W1/W2 selection is 442 passed, 0 skipped; Ruff and diff
+checks pass. The renewed logged-in source-124 focused live check observed a
+real End transition from `1/322` (signature `[2732494671,1489]`) to `322/322`
+(signature `[3810581606,84]`), then invoked the production Home rewind on that
+same page. Normal initialization and the subsequent forced End-to-Home check
+completed; two focus attempts were recorded across the adapter lifecycle.
+Cleanup restored
+the created page to `1/322` with render readiness and closed it; the original
+context remained at two pages. No W2 capture, live JPEG, or image artifact was
+produced. The safe manifest is recorded in `note/01_bookwalker.md`.
+The new exact-two live JPEG path remains unexercised: the separate bounded
+page-317 diagnostic had four geometry boxes, no matching destination, and zero
+JPEG candidates. The synthetic two-part tests therefore do not constitute a
+live JPEG success claim.
+
 ## Viewer and capture target
 
 BookWalker uses a canvas renderer. The observed current screen is `#renderer .currentScreen canvas:not(.dummy)`. Core reads the canvas PNG buffer so viewer toolbar/browser UI is not included.

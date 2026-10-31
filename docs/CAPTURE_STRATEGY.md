@@ -415,25 +415,32 @@ canvas B
     -> selected renderer
 ```
 
-The cropped one-hop extension requires an observed native `width`/`height` setter
-reset boundary with a monotonic segment generation. Same-value setters are
-resets; failed setters, unknown canvas attribute mutations, target changes,
-or an unobserved dimension change invalidate the segment. The clear-time
-canvas dimensions, tile draw target dimensions, B physical dimensions, and
-selected fractional source rectangle are retained as separate records. Only
-origin-zero full-frame A-to-B draws and the recorded right/bottom subpixel
-renderer crop are supported. Arbitrary graphs, third hops, rotations, left/top
-crops, dimension guessing, operation-proximity guessing, and fuzzy provenance
-remain unsupported.
+The cropped one-hop extension accepts either the historical observed native
+`width`/`height` setter reset boundary or a BookWalker executed-clear witness.
+For the exact-two executed-clear spread, the latter requires the source canvas
+to be cleared in place and both selected parts to retain immutable A/B/ROI
+snapshots, operation tuples, and a common renderer frame stamp. The existing
+single-part executed-clear path retains its own one-part proof. Same-value
+setters are resets; failed setters, unknown
+canvas attribute mutations, target changes, or an unobserved dimension change
+invalidate the segment. The clear-time canvas dimensions, tile draw target
+dimensions, B physical dimensions, and selected fractional source rectangle are
+retained as separate records. Only origin-zero full-frame A-to-B draws and the
+recorded right/bottom subpixel renderer crop are supported. Arbitrary graphs,
+third hops, rotations, left/top crops, dimension guessing, operation-proximity
+guessing, and fuzzy provenance remain unsupported.
 
 The resolver connects the hop only by exact mapping ID, operation index, canvas
 identity, dimensions, geometry, safe draw state, reset generation, and strict
 operation ordering. Reconstruction returns the source-native JPEG, not a JPEG
-representation of the scaled rendered pixels. The cropped one-hop production path requires intrinsic
-browser equality for the reconstructed A snapshot, reproduced B snapshot, and
-selected renderer destination ROI even when `BOOKWALKER_FINAL_PIXEL_VERIFY` is
-off; any unavailable, mismatched, or exceptional comparison falls back for the
-whole spread.
+representation of the scaled rendered pixels. The cropped one-hop production
+path requires intrinsic browser equality for the reconstructed A snapshot,
+reproduced B snapshot, and selected renderer destination ROI even when
+`BOOKWALKER_FINAL_PIXEL_VERIFY` is off. For an exact-two executed-clear spread,
+one final synchronous task must also prove both current ROIs against their
+immutable snapshots and prove the common before/after frame stamp and both
+operation tuples. Missing or changed current authority is `UNKNOWN`; a stable
+JPEG-stage failure can fall back for the whole spread.
 Original JPEG matching remains first priority; its retry wait is now bounded
 and event-driven, and is used only while eligible response work is pending.
 
@@ -447,10 +454,14 @@ mapping additionally keeps the historical native-dimension contract; the
 one-hop source-native path intentionally permits reconstructed dimensions to
  differ from the displayed native PNG. The direct partial-MCU path instead
  requires coded/visible dimension proof and always performs intrinsic browser
- comparison against the selected native snapshot, even when
- `BOOKWALKER_FINAL_PIXEL_VERIFY` is off. Comparison unavailability, dimension
- mismatch, exception, or any differing pixel falls back to native PNG. The
- production authority is the verified source JPEG, complete MCU-aligned mapping,
+  comparison against the selected native snapshot, even when
+  `BOOKWALKER_FINAL_PIXEL_VERIFY` is off. In the older single-part paths,
+  comparison unavailability, dimension mismatch, exception, or any differing
+  pixel falls back to that part's native PNG. The exact-two executed-clear path
+  instead requires the final synchronous task to prove both current ROIs
+  dimension-equal and exact, joined to one stable common frame. A stable
+  JPEG-stage failure may then use both fresh native PNGs; a final ROI mismatch
+  or changed authority is `UNKNOWN`. The production authority is the verified source JPEG, complete MCU-aligned mapping,
  coefficient-exact reconstruction, equal quantization tables and selector IDs,
  and supported source/output JPEG structure. Browser full-pixel equality remains
  optional for the older equal-size and one-hop paths through
@@ -484,10 +495,11 @@ performs its intrinsic comparison and requires available, dimension-equal,
 all-pixel exact output. With `BOOKWALKER_FINAL_PIXEL_VERIFY=1` (also `true`,
 `yes`, or `on`), the older paths also perform the browser full-resolution
 comparison and require exactness. An invalid explicit value fails fast. Spread
-output is all-or-none: one failed part makes every part native PNG. Unsupported
-JPEG layouts, ambiguous mappings or candidates, segment overflow, coefficient
-mismatch, dimension mismatch, and any required browser comparison failure are
-all non-fatal native PNG fallbacks.
+output is all-or-none: one failed part makes every part native PNG. For
+exact-two executed-clear output, any JPEG-stage failure rejects both JPEGs.
+Both native PNGs may be returned only if final common-frame/current-ROI
+authority remains exact; missing or changed authority, or a second redraw race,
+is `UNKNOWN`. Existing single-part and legacy fallbacks retain their own gates.
 Active segments, completed mappings, and retained browser source references are
 bounded and cleared after the capture window.
 `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original/native/lossless capture and

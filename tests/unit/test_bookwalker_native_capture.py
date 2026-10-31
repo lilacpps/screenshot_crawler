@@ -17,6 +17,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
+    _p4b_stable_batch_fallback_authority,
     _p4b_stable_current_fallback_authority,
     _trace_payload_stats,
     parse_bookwalker_final_pixel_verify,
@@ -355,6 +356,28 @@ def test_executed_clear_promotion_requires_single_native_selection() -> None:
     assert adapter_module._strict_executed_clear_capture_allowed(2, 2) is False
     assert adapter_module._strict_executed_clear_capture_allowed(2, 1) is False
     assert adapter_module._strict_executed_clear_capture_allowed(1, 2) is False
+
+
+def test_executed_clear_batch_promotion_requires_exact_two_anchor() -> None:
+    assert adapter_module._strict_executed_clear_batch_capture_allowed(
+        2, 2, {"available": True, "common": {}, "parts": [{}, {}]}
+    ) is True
+    assert adapter_module._strict_executed_clear_batch_capture_allowed(
+        1, 1, {"available": True, "common": {}, "parts": [{}, {}]}
+    ) is False
+
+
+def test_p4b_batch_selection_requires_two_nonoverlapping_destinations() -> None:
+    left = {"destination": {"x": 0, "y": 0, "width": 10, "height": 10}}
+    right = {"destination": {"x": 10, "y": 0, "width": 10, "height": 10}}
+    overlap = {"destination": {"x": 9, "y": 0, "width": 10, "height": 10}}
+    adapter = BookWalkerAdapter()
+    assert adapter._p4b_exact_two_nonoverlap([left, right]) is True
+    assert adapter._p4b_exact_two_nonoverlap([left, overlap]) is False
+    assert adapter._p4b_exact_two_nonoverlap([left]) is False
+    assert adapter_module._strict_executed_clear_batch_capture_allowed(
+        2, 2, {"available": False, "common": {}, "parts": [{}, {}]}
+    ) is False
 
 
 async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace() -> None:
@@ -807,6 +830,23 @@ def test_strict_png_fallback_requires_exact_current_roi_and_association() -> Non
     assert _p4b_stable_current_fallback_authority(proof) is True
     proof["current"]["exact"] = False
     assert _p4b_stable_current_fallback_authority(proof) is False
+
+
+def test_strict_batch_png_fallback_requires_both_current_rois_and_common_frame() -> None:
+    part = _stable_atomic_proof(exact=True, reason="stable JPEG proof unavailable")
+    proof = {
+        "available": True,
+        "exact": True,
+        "before": [part["before"], copy.deepcopy(part["before"])],
+        "after": [part["after"], copy.deepcopy(part["after"])],
+        "current": [part["current"], copy.deepcopy(part["current"])],
+    }
+    assert _p4b_stable_batch_fallback_authority(proof) is True
+    proof["current"][1]["exact"] = False
+    assert _p4b_stable_batch_fallback_authority(proof) is False
+    proof["current"][1]["exact"] = True
+    proof["after"][0]["counter"] = "2/2"
+    assert _p4b_stable_batch_fallback_authority(proof) is False
     proof = _stable_atomic_proof(exact=True, reason="stable JPEG proof unavailable")
     proof["before"]["selected"]["canvasId"] = "other-canvas"
     assert _p4b_stable_current_fallback_authority(proof) is False

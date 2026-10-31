@@ -1822,6 +1822,23 @@ def _strict_executed_clear_capture_allowed(
     """Keep the strict executed-clear promotion single-part only."""
     return native_capture_count == 1 and selected_draw_count == 1
 
+
+def _strict_executed_clear_batch_capture_allowed(
+    native_capture_count: int,
+    selected_draw_count: int,
+    batch_anchor: object,
+) -> bool:
+    """Allow executed-clear promotion only for a proven exact-two batch."""
+    return (
+        native_capture_count == 2
+        and selected_draw_count == 2
+        and isinstance(batch_anchor, dict)
+        and batch_anchor.get("available") is True
+        and isinstance(batch_anchor.get("common"), dict)
+        and isinstance(batch_anchor.get("parts"), list)
+        and len(batch_anchor["parts"]) == 2
+    )
+
 _BOOKWALKER_NATIVE_RGBA_HASH_SCRIPT = """
 async dataUrl => {
   if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
@@ -1911,6 +1928,224 @@ _BOOKWALKER_NATIVE_ANCHOR_SCRIPT = """
     resetEpoch: geometry?.resetEpoch ?? null,
     canvasWidth: geometry?.width ?? null,
     canvasHeight: geometry?.height ?? null,
+  };
+}
+"""
+
+_BOOKWALKER_SELECTION_ANCHOR_SCRIPT = """
+element => {
+  const traceId = element?.getAttribute('data-bookwalker-trace-id') || null;
+  const calls = (window.__bookwalkerNativeDrawCalls || [])
+    .filter(call => call.canvasId === traceId);
+  const operationIndex = calls[0]?.operation?.index
+    ?? calls[0]?.traceOperationIndex ?? null;
+  if (typeof window.__bookwalkerP4BCurrentAnchor === 'function'
+      && Number.isInteger(operationIndex)) {
+    return window.__bookwalkerP4BCurrentAnchor(element, operationIndex);
+  }
+  return null;
+}
+"""
+
+_BOOKWALKER_BATCH_NATIVE_ANCHOR_SCRIPT = """
+(element, operationIndexes) => {
+  const indexes = Array.isArray(operationIndexes) ? operationIndexes : [];
+  if (indexes.length !== 2
+      || typeof window.__bookwalkerP4BCurrentAnchor !== 'function') {
+    return {available: false, reason: 'batch anchor hook unavailable'};
+  }
+  const anchors = indexes.map(index => (
+    window.__bookwalkerP4BCurrentAnchor(element, index)
+  ));
+  if (anchors.some(anchor => !anchor || typeof anchor !== 'object')) {
+    return {available: false, reason: 'batch anchor incomplete', parts: anchors};
+  }
+  const commonFields = [
+    'traceId', 'actualCanvasId', 'connected', 'bookIdentity', 'counter',
+    'geometryToken', 'traceEpoch', 'geometryVersion', 'targetContentVersion',
+    'geometryHistoryIncomplete', 'observerFlushed', 'observerAvailable',
+    'observerTakeRecordsAvailable', 'unknownMutation', 'resetEpoch',
+    'canvasWidth', 'canvasHeight',
+  ];
+  const same = (left, right) => (
+    left === right || JSON.stringify(left) === JSON.stringify(right)
+  );
+  const first = anchors[0];
+  const common = Object.fromEntries(commonFields.map(field => [field, first[field]]));
+  if (commonFields.some(field => !same(first[field], anchors[1][field]))) {
+    return {available: false, reason: 'batch common renderer stamp changed', parts: anchors};
+  }
+  if (common.connected !== true
+      || common.geometryHistoryIncomplete !== false
+      || common.observerFlushed !== true
+      || common.observerAvailable !== true
+      || common.observerTakeRecordsAvailable !== true
+      || common.unknownMutation !== false
+      || !Number.isInteger(common.traceEpoch)
+      || common.traceEpoch <= 0) {
+    return {available: false, reason: 'batch common renderer stamp incomplete', parts: anchors};
+  }
+  return {available: true, common, parts: anchors};
+}
+"""
+
+_BOOKWALKER_BATCH_CURRENT_ROI_ANCHOR_SCRIPT = """
+({expectedParts, initialAnchor, originalElement}) => {
+  const parts = Array.isArray(expectedParts) ? expectedParts : [];
+  const initial = initialAnchor && typeof initialAnchor === 'object'
+    ? initialAnchor : null;
+  if (parts.length !== 2 || !initial || !originalElement
+      || !originalElement.isConnected || !document.contains(originalElement)) {
+    return {available: false, exact: false, reason: 'batch renderer anchor unavailable'};
+  }
+  const currentScreen = [
+    ...document.querySelectorAll('#renderer .currentScreen canvas:not(.dummy)'),
+  ];
+  const pool = currentScreen.length
+    ? currentScreen
+    : [...document.querySelectorAll('#renderer canvas:not(.dummy)')];
+  const visible = pool.filter(element => {
+    if (!element?.isConnected || !document.contains(element)) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none'
+      && rect.width > 0 && rect.height > 0
+      && Number(element.width) > 0 && Number(element.height) > 0;
+  });
+  if (visible.length !== 1 || visible[0] !== originalElement) {
+    return {available: false, exact: false, reason: 'current renderer canvas is missing or ambiguous'};
+  }
+  if (typeof window.__bookwalkerP4BCurrentAnchor !== 'function') {
+    return {available: false, exact: false, reason: 'batch anchor hook unavailable'};
+  }
+  const same = (left, right) => (
+    left === right || JSON.stringify(left) === JSON.stringify(right)
+  );
+  const commonFields = [
+    'traceId', 'actualCanvasId', 'connected', 'bookIdentity', 'counter',
+    'geometryToken', 'traceEpoch', 'geometryVersion', 'targetContentVersion',
+    'geometryHistoryIncomplete', 'observerFlushed', 'observerAvailable',
+    'observerTakeRecordsAvailable', 'unknownMutation', 'resetEpoch',
+    'canvasWidth', 'canvasHeight',
+  ];
+  const selectedFields = [
+    'canvasId', 'operationIndex', 'sourceId', 'sourceCanvasId',
+    'traceEpoch', 'sourceContentVersion', 'fullSourceSnapshotId',
+    'targetSnapshotId', 'targetContentVersionAfter', 'sourceRect', 'destination',
+  ];
+  const valuePresent = value => value !== null && value !== undefined && value !== '';
+  const commonEqual = (left, right) => (
+    left && right && commonFields.every(field => (
+      valuePresent(left[field]) && valuePresent(right[field])
+      && same(left[field], right[field])
+    ))
+    && left.connected === true && right.connected === true
+    && left.geometryHistoryIncomplete === false
+    && right.geometryHistoryIncomplete === false
+    && left.observerFlushed === true && right.observerFlushed === true
+    && left.observerAvailable === true && right.observerAvailable === true
+    && left.observerTakeRecordsAvailable === true
+    && right.observerTakeRecordsAvailable === true
+    && left.unknownMutation === false && right.unknownMutation === false
+  );
+  const expectedCommon = initial.common;
+  const anchorFor = operationIndex => (
+    window.__bookwalkerP4BCurrentAnchor(originalElement, operationIndex)
+  );
+  const makeFailure = (reason, before = null, after = null, current = null) => ({
+    available: current !== null,
+    exact: false,
+    reason,
+    before,
+    after,
+    current,
+  });
+  const before = parts.map(part => anchorFor(part.operationIndex));
+  if (before.some(anchor => !anchor || typeof anchor !== 'object')) {
+    return {available: false, exact: false, reason: 'batch anchor incomplete', parts: before};
+  }
+  if (before.some(anchor => !commonEqual(anchor, expectedCommon))) {
+    return {available: false, exact: false, reason: 'initial renderer anchor changed', parts: before};
+  }
+  for (let index = 0; index < parts.length; index += 1) {
+    const selected = before[index].selected;
+    const expected = parts[index];
+    const mismatchField = selectedFields.find(field => (
+      !selected || !valuePresent(selected[field]) || !same(selected[field], expected[field])
+    ));
+    if (mismatchField) {
+      return {
+        available: false, exact: false, reason: 'selected renderer B anchor mismatch',
+        parts: before,
+        mismatch: {
+          index, field: mismatchField,
+          actual: selected?.[mismatchField], expected: expected[mismatchField],
+        },
+      };
+    }
+  }
+  const currentParts = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const expected = parts[index];
+    const destination = expected.destination;
+    const snapshot = window.__bookwalkerNativeSnapshots?.get(
+      String(expected.targetSnapshotId)
+    );
+    const x = Number(destination?.x), y = Number(destination?.y);
+    const width = Number(destination?.width), height = Number(destination?.height);
+    if (!snapshot || ![x, y, width, height].every(Number.isInteger)
+        || width <= 0 || height <= 0 || x < 0 || y < 0
+        || x + width > originalElement.width || y + height > originalElement.height
+        || snapshot.width !== width || snapshot.height !== height) {
+      return {available: false, exact: false, reason: 'current ROI geometry unavailable', parts: before};
+    }
+    const expectedCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(expectedCanvas);
+    expectedCanvas.width = width; expectedCanvas.height = height;
+    const expectedContext = expectedCanvas.getContext('2d');
+    const currentContext = originalElement.getContext('2d');
+    if (!expectedContext || !currentContext) {
+      return {available: false, exact: false, reason: 'current ROI context unavailable', parts: before};
+    }
+    expectedContext.drawImage(snapshot, 0, 0);
+    const actualData = currentContext.getImageData(x, y, width, height).data;
+    const expectedData = expectedContext.getImageData(0, 0, width, height).data;
+    let differingPixels = 0; let maxChannelDifference = 0;
+    for (let offset = 0; offset < actualData.length; offset += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(actualData[offset + channel] - expectedData[offset + channel]);
+        maxChannelDifference = Math.max(maxChannelDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differingPixels += 1;
+    }
+    currentParts.push({
+      available: true,
+      dimensions_equal: true,
+      exact: differingPixels === 0,
+      differing_pixel_count: differingPixels,
+      max_channel_difference: maxChannelDifference,
+    });
+  }
+  const after = parts.map(part => anchorFor(part.operationIndex));
+  if (after.some(anchor => !anchor || typeof anchor !== 'object')) {
+    return {available: true, exact: false, reason: 'final renderer anchor changed', before, current: currentParts};
+  }
+  if (after.some(anchor => !commonEqual(anchor, expectedCommon))
+      || after.some((anchor, index) => !same(anchor.selected, before[index].selected))) {
+    return {available: true, exact: false, reason: 'final renderer anchor changed', before, after, current: currentParts};
+  }
+  const exact = currentParts.every(part => part.exact === true);
+  return {
+    available: true,
+    exact,
+    reason: exact ? 'current DOM ROI batch exact' : 'current DOM ROI mismatch',
+    before,
+    after,
+    current: currentParts,
+    common: {before: before[0], after: after[0]},
+    parts: currentParts,
   };
 }
 """
@@ -3229,6 +3464,56 @@ def _p4b_stable_current_fallback_authority(proof: object) -> bool:
     return before == after
 
 
+def _p4b_stable_batch_fallback_authority(proof: object) -> bool:
+    """Require both current ROIs and both before/after call tuples to join."""
+
+    if not isinstance(proof, dict) or proof.get("available") is not True:
+        return False
+    if proof.get("exact") is not True:
+        return False
+    before = proof.get("before")
+    after = proof.get("after")
+    current = proof.get("current")
+    if (
+        not isinstance(before, list)
+        or len(before) != 2
+        or not isinstance(after, list)
+        or len(after) != 2
+        or not isinstance(current, list)
+        or len(current) != 2
+    ):
+        return False
+    for item in current:
+        if (
+            not isinstance(item, dict)
+            or item.get("available") is not True
+            or item.get("dimensions_equal") is not True
+            or item.get("exact") is not True
+            or item.get("differing_pixel_count") != 0
+            or item.get("max_channel_difference") != 0
+        ):
+            return False
+    for first, second in zip(before, after, strict=True):
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            return False
+        if first != second:
+            return False
+        if first.get("connected") is not True or first.get("unknownMutation") is True:
+            return False
+        selected = first.get("selected")
+        if not isinstance(selected, dict):
+            return False
+        required = (
+            "canvasId", "operationIndex", "sourceId", "sourceCanvasId",
+            "traceEpoch", "sourceContentVersion", "fullSourceSnapshotId",
+            "targetSnapshotId", "targetContentVersionAfter", "sourceRect",
+            "destination",
+        )
+        if any(selected.get(field) in (None, "") for field in required):
+            return False
+    return True
+
+
 class BookWalkerStrictEntryError(RuntimeError):
     """Raised when a strict BookWalker entry cannot be proved safe."""
 
@@ -3359,6 +3644,9 @@ class BookWalkerAdapter(SiteAdapter):
         self._auto_login_password = auto_login_password
         self._auto_login_attempted = False
         self._initial_content_id: str | None = None
+        self._initial_render_deadline: float | None = None
+        self._last_render_ready_signature: tuple[int, int] | None = None
+        self._entry_only_initialization = False
         self._capture_run = 0
         self._output_title: str | None = None
         self._output_author: str | None = None
@@ -4300,6 +4588,14 @@ class BookWalkerAdapter(SiteAdapter):
         return match.group(1) if match else None
 
     @staticmethod
+    def _content_ids_match(actual: object, expected: object) -> bool:
+        return (
+            isinstance(actual, str)
+            and isinstance(expected, str)
+            and actual.casefold() == expected.casefold()
+        )
+
+    @staticmethod
     def parse_page_counter(text: str) -> tuple[int | None, str | None]:
         normalized = " ".join(text.split())
         if not normalized:
@@ -4392,12 +4688,14 @@ class BookWalkerAdapter(SiteAdapter):
                 return canvas
         return None
 
-    async def _canvas_signature(self, page: Page) -> tuple[int, int] | None:
-        canvas = await self._visible_canvas(page)
+    async def _canvas_signature(
+        self, page: Page, canvas: Locator | None = None
+    ) -> tuple[int, int] | None:
+        canvas = canvas or await self._visible_canvas(page)
         if canvas is None:
             return None
         try:
-            return await asyncio.wait_for(
+            value = await asyncio.wait_for(
                 canvas.evaluate(
                     """
                     element => {
@@ -4431,8 +4729,498 @@ class BookWalkerAdapter(SiteAdapter):
                 ),
                 timeout=2,
             )
+            # Playwright decodes a JavaScript Array as a Python list. Keep
+            # the adapter's internal evidence type stable for browser-backed
+            # and unit-backed initialization alike.
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                return None
+            checksum, non_white = value
+            if not isinstance(checksum, (int, float)) or not isinstance(
+                non_white, (int, float)
+            ):
+                return None
+            return int(checksum), int(non_white)
         except (PlaywrightTimeoutError, TimeoutError):
             return None
+
+    async def _initial_page_observation(self, page: Page) -> dict[str, Any]:
+        """Read one joined counter/URL/canvas frame before the first save."""
+
+        try:
+            data = await page.evaluate(
+                """
+                () => {
+                  const counterElement = document.querySelector('#pageSliderCounter');
+                  const rawCounter = (counterElement?.textContent || '').trim().replace(/\\s+/g, ' ');
+                  const counterMatch = rawCounter.match(/^(\\d+)\\s*\\/\\s*(\\d+)$/);
+                  const current = counterMatch ? Number(counterMatch[1]) : null;
+                  const total = counterMatch ? Number(counterMatch[2]) : null;
+                  const selectors = [
+                    '#renderer .currentScreen canvas:not(.dummy)',
+                    '#renderer canvas:not(.dummy)',
+                  ];
+                  let canvas = null;
+                  let selector = null;
+                  let canvasIndex = -1;
+                  for (const candidateSelector of selectors) {
+                    const candidates = [...document.querySelectorAll(candidateSelector)];
+                    for (let index = 0; index < candidates.length; index += 1) {
+                      const candidate = candidates[index];
+                      const rect = candidate.getBoundingClientRect();
+                      const style = getComputedStyle(candidate);
+                      if (style.display !== 'none' && style.visibility !== 'hidden'
+                          && rect.width > 0 && rect.height > 0
+                          && candidate.width > 0 && candidate.height > 0) {
+                        canvas = candidate;
+                        selector = candidateSelector;
+                        canvasIndex = index;
+                        break;
+                      }
+                    }
+                    if (canvas) break;
+                  }
+                  let geometry = null;
+                  let signature = null;
+                  let traceId = null;
+                  if (canvas) {
+                    const rect = canvas.getBoundingClientRect();
+                    const geometryState =
+                      window.__bookwalkerDirectOneHopGeometryState?.(canvas) || null;
+                    const probe = document.createElement('canvas');
+                    window.__bookwalkerMarkInternalCanvas?.(probe);
+                    probe.width = 64;
+                    probe.height = 64;
+                    const context = probe.getContext('2d');
+                    if (context) {
+                      context.drawImage(canvas, 0, 0, 64, 64);
+                      const sample = context.getImageData(0, 0, 64, 64).data;
+                      let nonWhite = 0;
+                      let checksum = 0;
+                      for (let offset = 0; offset < sample.length; offset += 4) {
+                        checksum = (checksum * 31 + sample[offset]) >>> 0;
+                        checksum = (checksum * 31 + sample[offset + 1]) >>> 0;
+                        checksum = (checksum * 31 + sample[offset + 2]) >>> 0;
+                        checksum = (checksum * 31 + sample[offset + 3]) >>> 0;
+                        if (sample[offset] < 245 || sample[offset + 1] < 245
+                            || sample[offset + 2] < 245 || sample[offset + 3] < 245) {
+                          nonWhite += 1;
+                        }
+                      }
+                      signature = [checksum, nonWhite];
+                    }
+                    traceId = canvas.getAttribute('data-bookwalker-trace-id');
+                    geometry = {
+                      width: canvas.width,
+                      height: canvas.height,
+                      left: rect.left,
+                      top: rect.top,
+                      displayWidth: rect.width,
+                      displayHeight: rect.height,
+                      actualCanvasId: window.__bookwalkerCanvasIdentity?.(canvas)
+                        || geometryState?.canvasId || traceId || null,
+                      contentVersion: geometryState?.contentVersion ?? null,
+                      connected: Boolean(canvas.isConnected && document.contains(canvas)),
+                    };
+                  }
+                  return {
+                    href: location.href,
+                    current,
+                    total,
+                    rawCounter: rawCounter || null,
+                    selector,
+                    canvasIndex,
+                    canvasPresent: Boolean(canvas),
+                    geometry,
+                    traceId,
+                    signature,
+                  };
+                }
+                """
+            )
+        except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            data = None
+        if not isinstance(data, dict):
+            return {
+                "current": None,
+                "total": None,
+                "raw_counter": None,
+                "content_id": None,
+                "canvas": None,
+                "geometry": None,
+                "trace_id": None,
+                "signature": None,
+            }
+        selector = data.get("selector")
+        canvas_index = data.get("canvasIndex")
+        canvas = None
+        if (
+            isinstance(selector, str)
+            and isinstance(canvas_index, int)
+            and canvas_index >= 0
+            and data.get("canvasPresent") is True
+        ):
+            canvas = page.locator(selector).nth(canvas_index)
+        signature_value = data.get("signature")
+        signature = (
+            (int(signature_value[0]), int(signature_value[1]))
+            if isinstance(signature_value, (list, tuple))
+            and len(signature_value) == 2
+            and all(isinstance(item, (int, float)) for item in signature_value)
+            else None
+        )
+        href = data.get("href")
+        return {
+            "current": data.get("current"),
+            "total": data.get("total"),
+            "raw_counter": data.get("rawCounter"),
+            "content_id": self.content_id_from_url(href) if isinstance(href, str) else None,
+            "canvas": canvas,
+            "geometry": data.get("geometry"),
+            "trace_id": data.get("traceId"),
+            "signature": signature,
+        }
+
+    @staticmethod
+    def _initial_page_geometry_is_valid(
+        observation: dict[str, Any],
+    ) -> bool:
+        geometry = observation.get("geometry")
+        if not isinstance(geometry, dict):
+            return False
+        return all(
+            isinstance(geometry.get(key), (int, float))
+            and geometry[key] > 0
+            for key in ("width", "height", "displayWidth", "displayHeight")
+        )
+
+    @staticmethod
+    def _initial_page_frame_is_valid(observation: dict[str, Any]) -> bool:
+        geometry = observation.get("geometry")
+        if not BookWalkerAdapter._initial_page_geometry_is_valid(observation):
+            return False
+        if not isinstance(geometry, dict):
+            return False
+        canvas_id = geometry.get("actualCanvasId")
+        content_version = geometry.get("contentVersion")
+        return (
+            geometry.get("connected") is True
+            and isinstance(canvas_id, str)
+            and bool(canvas_id)
+            and isinstance(content_version, (int, float))
+            and content_version >= 0
+        )
+
+    @staticmethod
+    def _initial_frame_join_key(
+        observation: dict[str, Any],
+    ) -> tuple[object, ...] | None:
+        geometry = observation.get("geometry")
+        signature = observation.get("signature")
+        if not BookWalkerAdapter._initial_page_frame_is_valid(observation):
+            return None
+        if not isinstance(geometry, dict) or not isinstance(signature, tuple):
+            return None
+        content_id = observation.get("content_id")
+        return (
+            content_id.casefold() if isinstance(content_id, str) else None,
+            observation.get("current"),
+            observation.get("total"),
+            geometry.get("actualCanvasId"),
+            geometry.get("contentVersion"),
+            geometry.get("width"),
+            geometry.get("height"),
+            geometry.get("displayWidth"),
+            geometry.get("displayHeight"),
+            geometry.get("connected"),
+            signature,
+        )
+
+    async def _focus_viewer_for_initial_home(self, page: Page) -> bool:
+        """Focus a viewer container without clicking or changing page content."""
+
+        for selector in ("#viewport1", "#renderer", ".currentScreen"):
+            try:
+                locator = page.locator(selector)
+                if await locator.count() and await self._visible(locator):
+                    focused = await locator.first.evaluate(
+                        """
+                        element => {
+                          if (!(element instanceof HTMLElement)) return false;
+                          if (!element.hasAttribute('tabindex')) element.tabIndex = -1;
+                          element.focus({preventScroll: true});
+                          return document.activeElement === element;
+                        }
+                        """
+                    )
+                    if focused is True:
+                        return True
+            except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                continue
+        return False
+
+    async def _ensure_initial_page_before_capture(self, page: Page) -> None:
+        """Rewind an ordinary reader entry to page 1 before the first save.
+
+        The viewer can restore a middle/end position before its first stable
+        canvas is exposed.  Home is therefore handled before the regular
+        render-ready wait.  A counter change alone is insufficient: when a
+        rewind was needed, the current canvas must also expose valid geometry
+        and a different non-empty signature from the pre-rewind frame.
+        """
+
+        expected_content_id = self._initial_content_id
+        if not expected_content_id:
+            raise UnknownPageStateError(
+                "BookWalker initial content identity is unavailable"
+            )
+
+        deadline = time.monotonic() + (self.page_change_timeout_ms / 1000)
+
+        async def wait_within_deadline(milliseconds: int) -> None:
+            remaining = max(0.001, deadline - time.monotonic())
+            try:
+                await asyncio.wait_for(
+                    page.wait_for_timeout(milliseconds), timeout=remaining
+                )
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError) as exc:
+                raise UnknownPageStateError(
+                    "BookWalker initial rewind wait exceeded its deadline"
+                ) from exc
+
+        def counter_is_valid(observed: dict[str, Any]) -> bool:
+            observed_current = observed.get("current")
+            observed_total = observed.get("total")
+            return (
+                isinstance(observed_current, int)
+                and isinstance(observed_total, int)
+                and observed_total >= 1
+                and 1 <= observed_current <= observed_total
+            )
+
+        # The URL can change before the viewer mounts its counter and canvas.
+        # Poll the counter within the existing bounded timeout. For a restored
+        # middle/end page, Home must still be attempted even when the first
+        # canvas frame has not mounted yet; the post-Home join remains strict.
+        remaining = max(0.001, deadline - time.monotonic())
+        try:
+            observation = await asyncio.wait_for(
+                self._initial_page_observation(page), timeout=remaining
+            )
+        except TimeoutError as exc:
+            raise UnknownPageStateError(
+                "BookWalker initial frame observation exceeded its deadline"
+            ) from exc
+        while (
+            time.monotonic() < deadline
+            and not counter_is_valid(observation)
+        ):
+            wait_ms = min(100, max(1, int((deadline - time.monotonic()) * 1000)))
+            await wait_within_deadline(wait_ms)
+            remaining = max(0.001, deadline - time.monotonic())
+            try:
+                observation = await asyncio.wait_for(
+                    self._initial_page_observation(page), timeout=remaining
+                )
+            except TimeoutError as exc:
+                raise UnknownPageStateError(
+                    "BookWalker initial frame observation exceeded its deadline"
+                ) from exc
+        current = observation.get("current")
+        total = observation.get("total")
+        if not counter_is_valid(observation):
+            raise UnknownPageStateError(
+                "BookWalker initial page counter is unavailable or invalid"
+            )
+        if not self._content_ids_match(
+            observation.get("content_id"), expected_content_id
+        ):
+            raise UnknownPageStateError(
+                "BookWalker initial content identity changed before capture"
+            )
+
+        if current == 1:
+            self._initial_render_deadline = deadline
+            try:
+                await asyncio.wait_for(
+                    self._wait_for_render_ready(page),
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except TimeoutError as exc:
+                raise UnknownPageStateError(
+                    "BookWalker initial render wait exceeded its deadline"
+                ) from exc
+            finally:
+                self._initial_render_deadline = None
+            try:
+                stable = await asyncio.wait_for(
+                    self._initial_page_observation(page),
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except TimeoutError as exc:
+                raise UnknownPageStateError(
+                    "BookWalker initial stable observation exceeded its deadline"
+                ) from exc
+            try:
+                final = await asyncio.wait_for(
+                    self._initial_page_observation(page),
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except TimeoutError as exc:
+                raise UnknownPageStateError(
+                    "BookWalker initial final observation exceeded its deadline"
+                ) from exc
+            stable_key = self._initial_frame_join_key(stable)
+            if (
+                final.get("current") != 1
+                or final.get("total") != total
+                or not self._content_ids_match(
+                    final.get("content_id"), expected_content_id
+                )
+                or final.get("canvas") is None
+                or not self._initial_page_frame_is_valid(final)
+                or not isinstance(final.get("signature"), tuple)
+                or final["signature"][1] <= 0
+                or (
+                    self._last_render_ready_signature is not None
+                    and final.get("signature") != self._last_render_ready_signature
+                )
+                or stable_key is None
+                or self._initial_frame_join_key(final) != stable_key
+            ):
+                raise UnknownPageStateError(
+                    "BookWalker first-page frame was not stable before capture"
+                )
+            return
+
+        original_signature = observation.get("signature")
+        attempts = 0
+        next_retry = time.monotonic()
+        retry_interval = min(1.0, max(0.05, self.page_change_timeout_ms / 4000))
+        while time.monotonic() < deadline:
+            if attempts < 2 and time.monotonic() >= next_retry:
+                try:
+                    focused = await asyncio.wait_for(
+                        self._focus_viewer_for_initial_home(page),
+                        timeout=max(0.001, deadline - time.monotonic()),
+                    )
+                except TimeoutError as exc:
+                    raise UnknownPageStateError(
+                        "BookWalker viewer focus exceeded its deadline"
+                    ) from exc
+                if not focused:
+                    raise UnknownPageStateError(
+                        "BookWalker viewer could not be focused before Home"
+                    )
+                try:
+                    await asyncio.wait_for(
+                        page.keyboard.press("Home"),
+                        timeout=max(0.001, deadline - time.monotonic()),
+                    )
+                except (PlaywrightError, PlaywrightTimeoutError, TimeoutError) as exc:
+                    raise UnknownPageStateError(
+                        "BookWalker initial Home navigation failed"
+                    ) from exc
+                attempts += 1
+                next_retry = time.monotonic() + retry_interval
+
+            wait_ms = min(100, max(1, int((deadline - time.monotonic()) * 1000)))
+            await wait_within_deadline(wait_ms)
+            try:
+                current_observation = await asyncio.wait_for(
+                    self._initial_page_observation(page),
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except TimeoutError as exc:
+                raise UnknownPageStateError(
+                    "BookWalker rewind observation exceeded its deadline"
+                ) from exc
+            if not self._content_ids_match(
+                current_observation.get("content_id"), expected_content_id
+            ):
+                raise UnknownPageStateError(
+                    "BookWalker content identity changed during initial rewind"
+                )
+            signature = current_observation.get("signature")
+            if (
+                current_observation.get("current") == 1
+                and current_observation.get("total") == total
+                and current_observation.get("canvas") is not None
+                and self._initial_page_frame_is_valid(current_observation)
+                and isinstance(signature, tuple)
+                and signature[1] > 0
+                and signature != original_signature
+            ):
+                self._initial_render_deadline = deadline
+                try:
+                    await asyncio.wait_for(
+                        self._wait_for_render_ready(page),
+                        timeout=max(0.001, deadline - time.monotonic()),
+                    )
+                except TimeoutError as exc:
+                    raise UnknownPageStateError(
+                        "BookWalker rewind render wait exceeded its deadline"
+                    ) from exc
+                finally:
+                    self._initial_render_deadline = None
+                try:
+                    stable = await asyncio.wait_for(
+                        self._initial_page_observation(page),
+                        timeout=max(0.001, deadline - time.monotonic()),
+                    )
+                except TimeoutError as exc:
+                    raise UnknownPageStateError(
+                        "BookWalker rewind stable observation exceeded its deadline"
+                    ) from exc
+                try:
+                    final = await asyncio.wait_for(
+                        self._initial_page_observation(page),
+                        timeout=max(0.001, deadline - time.monotonic()),
+                    )
+                except TimeoutError as exc:
+                    raise UnknownPageStateError(
+                        "BookWalker rewind final observation exceeded its deadline"
+                    ) from exc
+                stable_signature = stable.get("signature")
+                final_signature = final.get("signature")
+                stable_key = self._initial_frame_join_key(stable)
+                if (
+                    stable.get("current") == 1
+                    and stable.get("total") == total
+                    and self._content_ids_match(
+                        stable.get("content_id"), expected_content_id
+                    )
+                    and stable.get("canvas") is not None
+                    and self._initial_page_frame_is_valid(stable)
+                    and isinstance(stable_signature, tuple)
+                    and stable_signature[1] > 0
+                    and stable_signature != original_signature
+                    and self._last_render_ready_signature is not None
+                    and stable_signature == self._last_render_ready_signature
+                    and final.get("current") == 1
+                    and final.get("total") == total
+                    and self._content_ids_match(
+                        final.get("content_id"), expected_content_id
+                    )
+                    and final.get("canvas") is not None
+                    and self._initial_page_frame_is_valid(final)
+                    and isinstance(final_signature, tuple)
+                    and final_signature[1] > 0
+                    and final_signature != original_signature
+                    and final_signature == stable_signature
+                    and stable_key is not None
+                    and self._initial_frame_join_key(final) == stable_key
+                ):
+                    return
+                # The post-render stable and final samples must join to one
+                # actual frame. A pre-ready candidate may be replaced while
+                # the viewer paints; accepting a later unstable frame remains
+                # fail-closed before the first capture.
+                raise UnknownPageStateError(
+                    "BookWalker initial Home rewind produced an unstable first page"
+                )
+        raise UnknownPageStateError(
+            "BookWalker initial Home rewind did not produce a stable first page"
+        )
 
     async def _has_viewer_shell(self, page: Page) -> bool:
         for selector in ("#viewer", "#renderer"):
@@ -4446,10 +5234,15 @@ class BookWalkerAdapter(SiteAdapter):
     async def _wait_for_render_ready(self, page: Page) -> None:
         """Wait for the gray loading overlay to disappear and stay gone."""
 
+        self._last_render_ready_signature = None
         elapsed_ms = 0
         stable_checks = 0
         previous_signature: tuple[int, int] | None = None
-        while elapsed_ms < self.page_change_timeout_ms:
+        deadline = self._initial_render_deadline
+        while (
+            elapsed_ms < self.page_change_timeout_ms
+            and (deadline is None or time.monotonic() < deadline)
+        ):
             loading = await self._visible(page.locator("#loaderStatusDialog"))
             ready = await self._renderer_ready(page)
             if not loading and ready:
@@ -4464,12 +5257,22 @@ class BookWalkerAdapter(SiteAdapter):
                     stable_checks = 0
                 previous_signature = signature
                 if stable_checks >= self.render_stable_checks:
+                    self._last_render_ready_signature = signature
                     return
             else:
                 stable_checks = 0
                 previous_signature = None
-            await page.wait_for_timeout(100)
-            elapsed_ms += 100
+            remaining_ms = self.page_change_timeout_ms - elapsed_ms
+            if deadline is not None:
+                remaining_ms = min(
+                    remaining_ms,
+                    max(0, int((deadline - time.monotonic()) * 1000)),
+                )
+            if remaining_ms <= 0:
+                break
+            wait_ms = min(100, remaining_ms)
+            await page.wait_for_timeout(wait_ms)
+            elapsed_ms += wait_ms
         raise PageChangeTimeoutError(
             "BookWalker viewer did not finish loading within the timeout"
         )
@@ -5034,7 +5837,8 @@ class BookWalkerAdapter(SiteAdapter):
             )
 
     async def initialize(self, page: Page) -> None:
-        self._initial_content_id = self.content_id_from_url(page.url)
+        authorized_content_id = self.content_id_from_url(page.url)
+        self._initial_content_id = authorized_content_id
         has_viewer_shell = await self._has_viewer_shell(page)
         parsed = urlparse(page.url)
         is_product_page = parsed.netloc.lower() in {
@@ -5070,7 +5874,11 @@ class BookWalkerAdapter(SiteAdapter):
                 await self._open_reader_from_product(page)
             else:
                 await self._open_strict_reader_from_product(page)
-            self._initial_content_id = self.content_id_from_url(page.url)
+            opened_content_id = self.content_id_from_url(page.url)
+            if not self._content_ids_match(opened_content_id, authorized_content_id):
+                raise UnknownPageStateError(
+                    "BookWalker reader opened with a different content identity"
+                )
         elif self._access_strategy != "auto":
             raise self._strict_entry_error(
                 expected_kind=self._strict_expected_kind(),
@@ -5078,8 +5886,20 @@ class BookWalkerAdapter(SiteAdapter):
                 reason="strict entry requires a BookWalker product page",
             )
 
-        await self._wait_for_render_ready(page)
+        if self._entry_only_initialization:
+            await self._wait_for_render_ready(page)
+        else:
+            await self._ensure_initial_page_before_capture(page)
         await self._remember_viewer_title(page)
+
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Prepare a grant-only entry without changing the reader position."""
+
+        self._entry_only_initialization = True
+        try:
+            await self.initialize(page)
+        finally:
+            self._entry_only_initialization = False
 
     def get_output_metadata(self) -> dict[str, str | None]:
         return {
@@ -5806,6 +6626,170 @@ class BookWalkerAdapter(SiteAdapter):
             "reason": "atomic current ROI comparison returned invalid data",
         }
 
+    @staticmethod
+    def _p4b_selected_expected(selected_call: dict[str, Any]) -> dict[str, Any]:
+        source = selected_call.get("source")
+        source_canvas_id = (
+            source.get("canvasId")
+            if isinstance(source, dict)
+            else selected_call.get("sourceCanvasId")
+        )
+        source_content_version = selected_call.get("sourceContentVersion")
+        if isinstance(source, dict) and source_content_version is None:
+            source_content_version = source.get("contentVersion")
+        return {
+            "canvasId": selected_call.get("canvasId"),
+            "operationIndex": selected_call.get("traceOperationIndex"),
+            "traceEpoch": selected_call.get("traceEpoch"),
+            "sourceId": selected_call.get("sourceId"),
+            "sourceCanvasId": source_canvas_id,
+            "sourceContentVersion": source_content_version,
+            "fullSourceSnapshotId": selected_call.get("fullSourceSnapshotId"),
+            "targetSnapshotId": selected_call.get("targetSnapshotId"),
+            "targetContentVersionAfter": selected_call.get(
+                "targetContentVersionAfter"
+            ),
+            "sourceRect": selected_call.get("sourceRect"),
+            "destination": selected_call.get("destination"),
+        }
+
+    @staticmethod
+    def _p4b_exact_two_nonoverlap(selected_calls: list[dict[str, Any]]) -> bool:
+        if len(selected_calls) != 2:
+            return False
+        rectangles: list[tuple[int, int, int, int]] = []
+        for call in selected_calls:
+            destination = call.get("destination")
+            if not isinstance(destination, dict):
+                return False
+            values = tuple(destination.get(key) for key in ("x", "y", "width", "height"))
+            if any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or int(value) != value
+                for value in values
+            ):
+                return False
+            x, y, width, height = (int(value) for value in values)
+            if width <= 0 or height <= 0:
+                return False
+            rectangles.append((x, y, width, height))
+        first, second = rectangles
+        return not (
+            first[0] < second[0] + second[2]
+            and second[0] < first[0] + first[2]
+            and first[1] < second[1] + second[3]
+            and second[1] < first[1] + first[3]
+        )
+
+    async def _p4b_batch_initial_anchor(
+        self,
+        canvas: Locator,
+        selected_calls: list[dict[str, Any]],
+        renderer_handle: Any | None,
+        selection_anchor: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Join a pre-selection stamp to one renderer stamp and both B tuples."""
+
+        if (
+            renderer_handle is None
+            or not self._p4b_exact_two_nonoverlap(selected_calls)
+            or any(not isinstance(call.get("traceOperationIndex"), int) for call in selected_calls)
+        ):
+            return None
+        try:
+            result = await canvas.evaluate(
+                _BOOKWALKER_BATCH_NATIVE_ANCHOR_SCRIPT,
+                [call.get("traceOperationIndex") for call in selected_calls],
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            return None
+        if not isinstance(result, dict) or result.get("available") is not True:
+            return None
+        common = result.get("common")
+        parts = result.get("parts")
+        if not isinstance(common, dict) or not isinstance(parts, list) or len(parts) != 2:
+            return None
+        if self._initial_content_id is None or common.get("bookIdentity") != self._initial_content_id:
+            return None
+        if common.get("connected") is not True or common.get("traceEpoch") in (None, 0):
+            return None
+        if selection_anchor is not None:
+            common_fields = (
+                "traceId", "actualCanvasId", "connected", "bookIdentity", "counter",
+                "geometryToken", "traceEpoch", "geometryVersion", "targetContentVersion",
+                "geometryHistoryIncomplete", "observerFlushed", "observerAvailable",
+                "observerTakeRecordsAvailable", "unknownMutation", "resetEpoch",
+                "canvasWidth", "canvasHeight",
+            )
+            if any(
+                selection_anchor.get(field) != common.get(field)
+                for field in common_fields
+            ):
+                return None
+        for call, anchor in zip(selected_calls, parts, strict=True):
+            if not isinstance(anchor, dict):
+                return None
+            selected = anchor.get("selected")
+            if not isinstance(selected, dict):
+                return None
+            expected = self._p4b_selected_expected(call)
+            if any(
+                selected.get(field) is None or selected.get(field) != value
+                for field, value in expected.items()
+            ):
+                return None
+            if selected.get("traceEpoch") != common.get("traceEpoch"):
+                return None
+        return {
+            "available": True,
+            "common": common,
+            "parts": parts,
+            "selection": selection_anchor,
+        }
+
+    async def _p4b_batch_current_roi_atomic_proof(
+        self,
+        page: Page,
+        selected_calls: list[dict[str, Any]],
+        initial_anchor: dict[str, Any] | None,
+        renderer_handle: Any | None = None,
+    ) -> dict[str, Any]:
+        """Validate both exact-two ROIs in one synchronous browser task."""
+
+        if (
+            renderer_handle is None
+            or not _strict_executed_clear_batch_capture_allowed(
+                len(selected_calls), len(selected_calls), initial_anchor
+            )
+        ):
+            return {"available": False, "exact": False, "reason": "batch anchor unavailable"}
+        parts = initial_anchor.get("parts")
+        common = initial_anchor.get("common")
+        if not isinstance(parts, list) or not isinstance(common, dict):
+            return {"available": False, "exact": False, "reason": "batch anchor unavailable"}
+        expected_parts = []
+        for call, anchor in zip(selected_calls, parts, strict=True):
+            if not isinstance(anchor, dict) or not isinstance(anchor.get("selected"), dict):
+                return {"available": False, "exact": False, "reason": "batch selected anchor unavailable"}
+            expected_parts.append(self._p4b_selected_expected(call))
+        try:
+            result = await page.evaluate(
+                _BOOKWALKER_BATCH_CURRENT_ROI_ANCHOR_SCRIPT,
+                {
+                    "expectedParts": expected_parts,
+                    "initialAnchor": {"common": common},
+                    "originalElement": renderer_handle,
+                },
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            return {"available": False, "exact": False, "reason": "batch current ROI comparison failed"}
+        return result if isinstance(result, dict) else {
+            "available": False,
+            "exact": False,
+            "reason": "batch current ROI comparison returned invalid data",
+        }
+
     async def _capture_direct_one_hop_original_jpeg(
         self,
         page: Page,
@@ -6437,6 +7421,11 @@ class BookWalkerAdapter(SiteAdapter):
         strict_single_capture = _strict_executed_clear_capture_allowed(
             len(native_captures), len(selected_draw_calls)
         )
+        strict_batch_capture = _strict_executed_clear_batch_capture_allowed(
+            len(native_captures),
+            len(selected_draw_calls),
+            p4b_initial_anchor,
+        )
         analysis_times: list[float] = []
         for initial_analysis, candidate in zip(
             initial_analyses, provenance_candidates, strict=True
@@ -6471,7 +7460,7 @@ class BookWalkerAdapter(SiteAdapter):
                 candidate,
             )
             strict_executed_clear_valid = False
-            if not legacy_valid and strict_single_capture:
+            if not legacy_valid and (strict_single_capture or strict_batch_capture):
                 strict_executed_clear_valid = validate_scaled_canvas_source_analysis(
                     upstream_analysis,
                     candidate,
@@ -6500,12 +7489,16 @@ class BookWalkerAdapter(SiteAdapter):
             analysis_times.append(upstream_elapsed)
         self._p4b_atomic_proof_active = (
             self._diagnostic_p4b_atomic_proof
-            or (strict_single_capture and any(strict_executed_clear_flags))
+            or (
+                (strict_single_capture or strict_batch_capture)
+                and any(strict_executed_clear_flags)
+            )
         )
 
+        batch_atomic_proof: dict[str, Any] | None = None
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
-        for (
+        for part_index, (
             native,
             draw_call,
             analysis,
@@ -6513,15 +7506,17 @@ class BookWalkerAdapter(SiteAdapter):
             initial_analysis_time,
             upstream_analysis_time,
             strict_executed_clear_valid,
-        ) in zip(
-            native_captures,
-            selected_draw_calls,
-            analyses,
-            provenance_candidates,
-            initial_analysis_times,
-            analysis_times,
-            strict_executed_clear_flags,
-            strict=True,
+        ) in enumerate(
+            zip(
+                native_captures,
+                selected_draw_calls,
+                analyses,
+                provenance_candidates,
+                initial_analysis_times,
+                analysis_times,
+                strict_executed_clear_flags,
+                strict=True,
+            )
         ):
             part = self._shadow_part_defaults(
                 len(reconstruction_candidates),
@@ -6756,6 +7751,16 @@ class BookWalkerAdapter(SiteAdapter):
                                         part.get("provenance_renderer_trace_epoch"),
                                 )
                             )
+                        elif self._p4b_atomic_proof_active and len(selected_draw_calls) == 2:
+                            # Do not use the preflight as final evidence.  A
+                            # later async candidate/JPEG operation may mutate
+                            # the renderer; the single final task below joins
+                            # both parts to the same current frame.
+                            comparison["p4b_atomic_current_roi"] = {
+                                "available": False,
+                                "exact": False,
+                                "reason": "batch final proof pending",
+                            }
                         part["cropped_chain_pixel_comparison"] = comparison
                         stage_comparisons = (
                             comparison.get("source"),
@@ -6774,7 +7779,7 @@ class BookWalkerAdapter(SiteAdapter):
                                 for stage in stage_comparisons
                             )
                         )
-                        if self._p4b_atomic_proof_active:
+                        if self._p4b_atomic_proof_active and len(selected_draw_calls) == 1:
                             p4b_atomic = comparison.get("p4b_atomic_current_roi")
                             if not isinstance(p4b_atomic, dict) or p4b_atomic.get("exact") is not True:
                                 part["cropped_chain_pixel_exact"] = False
@@ -6851,6 +7856,56 @@ class BookWalkerAdapter(SiteAdapter):
                         )
                     )
             parts.append(part)
+        if strict_batch_capture and self._p4b_atomic_proof_active:
+            # The preflight above is diagnostic only.  Always make the final
+            # two-ROI proof after all async immutable/JPEG work, including
+            # paths where one part already failed candidate reconstruction.
+            batch_atomic_proof = await self._p4b_batch_current_roi_atomic_proof(
+                page,
+                selected_draw_calls,
+                p4b_initial_anchor,
+                p4b_renderer_handle,
+            )
+            batch_parts = batch_atomic_proof.get("parts")
+            for part_index, part in enumerate(parts):
+                comparison = part.get("cropped_chain_pixel_comparison")
+                if not isinstance(comparison, dict):
+                    continue
+                if isinstance(batch_parts, list) and len(batch_parts) == 2:
+                    final_proof = batch_parts[part_index]
+                else:
+                    final_proof = {
+                        "available": batch_atomic_proof.get("available") is True,
+                        "exact": False,
+                        "reason": batch_atomic_proof.get(
+                            "reason", "batch final ROI proof unavailable"
+                        ),
+                    }
+                comparison["p4b_atomic_current_roi"] = final_proof
+                if final_proof.get("exact") is not True:
+                    part["cropped_chain_pixel_exact"] = False
+                    part["reason"] = (
+                        "P4B current DOM ROI or final atomic anchor unavailable"
+                    )
+                else:
+                    stage_comparisons = (
+                        comparison.get("source"),
+                        comparison.get("intermediate"),
+                        comparison.get("final"),
+                    )
+                    part["cropped_chain_pixel_exact"] = bool(
+                        comparison.get("available") is True
+                        and comparison.get("dimensions_equal") is True
+                        and comparison.get("exact") is True
+                        and all(
+                            isinstance(stage, dict)
+                            and stage.get("available") is True
+                            and stage.get("dimensions_equal") is True
+                            and stage.get("exact") is True
+                            for stage in stage_comparisons
+                        )
+                    )
+            shadow["p4b_batch_atomic_proof"] = batch_atomic_proof
         shadow["parts"] = parts
         shadow["final_pixel_compare_performed"] = any(
             part.get("final_pixel_compare_performed") is True for part in parts
@@ -6904,6 +7959,14 @@ class BookWalkerAdapter(SiteAdapter):
             )
             for part in parts
         )
+        if strict_batch_capture and self._p4b_atomic_proof_active:
+            batch_proof = shadow.get("p4b_batch_atomic_proof")
+            shadow["spread_ready"] = bool(
+                shadow["spread_ready"]
+                and isinstance(batch_proof, dict)
+                and batch_proof.get("available") is True
+                and batch_proof.get("exact") is True
+            )
         if not shadow["spread_ready"]:
             shadow["reason"] = "one or more parts are not reconstruction-ready"
         captures = (
@@ -6948,6 +8011,30 @@ class BookWalkerAdapter(SiteAdapter):
             for part in first.debug.get("parts", [])
             if isinstance(part, dict)
         ]
+        batch_proof = first.debug.get("p4b_batch_atomic_proof")
+        if len(parts) == 2 and isinstance(batch_proof, dict):
+            batch_reason = batch_proof.get("reason")
+            if batch_proof.get("exact") is True:
+                return first
+            if batch_reason == "initial renderer anchor changed":
+                return await self._reselect_batch_lossless_reconstruction(
+                    page,
+                    first,
+                    native_captures,
+                    selected_draw_calls,
+                    p4b_initial_anchor=p4b_initial_anchor,
+                    p4b_renderer_handle=p4b_renderer_handle,
+                )
+            if batch_reason in {
+                "current capture target identity changed",
+                "current renderer canvas is missing or ambiguous",
+                "original renderer element is unavailable",
+                "final renderer anchor changed",
+                "selected renderer B anchor mismatch",
+            }:
+                raise UnknownPageStateError(
+                    "BookWalker strict batch proof anchor changed outside a retryable race"
+                )
         atomic_failures = []
         for part in parts:
             comparison = part.get("cropped_chain_pixel_comparison")
@@ -6972,6 +8059,15 @@ class BookWalkerAdapter(SiteAdapter):
             # snapshot) may safely keep the normal PNG fallback. Only an
             # identity transition must bypass the optional-capture fallback.
             return first
+        if len(parts) == 2:
+            return await self._reselect_batch_lossless_reconstruction(
+                page,
+                first,
+                native_captures,
+                selected_draw_calls,
+                p4b_initial_anchor=p4b_initial_anchor,
+                p4b_renderer_handle=p4b_renderer_handle,
+            )
         if len(parts) != 1 or not _initial_proof_ready_for_redraw(parts[0]):
             raise UnknownPageStateError(
                 "BookWalker strict clear proof lacks complete initial immutable proof"
@@ -7160,6 +8256,182 @@ class BookWalkerAdapter(SiteAdapter):
             "BookWalker strict clear proof could not complete a fresh same-source redraw"
         )
 
+    async def _reselect_batch_lossless_reconstruction(
+        self,
+        page: Page,
+        first: LosslessReconstructionEvaluation,
+        native_captures: tuple[CaptureResult, ...],
+        selected_draw_calls: list[dict[str, Any]],
+        *,
+        p4b_initial_anchor: dict[str, Any] | None,
+        p4b_renderer_handle: Any | None,
+    ) -> LosslessReconstructionEvaluation:
+        """Retry one exact-two proof with both parts from one fresh lineage."""
+
+        parts = [
+            part for part in first.debug.get("parts", []) if isinstance(part, dict)
+        ]
+        if (
+            len(parts) != 2
+            or len(native_captures) != 2
+            or len(selected_draw_calls) != 2
+            or any(not _initial_proof_ready_for_redraw(part) for part in parts)
+            or not isinstance(p4b_initial_anchor, dict)
+            or not isinstance(p4b_initial_anchor.get("common"), dict)
+            or p4b_renderer_handle is None
+        ):
+            raise UnknownPageStateError(
+                "BookWalker strict batch proof lacks complete immutable proof"
+            )
+        self._p4b_redraw_attempted = True
+        redraw: dict[str, Any] = {
+            "attempted": True,
+            "initial_operations": [
+                call.get("traceOperationIndex") for call in selected_draw_calls
+            ],
+            "reason": "initial renderer anchor changed",
+            "selected": False,
+        }
+        try:
+            canvas = await self.get_capture_target(page)
+            current_handle = await canvas.element_handle()
+            if current_handle is None:
+                raise CaptureUnavailableError("renderer element handle unavailable")
+            same_renderer = await page.evaluate(
+                "([original, current]) => original === current",
+                [p4b_renderer_handle, current_handle],
+            )
+            if same_renderer is not True:
+                raise CaptureUnavailableError(
+                    "renderer element identity changed before batch redraw"
+                )
+            size = await canvas.evaluate(
+                "element => ({width: element.width, height: element.height})"
+            )
+            trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
+            boxes = await self._page_draw_rectangles(page, canvas)
+            calls = await page.evaluate(
+                "traceId => (window.__bookwalkerNativeDrawCalls || [])"
+                ".filter(call => call.canvasId === traceId)",
+                trace_id,
+            )
+            selection_debug: dict[str, Any] = {"box_count": len(boxes)}
+            current = select_native_draw_calls(
+                calls if isinstance(calls, list) else [],
+                canvas_id=trace_id,
+                canvas_width=int(size["width"]),
+                canvas_height=int(size["height"]),
+                boxes=boxes,
+                selection_debug=selection_debug,
+            )
+            redraw["selector"] = selection_debug
+            if current is None or len(current) != 2:
+                raise CaptureUnavailableError(
+                    "current batch draw was not uniquely selected"
+                )
+            old_operations = [call.get("traceOperationIndex") for call in selected_draw_calls]
+            for old_call, new_call, old_operation in zip(
+                selected_draw_calls, current, old_operations, strict=True
+            ):
+                new_operation = new_call.get("traceOperationIndex")
+                if (
+                    not isinstance(old_operation, int)
+                    or not isinstance(new_operation, int)
+                    or isinstance(old_operation, bool)
+                    or isinstance(new_operation, bool)
+                    or new_operation <= old_operation
+                ):
+                    raise CaptureUnavailableError("no newer current batch redraw operations")
+                for key in ("sourceId", "sourceCanvasId", "sourceRect", "destination"):
+                    if new_call.get(key) != old_call.get(key):
+                        raise CaptureUnavailableError(f"batch redraw {key} changed")
+                if new_call.get("traceEpoch") != old_call.get("traceEpoch"):
+                    raise CaptureUnavailableError("batch redraw trace epoch changed")
+                if not _native_call_is_safe(new_call):
+                    raise CaptureUnavailableError("batch redraw native safety gate failed")
+            materialized = await self._materialize_native_source_crops(page, current)
+            if len(materialized) != 2:
+                raise CaptureUnavailableError("batch redraw materialization was incomplete")
+            fresh_captures: list[CaptureResult] = []
+            for call in materialized:
+                source_rect = call.get("sourceRect")
+                source = call.get("source")
+                if not isinstance(source_rect, dict) or not isinstance(source, dict):
+                    raise CaptureUnavailableError("batch redraw source geometry unavailable")
+                expected_width = round(float(source_rect["width"]))
+                expected_height = round(float(source_rect["height"]))
+                current_capture = _capture_from_data_url(call.get("sourceCropPng"))
+                if (current_capture.width, current_capture.height) != (
+                    expected_width,
+                    expected_height,
+                ):
+                    raise CaptureUnavailableError("batch redraw native PNG dimensions do not match")
+                fresh_captures.append(current_capture)
+            selection_anchor = await canvas.evaluate(_BOOKWALKER_SELECTION_ANCHOR_SCRIPT)
+            new_anchor = await self._p4b_batch_initial_anchor(
+                canvas,
+                materialized,
+                current_handle,
+                selection_anchor,
+            )
+            if new_anchor is None:
+                raise CaptureUnavailableError("batch redraw anchor is incomplete")
+            identity_fields = (
+                "traceId", "actualCanvasId", "bookIdentity", "counter",
+                "geometryToken", "traceEpoch",
+            )
+            old_common = p4b_initial_anchor["common"]
+            new_common = new_anchor["common"]
+            if any(new_common.get(field) != old_common.get(field) for field in identity_fields):
+                raise CaptureUnavailableError("batch redraw page or canvas identity changed")
+            redraw["new_operations"] = [
+                call.get("traceOperationIndex") for call in materialized
+            ]
+            redraw["selected"] = True
+            rerun = await self._evaluate_lossless_reconstruction(
+                page,
+                tuple(fresh_captures),
+                materialized,
+                p4b_initial_anchor=new_anchor,
+                p4b_renderer_handle=current_handle,
+            )
+            proof = rerun.debug.get("p4b_batch_atomic_proof")
+            if not isinstance(proof, dict) or proof.get("available") is not True:
+                raise UnknownPageStateError("batch redraw proof authority is missing")
+            if proof.get("reason") in {
+                "current capture target identity changed",
+                "current renderer canvas is missing or ambiguous",
+                "original renderer element is unavailable",
+                "initial renderer anchor changed",
+                "final renderer anchor changed",
+                "selected renderer B anchor mismatch",
+            }:
+                raise UnknownPageStateError("batch redraw proof changed identity again")
+            self._p4b_redraw_native_captures = tuple(fresh_captures)
+            self._p4b_redraw_selected_draw_calls = materialized
+            rerun.debug["p4b_redraw_reselection"] = redraw
+            return rerun
+        except UnknownPageStateError:
+            raise
+        except (
+            CaptureUnavailableError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            redraw["reason"] = f"batch redraw reselection failed: {type(exc).__name__}"
+        first.debug["p4b_redraw_reselection"] = redraw
+        self._capture_debug["bookwalker_capture"]["lossless_shadow"] = first.debug
+        self._capture_debug["bookwalker_capture"]["strict_abort_reason"] = redraw[
+            "reason"
+        ]
+        raise UnknownPageStateError(
+            "BookWalker strict batch proof could not complete a fresh same-source redraw"
+        )
+
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
         return copy.deepcopy(self._capture_debug)
@@ -7301,6 +8573,17 @@ class BookWalkerAdapter(SiteAdapter):
             selection_geometry_state = await capture_canvas.evaluate(
                 "element => window.__bookwalkerDirectOneHopGeometryState?.(element) || null",
             )
+            selection_anchor: dict[str, Any] | None = None
+            if p4b_renderer_handle is not None:
+                try:
+                    # Capture the common renderer/CID/counter stamp before
+                    # geometry selection.  The selected B tuples must join
+                    # this exact stamp later in one batch anchor task.
+                    selection_anchor = await capture_canvas.evaluate(
+                        _BOOKWALKER_SELECTION_ANCHOR_SCRIPT,
+                    )
+                except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                    selection_anchor = None
             boxes = await self._page_draw_rectangles(page, capture_canvas)
             selection_debug: dict[str, Any] = {
                 "outcome": "rejected",
@@ -7359,7 +8642,92 @@ class BookWalkerAdapter(SiteAdapter):
             selection_debug["selected_count"] = len(selected)
             selected_draw_calls = selected
             p4b_initial_anchor: dict[str, Any] | None = None
-            if p4b_renderer_handle is not None and len(selected) == 1:
+            p4b_initial_anchor_failure: str | None = None
+            if (
+                p4b_renderer_handle is not None
+                and len(selected) == 2
+                and isinstance(selection_anchor, dict)
+            ):
+                p4b_initial_anchor = await self._p4b_batch_initial_anchor(
+                    capture_canvas,
+                    selected,
+                    p4b_renderer_handle,
+                    selection_anchor,
+                )
+                if p4b_initial_anchor is None:
+                    try:
+                        probe = await capture_canvas.evaluate(
+                            _BOOKWALKER_BATCH_NATIVE_ANCHOR_SCRIPT,
+                            [
+                                call.get("traceOperationIndex")
+                                for call in selected
+                            ],
+                        )
+                    except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                        probe = None
+                    common_fields = (
+                        "traceId", "actualCanvasId", "bookIdentity", "counter",
+                        "geometryToken", "traceEpoch", "geometryVersion",
+                        "targetContentVersion", "resetEpoch", "canvasWidth",
+                        "canvasHeight", "connected", "geometryHistoryIncomplete",
+                        "observerFlushed", "observerAvailable",
+                        "observerTakeRecordsAvailable", "unknownMutation",
+                    )
+                    preselection_safe = all(
+                        selection_anchor.get(field) not in (None, "")
+                        for field in common_fields
+                    ) and (
+                        selection_anchor.get("connected") is True
+                        and selection_anchor.get("geometryHistoryIncomplete") is False
+                        and selection_anchor.get("observerFlushed") is True
+                        and selection_anchor.get("observerAvailable") is True
+                        and selection_anchor.get("observerTakeRecordsAvailable") is True
+                        and selection_anchor.get("unknownMutation") is False
+                    )
+                    if isinstance(probe, dict):
+                        p4b_initial_anchor_failure = probe.get("reason")
+                        if probe.get("available") is True:
+                            p4b_initial_anchor_failure = (
+                                "selected renderer B anchor mismatch"
+                            )
+                        probe_parts = probe.get("parts")
+                    else:
+                        probe_parts = None
+                    if preselection_safe and (
+                            not isinstance(probe_parts, list)
+                            or len(probe_parts) != 2
+                            or any(not isinstance(post, dict) for post in probe_parts)
+                            or (
+                                all(isinstance(post, dict) for post in probe_parts)
+                                and any(
+                                    any(
+                                        post.get(field) != selection_anchor.get(field)
+                                        for field in common_fields
+                                    )
+                                    for post in probe_parts
+                                )
+                            )
+                        ):
+                        p4b_initial_anchor_failure = (
+                            "initial renderer anchor changed"
+                        )
+                    if (
+                        isinstance(selection_anchor, dict)
+                        and selection_anchor.get("bookIdentity")
+                        != self._initial_content_id
+                    ):
+                        p4b_initial_anchor_failure = (
+                            "initial renderer anchor changed"
+                        )
+                    if p4b_initial_anchor_failure in {
+                        "batch common renderer stamp changed",
+                        "initial renderer anchor changed",
+                        "selected renderer B anchor mismatch",
+                    }:
+                        raise UnknownPageStateError(
+                            "BookWalker strict batch initial anchor changed"
+                        )
+            elif p4b_renderer_handle is not None and len(selected) == 1:
                 selected_operation_index = selected[0].get("traceOperationIndex")
                 if isinstance(selected_operation_index, int):
                     try:
@@ -7596,6 +8964,10 @@ class BookWalkerAdapter(SiteAdapter):
                         raise UnknownPageStateError(
                             "BookWalker strict clear proof part is missing"
                         )
+                    if len(native_captures) == 2 and not strict_parts:
+                        raise UnknownPageStateError(
+                            "BookWalker strict batch proof part is missing"
+                        )
                     strict_anchor_failures = [
                         (part.get("cropped_chain_pixel_comparison") or {})
                         .get("p4b_atomic_current_roi")
@@ -7615,6 +8987,18 @@ class BookWalkerAdapter(SiteAdapter):
                         raise UnknownPageStateError(
                             "BookWalker strict clear proof lacks stable current anchor"
                         )
+                    if len(native_captures) == 2:
+                        batch_proof = evaluation.debug.get("p4b_batch_atomic_proof")
+                        if not isinstance(batch_proof, dict) or batch_proof.get(
+                            "available"
+                        ) is not True:
+                            raise UnknownPageStateError(
+                                "BookWalker strict batch proof authority is missing"
+                            )
+                        if not _p4b_stable_batch_fallback_authority(batch_proof):
+                            raise UnknownPageStateError(
+                                "BookWalker strict batch proof lacks stable current authority"
+                            )
                     if any(
                         isinstance(proof, dict)
                         and proof.get("reason") in {

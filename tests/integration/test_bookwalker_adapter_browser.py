@@ -47,11 +47,22 @@ async def browser_page(integration_browser: Browser) -> Page:
 
 def _viewer_html() -> str:
     return """
+    <span id="pageSliderCounter">1 / 10</span>
     <div id="renderer">
       <div class="currentScreen">
-        <canvas width="100" height="100" style="width:100px;height:100px"></canvas>
+        <canvas width="100" height="100" style="width:100px;height:100px" data-bookwalker-trace-id="synthetic-canvas"></canvas>
       </div>
     </div>
+    <script>
+      const canvas = document.querySelector('#renderer canvas');
+      const context = canvas.getContext('2d');
+      window.__bookwalkerCanvasIdentity = () => 'synthetic-canvas';
+      window.__bookwalkerDirectOneHopGeometryState = () => ({
+        canvasId: 'synthetic-canvas', contentVersion: 1,
+      });
+      context.fillStyle = 'rgb(20, 20, 20)';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    </script>
     """
 
 
@@ -111,6 +122,84 @@ async def _initialize_strict(
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
     await adapter.initialize(browser_page)
     return adapter
+
+
+@pytest.mark.parametrize("paint_delay_ms", [150, 2300], ids=["fast-paint", "late-paint"])
+async def test_bookwalker_initial_home_waits_for_new_pixels_after_counter(
+    browser_page: Page, paint_delay_ms: int
+) -> None:
+    async def fulfill_viewer(route) -> None:
+        await route.fulfill(content_type="text/html", body=_viewer_html())
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill_viewer)
+    await browser_page.goto(f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=owned")
+    await browser_page.evaluate(
+        """
+        () => {
+          const counter = document.querySelector('#pageSliderCounter');
+          const canvas = document.querySelector('#renderer canvas');
+          const context = canvas.getContext('2d');
+          const input = document.createElement('input');
+          input.id = 'active-input';
+          document.body.append(input);
+          input.focus();
+          window.__homePresses = 0;
+          window.__paintScheduled = false;
+          window.__paintDelayMs = __PAINT_DELAY_MS__;
+          counter.textContent = '3 / 10';
+          document.addEventListener('keydown', event => {
+            if (event.key !== 'Home') return;
+            window.__homePresses += 1;
+            counter.textContent = '1 / 10';
+            if (window.__paintScheduled) return;
+            window.__paintScheduled = true;
+            setTimeout(() => {
+              context.fillStyle = 'rgb(30, 100, 200)';
+              context.fillRect(0, 0, canvas.width, canvas.height);
+            }, window.__paintDelayMs);
+          });
+        }
+        """.replace("__PAINT_DELAY_MS__", str(paint_delay_ms))
+    )
+
+    adapter = BookWalkerAdapter()
+    adapter.page_change_timeout_ms = 4_500
+    await adapter.configure_run(browser_page, "auto")
+    await adapter.initialize(browser_page)
+
+    assert await browser_page.locator("#pageSliderCounter").inner_text() == "1 / 10"
+    assert 1 <= await browser_page.evaluate("window.__homePresses") <= 2
+    assert await browser_page.evaluate("window.__paintScheduled") is True
+    assert await browser_page.evaluate("document.activeElement.id") != "active-input"
+
+
+async def test_bookwalker_entry_only_does_not_rewind_reader_position(
+    browser_page: Page,
+) -> None:
+    async def fulfill_viewer(route) -> None:
+        await route.fulfill(content_type="text/html", body=_viewer_html())
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill_viewer)
+    await browser_page.goto(f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=owned")
+    await browser_page.evaluate(
+        """
+        () => {
+          document.querySelector('#pageSliderCounter').textContent = '3 / 10';
+          window.__homePresses = 0;
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Home') window.__homePresses += 1;
+          });
+        }
+        """
+    )
+
+    adapter = BookWalkerAdapter()
+    adapter.page_change_timeout_ms = 2_500
+    await adapter.configure_run(browser_page, "auto")
+    await adapter.initialize_entry_only(browser_page)
+
+    assert await browser_page.locator("#pageSliderCounter").inner_text() == "3 / 10"
+    assert await browser_page.evaluate("window.__homePresses") == 0
 
 
 async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(

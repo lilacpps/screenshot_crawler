@@ -1,9 +1,14 @@
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
-from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
+from screenshot_crawler.core.errors import (
+    PageChangeTimeoutError,
+    UnknownPageStateError,
+    UnsupportedAccessStrategyError,
+)
 from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
@@ -32,6 +37,321 @@ async def test_bookwalker_configure_run_accepts_all_strategies() -> None:
 async def test_bookwalker_configure_run_rejects_unknown_strategy() -> None:
     with pytest.raises(UnsupportedAccessStrategyError, match="access_strategy='invalid'"):
         await BookWalkerAdapter().configure_run(object(), "invalid")  # type: ignore[arg-type]
+
+
+def _initial_page_observation(
+    current: int,
+    total: int,
+    content_id: str,
+    signature: tuple[int, int],
+    *,
+    canvas_id: str = "synthetic-canvas",
+    content_version: int = 1,
+) -> dict[str, object]:
+    return {
+        "current": current,
+        "total": total,
+        "raw_counter": f"{current} / {total}",
+        "content_id": content_id,
+        "canvas": object(),
+        "geometry": {
+            "width": 1443,
+            "height": 2048,
+            "displayWidth": 722,
+            "displayHeight": 1024,
+            "actualCanvasId": canvas_id,
+            "contentVersion": content_version,
+            "connected": True,
+        },
+        "trace_id": "synthetic-canvas",
+        "signature": signature,
+    }
+
+
+class _InitialPageKeyboard:
+    def __init__(self) -> None:
+        self.pressed: list[str] = []
+
+    async def press(self, key: str) -> None:
+        self.pressed.append(key)
+
+
+class _InitialPage:
+    def __init__(self) -> None:
+        self.keyboard = _InitialPageKeyboard()
+
+    async def wait_for_timeout(self, _milliseconds: int) -> None:
+        return
+
+
+def _observation_reader(observations):
+    async def read(_page: object) -> dict[str, object]:
+        return next(observations)
+
+    return read
+
+
+async def _focus_initial_viewer(_page: object) -> bool:
+    return True
+
+
+async def _focus_failed(_page: object) -> bool:
+    return False
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_does_not_press_home_when_already_first() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    observations = iter(
+        (
+            _initial_page_observation(1, 10, "book", (1, 20)),
+            _initial_page_observation(1, 10, "book", (1, 20)),
+            _initial_page_observation(1, 10, "book", (1, 20)),
+        )
+    )
+    adapter._initial_page_observation = _observation_reader(observations)  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+    ready_calls = 0
+
+    async def ready(_page: object) -> None:
+        nonlocal ready_calls
+        ready_calls += 1
+        adapter._last_render_ready_signature = (1, 20)
+
+    adapter._wait_for_render_ready = ready  # type: ignore[method-assign]
+    await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == []
+    assert ready_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_current", [317, 322])
+async def test_bookwalker_initial_page_rewinds_and_requires_new_canvas_signature(
+    initial_current: int,
+) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    observations = iter(
+        (
+            _initial_page_observation(initial_current, 322, "book", (10, 20)),
+            _initial_page_observation(1, 322, "book", (10, 20)),
+            _initial_page_observation(1, 322, "book", (11, 30)),
+            _initial_page_observation(1, 322, "book", (11, 30)),
+            _initial_page_observation(1, 322, "book", (11, 30)),
+        )
+    )
+    adapter._initial_page_observation = _observation_reader(observations)  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    async def ready(_page: object) -> None:
+        adapter._last_render_ready_signature = (11, 30)
+
+    adapter._wait_for_render_ready = ready  # type: ignore[method-assign]
+    await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == ["Home"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_before_ready", [False, True])
+async def test_bookwalker_initial_page_allows_pre_ready_repaint_before_stable_join(
+    replace_before_ready: bool,
+) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    observations = iter(
+        (
+            _initial_page_observation(317, 322, "book", (10, 20)),
+            _initial_page_observation(
+                1,
+                322,
+                "book",
+                (11, 30),
+                canvas_id="candidate-canvas" if replace_before_ready else "synthetic-canvas",
+                content_version=2 if replace_before_ready else 1,
+            ),
+            _initial_page_observation(
+                1,
+                322,
+                "book",
+                (12, 40),
+                canvas_id="stable-canvas" if replace_before_ready else "synthetic-canvas",
+                content_version=3 if replace_before_ready else 1,
+            ),
+            _initial_page_observation(
+                1,
+                322,
+                "book",
+                (12, 40),
+                canvas_id="stable-canvas" if replace_before_ready else "synthetic-canvas",
+                content_version=3 if replace_before_ready else 1,
+            ),
+        )
+    )
+    adapter._initial_page_observation = _observation_reader(observations)  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    async def ready(_page: object) -> None:
+        adapter._last_render_ready_signature = (12, 40)
+
+    adapter._wait_for_render_ready = ready  # type: ignore[method-assign]
+    await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == ["Home"]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_render_ready_signature_mismatch() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    observations = iter(
+        (
+            _initial_page_observation(317, 322, "book", (10, 20)),
+            _initial_page_observation(1, 322, "book", (11, 30)),
+            _initial_page_observation(1, 322, "book", (12, 40)),
+            _initial_page_observation(1, 322, "book", (12, 40)),
+        )
+    )
+    adapter._initial_page_observation = _observation_reader(observations)  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    async def ready(_page: object) -> None:
+        adapter._last_render_ready_signature = (11, 30)
+
+    adapter._wait_for_render_ready = ready  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="stable first page"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_counter_ahead_of_pixels_and_ignored_home() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    adapter.page_change_timeout_ms = 120
+    page = _InitialPage()
+    initial = _initial_page_observation(317, 322, "book", (10, 20))
+    tail = _initial_page_observation(1, 322, "book", (10, 20))
+    observations = iter((initial, tail))
+
+    async def read_tail(_page: object) -> dict[str, object]:
+        try:
+            return next(observations)
+        except StopIteration:
+            return tail
+
+    adapter._initial_page_observation = read_tail  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    with pytest.raises(UnknownPageStateError, match="stable first page"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == ["Home", "Home"]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_content_change_during_home() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    observations = iter(
+        (
+            _initial_page_observation(317, 322, "book", (10, 20)),
+            _initial_page_observation(1, 322, "other-book", (11, 30)),
+        )
+    )
+    adapter._initial_page_observation = _observation_reader(observations)  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    with pytest.raises(UnknownPageStateError, match="identity changed"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_focus_failure_before_home() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    adapter._initial_page_observation = _observation_reader(
+        iter((_initial_page_observation(3, 10, "book", (10, 20)),))
+    )  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_failed  # type: ignore[method-assign]
+
+    with pytest.raises(UnknownPageStateError, match="could not be focused"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == []
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_bounds_slow_observation() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    adapter.page_change_timeout_ms = 20
+    page = _InitialPage()
+
+    async def slow_observation(_page: object) -> dict[str, object]:
+        await asyncio.sleep(0.2)
+        return _initial_page_observation(3, 10, "book", (10, 20))
+
+    adapter._initial_page_observation = slow_observation  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="exceeded its deadline"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_late_first_paint_after_home() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    adapter.page_change_timeout_ms = 20
+    page = _InitialPage()
+    initial = _initial_page_observation(3, 10, "book", (10, 20))
+    observations = iter((initial,))
+
+    async def late_observation(_page: object) -> dict[str, object]:
+        try:
+            return next(observations)
+        except StopIteration:
+            await asyncio.sleep(0.2)
+            return _initial_page_observation(1, 10, "book", (10, 20))
+
+    adapter._initial_page_observation = late_observation  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="rewind observation exceeded"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
+    assert page.keyboard.pressed == ["Home"]
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_initial_page_rejects_canvas_replacement_after_stable_frame() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    page = _InitialPage()
+    first = _initial_page_observation(3, 10, "book", (10, 20))
+    candidate = _initial_page_observation(1, 10, "book", (11, 30))
+    replacement = _initial_page_observation(1, 10, "book", (11, 30))
+    replacement["geometry"] = {
+        **replacement["geometry"],
+        "actualCanvasId": "replacement-canvas",
+    }
+    stale = _initial_page_observation(1, 10, "book", (10, 20))
+    observations = iter((first, stale, candidate, candidate, replacement))
+
+    async def read_replacement(_page: object) -> dict[str, object]:
+        try:
+            return next(observations)
+        except StopIteration:
+            return replacement
+
+    adapter._initial_page_observation = read_replacement  # type: ignore[method-assign]
+    adapter._focus_viewer_for_initial_home = _focus_initial_viewer  # type: ignore[method-assign]
+
+    async def ready(_page: object) -> None:
+        adapter._last_render_ready_signature = (11, 30)
+
+    adapter._wait_for_render_ready = ready  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="stable first page"):
+        await adapter._ensure_initial_page_before_capture(page)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

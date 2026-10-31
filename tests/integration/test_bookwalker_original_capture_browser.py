@@ -61,7 +61,11 @@ def _patterned_cover_jpeg() -> bytes:
 
 
 def _solid_large_jpeg() -> bytes:
-    image = Image.new("RGB", (1448, 2048), (23, 47, 71))
+    return _solid_large_jpeg_color((23, 47, 71))
+
+
+def _solid_large_jpeg_color(color: tuple[int, int, int]) -> bytes:
+    image = Image.new("RGB", (1448, 2048), color)
     buffer = BytesIO()
     image.save(buffer, format="JPEG", quality=95, subsampling=0)
     return buffer.getvalue()
@@ -1357,6 +1361,112 @@ async def test_p4b_current_roi_actual_hook_and_element_identity(
         assert result["exact"] is True, result
     else:
         assert result["available"] is False or result["exact"] is False, result
+
+
+async def test_p4b_exact_two_batch_anchor_joins_both_rois_in_one_task(
+    browser_page: Page,
+) -> None:
+    async def fulfill(route) -> None:
+        await route.fulfill(content_type="text/html", body="<html><body></body></html>")
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto(
+        "https://viewer.bookwalker.jp/03/30/viewer.html?cid=synthetic-p4b-batch"
+    )
+    setup = await browser_page.evaluate(
+        """
+        () => {
+          document.body.innerHTML = `
+            <div id="pageSliderCounter">1/2</div>
+            <div id="renderer"><div class="currentScreen">
+              <canvas width="1200" height="600" style="width:1200px;height:600px"></canvas>
+            </div></div>`;
+          const renderer = document.querySelector('#renderer .currentScreen canvas');
+          const rendererTraceId = String(window.__bookwalkerCanvasIdentity(renderer));
+          renderer.setAttribute('data-bookwalker-trace-id', rendererTraceId);
+          const sourceA = document.createElement('canvas');
+          sourceA.width = 600; sourceA.height = 600;
+          sourceA.getContext('2d').fillStyle = 'rgb(20,40,60)';
+          sourceA.getContext('2d').fillRect(0, 0, 600, 600);
+          const sourceB = document.createElement('canvas');
+          sourceB.width = 600; sourceB.height = 600;
+          sourceB.getContext('2d').fillStyle = 'rgb(160,80,20)';
+          sourceB.getContext('2d').fillRect(0, 0, 600, 600);
+          const context = renderer.getContext('2d');
+          context.drawImage(sourceA, 0, 0, 600, 600, 0, 0, 600, 600);
+          context.drawImage(sourceB, 0, 0, 600, 600, 600, 0, 600, 600);
+          window.__bookwalkerDirectOneHopGeometryState = element => ({
+            token: 'batch-geometry', traceEpoch: 1, geometryVersion: 2,
+            contentVersion: 5, geometryHistoryIncomplete: false,
+            observerFlushed: true, observerAvailable: true,
+            observerTakeRecordsAvailable: true, unknownMutation: false,
+            resetEpoch: 1, width: element.width, height: element.height,
+          });
+          const calls = (window.__bookwalkerNativeDrawCalls || [])
+            .filter(call => call.canvasId === rendererTraceId);
+          return {
+            rendererTraceId,
+            calls: calls.map(call => ({
+              traceOperationIndex: call.traceOperationIndex,
+              traceEpoch: call.traceEpoch,
+              sourceId: call.sourceId,
+              sourceCanvasId: call.sourceCanvasId,
+              sourceContentVersion: call.sourceContentVersion,
+              targetSnapshotId: call.targetSnapshotId,
+              fullSourceSnapshotId: call.fullSourceSnapshotId,
+              targetContentVersionAfter: call.targetContentVersionAfter,
+              sourceRect: call.sourceRect,
+              destination: call.destination,
+            })),
+            snapshotCount: window.__bookwalkerNativeSnapshots?.size || 0,
+          };
+        }
+        """
+    )
+    assert len(setup["calls"]) == 2, setup
+    assert all(call["targetSnapshotId"] for call in setup["calls"]), setup
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic-p4b-batch"
+    target = browser_page.locator("#renderer .currentScreen canvas")
+    handle = await target.element_handle()
+    assert handle is not None
+    calls = await browser_page.evaluate(
+        """traceId => (window.__bookwalkerNativeDrawCalls || [])
+          .filter(call => call.canvasId === traceId)""",
+        setup["rendererTraceId"],
+    )
+    anchor = await adapter._p4b_batch_initial_anchor(target, calls, handle)
+    assert anchor is not None, setup
+    proof = await adapter._p4b_batch_current_roi_atomic_proof(
+        browser_page, calls, anchor, handle
+    )
+    assert proof["available"] is True, proof.get("mismatch", proof.get("reason"))
+    assert proof["exact"] is True, proof
+    assert len(proof["parts"]) == 2
+    await browser_page.evaluate(
+        """() => {
+          const canvas = document.querySelector('#renderer .currentScreen canvas');
+          const context = canvas?.getContext('2d');
+          if (context) {
+            context.fillStyle = 'rgb(1,2,3)';
+            context.fillRect(600, 0, 1, 1);
+          }
+        }"""
+    )
+    mutated = await adapter._p4b_batch_current_roi_atomic_proof(
+        browser_page, calls, anchor, handle
+    )
+    assert mutated["available"] is True, mutated
+    assert mutated["exact"] is False, mutated
+    await browser_page.evaluate(
+        """targetId => window.__bookwalkerNativeSnapshots?.delete(String(targetId))""",
+        calls[1]["targetSnapshotId"],
+    )
+    missing_snapshot = await adapter._p4b_batch_current_roi_atomic_proof(
+        browser_page, calls, anchor, handle
+    )
+    assert missing_snapshot["exact"] is False, missing_snapshot
 
 
 @pytest.mark.parametrize("failure_mode", ["partial_setter", "observer_unavailable"])
@@ -2726,6 +2836,241 @@ async def test_capture_page_default_proves_executed_clear_scaled_reconstruction(
     assert parts[0]["cropped_chain_pixel_comparison"]["p4b_atomic_current_roi"][
         "exact"
     ] is True
+
+
+@pytest.mark.parametrize(
+    ("candidate_mode", "clear_mode", "mutation"),
+    [
+        ("both", "executed", "none"),
+        ("first_only", "executed", "none"),
+        ("both", "legacy", "none"),
+        ("both", "mixed", "none"),
+        ("both", "executed", "pre_dom"),
+        ("both", "executed", "pre_dom_hook_missing"),
+        ("both", "executed", "pixel"),
+        ("both", "executed", "cid"),
+        ("both", "executed", "counter"),
+        ("both", "executed", "dom"),
+        ("both", "executed", "redraw"),
+        ("both", "executed", "redraw_twice"),
+    ],
+)
+async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_closed(
+    browser_page: Page,
+    candidate_mode: str,
+    clear_mode: str,
+    mutation: str,
+) -> None:
+    class TwoPartScaledAdapter(BookWalkerAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self._w2_compare_calls = 0
+
+        async def get_capture_target(self, page: Page):
+            return page.locator("#spread-renderer")
+
+        async def _page_draw_rectangles(self, page: Page, canvas):
+            if mutation in {"pre_dom", "pre_dom_hook_missing"}:
+                await page.evaluate(
+                    """
+                    kind => {
+                      const renderer = document.querySelector('#spread-renderer');
+                      renderer.replaceWith(renderer.cloneNode(true));
+                      if (kind === 'pre_dom_hook_missing') {
+                        delete window.__bookwalkerP4BCurrentAnchor;
+                      }
+                    }
+                    """,
+                    mutation,
+                )
+            return [
+                {"x": 0, "y": 0, "width": 600, "height": 800},
+                {"x": 600, "y": 0, "width": 600, "height": 800},
+            ]
+
+        async def _is_first_page(self, page: Page) -> bool:
+            return False
+
+        async def _browser_cropped_one_hop_pixel_exact(
+            self,
+            page: Page,
+            reconstructed: bytes,
+            selected_call: dict,
+            provenance_candidate,
+            mapping,
+            source_snapshot: str | None,
+        ) -> dict:
+            comparison = await super()._browser_cropped_one_hop_pixel_exact(
+                page,
+                reconstructed,
+                selected_call,
+                provenance_candidate,
+                mapping,
+                source_snapshot,
+            )
+            self._w2_compare_calls += 1
+            if mutation != "none" and (
+                self._w2_compare_calls == 2
+                or (mutation == "redraw_twice" and self._w2_compare_calls == 4)
+            ):
+                await page.evaluate(
+                    """
+                    kind => {
+                      const renderer = document.querySelector('#spread-renderer');
+                      if (kind === 'pixel') {
+                        const context = renderer.getContext('2d');
+                        context.fillStyle = 'rgba(255, 0, 0, 1)';
+                        context.fillRect(0, 0, 1, 1);
+                      } else if (kind === 'cid') {
+                        history.replaceState({}, '', `${location.pathname}?cid=changed`);
+                      } else if (kind === 'counter') {
+                        document.querySelector('#pageSliderCounter').textContent = '3/322';
+                      } else if (kind === 'dom') {
+                        renderer.replaceWith(renderer.cloneNode(true));
+                      } else if (kind === 'redraw' || kind === 'redraw_twice') {
+                        renderer.__w2Redraw?.();
+                      }
+                    }
+                    """,
+                    mutation,
+                )
+            return comparison
+
+    jpeg_a = _solid_large_jpeg()
+    jpeg_b = _solid_large_jpeg_color((101, 53, 17))
+    adapter = TwoPartScaledAdapter()
+    adapter._initial_content_id = "synthetic-two-part"
+    adapter.capture_mode = "native"
+    adapter.enable_original_jpeg_capture = True
+    adapter.lossless_jpeg_output_enabled = True
+    candidate_jpegs = (jpeg_a, jpeg_b) if candidate_mode == "both" else (jpeg_a,)
+    for sequence, jpeg in enumerate(candidate_jpegs, start=1):
+        candidate = adapter_module.candidate_from_jpeg(
+            jpeg,
+            url=f"https://bw-bv-epubs.bookwalker.jp/spread-{sequence}.jpg",
+            sequence=sequence,
+        )
+        assert candidate is not None
+        adapter._original_candidates.add(candidate)
+    await browser_page.add_init_script(
+        "window.__bookwalkerCaptureMode = 'native'; "
+        "window.__bookwalkerDirectOriginalEnabled = true;"
+    )
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    async def fulfill(route) -> None:
+        await route.fulfill(content_type="text/html", body="<html><body></body></html>")
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.goto(
+        "https://viewer.bookwalker.jp/03/30/viewer.html?cid=synthetic-two-part"
+    )
+    encoded_a = base64.b64encode(jpeg_a).decode("ascii")
+    encoded_b = base64.b64encode(jpeg_b).decode("ascii")
+    await browser_page.evaluate(
+        """
+        async ({encodedA, encodedB, clearMode}) => {
+          document.body.innerHTML = `
+            <div id="pageSliderCounter">2/322</div>
+            <div id="renderer"><div class="currentScreen">
+              <canvas id="spread-renderer" width="1200" height="800"></canvas>
+            </div></div>`;
+          const load = async encoded => createImageBitmap(
+            await (await fetch(`data:image/jpeg;base64,${encoded}`)).blob(),
+          );
+          const sourceA = await load(encodedA);
+          const sourceB = await load(encodedB);
+              const upstream = document.createElement('canvas');
+              upstream.width = 1443; upstream.height = 2048;
+              let upstreamContext = upstream.getContext('2d');
+              const intermediate = document.createElement('canvas');
+              intermediate.width = 722; intermediate.height = 1024;
+              const drawSource = source => {
+                    if (clearMode === 'legacy' || (clearMode === 'mixed' && source === sourceA)) {
+                  upstream.width = 1443;
+                  upstream.height = 2048;
+                  upstreamContext = upstream.getContext('2d');
+                } else {
+                  upstreamContext.clearRect(0, 0, upstream.width, upstream.height);
+                }
+                upstreamContext.drawImage(
+                  source, 0, 0, 1448, 2048, 0, 0, 1448, 2048,
+                );
+                intermediate.width = 722;
+                intermediate.height = 1024;
+                intermediate.getContext('2d').drawImage(
+                  upstream, 0, 0, 1443, 2048, 0, 0, 722, 1024,
+                );
+              };
+          const renderer = document.querySelector('#spread-renderer');
+              renderer.width = 1200;
+              renderer.height = 800;
+          renderer.setAttribute(
+            'data-bookwalker-trace-id',
+            String(window.__bookwalkerCanvasIdentity(renderer)),
+          );
+              const context = renderer.getContext('2d');
+              drawSource(sourceA);
+              context.drawImage(intermediate, 0, 0, 722, 1024, 0, 0, 600, 800);
+              drawSource(sourceB);
+              context.drawImage(intermediate, 0, 0, 722, 1024, 600, 0, 600, 800);
+              renderer.__w2Redraw = () => {
+                drawSource(sourceA);
+                context.drawImage(intermediate, 0, 0, 722, 1024, 0, 0, 600, 800);
+                drawSource(sourceB);
+                context.drawImage(intermediate, 0, 0, 722, 1024, 600, 0, 600, 800);
+              };
+        }
+        """,
+        {"encodedA": encoded_a, "encodedB": encoded_b, "clearMode": clear_mode},
+    )
+    if mutation == "redraw_twice":
+        with pytest.raises(adapter_module.UnknownPageStateError):
+            await adapter.capture_page(browser_page)
+        assert adapter._w2_compare_calls == 4
+        return
+    if mutation not in {"none", "redraw"}:
+        with pytest.raises(adapter_module.UnknownPageStateError):
+            await adapter.capture_page(browser_page)
+        return
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None
+    if candidate_mode == "first_only":
+        assert [capture.mime_type for capture in captures] == [
+            "image/png", "image/png"
+        ], adapter._capture_debug
+        assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == "native_png"
+        shadow = adapter._capture_debug["bookwalker_capture"]["lossless_shadow"]
+        assert shadow["p4b_batch_atomic_proof"]["exact"] is True, shadow
+        assert all(
+            current["available"] is True
+            and current["dimensions_equal"] is True
+            and current["exact"] is True
+            and current["differing_pixel_count"] == 0
+            for current in shadow["p4b_batch_atomic_proof"]["current"]
+        )
+        return
+    assert [capture.mime_type for capture in captures] == ["image/jpeg", "image/jpeg"], adapter._capture_debug
+    assert len(captures) == 2
+    expected_a = Image.open(BytesIO(jpeg_a)).convert("RGBA").crop((0, 0, 1443, 2048))
+    expected_b = Image.open(BytesIO(jpeg_b)).convert("RGBA").crop((0, 0, 1443, 2048))
+    assert Image.open(BytesIO(captures[0].data)).convert("RGBA").tobytes() == expected_a.tobytes()
+    assert Image.open(BytesIO(captures[1].data)).convert("RGBA").tobytes() == expected_b.tobytes()
+    shadow = adapter._capture_debug["bookwalker_capture"]["lossless_shadow"]
+    assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == "reconstructed_jpeg"
+    assert shadow["spread_ready"] is True, shadow
+    assert len(shadow["parts"]) == 2
+    if mutation == "redraw":
+        assert adapter._w2_compare_calls == 4
+        assert shadow["p4b_redraw_reselection"]["selected"] is True, shadow
+    if clear_mode in {"legacy", "mixed"}:
+        expected_flags = [False, False] if clear_mode == "legacy" else [False, True]
+        assert [part["executed_clear_provenance"] for part in shadow["parts"]] == expected_flags
+        return
+    assert all(part["executed_clear_provenance"] is True for part in shadow["parts"])
+    assert all(
+        part["cropped_chain_pixel_comparison"]["p4b_atomic_current_roi"]["exact"] is True
+        for part in shadow["parts"]
+    )
 
 
 async def test_capture_page_does_not_use_direct_for_cover_union(
