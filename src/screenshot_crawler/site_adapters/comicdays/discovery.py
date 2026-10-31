@@ -307,41 +307,11 @@ async def fetch_comicdays_readable_products(
     seen: set[str] = set()
     page_count = (expected_total + 49) // 50
     for offset in range(0, page_count * 50, 50):
-        query = urlencode({"type": "episode", "aggregate_id": series_id, "offset": offset, "limit": 50, "sort_order": "desc"})
-        try:
-            response = await page.request.get(
-                f"https://comic-days.com/api/viewer/pagination_readable_products?{query}",
-                timeout=15_000, fail_on_status_code=False,
-            )
-            if response.status != 200:
-                raise DiscoveryIncompleteError("Comic DAYS readable-product page was unavailable")
-            body = await asyncio.wait_for(response.body(), timeout=5)
-        except (PlaywrightTimeoutError, TimeoutError) as exc:
-            raise DiscoveryIncompleteError("Comic DAYS readable-product page timed out") from exc
-        if len(body) > MAX_LISTING_BODY:
-            raise DiscoveryIncompleteError("Comic DAYS readable-product page exceeded the body limit")
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid") from exc
-        page_rows = payload if isinstance(payload, list) else None
-        if not isinstance(page_rows, list) or not page_rows or len(page_rows) > 50:
-            raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid or empty")
+        page_rows = await fetch_comicdays_readable_product_page(page, series_id, offset=offset)
         for row in page_rows:
-            if not isinstance(row, dict):
-                raise DiscoveryIncompleteError("Comic DAYS readable-product row was invalid")
-            product_id = row.get("readable_product_id")
-            key = str(product_id)
-            if not key.isdigit() or key in seen:
+            key = str(row["readable_product_id"])
+            if key in seen:
                 raise DiscoveryIncompleteError("Comic DAYS readable-product ids were invalid or duplicated")
-            viewer_uri = row.get("viewer_uri")
-            try:
-                viewer_id = parse_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
-                canonical_viewer_uri = canonical_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
-            except ValueError as exc:
-                raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI was invalid") from exc
-            if canonical_viewer_uri != viewer_uri or viewer_id != key:
-                raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI disagreed with its episode id")
             seen.add(key)
             rows.append(row)
         if len(rows) >= expected_total:
@@ -349,6 +319,50 @@ async def fetch_comicdays_readable_products(
     if len(rows) != expected_total:
         raise DiscoveryIncompleteError("Comic DAYS readable-product pages were incomplete")
     return rows
+
+
+async def fetch_comicdays_readable_product_page(
+    page: Page, series_id: str, *, offset: int
+) -> list[dict[str, object]]:
+    """Read one bounded native page, validating every row's identity and URL."""
+    if offset < 0 or offset >= MAX_LISTING_PAGES * 50 or offset % 50:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product offset was outside the supported bound")
+    query = urlencode({"type": "episode", "aggregate_id": series_id, "offset": offset, "limit": 50, "sort_order": "desc"})
+    try:
+        response = await page.request.get(
+            f"https://comic-days.com/api/viewer/pagination_readable_products?{query}",
+            timeout=15_000, fail_on_status_code=False,
+        )
+        if response.status != 200:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product page was unavailable")
+        body = await asyncio.wait_for(response.body(), timeout=5)
+    except (PlaywrightTimeoutError, TimeoutError) as exc:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product page timed out") from exc
+    if len(body) > MAX_LISTING_BODY:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product page exceeded the body limit")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid") from exc
+    if not isinstance(payload, list) or not payload or len(payload) > 50:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid or empty")
+    seen: set[str] = set()
+    for row in payload:
+        if not isinstance(row, dict):
+            raise DiscoveryIncompleteError("Comic DAYS readable-product row was invalid")
+        key = str(row.get("readable_product_id"))
+        if not key.isdigit() or key in seen:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product ids were invalid or duplicated")
+        viewer_uri = row.get("viewer_uri")
+        try:
+            viewer_id = parse_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
+            canonical_viewer_uri = canonical_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
+        except ValueError as exc:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI was invalid") from exc
+        if canonical_viewer_uri != viewer_uri or viewer_id != key:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI disagreed with its episode id")
+        seen.add(key)
+    return payload
 
 
 class ComicDaysDiscoveryAdapter(DiscoveryAdapter):

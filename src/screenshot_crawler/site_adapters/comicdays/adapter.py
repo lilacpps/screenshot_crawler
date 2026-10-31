@@ -71,6 +71,7 @@ class ComicDaysAdapter(SiteAdapter):
     forward_selector = "section.viewer.js-viewer .page-navigation-forward.js-slide-forward"
     ticket_recovery_window_ms = 3_000
     max_ticket_trace_events = 160
+    max_transition_trace_events = 64
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
@@ -102,6 +103,9 @@ class ComicDaysAdapter(SiteAdapter):
         self._last_ticket_poll_signature: tuple[object, ...] | None = None
         self._last_ticket_observe_error: str | None = None
         self._entry_error_recorded = False
+        self._transition_trace: list[dict[str, Any]] = []
+        self._transition_trace_started = time.monotonic()
+        self._transition_trace_samples: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _safe_trace_url(value: object) -> str:
@@ -197,6 +201,9 @@ class ComicDaysAdapter(SiteAdapter):
                 f"ComicDaysAdapter does not support access_strategy={access_strategy!r}"
             )
         self._ticket_trace = []
+        self._transition_trace = []
+        self._transition_trace_samples = {}
+        self._transition_trace_started = time.monotonic()
         self._ticket_trace_started_monotonic = time.monotonic()
         self._ticket_entry_only = False
         self._ticket_click_started_monotonic = None
@@ -261,10 +268,11 @@ class ComicDaysAdapter(SiteAdapter):
                 page.evaluate("() => window.__comicDaysProductionCapture?.active() || null"),
                 timeout=timeout_seconds,
             )
-        except Exception:  # noqa: BLE001 - rendering races remain unknown
-            return {"rows": [], "colophon": False}
+        except Exception as exc:  # noqa: BLE001 - rendering races remain unknown
+            return {"rows": [], "colophon": False, "reason": "active_evaluation_failed",
+                    "observation_error": type(exc).__name__}
         if not isinstance(value, dict):
-            return {"rows": [], "colophon": False}
+            return {"rows": [], "colophon": False, "reason": "capture_hook_missing_or_malformed"}
         rows = value.get("rows")
         value["rows"] = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
         # The production hook owns completeness.  A non-empty row list can be
@@ -1500,7 +1508,12 @@ class ComicDaysAdapter(SiteAdapter):
             and back_item.get("childCount") == 1
             and back_item.get("childTags") == ["div"]
             and back_item.get("childClasses") == ["link-page-content"]
-            and ad_item.get("canvasCount") == 0 and ad_item.get("iframeCount") == 2
+            and ad_item.get("canvasCount") == 0
+            and (
+                ad_item.get("iframeCount") == 2
+                or (variant == "leading-area-tail" and ad_item.get("iframeCount") == 1
+                    and ad_item.get("adContainerCount") == 2)
+            )
             and ad_item.get("imageCount") == 0
             and ad_item.get("childCount") == 1
             and ad_item.get("childTags") == ["div"]
@@ -1591,7 +1604,11 @@ class ComicDaysAdapter(SiteAdapter):
                 and (back_item.get("areaIndex"), ad_item.get("areaIndex")) == expected
                 and back_item.get("imageCount") == 2
                 and ad_item.get("imageCount") == 0
-                and ad_item.get("iframeCount") == 2
+                and (
+                    ad_item.get("iframeCount") == 2
+                    or (variant == "leading-area-tail" and ad_item.get("iframeCount") == 1
+                        and ad_item.get("adContainerCount") == 2)
+                )
             )
             expected_colophon = last - 1 if variant == "legacy-tail" and isinstance(last, int) else last
         return (
@@ -1642,7 +1659,63 @@ class ComicDaysAdapter(SiteAdapter):
             tuple(marker(item) for item in observation.get("unknownOnScreenAreas", []) if isinstance(item, dict)),
         )
 
+    def _trace_transition(self, phase: str, *, sample: bool = False, **fields: Any) -> None:
+        """Keep bounded, metadata-only observations without querying the browser."""
+        try:
+            if sample and self._transition_trace_samples.get(phase) == fields:
+                return
+            if sample:
+                self._transition_trace_samples[phase] = dict(fields)
+            self._transition_trace.append({
+                "phase": phase,
+                "elapsed_ms": round((time.monotonic() - self._transition_trace_started) * 1000),
+                **fields,
+            })
+            del self._transition_trace[:-self.max_transition_trace_events]
+        except Exception:  # noqa: BLE001 - diagnostics must not change viewer behavior
+            return
+
+    def _trace_active_transition(self, state: dict[str, Any], stable: int, nonbody_stable: int) -> None:
+        try:
+            rows = state.get("rows", [])[:MAX_ROWS]
+            self._trace_transition(
+                "active_observation", sample=True,
+                slider_from=self._advance_from_slider,
+                slider_now=state.get("sliderNow"), slider_last=state.get("sliderLast"),
+                complete=state.get("complete"), ready=state.get("ready"),
+                reason=state.get("reason"), colophon=state.get("colophon"),
+                observation_error=state.get("observation_error"),
+                expected_areas=state.get("expectedAreaIndices", [])[:24],
+                visible_areas=state.get("visibleBodyAreaIndices", [])[:24],
+                rows=[{"area": row.get("areaIndex"), "render_ready": row.get("renderReady")}
+                      for row in rows],
+                signature_hash=hashlib.sha256(repr(self._signature(rows)).encode()).hexdigest()[:16],
+                body_stable=min(stable, 2), nonbody_stable=min(nonbody_stable, 2),
+            )
+        except Exception:  # noqa: BLE001 - malformed diagnostics must not change decisions
+            return
+
+    def _trace_nonbody_transition(
+        self, observation: dict[str, Any] | None, current: int, last: int, stable: int
+    ) -> None:
+        try:
+            self._trace_transition(
+                "nonbody_observation", sample=True,
+                slider_from=self._advance_from_slider,
+                slider_now=current, slider_last=last, matches_slider=observation is not None,
+                tail_variant=observation.get("tailVariant") if observation else None,
+                tail_matches=self._is_observed_tail(observation) if observation else False,
+                colophon_matches=self._is_observed_colophon(observation) if observation else False,
+                ads=[{key: item.get(key) for key in
+                      ("areaIndex", "onScreen", "iframeCount", "adContainerCount")}
+                     for item in (observation.get("ads", []) if observation else [])[:3]],
+                stable=min(stable, 2),
+            )
+        except Exception:  # noqa: BLE001 - malformed diagnostics must not change decisions
+            return
+
     async def go_next(self, page: Page) -> None:
+        self._trace_transition("forward_start")
         state = await self._active(page, timeout_ms=1_000)
         slider = self._valid_slider_state(state)
         if slider is None:
@@ -1656,9 +1729,26 @@ class ComicDaysAdapter(SiteAdapter):
             raise PageChangeTimeoutError("Comic DAYS forward control failed safety validation")
         self._advance_from_slider = slider[0]
         self._advance_pending = True
+        self._trace_transition("click_start", slider_from=slider[0], slider_last=slider[1])
         await button.click(timeout=1_000, no_wait_after=True)
+        self._trace_transition("click_returned")
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
+        self._transition_trace_samples = {}
+        self._trace_transition(
+            "wait_start", slider_from=self._advance_from_slider,
+            previous_page_id=previous_identity.page_id if previous_identity else None,
+            timeout_ms=self.page_change_timeout_ms,
+        )
+        try:
+            await self._wait_for_change(page, previous_identity)
+        except BaseException as exc:
+            self._trace_transition("wait_failed", error_type=type(exc).__name__)
+            raise
+        self._trace_transition("wait_completed", terminal=self._terminal,
+                               known_tail_slider=self._known_tail_slider)
+
+    async def _wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         stable, previous = 0, None
         nonbody_stable, nonbody_previous = 0, None
@@ -1670,6 +1760,8 @@ class ComicDaysAdapter(SiteAdapter):
                 return
             state = await self._active(page)
             slider_state = self._valid_slider_state(state)
+            # Do not retain canvas source URLs, draw histories, or image data.
+            self._trace_active_transition(state, stable, nonbody_stable)
             advance_from = self._advance_from_slider
             if self._advance_pending and slider_state is not None and advance_from is not None:
                 current, last = slider_state
@@ -1688,6 +1780,7 @@ class ComicDaysAdapter(SiteAdapter):
                             signature = self._nonbody_signature(observation, state)
                             nonbody_stable = nonbody_stable + 1 if signature == nonbody_previous else 1
                             nonbody_previous = signature
+                    self._trace_nonbody_transition(observation, current, last, nonbody_stable)
                     tail_indices = observation.get("tailIndices") if isinstance(observation, dict) else None
                     new_tail_transition = (
                         isinstance(observation, dict)
@@ -1770,6 +1863,7 @@ class ComicDaysAdapter(SiteAdapter):
             **self._capture_debug,
             "last_transition_observation": self._last_transition_observation,
             "ticket_trace": [dict(event) for event in self._ticket_trace],
+            "transition_trace": [dict(event) for event in self._transition_trace],
         }
 
     def get_output_metadata(self) -> dict[str, str | None]:

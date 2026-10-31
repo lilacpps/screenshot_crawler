@@ -21,9 +21,11 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.comicdays.discovery import (
+    MAX_LISTING_PAGES,
     comicdays_access_observation,
     fetch_comicdays_atom,
     fetch_comicdays_listing_total,
+    fetch_comicdays_readable_product_page,
     fetch_comicdays_readable_products,
     parse_comicdays_episode_url,
 )
@@ -291,9 +293,9 @@ async def observe_comicdays_live_access(
     """Observe the target without refreshing a complete work listing.
 
     A present Work Ticket object is sufficient to use the target-local
-    GraphQL/DOM contract. A complete listing is retained only for the explicit
-    ``ticket: null`` path, where the official free-only feed is the authority
-    for allowing a direct free target.
+    GraphQL/DOM contract. The explicit ``ticket: null`` path validates full/free
+    Atom identities and the target's one readable-product page; the official
+    free-only feed remains the authority for allowing a direct free target.
     """
 
     if not str(series_id).isdigit() or not str(episode_id).isdigit():
@@ -322,26 +324,31 @@ async def observe_comicdays_live_access(
     remaining = _remaining_ms(deadline)
     if remaining <= 0:
         raise ComicDaysLiveAccessError("Comic DAYS access observation exceeded its time bound")
-    listing = await _observe_comicdays_listing(
-        page,
-        series_id=str(series_id),
-        episode_id=str(episode_id),
-        timeout_ms=remaining,
-        ticket_state=ticket,
-        deadline=deadline,
-    )
     try:
-        row = next(row for row in listing.rows if str(row.get("readable_product_id")) == str(episode_id))
+        full_ids, free_ids = await _observe_comicdays_listing_ids(
+            page, series_id=str(series_id), episode_id=str(episode_id), deadline=deadline
+        )
+        if str(episode_id) not in free_ids:
+            raise ComicDaysLiveAccessError(
+                "Comic DAYS ticket-free series did not identify a free target"
+            )
+        offset = (full_ids.index(str(episode_id)) // 50) * 50
+        rows = await _bounded_call(
+            fetch_comicdays_readable_product_page(page, str(series_id), offset=offset), deadline
+        )
+        if [str(row["readable_product_id"]) for row in rows] != full_ids[offset:offset + 50]:
+            raise DiscoveryIncompleteError("Comic DAYS target page order disagreed with Atom")
+        row = next(row for row in rows if str(row["readable_product_id"]) == str(episode_id))
         mode, expiry, observed = comicdays_access_observation(
-            row, free=str(episode_id) in listing.free_ids, now=datetime.now(UTC)
+            row, free=True, now=datetime.now(UTC)
         )
     except (DiscoveryIncompleteError, StopIteration) as exc:
         raise ComicDaysLiveAccessError(str(exc)) from exc
-    if not listing.ticket.ticket_present and mode != "free":
+    if mode != "free":
         raise ComicDaysLiveAccessError(
             "Comic DAYS ticket-free series did not identify a free target"
         )
-    return ComicDaysLiveAccessState(str(series_id), str(episode_id), row, mode, expiry, observed, listing.ticket)
+    return ComicDaysLiveAccessState(str(series_id), str(episode_id), row, mode, expiry, observed, ticket)
 
 
 async def _observe_target_dom_snapshot(page: Page, *, timeout_ms: int) -> dict[str, object]:
@@ -744,31 +751,15 @@ async def _observe_comicdays_listing(
     if current != str(episode_id):
         raise ComicDaysLiveAccessError("Comic DAYS page URL did not match the target episode")
     try:
-        full = await _bounded_call(
-            fetch_comicdays_atom(page, str(series_id), free_only=False), deadline
-        )
-        free = await _bounded_call(
-            fetch_comicdays_atom(page, str(series_id), free_only=True), deadline
-        )
-        total = await _bounded_call(
-            fetch_comicdays_listing_total(page, str(series_id), str(episode_id)), deadline
+        full_ids, free_ids = await _observe_comicdays_listing_ids(
+            page, series_id=str(series_id), episode_id=str(episode_id), deadline=deadline
         )
         rows = await _bounded_call(
-            fetch_comicdays_readable_products(page, str(series_id), expected_total=total), deadline
+            fetch_comicdays_readable_products(page, str(series_id), expected_total=len(full_ids)), deadline
         )
-        full_ids = [str(item["episode_id"]) for item in full]
-        if len(full_ids) != total or len(set(full_ids)) != total:
-            raise DiscoveryIncompleteError("Comic DAYS listing identity/count mismatch")
         row_ids = [str(item.get("readable_product_id")) for item in rows]
         if row_ids != full_ids:
             raise DiscoveryIncompleteError("Comic DAYS listing order disagreed with Atom")
-        if str(episode_id) not in full_ids:
-            raise DiscoveryIncompleteError("Comic DAYS target was absent from the complete listing")
-        free_ids = {str(item["episode_id"]) for item in free}
-        if not free_ids.issubset(set(full_ids)):
-            raise DiscoveryIncompleteError("Comic DAYS free listing contained an unknown episode")
-        if [item_id for item_id in full_ids if item_id in free_ids] != [str(item["episode_id"]) for item in free]:
-            raise DiscoveryIncompleteError("Comic DAYS free listing order disagreed with Atom")
     except (DiscoveryIncompleteError, StopIteration) as exc:
         raise ComicDaysLiveAccessError(str(exc)) from exc
     remaining = _remaining_ms(deadline)
@@ -780,6 +771,34 @@ async def _observe_comicdays_listing(
             observe_comicdays_ticket(page, str(series_id), timeout_ms=remaining), deadline
         )
     return ComicDaysListingState(str(series_id), tuple(rows), frozenset(free_ids), ticket)
+
+
+async def _observe_comicdays_listing_ids(
+    page: Page, *, series_id: str, episode_id: str, deadline: float
+) -> tuple[list[str], set[str]]:
+    """Validate complete feed identities without loading every access row."""
+    full = await _bounded_call(
+        fetch_comicdays_atom(page, series_id, free_only=False), deadline
+    )
+    free = await _bounded_call(
+        fetch_comicdays_atom(page, series_id, free_only=True), deadline
+    )
+    total = await _bounded_call(
+        fetch_comicdays_listing_total(page, series_id, episode_id), deadline
+    )
+    if total < 1 or total > MAX_LISTING_PAGES * 50:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product total was outside the supported bound")
+    full_ids = [str(item["episode_id"]) for item in full]
+    if len(full_ids) != total or len(set(full_ids)) != total:
+        raise DiscoveryIncompleteError("Comic DAYS listing identity/count mismatch")
+    if episode_id not in full_ids:
+        raise DiscoveryIncompleteError("Comic DAYS target was absent from the complete listing")
+    free_ids = {str(item["episode_id"]) for item in free}
+    if not free_ids.issubset(set(full_ids)):
+        raise DiscoveryIncompleteError("Comic DAYS free listing contained an unknown episode")
+    if [item_id for item_id in full_ids if item_id in free_ids] != [str(item["episode_id"]) for item in free]:
+        raise DiscoveryIncompleteError("Comic DAYS free listing order disagreed with Atom")
+    return full_ids, free_ids
 
 
 async def observe_comicdays_listing(

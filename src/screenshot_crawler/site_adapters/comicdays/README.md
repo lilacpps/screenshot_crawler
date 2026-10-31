@@ -24,10 +24,25 @@ target-local quota and post-click consumption path requires a Ticket object;
 For normal Batch/direct initialization, a present Ticket object is followed by
 the target-local GraphQL and viewer-DOM contract; the adapter does not refresh
 the complete work listing again. Only the explicit `ticket: null` branch
-performs the bounded full Atom, free-only Atom, pagination, and readable-product
-checks needed to prove that a direct target is free. This keeps free access
-fail-closed while avoiding transient full-feed/pagination snapshot mismatches
-on long or actively changing works.
+validates the bounded full Atom, free-only Atom, and pagination total, then
+fetches only the 50-row readable-product page containing the target. Its offset
+comes from the target's index in the full latest-first Atom feed; every returned
+ID and canonical URL is validated and the page must exactly match the full
+feed's corresponding slice, including its length and order. The target must be
+in the free feed and have coherent free access state. Missing, contradictory,
+truncated, duplicate or shifted observations fail closed without scanning other
+pages or retrying. All requests share the existing 10-second initialization
+access budget. Discovery and complete-listing observations still fetch and
+validate every readable-product page.
+
+On 2026-10-31, item/source `37648` (episode `12207421984303447617`)
+reproduced the previous timeout: its Ticket-less work contained 1,767 episodes
+and required 36 readable-product pages; the 10-second preflight stopped while
+requesting page 19. The target was at latest-first index 3 and positively free.
+With the target-page path the same preflight passed in 1.30 seconds using one
+readable-product page. Production direct initialization reached `CONTENT` in
+1.94 seconds with `resource_consumed=false`. This was a metadata-only check;
+operational Batch capture/packaging was not rerun.
 
 ## Work-key archive-order inventory
 
@@ -182,6 +197,27 @@ unknown, blank, paid, mixed, or stagnant non-body panels fail closed.  The
 adapter records the actual slider before each forward action and requires a
 monotonic, bounded transition, so the tail controls are never captured or
 clicked.
+For `leading-area-tail` only, the same validated layout also accepts exactly
+one ad iframe with exactly two `.js-ad-container` slots. Item/source `37739`
+failed after saving all 18 body pages on 2026-10-31 at slider 20/21: its failure
+snapshot had that exact shape, while the old two-iframe check rejected it.
+One advertising endpoint returned HTTP 500 during the run; its causal link to
+the missing iframe is unproven. The saved snapshot passes the corrected tail
+and Colophon predicates, and artificial-browser traversal reaches `AD` then
+`END`. Zero iframes, one iframe without exactly two slots, extra iframes, and
+unknown/mixed structures still fail closed. Legacy-tail rules are unchanged.
+
+Page transitions now keep a change-deduplicated, 64-event `transition_trace` in
+adapter debug metadata. It records forward/click/wait phases, elapsed times,
+slider positions, body completeness/readiness and hook errors, expected/visible
+areas, hashed render signatures, stability counts, and tail/Colophon checks
+with iframe/slot counts. Completion, timeout and outer cancellation are recorded.
+The trace is reset in `configure_run()` and performs no additional browser or
+network operations. It contains no source URLs, image bytes or draw histories.
+Failure output is in the candidate's `diagnostics/metadata.json` under
+`adapter_debug.transition_trace`; successful captures also include the bounded
+trace in manifest page metadata. No CLI/configuration change is needed.
+
 The terminal Colophon has two explicit resource variants. A simple ordinary
 Colophon has ten images and a simple `point-gettable-episode` Colophon has
 exactly eleven images. The live recommendation form has the known

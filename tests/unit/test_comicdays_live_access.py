@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -99,8 +100,10 @@ class _Request:
     def __init__(self, gets: list[_Response], post: _Response) -> None:
         self._gets = iter(gets)
         self._post = post
+        self.get_urls: list[str] = []
 
-    async def get(self, *_args: object, **_kwargs: object) -> _Response:
+    async def get(self, url: str, **_kwargs: object) -> _Response:
+        self.get_urls.append(url)
         return next(self._gets)
 
     async def post(self, *_args: object, **_kwargs: object) -> _Response:
@@ -171,17 +174,91 @@ async def test_absent_ticket_trace_marks_ticket_as_not_present() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_access_allows_absent_ticket_only_for_free_feed_target() -> None:
+@pytest.mark.parametrize("total,index", [(1, 0), (1767, 3), (1767, 50), (1767, 1766)])
+async def test_live_access_allows_absent_ticket_only_for_free_feed_target(
+    total: int, index: int,
+) -> None:
     page = _page(_free_row("1"))
+    ids = [str(i + 1) for i in range(total)]
+    episode_id = ids[index]
+    page.url = f"https://comic-days.com/episode/{episode_id}"
+    offset = index // 50 * 50
+    page.request._gets = iter([
+        _Response(_atom_entries(*ids)),
+        _Response(_atom(episode_id)),
+        _Response({"readable_products_count": total}),
+        _Response([_free_row(key) for key in ids[offset:offset + 50]]),
+    ])
     page.request._post = _Response(  # type: ignore[attr-defined]
         {"data": {"userAccount": {"eventTicketCount": 0}, "series": {"ticket": None}}}
     )
 
-    observed = await observe_comicdays_live_access(page, series_id="9", episode_id="1")
+    observed = await observe_comicdays_live_access(page, series_id="9", episode_id=episode_id)
 
     assert observed.access_mode == "free"
     assert observed.ticket.ticket_present is False
     assert observed.ticket.is_charged is None
+    assert observed.episode_id == episode_id
+    assert observed.row["readable_product_id"] == episode_id
+    assert len(page.request.get_urls) == 4
+    query = parse_qs(urlsplit(page.request.get_urls[-1]).query)
+    assert query == {
+        "type": ["episode"], "aggregate_id": ["9"], "offset": [str(offset)],
+        "limit": ["50"], "sort_order": ["desc"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", [
+    "count", "missing_target", "unknown_free", "free_order", "page_order",
+    "short_page", "duplicate", "foreign_url", "paid", "owned", "expiry", "oversized",
+])
+async def test_ticket_free_target_rejects_incoherent_listing(fault: str) -> None:
+    ids = [str(i + 1) for i in range(51)]
+    free = ["1", "2"]
+    total = len(ids)
+    rows = [_free_row(key) for key in ids[:50]]
+    if fault == "count":
+        total += 1
+    elif fault == "missing_target":
+        ids[0] = "99"
+    elif fault == "unknown_free":
+        free.append("99")
+    elif fault == "free_order":
+        free.reverse()
+    elif fault == "page_order":
+        rows.reverse()
+    elif fault == "short_page":
+        rows.pop()
+    elif fault == "duplicate":
+        rows[-1] = rows[0]
+    elif fault == "foreign_url":
+        rows[0]["viewer_uri"] = "https://comic-days.com/episode/99"
+    elif fault == "paid":
+        rows[0]["purchase_info"].update(can_read=False, is_free=False)
+        rows[0]["status"]["buy_price"] = 100
+    elif fault == "owned":
+        rows[0]["purchase_info"]["has_purchased"] = True
+    elif fault == "expiry":
+        rows[0]["status"]["rental_end_at"] = "2099-01-01T00:00:00Z"
+    page = _Page([
+        _Response(_atom_entries(*ids)), _Response(_atom_entries(*free)),
+        _Response({"readable_products_count": total}),
+        _Response(b"x" * 500_001 if fault == "oversized" else rows),
+    ], _Response({"data": {"userAccount": {"eventTicketCount": 0}, "series": {"ticket": None}}}))
+    with pytest.raises(ComicDaysLiveAccessError):
+        await observe_comicdays_live_access(page, series_id="9", episode_id="1")
+    assert len(page.request.get_urls) <= 4
+
+
+@pytest.mark.asyncio
+async def test_ticket_free_target_cancels_stalled_page_at_shared_deadline() -> None:
+    page = _Page([
+        _Response(_atom("1")), _Response(_atom("1")),
+        _Response({"readable_products_count": 1}), _StalledResponse(b"[]"),
+    ], _Response({"data": {"userAccount": {"eventTicketCount": 0}, "series": {"ticket": None}}}))
+    with pytest.raises(ComicDaysLiveAccessError, match="time bound"):
+        await observe_comicdays_live_access(page, series_id="9", episode_id="1", timeout_ms=50)
 
 
 @pytest.mark.asyncio

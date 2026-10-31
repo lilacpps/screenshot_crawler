@@ -1152,8 +1152,14 @@ async def test_comicdays_active_requires_explicit_complete_flag(browser_page) ->
 
 
 
-async def test_comicdays_leading_area_tail_variant_reaches_end(browser_page) -> None:
+@pytest.mark.parametrize("ad_iframes", [2, 1])
+async def test_comicdays_leading_area_tail_variant_reaches_end(browser_page, ad_iframes: int) -> None:
     await browser_page.set_content(OFFSET_TAIL_HTML)
+    if ad_iframes == 1:
+        await browser_page.evaluate("""() => {
+          document.querySelector('.js-page-ad .ad-nav-area-wrap').innerHTML =
+            '<div class="js-ad-container"><iframe></iframe></div><div class="js-ad-container"></div>';
+        }""")
     adapter = ComicDaysAdapter()
     adapter._episode_id = "1"
     previous = ContentIdentity(page_id="17", page_number=17, source_id="1", fingerprint="body")
@@ -1163,6 +1169,13 @@ async def test_comicdays_leading_area_tail_variant_reaches_end(browser_page) -> 
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, previous)
     assert await adapter.detect_state(browser_page) is PageState.END
+    trace = (await adapter.collect_debug_metadata(browser_page))["transition_trace"]
+    assert [event["phase"] for event in trace].count("click_returned") == 2
+    assert [event["phase"] for event in trace].count("wait_completed") == 2
+    ads = [event for event in trace if event["phase"] == "nonbody_observation"]
+    assert any(event["tail_matches"] for event in ads)
+    assert any(event["colophon_matches"] for event in ads)
+    assert any(event["ads"][0]["iframeCount"] == ad_iframes for event in ads)
 
 
 async def test_comicdays_series_like_tail_variant_reaches_end(browser_page) -> None:
@@ -1368,6 +1381,10 @@ async def test_comicdays_nonbody_mismatched_slider_snapshot_resets_stability(
             browser_page,
             ContentIdentity(page_id="16,17", page_number=17, source_id="1", fingerprint="body"),
         )
+    trace = (await adapter.collect_debug_metadata(browser_page))["transition_trace"]
+    assert trace[-1]["phase"] == "wait_failed"
+    assert trace[-1]["error_type"] == "PageChangeTimeoutError"
+    assert any(event["phase"] == "nonbody_observation" and not event["tail_matches"] for event in trace)
 
 
 async def test_comicdays_colophon_without_validated_transition_is_not_end(browser_page) -> None:
@@ -1454,7 +1471,9 @@ async def test_comicdays_terminal_resource_shape_must_match_observation(
 @pytest.mark.parametrize("case_html", [TAIL_HTML, OFFSET_TAIL_HTML], ids=["legacy", "leading"])
 @pytest.mark.parametrize(
     "mutation",
-    ["back_img1", "back_img3", "ad_iframe1", "ad_iframe3"],
+    ["back_img1", "back_img3", "ad_iframe1", "ad_iframe3",
+     "ad_iframe1_container1", "ad_iframe1_container3", "ad_iframe3_container2",
+     "ad_iframe0_container2"],
 )
 async def test_comicdays_both_tail_families_reject_wrong_resource_counts(
     browser_page, case_html: str, mutation: str,
@@ -1468,6 +1487,15 @@ async def test_comicdays_both_tail_families_reject_wrong_resource_counts(
         script = "document.querySelector('.js-back-link-page .link-page-content').append(document.createElement('img'))"
     elif mutation == "ad_iframe1":
         script = "document.querySelector('.js-page-ad .ad-nav-area-wrap iframe').remove()"
+    elif "_container" in mutation:
+        _, iframe_part, container_part = mutation.split("_")
+        iframe_count = int(iframe_part.removeprefix("iframe"))
+        container_count = int(container_part.removeprefix("container"))
+        script = """(() => {
+          const wrap = document.querySelector('.js-page-ad .ad-nav-area-wrap');
+          wrap.innerHTML = '<iframe></iframe>'.repeat(IFRAMES) +
+            '<div class="js-ad-container"></div>'.repeat(CONTAINERS);
+        })()""".replace("IFRAMES", str(iframe_count)).replace("CONTAINERS", str(container_count))
     else:
         script = "document.querySelector('.js-page-ad .ad-nav-area-wrap').append(document.createElement('iframe'))"
     await browser_page.evaluate(script)
@@ -1478,6 +1506,53 @@ async def test_comicdays_both_tail_families_reject_wrong_resource_counts(
     with pytest.raises(PageChangeTimeoutError):
         await adapter.go_next(browser_page)
         await adapter.wait_for_change(browser_page, previous)
+
+
+async def test_comicdays_transition_trace_is_bounded_redacted_and_reset(browser_page) -> None:
+    adapter = ComicDaysAdapter()
+    state = {
+        "sliderNow": 1, "sliderLast": 20, "complete": True, "ready": True,
+        "rows": [{"areaIndex": 1, "renderReady": True,
+                  "base": {"sourceUrl": "https://example.test/private?token=secret"},
+                  "mapping": [{"secret": "draw-data"}]}],
+    }
+    for _ in range(100):
+        adapter._trace_active_transition(state, 0, 0)
+    assert len(adapter._transition_trace) == 1
+    before = adapter._transition_trace[-1]["signature_hash"]
+    state["rows"][0]["rect"] = {"x": 10}
+    adapter._trace_active_transition(state, 0, 0)
+    assert adapter._transition_trace[-1]["signature_hash"] != before
+    for stable in range(2, 100):
+        adapter._trace_active_transition(state, stable, stable)
+    assert len(adapter._transition_trace) == 3  # counts saturate at the decision threshold
+    for value in range(100):
+        state["sliderNow"] = value
+        adapter._trace_active_transition(state, 0, 0)
+    trace = (await adapter.collect_debug_metadata(browser_page))["transition_trace"]
+    assert len(trace) == adapter.max_transition_trace_events
+    assert trace[-1]["slider_now"] == 99
+    assert "secret" not in json.dumps(trace)
+    assert "draw-data" not in json.dumps(trace)
+    adapter._trace_active_transition({"rows": None}, 0, 0)  # diagnostics tolerate malformed data
+    await adapter.configure_run(browser_page, "direct")
+    assert (await adapter.collect_debug_metadata(browser_page))["transition_trace"] == []
+
+
+async def test_comicdays_transition_trace_preserves_outer_cancellation(
+    browser_page, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = ComicDaysAdapter()
+
+    async def cancelled(*_args):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(adapter, "_wait_for_change", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.wait_for_change(browser_page, None)
+    trace = (await adapter.collect_debug_metadata(browser_page))["transition_trace"]
+    assert trace[-1]["phase"] == "wait_failed"
+    assert trace[-1]["error_type"] == "CancelledError"
 
 
 @pytest.mark.parametrize("slider", [16, 22])

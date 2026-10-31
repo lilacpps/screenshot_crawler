@@ -1,5 +1,104 @@
 # Comic DAYS
 
+## Intermittent tail timeout and transition diagnostics (2026-10-31)
+
+Metrics run `90df8b75ccf744109922bd32f07ee2a9` completed 13 candidates before
+item/source `37739`, episode `14079602755529201655`, failed with a page-change
+timeout. Its candidate saved 18 native JPEG pages, then stopped after 43.63
+seconds including the whole crawl. Existing failure metadata and screenshot
+show the known `leading-area-tail` at slider 20/21: body ends at area 18,
+back-link 19, advertisement 20, Colophon 21, no unknown or extra on-screen
+areas. The ad has one iframe and two `.js-ad-container` slots under the exact
+known wrapper. The old tail and Colophon checks required two iframes and could
+not accept this state within the unchanged 10-second page-change budget.
+The metrics include a `securepubads.g.doubleclick.net/gampad/ads` HTTP 500
+during the failed candidate, with no 403/429, challenge or retry. This supports
+an advertising-delivery dependency, but does not prove why the iframe was
+missing or explain every intermittent timeout.
+
+Only the observed leading-area variant now also accepts exactly one iframe
+with exactly two ad slots. All identity, tail position, known wrapper/back-link
+structure, no body/extra content, stability and monotonic-progress checks
+remain. Zero iframes, extra iframes, or a lone iframe without exactly two slots
+still fail closed. Legacy-tail and other tail families are unchanged. Offline
+evaluation of the actual saved failure snapshot passes both corrected
+predicates; artificial browser tests cover `AD` then `END` and malformed
+variants. The failure artifacts are under
+`output/batch/comicdays/item-37739-source-37739-20261031T164323424520+0900-d398100987c54950b16e5a7aeb215679/diagnostics/`.
+No real-site browser operation, retry, capture, ticket click or operational
+Catalog/Watchlist write was performed for this change. Fresh live traversal
+of this variant remains unverified.
+
+`adapter_debug.transition_trace` now retains at most 64 metadata events across
+forward actions and waits, deduplicating unchanged observations. It records
+click start/return, slider from/now/last, elapsed milliseconds, body
+completeness/render readiness/hook errors, expected/visible areas, hashes of
+the capture signature, stability counters (saturated at the decision threshold
+of two), tail/Colophon predicate results,
+iframe/slot counts, and wait completion/failure (including outer cancellation).
+`configure_run()` clears the trace. It adds no browser queries, network calls,
+clicks, sleeps, retries or timeout extension. Canvas source URLs, image data,
+draw histories and credentials are excluded; malformed diagnostic fields are
+ignored without affecting viewer decisions. The existing Runner writes it to
+candidate `diagnostics/metadata.json` on failure, and successful capture page
+metadata includes the same bounded history. No CLI/configuration is needed.
+Next failures can distinguish no slider progress, incomplete/unready body
+rendering, unstable signatures, mismatched snapshots and rejected tail shapes.
+
+Validation: affected Comic DAYS access/Discovery/Batch/policy/native-capture
+unit tests and all three artificial-browser integration files passed 324 cases
+in 128.84 seconds, with zero skips. After the final trace deduplication change,
+the five affected trace/tail/snapshot cases passed again; the two trace cases
+also passed after adding saturation coverage. `ruff check src tests --no-cache`
+and `git diff --check` passed. Full pytest was not run for this site-local
+change; Research was not rerun because no PoC/probe code changed. Verification
+used the saved real failure evidence and artificial viewers; live traversal
+and operational Batch capture/packaging were not rerun.
+
+## Ticket-less direct access on long works (2026-10-31)
+
+Item/source `37648`, episode `12207421984303447617`, failed during the
+10-second access preflight. Metrics run `3f1184f08e13481eaad8c786619d237f`
+recorded one failed direct candidate, 12.54 seconds including navigation,
+zero retries, and no HTTP 403/429/5xx. Read-only shared-CDP observation confirmed
+native series `13932016480031247617`, explicit `series.ticket=null`, 1,767 full
+Atom IDs, 1,745 free Atom IDs, matching pagination total, and the target at
+latest-first index 3 with coherent free readable-product state. The old
+production preflight reproduced the error after 10.08 seconds while requesting
+readable-product page 19 of the required 36.
+
+The Ticket-less direct path retains full/free Atom and total/count/subset/order
+validation, but reads only the target's 50-row page. Its offset is calculated
+from the full Atom index, and every page ID and canonical URL is checked.
+The complete returned page must exactly match the corresponding Atom slice,
+including the final page length. The target must be positively in the free
+feed and pass the existing coherent-free classifier. Unsupported, malformed,
+paid, owned, rental-expiry, duplicate, missing or shifted observations fail
+closed. The existing 10-second budget covers all requests; no retries or
+timeout increases were added. Full Discovery/complete-listing observations
+still read every access row through the same extracted page reader.
+
+The same production preflight passed in 1.30 seconds with one readable-product
+page after the fix. A fresh production direct initialization on the same
+episode reached `CONTENT` in 1.94 seconds, with one readable-product page and
+`resource_consumed=false`. Diagnostic pages were closed. No operational
+Catalog/Watchlist changes, ticket clicks, capture or packaging were performed.
+No CLI or configuration changes are required; an ordinary Batch retry uses the
+new path. Actual Batch download/packaging remains unverified for this episode.
+
+Artificial regression coverage includes first/second/final target pages in a
+1,767-episode work; exact request offset and one-page bound; count, membership,
+order, identity, free-state and body-size rejection; and cancellation of a
+stalled target page under a short shared deadline. The affected Comic DAYS
+access/Discovery/Batch/policy/native-capture unit tests and all three artificial
+browser integration files passed 313 cases in 133.33 seconds, with zero skips.
+After tightening the paid-row fixture, the access file passed all 29 cases
+again. `ruff check src tests --no-cache` and `git diff --check` passed.
+The initial default-temp run had 77 passes and two setup permission errors;
+the affected group passed using a dedicated short OS TEMP base with pytest's
+cache disabled. Full pytest was not run for this site-local access fix, and
+Research tests were not rerun because no PoC/probe implementation changed.
+
 ## Dummy/front prefix normalization (2026-10-28)
 
 The direct Batch for item/source 22405, episode `14079602755444925666`, stopped
@@ -173,11 +272,14 @@ quota and post-click consumption observations still require a Ticket object,
 so an absent Ticket can never be interpreted as an uncharged or consumed Ticket.
 For normal Batch/direct initialization, a present Ticket object is now followed
 by the target-local GraphQL and viewer-DOM contract without refreshing the
-complete work listing. Only the explicit `ticket: null` branch repeats the
-bounded full Atom, free-only Atom, pagination, and readable-product checks
-needed to prove a direct target is free. This preserves the free-only
-fail-closed authority while avoiding transient full-feed/pagination snapshot
-mismatches on long or actively changing works.
+complete work listing. Only the explicit `ticket: null` branch reads the
+bounded full Atom, free-only Atom and pagination total, followed by the target's
+one 50-row readable-product page. Every page ID and canonical URL is validated,
+and its length/order must exactly match the corresponding full-Atom slice.
+The target must have both free-feed membership and coherent free state. All
+requests share the unchanged access deadline, and missing or inconsistent data
+fails closed without another page scan. Discovery retains complete access-row
+validation for the whole work.
 
 The shared-CDP direct verification on 2026-10-08 for item `21804` completed
 from the initial page through packaging. The adapter used the target-local
@@ -236,8 +338,10 @@ colophon: body slider 17 advances to slider 19 with one on-screen
 `link-page-content`) and one on-screen `js-page-ad` (two iframes, no canvas,
 wrapped by exactly one `ad-nav-area-wrap page-content`), then advances to slider 21 with a visible
 `#viewer-colophon` and no active rows; its ten images are under exactly one
-`back-matter-content` child. The adapter treats only this exact
-viewport-intersecting pattern as `AD`, tracks the actual pre-advance slider,
+`back-matter-content` child. The leading-area variant also accepts exactly one
+iframe with exactly two `.js-ad-container` slots in the same known ad wrapper,
+as observed in item 37739's saved failure. The adapter treats only these known
+viewport-intersecting patterns as `AD`, tracks the actual pre-advance slider,
 and requires bounded monotonic progress. Unknown, blank, paid, mixed, repeated,
 or retrograde panels fail closed and are never captured or clicked.
 Colophon validation has two explicit resource families. A simple ordinary
