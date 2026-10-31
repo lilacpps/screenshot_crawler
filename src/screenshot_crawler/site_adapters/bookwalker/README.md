@@ -1,5 +1,34 @@
 # BookWalker adapter
 
+## Discovery access for bonus and preorder products
+
+Bonus products retain their special order metadata but no longer force an
+unknown access mode. A product's purchased full-reader control is `owned`;
+strong maruyomi remains `quota`. A visible `コードを入力` control with
+`data-action-label="enter_code"` is `paid` only inside the current product's
+main action scope and with an HTTPS member.bookwalker.jp link to
+`/app/03/products/<same UUID>/purchase/confirm`. Related, hidden, other-product,
+and other-host controls are excluded. A bonus title/badge or trial alone is
+insufficient. Code-entry observations use the bounded paid-control settle wait
+so a delayed owned/quota control can take precedence.
+
+Code entry is a Discovery-only observation; it is never a reader control and
+is not clicked. Run Full Discovery for the registered series to refresh old
+unknown bonus records while preserving Item completion state. Incremental
+Discovery retains its existing owned/quota stopping boundary. The existing GUI
+counts then reflect the refreshed access modes; no GUI-specific suppression is
+needed.
+
+Preorders are `paid` when the current product's visible main action has text
+`予約する`, `data-action-label="reserve"`, and a matching `data-uuid`.
+Series reservations, related/hidden controls, and missing or mismatching UUIDs
+are excluded. A preorder keeps its normal volume order. Reservation is a
+Discovery-only observation, never a reader entry or an action to execute.
+No date-based transition is inferred: a later Discovery observes trial as
+`paid`, strong maruyomi as `quota`, or purchased full-reader access as `owned`.
+Existing owned/quota priority, paid-control settling, and incremental stopping
+boundaries still apply.
+
 ## Entry flow
 
 The crawler accepts a direct viewer URL or a BookWalker product URL such as `/de<content-id>/`. For a product URL, `initialize()` locates the product reading control and follows the best reader candidate in the same tab.

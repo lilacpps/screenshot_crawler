@@ -1367,17 +1367,68 @@ product titleはreader-control ready signalにしない。title等のmetadata取
 `試し読み`観測後は最大500msのsettle期間を置き、その間に遅延表示された強いcontrolを優先する。
 全体のcontrol待ちは最大5秒で、timeout後にproduct identity/titleが
 正常でcontrolがない商品はunknownとしてyieldし、identity/titleが確認できない場合だけincompleteとする。
-series list等の関連商品のtrial controlはproduct access判定から除外する。購入特典・特殊商品は
-商品ページにtrial controlが見えてもunknownとして扱う。
+series list等の関連商品のcontrolはproduct access判定から除外する。購入特典も商品自身の
+「読む」ならowned、強いまる読みsignalならquotaを優先する。商品自身のmain action scope内に
+visibleな「コードを入力」・`data-action-label="enter_code"`があり、リンク先がHTTPSの
+`member.bookwalker.jp/app/03/products/<同一UUID>/purchase/confirm`ならpaidとする。
+別host・別UUID・非表示・関連商品のボタンは根拠にしない。コード入力もpaid判定後に
+既存500msのsettleで遅いowned/quota表示を待つ。特典タイトルやbadgeだけ、または特典の
+trialだけではpaidにせずunknownを維持する。コード入力はDiscovery専用の判定で、
+reader control分類には追加せず、コード入力・購入の操作を行わない。
+
+予約商品は、同じmain action scope内のvisibleな「予約する」と
+`data-action-label="reserve"`、現在の商品に一致する`data-uuid`を確認した場合にpaidとする。
+「シリーズ予約」、関連商品、非表示、別UUID、UUID欠落は対象にしない。
+予約signalは特典識別に使わず、通常巻のorderを保持する。owned/quotaは予約より優先し、
+予約にも既存paidの500ms settleを適用して遅い強いcontrolを待つ。予約はDiscovery専用であり、
+reader controlには追加せずボタンを操作しない。日時の経過や配信予定日だけでは権限を変えず、
+後続のFull/Incremental Discoveryで試し読みならpaid、強いまる読みならquota、
+購入済み「読む」ならownedを観測・更新する。Incrementalの既知境界停止は維持する。
 
 access mode:
 
 ```text
 owned   = 購入済みfull reader「読む」
 quota   = 「まる読み10分」の強い固有signal
-paid    = 通常の「試し読み」のみ
-unknown = reader入口なし、特殊商品、unsupported subscription、曖昧状態
+paid    = 通常商品の「試し読み」、同一商品のコード入力要件、または同一UUIDの予約するを確認
+unknown = reader入口なし、強い権限signalのない特殊商品、unsupported subscription、曖昧状態
 ```
+
+一覧上の特典識別・商品titleの特典prefix・有効なコード入力signalをorder判定に使い、
+特典は引き続き`order_key=None`とする。`iter_records()`の一律special→unknownは廃止した。
+series listのFull Discoveryで既存unknownを再観測してpaid/ownedへ更新できる。
+Itemのpending/completed等とcompleted_at、Source IDは保持し、通常のDiscoveryServiceでupsertする。
+初回反映にIncrementalを使うと既知owned/quota境界より古い特典へ届かない場合がある。
+
+2026-10-31のログイン済みshared-CDP観測ではseries 317089に11商品・特典2件を確認した。
+第8巻特典`73d78f76-d2b1-411e-907c-7fd34fdba08b`は商品自身の`#js-read-check`内に
+enter_codeと同一UUIDのmemberリンクがあり、第4巻特典`fbf0d177-bd99-4a9f-a2c4-617a727f535d`は
+read_purchasedの「読む」があった。通常第4巻にも関連商品側のコード入力があり、商品scopeの
+限定が必要である。本番Catalogは調査中read-onlyであり、reader/コード入力は開かず、
+作成Pageを閉じて元の2 Pageへ復帰した。
+
+修正後はCatalogのコピーで本番と同じDiscoveryServiceのFull Discoveryを実行し、
+11件の既存Sourceを列挙してcomplete/exhaustedを確認した。その後、SQLiteバックアップを
+`.tmp/bookwalker-bonus-implementation-20261031/catalog-before-apply.sqlite`へ作成してから
+通常Catalogへ同じFull Discoveryを反映した。Source 118はunknown→paid、Source 123は
+unknown→ownedとなり、GUI用InventoryService集計のunknownは2→0、diagnosticsは空になった。
+Source/Item ID、Item status/completed_at、quota_started_atは対象11件すべてで不変だった。
+通常Catalogの反映結果は同ディレクトリの`apply-result.json`へ記録した。両live runとも
+reader・コード入力は開かず、作成Pageを閉じて元の2 Pageを保持した。
+予約判定の修正後、series 56431（sword-art-online-progressive）もCatalogのコピーで
+Full Discoveryを検証し、バックアップ後に通常Catalogへ同じFull Discoveryを反映した。
+10件の既存Sourceを列挙してcomplete/exhaustedを確認し、予約中の第10巻
+`caa7632c-602f-4a47-a561-cadb8acac7bf`（Source 37644）はunknown→paidとなった。
+同商品の`#js-read-check`内にvisibleなreserve/予約すると同一UUIDを確認した。
+巻番号10、対象10件のSource/Item ID・Item status/completed_at・quota_started_atは保持され、
+GUI用集計のunknownは1→0、diagnosticsは空になった。予約・readerは操作せず、
+作成Pageを閉じて元の6 Pageを保持した。検証・通常反映の記録と事前バックアップは
+`.tmp/bookwalker-reservation-implementation-20261031/`に隔離した。
+予約→試し読み→quota/ownedの観測更新はFull/Incremental双方のbrowser Integrationで検証した。
+現行の検証はDiscovery Unit/browser Integration、reader control・Policy・Batch・
+DiscoveryService・Inventory・GUI modelの影響範囲を合わせて243 passed、0 skipped。
+`ruff check src tests`とdiff checkもPASS。site-local Discovery変更のためfull pytest、
+source-native capture Research、全冊crawlは実行していない。
 
 購入済み商品の実サイトcontrol `data-action-label="read_purchased"` も
 `owned` として分類する。初回full Discoveryでは商品URLをWeb targetへ保存し、

@@ -1391,10 +1391,15 @@ quota
   「まる読み」+「10分」等を使う
 
 paid
-  通常の「試し読み」だけを確認できる
+  通常商品の「試し読み」だけを確認できる、または商品自身の操作欄で
+  visibleな「予約する」・data-action-label=reserve・同一商品のdata-uuidを
+  確認できる予約商品。または商品自身の操作欄で
+  visibleな「コードを入力」・data-action-label=enter_codeを確認し、
+  HTTPSのmember.bookwalker.jp/app/03/products/<同一UUID>/purchase/confirmへ
+  向くリンクであることを確認できる購入特典
 
 unknown
-  reader入口なし、購入特典等の特殊商品、unsupported subscription、
+  reader入口なし、権限の強いsignalがない特殊商品、unsupported subscription、
   または安全に分類できない状態
 ```
 
@@ -1403,6 +1408,23 @@ unknown
 ```text
 owned > quota > paid > unknown
 ```
+
+購入特典も、商品自身に購入済みfull reader「読む」があれば`owned`を優先する。
+特典タイトルや一覧badgeだけでは`paid`としない。コード入力の判定は商品自身の
+main action scope内に限定し、関連商品のボタン・非表示ボタン・別UUID・別hostを除外する。
+コード入力はDiscovery専用のアクセス判定であり、reader入口の分類には追加せず、
+コード入力や購入のリンクを自動操作しない。特典の巻番号を通常巻として解釈しない
+既存のorder metadata契約は保持する。コード入力も通常trialと同じ有界settle期間で
+遅れて表示されるowned/quotaを確認してから確定する。
+既存の特典unknownを一括修正するにはseries listのFull Discoveryを使う。
+Sourceのaccess_modeを通常のDiscovery upsertで更新し、Itemの取得状態は保持する。
+Incrementalの既知owned/quota境界での停止は変更しない。
+
+予約判定もDiscovery専用であり、予約ボタンをreader入口として分類・操作しない。
+「シリーズ予約」、関連商品・非表示・別UUID・UUIDのない予約ボタンは根拠にしない。
+予約商品は通常巻のorder metadataを保持する。配信予定日や経過時間からaccess_modeを
+自動変更せず、次回Discoveryで通常trialならpaid、強いまる読みsignalならquota、
+購入済みfull readerならownedへ更新する。予約signalにも既存paidの有界settleを適用する。
 
 `subscription_reading` というaction名だけでは `quota` と判定しない。
 読み放題MAX等と「まる読み10分」を混同しないため、quotaには

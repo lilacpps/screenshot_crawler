@@ -121,6 +121,95 @@ def test_bookwalker_access_mode_uses_reader_classifier(
     assert map_bookwalker_access_mode(controls) == expected
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "paid"),
+        ({"href": "https://member.bookwalker.jp/app/03/products/00000000-0000-0000-0000-000000000002/purchase/confirm"}, "unknown"),
+        ({"href": "https://example.test/app/03/products/00000000-0000-0000-0000-000000000001/purchase/confirm"}, "unknown"),
+        ({"href": "http://member.bookwalker.jp/app/03/products/00000000-0000-0000-0000-000000000001/purchase/confirm"}, "unknown"),
+        ({"href": "https://member.bookwalker.jp@evil.test/app/03/products/00000000-0000-0000-0000-000000000001/purchase/confirm"}, "unknown"),
+        ({"href": "https://[invalid"}, "unknown"),
+        ({"action": "gift_purchase"}, "unknown"),
+        ({"text": "コードを入力できます"}, "unknown"),
+        ({"uuid": "00000000-0000-0000-0000-000000000002"}, "unknown"),
+    ],
+)
+def test_bookwalker_code_entry_requires_exact_product_evidence(
+    overrides: dict[str, object], expected: str,
+) -> None:
+    product_id = "00000000-0000-0000-0000-000000000001"
+    control = {
+        "text": "コードを入力", "action": "enter_code",
+        "href": f"https://member.bookwalker.jp/app/03/products/{product_id}/purchase/confirm",
+        **overrides,
+    }
+    assert map_bookwalker_access_mode(
+        [control], current_product_id=product_id, special=True,
+    ) == expected
+    # A matching code action alone is insufficient without the product identity.
+    assert map_bookwalker_access_mode([control], special=True) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("reader", "expected"),
+    [
+        ({"text": "読む", "action": "read_purchased"}, "owned"),
+        ({"text": "10分まる読み", "action": "read_maruyomi"}, "quota"),
+        ({"text": "試し読み", "action": "trial_reading"}, "paid"),
+    ],
+)
+def test_bookwalker_bonus_uses_stronger_reader_rights(
+    reader: dict[str, object], expected: str,
+) -> None:
+    product_id = "00000000-0000-0000-0000-000000000001"
+    code = {
+        "text": "コードを入力", "action": "enter_code",
+        "href": f"https://member.bookwalker.jp/app/03/products/{product_id}/purchase/confirm",
+    }
+    assert map_bookwalker_access_mode(
+        [code, reader], current_product_id=product_id, special=True,
+    ) == expected
+    if expected == "owned":
+        assert map_bookwalker_access_mode([reader], special=True) == "owned"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "paid"),
+        ({"uuid": "00000000-0000-0000-0000-000000000002"}, "unknown"),
+        ({"uuid": None}, "unknown"),
+        ({"action": "series_reserve"}, "unknown"),
+        ({"action": None}, "unknown"),
+        ({"text": "シリーズ予約"}, "unknown"),
+        ({"text": "予約するか確認"}, "unknown"),
+    ],
+)
+def test_bookwalker_reservation_requires_current_product_button(
+    overrides: dict[str, object], expected: str,
+) -> None:
+    product_id = "00000000-0000-0000-0000-000000000001"
+    control = {"text": "予約する", "action": "reserve", "uuid": product_id, **overrides}
+    assert map_bookwalker_access_mode([control], current_product_id=product_id) == expected
+    assert map_bookwalker_access_mode([control]) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("reader", "expected"),
+    [
+        ({"text": "読む", "action": "read_purchased"}, "owned"),
+        ({"text": "まる読み10分", "action": "read_maruyomi"}, "quota"),
+    ],
+)
+def test_bookwalker_reservation_retains_stronger_reader_precedence(
+    reader: dict[str, object], expected: str,
+) -> None:
+    product_id = "00000000-0000-0000-0000-000000000001"
+    reserve = {"text": "予約する", "action": "reserve", "uuid": product_id}
+    assert map_bookwalker_access_mode([reserve, reader], current_product_id=product_id) == expected
+
+
 def test_bookwalker_order_keeps_special_products_unparsed() -> None:
     assert parse_bookwalker_order("作品名4") == ("4", "第04巻")
     assert parse_bookwalker_order("作品名 #16 サブタイトル") == ("16", "第16巻")

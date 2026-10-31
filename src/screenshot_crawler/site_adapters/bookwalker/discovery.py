@@ -271,7 +271,69 @@ def clean_bookwalker_author(raw_author: object) -> str | None:
     return author or None
 
 
-def map_bookwalker_access_mode(controls: list[dict[str, object]]) -> str:
+def _has_bookwalker_code_entry(
+    controls: list[dict[str, object]], current_product_id: str | None,
+) -> bool:
+    """Recognize a product-scoped code requirement, never a reader entry."""
+
+    if not current_product_id or not _PRODUCT_PATH.fullmatch(f"/de{current_product_id}/"):
+        return False
+    expected_path = f"/app/03/products/{current_product_id}/purchase/confirm".lower()
+    for control in controls:
+        text, href = control.get("text"), control.get("href")
+        if (
+            control.get("action") != "enter_code"
+            or not isinstance(text, str)
+            or " ".join(text.split()) != "コードを入力"
+            or not isinstance(href, str)
+        ):
+            continue
+        control_id = control.get("uuid")
+        if control_id is not None and (
+            not isinstance(control_id, str)
+            or control_id.lower() != current_product_id.lower()
+        ):
+            continue
+        try:
+            destination = urlparse(href)
+        except ValueError:
+            continue
+        if (
+            destination.scheme == "https"
+            and destination.netloc.lower() in {"member.bookwalker.jp", "member.bookwalker.jp:443"}
+            and destination.path.rstrip("/").lower() == expected_path
+            and not destination.params
+        ):
+            return True
+    return False
+
+
+def _has_bookwalker_reservation(
+    controls: list[dict[str, object]], current_product_id: str | None,
+) -> bool:
+    """Observe a matching product's preorder requirement without activating it."""
+
+    if not current_product_id or not _PRODUCT_PATH.fullmatch(f"/de{current_product_id}/"):
+        return False
+    for control in controls:
+        text, control_id = control.get("text"), control.get("uuid")
+        if (
+            control.get("action") == "reserve"
+            and isinstance(text, str)
+            and " ".join(text.split()) == "予約する"
+            and isinstance(control_id, str)
+            and control_id.lower() == current_product_id.lower()
+        ):
+            return True
+    return False
+
+
+def map_bookwalker_access_mode(
+    controls: list[dict[str, object]],
+    *,
+    current_product_id: str | None = None,
+    special: bool = False,
+) -> str:
     """Map observed reader controls to the Catalog access modes."""
 
     classifications = {classify_reader_control(control) for control in controls}
@@ -279,7 +341,12 @@ def map_bookwalker_access_mode(controls: list[dict[str, object]]) -> str:
         return "owned"
     if ReaderControlKind.MARUYOMI in classifications:
         return "quota"
-    if ReaderControlKind.TRIAL in classifications:
+    if (
+        _has_bookwalker_code_entry(controls, current_product_id)
+        or _has_bookwalker_reservation(controls, current_product_id)
+    ):
+        return "paid"
+    if not special and ReaderControlKind.TRIAL in classifications:
         return "paid"
     return "unknown"
 
@@ -345,15 +412,19 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                     f"BookWalker product page did not load: {product.external_id}"
                 ) from exc
             product_title = product.title or product_data["title"]
+            special = (
+                product.special
+                or is_bookwalker_special_title(product_data["title"])
+                or _has_bookwalker_code_entry(product_data["controls"], product.external_id)
+            )
             order_key, order_label = resolve_bookwalker_order(
                 product_title,
-                special=product.special,
+                special=special,
                 first_volume_candidate=product.external_id in first_volume_candidates,
             )
-            access_mode = (
-                "unknown"
-                if product.special
-                else map_bookwalker_access_mode(product_data["controls"])
+            access_mode = map_bookwalker_access_mode(
+                product_data["controls"], current_product_id=product.external_id,
+                special=special,
             )
             yield DiscoveredRecord(
                 item=DiscoveredItem(
@@ -643,22 +714,25 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
 
         latest_data: dict[str, object] | None = None
         elapsed = 0
-        trial_observed_at: int | None = None
+        paid_observed_at: int | None = None
         while elapsed < PRODUCT_CONTROL_WAIT_TIMEOUT_MS:
             await self._assert_account_state(page)
             data = await page.evaluate(_PRODUCT_METADATA_SCRIPT, product.external_id)
             latest_data = data
             if data["title"]:
-                access_mode = map_bookwalker_access_mode(data["controls"])
+                access_mode = map_bookwalker_access_mode(
+                    data["controls"], current_product_id=product.external_id,
+                    special=product.special or is_bookwalker_special_title(data["title"]),
+                )
                 if access_mode in {"owned", "quota"}:
                     return data
                 if access_mode == "paid":
-                    if trial_observed_at is None:
-                        trial_observed_at = elapsed
-                    elif elapsed - trial_observed_at >= PRODUCT_CONTROL_SETTLE_TIMEOUT_MS:
+                    if paid_observed_at is None:
+                        paid_observed_at = elapsed
+                    elif elapsed - paid_observed_at >= PRODUCT_CONTROL_SETTLE_TIMEOUT_MS:
                         return data
                 else:
-                    trial_observed_at = None
+                    paid_observed_at = None
             await page.wait_for_timeout(POLL_INTERVAL_MS)
             elapsed += POLL_INTERVAL_MS
         if latest_data is None or not latest_data["title"]:

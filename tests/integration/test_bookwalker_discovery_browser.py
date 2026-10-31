@@ -120,7 +120,9 @@ def _current_tile_listing_html(
     return f'<h1>シリーズ公式タイトル</h1><ul class="m-tile-list">{"".join(cards)}</ul>'
 
 
-def _access_control(access_mode: str, *, click_endpoint: bool = False) -> str:
+def _access_control(
+    access_mode: str, *, external_id: str, click_endpoint: bool = False,
+) -> str:
     onclick = " onclick=\"fetch('/__reader-click')\"" if click_endpoint else ""
     if access_mode == "owned":
         return f'<div id="js-read-check-book-cover-main-button"><a data-action-label="read_purchased" href="/viewer"{onclick}>読む</a></div>'
@@ -128,6 +130,14 @@ def _access_control(access_mode: str, *, click_endpoint: bool = False) -> str:
         return f'<button data-action-label="read_maruyomi"{onclick}>10分まる読み</button>'
     if access_mode == "paid":
         return f'<a data-action-label="trial_reading" href="?sample=1"{onclick}>試し読み</a>'
+    if access_mode == "code":
+        return (
+            f'<a data-action-label="enter_code" '
+            f'href="https://member.bookwalker.jp/app/03/products/{external_id}/purchase/confirm"'
+            f'{onclick}>コードを入力</a>'
+        )
+    if access_mode == "reservation":
+        return f'<button data-action-label="reserve" data-uuid="{external_id}"{onclick}>予約する</button>'
     if access_mode == "subscription":
         return '<button data-action-label="subscription_reading">読み放題で読む</button>'
     return ""
@@ -142,7 +152,9 @@ def _product_page_html(
     click_endpoint: bool = False,
     header: str = "",
 ) -> str:
-    control = _access_control(access_mode, click_endpoint=click_endpoint)
+    control = _access_control(
+        access_mode, external_id=external_id, click_endpoint=click_endpoint,
+    )
     initial = "" if delayed else control
     delayed_script = (
         f"<script>setTimeout(() => document.querySelector('#js-read-check').innerHTML = "
@@ -625,8 +637,11 @@ async def test_bookwalker_product_uuid_redirect_mismatch_is_incomplete(
     assert catalog.list_sources() == []
 
 
+@pytest.mark.parametrize(("access_mode", "expected"), [("paid", "unknown"), ("code", "paid"), ("owned", "owned")])
 async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_never_clicks(
     browser_page,
+    access_mode: str,
+    expected: str,
 ) -> None:
     normal = _uuid(16)
     special = _uuid(99)
@@ -637,7 +652,7 @@ async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_nev
             (normal, "作品名 #16 サブタイトル", False),
             (special, "〖購入特典〗『作品名 #16 サブタイトル』BOOK☆WALKER限定", False),
         ],
-        {normal: "paid", special: "paid"},
+        {normal: "paid", special: access_mode},
         click_endpoint_counter=clicks,
     )
 
@@ -652,7 +667,149 @@ async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_nev
     assert records[0].item.order_label == "第16巻"
     assert records[1].item.order_key is None
     assert "#16" in (records[1].item.order_label or "")
-    assert records[1].source.access_mode == "unknown"
+    assert records[1].source.access_mode == expected
+    assert clicks[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("control_kind", "placement", "expected", "order_key"),
+    [
+        ("code", "main", "paid", None),
+        ("code", "related", "unknown", "16"),
+        ("code", "different_product", "unknown", "16"),
+        ("code", "hidden", "unknown", "16"),
+        ("code", "different_host", "unknown", "16"),
+        ("reservation", "main", "paid", "16"),
+        ("reservation", "related", "unknown", "16"),
+        ("reservation", "different_product", "unknown", "16"),
+        ("reservation", "hidden", "unknown", "16"),
+        ("reservation", "series_reserve", "unknown", "16"),
+    ],
+)
+async def test_bookwalker_paid_action_scope_and_product_identity(
+    browser_page, monkeypatch: pytest.MonkeyPatch,
+    control_kind: str, placement: str, expected: str, order_key: str | None,
+) -> None:
+    monkeypatch.setattr(bookwalker_discovery, "PRODUCT_CONTROL_WAIT_TIMEOUT_MS", 200)
+    monkeypatch.setattr(bookwalker_discovery, "PRODUCT_CONTROL_SETTLE_TIMEOUT_MS", 50)
+    product = _uuid(16)
+    code = _access_control(
+        control_kind, external_id=_uuid(15) if placement == "different_product" else product,
+    )
+    if placement == "different_host":
+        code = code.replace("member.bookwalker.jp", "example.test")
+    if placement == "hidden":
+        code = f'<div style="display:none">{code}</div>'
+    if placement == "series_reserve":
+        code = code.replace('data-action-label="reserve"', 'data-action-label="series_reserve"')
+
+    async def fulfill(route) -> None:
+        if "/series/" in route.request.url:
+            body = _listing_html([(product, "作品名 #16", False)])
+        else:
+            body = _product_page_html(product, "unknown")
+            if placement == "related":
+                body += f'<article class="related">{code}</article>'
+            else:
+                body = body.replace('<div id="js-read-check"></div>', f'<div id="js-read-check">{code}</div>')
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    records = [record async for record in BookWalkerDiscoveryAdapter().iter_records(
+        browser_page, _series_target(), "full",
+    )]
+    assert records[0].source.access_mode == expected
+    assert records[0].item.order_key == order_key
+
+
+@pytest.mark.parametrize("initial_access", ["code", "reservation"])
+async def test_bookwalker_paid_action_settles_before_delayed_owned_control(
+    browser_page, initial_access: str,
+) -> None:
+    product = _uuid(16)
+
+    async def fulfill(route) -> None:
+        if "/series/" in route.request.url:
+            body = _listing_html([(product, "【購入特典】作品名 #16", True)])
+        else:
+            body = _product_page_html(product, initial_access)
+            owned = _access_control("owned", external_id=product)
+            body += (
+                "<script>setTimeout(() => document.querySelector('#js-read-check').innerHTML = "
+                f"{owned!r}, 150);</script>"
+            )
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    records = [record async for record in BookWalkerDiscoveryAdapter().iter_records(
+        browser_page, _series_target(), "full",
+    )]
+    assert records[0].source.access_mode == "owned"
+    assert records[0].item.order_key is None
+
+
+async def test_bookwalker_full_refreshes_existing_unknown_bonuses_without_resetting_items(
+    browser_page, tmp_path: Path,
+) -> None:
+    target = _series_target()
+    locked, owned = _uuid(18), _uuid(14)
+    products = [(locked, "【購入特典】作品名 #8", True), (owned, "【購入特典】作品名 #4", True)]
+    clicks = [0]
+    await _install_route(
+        browser_page, products, {locked: "code", owned: "owned"},
+        product_titles={identity: title for identity, title, _ in products},
+        click_endpoint_counter=clicks,
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    for identity in (locked, owned):
+        _seed_source(catalog, target, identity, "unknown")
+    before = {s.external_id: s for s in catalog.list_sources()}
+    completed = catalog.mark_item_completed(before[owned].item_id)
+    registry = DiscoveryAdapterRegistry()
+    registry.register("bookwalker", BookWalkerDiscoveryAdapter)
+    result = await DiscoveryService(catalog, registry).discover(browser_page, target, "full")
+
+    assert result.complete is True
+    after = {s.external_id: s for s in catalog.list_sources()}
+    assert {identity: s.id for identity, s in after.items()} == {identity: s.id for identity, s in before.items()}
+    assert {identity: s.access_mode for identity, s in after.items()} == {locked: "paid", owned: "owned"}
+    assert catalog.get_item(after[locked].item_id).status == "pending"
+    assert catalog.get_item(after[owned].item_id).status == "completed"
+    assert catalog.get_item(after[owned].item_id).completed_at == completed.completed_at
+    assert all(catalog.get_item(s.item_id).order_key is None for s in after.values())
+    assert not any(s.access_mode == "unknown" for s in after.values())
+    assert clicks[0] == 0
+
+
+@pytest.mark.parametrize("final_access", ["quota", "owned"])
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+async def test_bookwalker_preorder_refreshes_rights_only_after_new_discovery(
+    browser_page, tmp_path: Path, final_access: str, mode: str,
+) -> None:
+    product = _uuid(10)
+    target = _series_target()
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    _seed_source(catalog, target, product, "unknown")
+    original = catalog.get_source_by_external_id("bookwalker", product)
+    registry = DiscoveryAdapterRegistry()
+    registry.register("bookwalker", BookWalkerDiscoveryAdapter)
+    service = DiscoveryService(catalog, registry)
+    clicks = [0]
+    for observed, expected in (("reservation", "paid"), ("paid", "paid"), (final_access, final_access)):
+        await _install_route(
+            browser_page, [(product, "作品名 #10", False)], {product: observed},
+            click_endpoint_counter=clicks,
+        )
+        result = await service.discover(browser_page, target, mode)
+        source = catalog.get_source_by_external_id("bookwalker", product)
+        item = catalog.get_item(source.item_id)
+        assert result.error is None
+        assert result.complete is (True if mode == "full" else None)
+        assert source.id == original.id and source.item_id == original.item_id
+        assert source.access_mode == expected
+        assert source.quota_started_at is None
+        assert item.status == "pending"
+        assert item.order_key == "10"
     assert clicks[0] == 0
 
 
@@ -715,9 +872,12 @@ async def test_bookwalker_bounded_scope_selects_inclusive_listing_range(
     ] == expected
 
 
+@pytest.mark.parametrize(("bonus_access", "expected"), [("paid", "unknown"), ("code", "paid"), ("owned", "owned")])
 async def test_bookwalker_bounded_scope_preserves_special_product_semantics(
     browser_page,
     tmp_path: Path,
+    bonus_access: str,
+    expected: str,
 ) -> None:
     products = [
         (_uuid(16), "作品名 #16", False),
@@ -728,7 +888,7 @@ async def test_bookwalker_bounded_scope_preserves_special_product_semantics(
     await _install_route(
         browser_page,
         products,
-        {external_id: "paid" for external_id, _title, _special in products},
+        {_uuid(16): "paid", _uuid(15): bonus_access, _uuid(14): "paid"},
         product_observed_ids=observed_ids,
     )
 
@@ -748,7 +908,7 @@ async def test_bookwalker_bounded_scope_preserves_special_product_semantics(
     special_item = catalog.get_item(special_source.item_id)
     assert result.complete is True
     assert observed_ids == [_uuid(16), _uuid(15), _uuid(14)]
-    assert special_source.access_mode == "unknown"
+    assert special_source.access_mode == expected
     assert special_item.order_key is None
 
 
