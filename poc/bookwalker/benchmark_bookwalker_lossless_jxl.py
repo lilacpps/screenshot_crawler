@@ -12,7 +12,7 @@ decoder.  Install it in the benchmark environment with::
 
 Example::
 
-    python scripts/benchmark_bookwalker_lossless_jxl.py \\
+    python poc/bookwalker/benchmark_bookwalker_lossless_jxl.py \\
         "output/Books/ライトノベル/わたし、二番目の彼女でいいから。/わたし、二番目の彼女でいいから。-第01巻-西 条陽.zip" \\
         "output/Books/ライトノベル/アクセル・ワールド/アクセル・ワールド-アクセル・ワールド21 -雪の妖精--川原礫.zip" \\
         "output/Books/ライトノベル/スパイ教室/スパイ教室-スパイ教室06 《百鬼》のジビア-竹町.zip" \\

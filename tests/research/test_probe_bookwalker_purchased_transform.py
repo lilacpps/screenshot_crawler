@@ -9,7 +9,7 @@ from PIL import Image
 
 SCRIPT_PATH = (
     Path(__file__).parents[2]
-    / "scripts"
+    / "poc" / "bookwalker"
     / "probe_bookwalker_purchased_transform.py"
 )
 SPEC = importlib.util.spec_from_file_location(

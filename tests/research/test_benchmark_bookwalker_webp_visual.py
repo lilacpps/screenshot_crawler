@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 SCRIPT_PATH = (
-    Path(__file__).parents[2] / "scripts" / "benchmark_bookwalker_webp_visual.py"
+    Path(__file__).parents[2] / "poc" / "bookwalker" / "benchmark_bookwalker_webp_visual.py"
 )
 SPEC = importlib.util.spec_from_file_location("benchmark_bookwalker_webp_visual", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None

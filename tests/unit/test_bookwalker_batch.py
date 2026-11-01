@@ -4,6 +4,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import scripts.restore_bookwalker_quota as restore
 from screenshot_crawler.batch import BatchCandidate, BatchExecutionError, BatchExecutor
 from screenshot_crawler.catalog import (
     CatalogService,
@@ -190,3 +191,35 @@ async def test_bookwalker_quota_can_retry_after_next_window(tmp_path: Path) -> N
     assert result.stop_reason == "end"
     assert service.get_item(candidate.item_id).status == "completed"
     assert service.get_source(candidate.source_id).quota_started_at == next_window.isoformat()
+
+
+@pytest.mark.parametrize("first_failed", [True, False])
+async def test_manual_restore_allows_retry_or_next_book_but_not_automatic_retry(
+    tmp_path: Path, monkeypatch, first_failed: bool,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    first = make_candidate(service)
+    following = first if first_failed else make_candidate(service, order="02")
+    executor = make_executor(service, fail=first_failed)
+    options = {"output_root": tmp_path / "batch", "now": NOW}
+    if first_failed:
+        with pytest.raises(BatchExecutionError, match="crawler failed"):
+            await executor.execute_candidate(object(), first, **options)
+    else:
+        await executor.execute_candidate(object(), first, **options)
+    first_run = service.list_crawl_runs(source_id=first.source_id)[0]
+    first_item = service.get_item(first.item_id)
+
+    monkeypatch.setattr(restore, "now_jst", lambda: NOW)
+    assert restore.main(["--catalog", str(service.path), "--apply"]) == 0
+    assert service.get_crawl_run(first_run.id) == first_run
+    assert service.get_item(first.item_id) == first_item
+
+    # Consume the restored slot even when the following entry fails again.
+    FakeRunner.fail = True
+    with pytest.raises(BatchExecutionError, match="crawler failed"):
+        await executor.execute_candidate(object(), following, **options)
+    assert FakeRunner.calls == 2
+    with pytest.raises(BatchExecutionError, match="stale batch candidate"):
+        await executor.execute_candidate(object(), following, **options)
+    assert FakeRunner.calls == 2

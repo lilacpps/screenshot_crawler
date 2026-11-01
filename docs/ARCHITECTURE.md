@@ -537,6 +537,12 @@ Site Policyによるquota eligibility判定
 - BookWalker `direct` strategyからtrial/maruyomi/subscriptionへfallbackしない
 - `batch plan` はCatalogのstatus/local/quota stateを変更しない
 
+BookWalkerの手動local quota復元は `scripts/restore_bookwalker_quota.py` が
+既存Catalog APIを使い、current windowの予約1件を解除する。失敗後の再実行と
+成功後の次冊取得を同じ操作で扱う。job lock内でtimestamp compare-and-setを行い、
+履歴・Item status・Artifactは保持する。毎回のbackup、追加許可の保存用schema、
+Core/Runnerへのsite固有分岐は追加しない。既定dry-run、空き枠はno-op、複数予約は停止。
+
 ## 15. 移行状態
 
 Browser Session architectureは採用済みで、共通launcherとshared-profile live verificationまで完了している。

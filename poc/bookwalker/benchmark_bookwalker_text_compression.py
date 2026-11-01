@@ -8,7 +8,7 @@ variants of a page so that visual inspection is straightforward.
 
 Example::
 
-    python scripts/benchmark_bookwalker_text_compression.py \
+    python poc/bookwalker/benchmark_bookwalker_text_compression.py \
         --page "output/book/page-0151.png" \
         --page "output/book/page-0152.png" \
         --page "output/book/page-0153.png" \

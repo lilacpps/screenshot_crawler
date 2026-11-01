@@ -13,7 +13,7 @@ from PIL import Image
 
 SCRIPT_PATH = (
     Path(__file__).parents[2]
-    / "scripts"
+    / "poc" / "bookwalker"
     / "poc_bookwalker_lossless_jpeg_rearrange.py"
 )
 SPEC = importlib.util.spec_from_file_location(

@@ -2334,7 +2334,21 @@ CLIは `batch plan --site mangaone --catalog catalog.sqlite` と `batch run --si
 
 BookWalker Discoveryはseries listから商品URLを列挙し、商品ページのreader controlを観測してCatalogへ反映する。BookWalker Site Policyはsite-wide 1 quota / 05:00 JST half-open windowを評価し、`access_granted_until`をdirect判定に使わない。Batch Executorはquota candidateの`quota_started_at`をCrawler開始前に保存し、`access_granted_until=NULL`を許容する。同一window内の失敗はrefundせず、Executorの現在Catalog再検証で同一candidateをCrawlerへ再投入しない。Manga ONEの24時間grant挙動は維持する。実サイトquota clickは自動検証していない。
 
-誤ったlogout状態のBatch実行などで、実際のreader消費ではなくCatalog上の予約だけを戻す必要がある場合は、`scripts/restore_bookwalker_quota.py`を使う。既定はdry-runで、`--crawl-run-id`（failedかつquotaのCrawlRun）または`--source-id` / `--external-id`を指定し、`--apply`時には先にverified SQLite backupを作る。修復対象は`quota_started_at`と`access_granted_until`だけで、`access_mode`、CrawlRun、Item status、Artifactは変更しない。これはBookWalkerサーバー側の10分利用を巻き戻す機能ではない。executor実行中の同時修復は避ける。
+BookWalkerのlocal枠を手動で1枠戻すには `scripts/restore_bookwalker_quota.py` を使う。
+失敗後の再実行と、成功後に残時間で次の冊を取得する場合は同じ操作とする。
+既定dry-run、`--apply`でcurrent 05:00 JST windowの予約1件を解除する。
+`--catalog`以外の対象選択は提供せず、過去windowは変更しない。既に空き枠がある場合は
+no-op、複数予約は停止。自動backupは作らず、Catalog job lockと既存のtimestamp
+compare-and-set APIで対象Sourceの `quota_started_at` / `access_granted_until` をNULL化する。
+CrawlRun、Item status、Artifact、access modeは保持する。旧 `--crawl-run-id` /
+`--source-id` / `--external-id` / `--allow-expired` / `--backup-dir` は廃止した。
+枠の累積やサーバー側残時間の復元・推定は行わない。Batchの自動refund禁止とstrict entryは
+維持し、Catalog schema、Planner/Executor、Core/Runnerのproduction codeは変更しない。
+BookWalker専用調査scriptは `poc/bookwalker/`、関連Research testsは `tests/research/` へ移動した。
+通常運用は `scripts/README.md`、調査用途は `poc/bookwalker/README.md` を参照する。
+この変更のUnit/Research・CLI検証は完了したが、full suiteは変更範囲外のComicFUZ
+browser Integrationでtimeout/進行停止があり完走していない。検証範囲の詳細は
+`note/01_bookwalker.md` のlocal quota節を参照する。live quota操作は行っていない。
 
 ### 22.3 Discovery framework（実装済み）
 

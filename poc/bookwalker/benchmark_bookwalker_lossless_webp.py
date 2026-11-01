@@ -6,7 +6,7 @@ from memory; no archive is rewritten and no PNG is extracted to disk.
 
 Example::
 
-    python scripts/benchmark_bookwalker_lossless_webp.py \
+    python poc/bookwalker/benchmark_bookwalker_lossless_webp.py \
         "output/Books/ライトノベル/book-a/book-a.zip" \
         "output/Books/ライトノベル/book-b/book-b.zip" \
         --max-images 100

@@ -1631,6 +1631,17 @@ BookWalker quota candidateは、実readerを開く前に `quota_started_at` を
 永続化する。以後のcrawl / packagingが失敗しても同じwindow内では自動refundせず、
 自動再試行しない。次の05:00以降に再試行する。
 
+手動で再実行する場合は `scripts/restore_bookwalker_quota.py --apply` で
+current windowのlocal予約1件を解除し、次の1 quota attemptを許可できる。
+readerに入れなかった場合と、取得成功後に残時間で次の冊を取得する場合は
+同じ操作とし、failed CrawlRunだけに限定しない。解除するSourceの
+`quota_started_at` / `access_granted_until`はNULLに戻すが、CrawlRun、Item status、
+Artifact、access modeは保持する。既に枠が空いていればno-opであり、枠を累積しない。
+既定はdry-run、`--apply`時もDB backupを作らず、Catalog job lockと既存の
+timestamp compare-and-setで更新する。current windowに複数の予約がある場合は
+自動選択せず停止する。過去windowの解除とSource/CrawlRun指定は提供しない。
+サーバー側の残時間は変更・推定せず、strict quota entryは引き続き必須とする。
+
 BookWalkerのまる読み10分には、Manga ONEのようなsource単位の24時間再閲覧grantを
 仮定しない。BookWalkerでは `access_granted_until` をdirect判定の根拠にせず、
 初期仕様ではNULLのまま扱う。実装時はBatch Executorを、quota policyが

@@ -777,3 +777,20 @@ This trades a frozen preview of candidate counts for shorter startup and useful
 serial queues. It does not remove the actual Batch plan, make jobs parallel,
 modify site pacing, or apply Watchlist scope changes to Catalog before Discovery.
 
+## BookWalker local枠の手動復元と調査scriptの配置 (2026-11-01)
+
+reader entry失敗後の再実行と、成功後の残時間による次冊取得は、同じ手動操作で
+current windowのlocal枠を1枠戻すものとする。現行のsite-wide capacity=1では、
+`quota_started_at`の解除で対応できるため、追加許可の台帳やschemaは追加しない。
+CrawlRun・Item status・Artifactは保持する。枠は累積しない。
+
+`restore_bookwalker_quota.py`はcurrent windowの予約1件だけを扱い、既定dry-run、
+Catalog job lockとtimestamp compare-and-setを維持する。通常の小さなstate更新で
+毎回DB全体をbackupせず、Source/CrawlRun指定と過去日の修復optionも廃止する。
+複数予約は曖昧なまま処理せず停止する。自動refund/retry禁止とstrict entryは継続し、
+サーバー側の残時間の増加・推定は行わない。分数管理と残時間表示は今回の対象外とする。
+
+BookWalker専用の診断・Probe・圧縮比較・timing分析は再現手段として削除せず
+`poc/bookwalker/`へ移動し、関連の調査testは`tests/research/`へ分離する。
+`scripts/`は通常運用・保守用として整理する。
+

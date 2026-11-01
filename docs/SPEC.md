@@ -628,7 +628,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - active grant中は新規quotaを消費せず `access_strategy=direct` を選べる
 - 新規quota利用時は `access_strategy=quota` を選べる
 - Site Policyのquota rule自体をCrawlerへ渡さない
-- BookWalker Batchではlocal safety policyを05:00 JST区切り1 quota book/dayとし、`quota`はまる読み10分、`direct`は購入済みreaderへstrict entryする
+- BookWalker Batchではlocal safety policyの既定を05:00 JST区切り1 quota bookとし、明示的な手動操作で当日のlocal枠を1枠戻せる。`quota`はまる読み10分、`direct`は購入済みreaderへstrict entryする
 - Catalog metadataをCrawlerへoptional overrideとして渡せる
 - Catalog管理runはCrawlRunへ成功/失敗履歴を残し、crawl + packaging + Artifact persistence成功時だけitemをcompletedへ更新する
 
@@ -708,7 +708,7 @@ existing Screenshot Crawler
 - Batchは今回の実行意図を `access_strategy=auto|direct|quota` としてCrawlerへ渡す
 - Phase 5Aの `batch plan` は `pending` itemだけを対象に、Catalogを変更せず候補を表示する
 - Manga ONE Policyのlocal quota modelは4枠、09:00/21:00 JST reset、24時間grantである
-- BookWalkerの採用local quota modelは05:00 JST reset、site-wide 1 quota book/dayである。失敗しても同window内で自動refund/retryしない
+- BookWalkerの採用local quota modelは05:00 JST reset、site-wideの既定1 quota bookである。失敗しても同window内で自動refund/retryしない。`restore_bookwalker_quota.py`で失敗後の再実行・残時間による次冊取得を区別せず、当日のlocal枠を明示的に1枠戻せる。枠の累積やサーバー側残時間の加算は行わない
 - BookWalkerのstrict `quota` はまる読み10分以外へfallbackせず、strict `direct` は初期実装で購入済みfull reader以外へfallbackしない
 - title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
 - 同じWorkで話ごとにsiteが異なることを許容し、cross-site Itemを自動mergeせずDiscovery時に重複候補warningだけを出す

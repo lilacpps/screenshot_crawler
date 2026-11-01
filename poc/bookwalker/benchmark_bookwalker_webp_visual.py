@@ -7,7 +7,7 @@ production policy from image heuristics; page categories are user labels only.
 
 Example::
 
-    python scripts/benchmark_bookwalker_webp_visual.py \
+    python poc/bookwalker/benchmark_bookwalker_webp_visual.py \
         --text-page "output/book/page-0151.png" \
         --text-page "output/book/page-0152.png" \
         --text-page "output/book/page-0153.png" \

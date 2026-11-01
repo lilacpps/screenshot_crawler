@@ -898,7 +898,7 @@ PNG生成に成功した。sourceを保存したreferenceの寿命問題は避�
 一時sourceを安全に分類できることまでは証明していないため、実装は「source-native優先 + 失敗時は既存Canvas
 cropへfallback」とする。上記のdiagnostic結果を基に、今回の実装でBookWalker Adapterへこのcapture pathを組み込んだ。
 
-再現用scriptは`scripts/diagnose_bookwalker_native_source.py`、生成したdiagnostic PNG/JSONは
+再現用scriptは`poc/bookwalker/diagnose_bookwalker_native_source.py`、生成したdiagnostic PNG/JSONは
 `output/diagnostics/bookwalker-source-native/`配下に保存した。実サイトの画像はfixtureやcommitには含めない。
 
 ### 18.6 source-native production capture (2026-09-19)
@@ -936,7 +936,7 @@ GitHub `main` HEAD `727d051db3e847090f46c72f52d5a67a572d27f3`をauthorityとし�
 （`1/11`）、`f5b3ae37...&cty=0`（`1/60`）である。queryの`Policy`、`Signature`、`Key-Pair-Id`、
 `pfCd`、`cid`等の値はartifact metadataではredactし、本文画像はcommitしない。
 
-診断script `scripts/diagnose_bookwalker_original_source.py` は、Playwright response監視に加えて、
+診断script `poc/bookwalker/diagnose_bookwalker_original_source.py` は、Playwright response監視に加えて、
 本文epub hostだけを限定したroute fetchでresponse bodyを即時取得した。CDP `Network` metadataも
 併記し、URL、method、status、Content-Type、Content-Length、body bytes、magic bytes、拡張子、
 resource typeを記録した。page init scriptでは`Blob`相当、`URL.createObjectURL`、`fetch`、XHR、
@@ -1487,13 +1487,39 @@ Batch Executorはgrantなしquota policyを許容し、`quota_started_at`のみ�
 
 manual browserや別clientでの10分消費はCatalogから観測できない。
 
-Catalog上の誤ったquota予約を明示的に戻す運用には
-`scripts/restore_bookwalker_quota.py`を使う。既定はdry-runで、failedなquota
-`CrawlRun`を`--crawl-run-id`で指定して確認し、`--apply`時だけ自動backup後に
-`quota_started_at` / `access_granted_until`をNULL化する。CrawlRun、Item status、
-access mode、Artifactは変更しない。これはlocal reservationの修復であり、
-BookWalkerサーバー側で既に消費された10分をrefundするものではない。通常のBatch
-Executorは引き続き同一window内のautomatic refund/retryを行わない。
+local quotaを手動で1枠戻す運用には `scripts/restore_bookwalker_quota.py` を使う。
+reader entry失敗後の再実行と、取得成功後に残時間で次の冊を実行する場合は、
+どちらも同じ操作とする。current 05:00 JST windowの予約1件を自動選択し、
+`quota_started_at` / `access_granted_until`をNULL化して次の1回を許可する。
+CrawlRunの成功/失敗で制限せず、CrawlRun、Item status、access mode、Artifactは保持する。
+空き枠があればno-opで、複数回の許可を貯めない。複数予約がある場合は停止する。
+
+```powershell
+python scripts/restore_bookwalker_quota.py
+python scripts/restore_bookwalker_quota.py --apply
+```
+
+既定はdry-run。`--catalog`で対象DBを指定できる。存在しないDBは作らない。
+`--apply`時も自動backupを作らず、Catalog job lock内で既存のtimestamp
+compare-and-set APIを使う。旧Source/CrawlRun指定・過去window解除・backup指定は廃止した。
+これはlocal予約の解除であり、BookWalkerサーバー側の残時間を増やすものではない。
+分数管理・残時間の取得/表示は未実装で、strict quota entryを維持する。
+通常のBatch Executorは引き続き同window内のautomatic refund/retryを行わない。
+
+BookWalker専用の診断・Probe・圧縮比較・timing分析12本は `poc/bookwalker/` に置く。
+実行例と用途は `poc/bookwalker/README.md`、通常運用scriptの説明は
+`scripts/README.md` を参照する。関連7 test fileとnative診断側の3 testは
+`tests/research/` に置き、production native helperのtestは `tests/unit/` に残す。
+移動のみでviewer/captureの実装・live挙動は変更していない。
+
+この整理の検証は、utility・Policy・Batch・production native helper・移動した
+Researchの選択86件がPASS、skipなし。13 scriptの `--help`、`ruff check src tests
+scripts/restore_bookwalker_quota.py` とdiff checkもPASS。full suiteは385件PASS後に
+変更範囲外のComicFUZ `test_comicfuz_runner_crawls_verified_spreads_to_positive_end` が
+page-change timeoutで失敗した。同testは変更なしの単独再実行でPASSしたが、残りを
+再開した実行もComicFUZの異常系Integration内で数分間進行しなくなり中断したため、
+full suite全体の成功は確認していない。live quota操作・残時間確認は実施しておらず、
+通常Catalogの枠は変更していない。
 
 ### 20.4.1 Series-list live smoke and first-volume inference
 
@@ -1561,7 +1587,7 @@ fail-safeを確認する。実サイトでのquota消費を伴うauto-login live
 
 ### 20.7 JPEG delivery comparison probe (2026-09-30)
 
-Diagnostic-only probe added at scripts/probe_bookwalker_jpeg_delivery.py.
+Diagnostic-only probe added at poc/bookwalker/probe_bookwalker_jpeg_delivery.py.
 It reuses the existing BookWalker product-to-viewer entry, access strategy,
 render wait, page advance and native draw trace. It does not call production
 capture_page() and does not change production route patterns or response
@@ -1601,7 +1627,7 @@ and filter behavior were not changed.
 ### 20.8 Purchased JPEG transformation probe (2026-09-30)
 
 The diagnostic-only transformation probe is
-scripts/probe_bookwalker_purchased_transform.py. It accepts a purchased
+poc/bookwalker/probe_bookwalker_purchased_transform.py. It accepts a purchased
 product URL, uses the existing adapter entry/navigation and native draw
 selection, and does not call production capture_page() or change production
 JPEG/PNG selection. It saves raw JPEG candidates, native source crop PNGs,
@@ -1691,7 +1717,7 @@ changed by the probe itself.
 ### 20.10 Lossless JPEG coefficient rearrangement PoC (2026-09-30)
 
 The diagnostic-only PoC is
-`scripts/poc_bookwalker_lossless_jpeg_rearrange.py`. It consumes only the
+`poc/bookwalker/poc_bookwalker_lossless_jpeg_rearrange.py`. It consumes only the
 local output of the transformation probe and requires the complete proven
 part evidence, strict MCU alignment, equal source/destination dimensions,
 and a uniform complete tile bijection. It uses the installed `jpeglib`
@@ -1824,7 +1850,7 @@ fallback.
 ### 20.12 Phase P1 live shadow investigation (2026-09-30)
 
 This investigation changed only
-`scripts/probe_bookwalker_purchased_transform.py` and its unit tests. Production
+`poc/bookwalker/probe_bookwalker_purchased_transform.py` and its unit tests. Production
 BookWalker capture, purchased matching, and the 5,000-operation production
 trace limit were not changed.
 
@@ -1894,7 +1920,7 @@ a production behavior change.
 ### 20.13 Purchased p.1 original-JPEG A/B investigation (2026-09-30)
 
 This investigation uses
-`scripts/diagnose_bookwalker_original_jpeg_ab.py`. The script calls the
+`poc/bookwalker/diagnose_bookwalker_original_jpeg_ab.py`. The script calls the
 production `BookWalkerAdapter` methods, wraps selection/materialization/matcher
 calls read-only, and adds a bounded independent draw trace so older revisions
 can be compared with the current trace fields. It resets the persisted viewer
@@ -2876,7 +2902,7 @@ the traced HTMLCanvasElement source identity. This remains diagnostic evidence
 and is not production proof.
 
 The successful default run was summarized with
-`scripts/analyze_bookwalker_capture_timing.py`; values are milliseconds,
+`poc/bookwalker/analyze_bookwalker_capture_timing.py`; values are milliseconds,
 median / p90 / max. Capture-level values use five logical captures; part-level
 values use ten spread parts:
 

@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 SCRIPT_PATH = (
-    Path(__file__).parents[2] / "scripts" / "probe_bookwalker_jpeg_delivery.py"
+    Path(__file__).parents[2] / "poc" / "bookwalker" / "probe_bookwalker_jpeg_delivery.py"
 )
 SPEC = importlib.util.spec_from_file_location("probe_bookwalker_jpeg_delivery", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
