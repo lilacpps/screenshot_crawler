@@ -1,5 +1,71 @@
 # Comic DAYS
 
+## Free-period expiration and stale free-feed membership (2026-11-02)
+
+Discovery no longer aborts the entire work when a free-feed entry has current
+non-free/unreadable flags. It classifies the observed locked paid shape as
+`paid`: `can_read=false`, `is_free=false`, no purchase/point rental/ticket rental
+or ticket eligibility, `is_support_ticket=false`, null rental price/term/expiry,
+and a finite positive `buy_price`. Explicit non-free ticket rows (`is_free=false`,
+`is_support_ticket=true`) use the existing native ticket/grant classifier even
+when the free Atom still contains them: coherent locked zero-price, integer
+72-hour Work Ticket eligibility becomes `quota`, and valid active rentals become
+`quota` with observed expiry. Unsupported terms remain unknown and contradictory
+ticket price/expiry/flags still fail closed. Other false-free/readability
+disagreements become `unknown`. Missing/non-boolean access flags, ownership/unavailability,
+invalid metadata on otherwise coherent-free rows, and identity/count/order
+failures still stop before yielding any records. Ticket-less direct entry still
+requires classification `free` and rejects `paid`, `unknown` and `quota`; it never
+implicitly switches from direct access to ticket consumption.
+
+Read-only shared-CDP API observation for `cooking-papa` found 1,767 full entries,
+1,745 free-feed entries and 1,767 matching readable-product IDs in the same
+order. The previous classifier rejected 1,709 free-feed entries; its first six
+failures had the fully locked paid shape (`buy_price=80`). 36 were coherently
+free and 22 further entries were already outside the free feed and paid.
+This establishes the mismatch, but does not prove the feed's
+cache/expiration mechanism or the precise date public access ended.
+
+Run the existing `discover --key cooking-papa --mode full` to refresh past rows.
+Full updates current external access state while keeping completed status,
+completion timestamps, artifacts and files. Pending paid/unknown Items remain
+pending and are excluded by the existing Batch policy; if coherent free state
+returns, pending Items become eligible again. No new CLI/configuration is needed.
+The initial production CLI Full Discovery completed against shared-CDP live state
+using the dedicated `.tmp/comicdays-expiry-live-20261102/watchlist.yaml` and
+`catalog.sqlite`: `observed=1767`, `new=1767`, `known=0`, `complete=True`,
+`stopped_reason=exhausted`, with a complete 1,767-source listing proof.
+That initial isolated Catalog contains 36 free, 1,691 paid and 40 unknown Sources;
+it predates the ticket-classification correction and is not a current-classifier
+output. The 40 unknown rows occupy oldest-first positions 36..75. The first
+three probed rows exposed the supported locked Work Ticket metadata, revealing
+that the initial change incorrectly suppressed native quota classification.
+Current code lets those ticket rows reach the original validated ticket matcher.
+The operational Catalog/Watchlist and archive files remain untouched. No access
+resource click, capture or packaging is part of this verification.
+
+Read-only live reclassification then verified all 40 affected IDs against the
+unchanged full/free Atom feeds and native pagination total (1,767). Exactly two
+native 50-row pages, offsets 1650 and 1700, matched the corresponding full-Atom
+slices. All 40 rows now classify as `quota` using production code; all 40 remain
+in the free feed. Metadata-only results are in
+`.tmp/comicdays-expiry-live-20261102/ticket-reclassification.json`. This check
+does not consume a ticket or prove that the account has a charged Ticket at
+execution time; the existing live preflight remains responsible for availability.
+
+Validation: Comic DAYS Discovery/live-access/policy/Batch unit tests, shared
+Discovery tests and the artificial-browser listing-preview integration passed
+201 cases in 42.03 seconds, with zero skips. Coverage includes feed-listed quota
+and active-grant classification, unsupported/malformed ticket rejection,
+pending quota Batch eligibility, completed timestamps/artifacts/file preservation,
+restored-free eligibility, preview replay, and rejection of quota in ticket-less
+direct entry. `ruff check src tests --no-cache` and `git diff --check` passed.
+Full pytest and Research were not rerun for this site-local classifier change;
+viewer/capture/consumption code was unchanged. Actual Batch capture/packaging and
+ticket consumption were not rerun. Full CLI reconciliation was verified before
+this follow-up; current ticket classification was live-verified for all affected
+rows without another full Catalog write.
+
 ## Intermittent tail timeout and transition diagnostics (2026-10-31)
 
 Metrics run `90df8b75ccf744109922bd32f07ee2a9` completed 13 candidates before
@@ -261,8 +327,11 @@ The free Atom membership is authoritative only with coherent free state:
 rental, and no expiry. The live Work5 listing also emits two free rows with
 `is_support_ticket=true`, numeric zero `rental_price`, and integer
 `rental_term=72`; this observed supporting metadata remains `free` and never
-becomes a quota candidate. Other malformed or contradictory combinations fail
-closed before any record is yielded. Work Ticket GraphQL may explicitly return
+becomes a quota candidate. A free-feed entry with false `can_read` or `is_free`
+instead uses the validated native ticket/grant classifier, the strictly observed
+`paid` shape, or safe `unknown` as described
+above. Other malformed or contradictory combinations fail closed before any
+record is yielded. Work Ticket GraphQL may explicitly return
 `series.ticket=null` for a work with no Work Ticket contract. That state is
 preserved as Ticket-not-present (`is_charged=None`) and is accepted only for a
 direct target that is also present in the authoritative `free_only=1` feed and

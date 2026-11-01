@@ -211,7 +211,7 @@ async def test_live_access_allows_absent_ticket_only_for_free_feed_target(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", [
     "count", "missing_target", "unknown_free", "free_order", "page_order",
-    "short_page", "duplicate", "foreign_url", "paid", "owned", "expiry", "oversized",
+    "short_page", "duplicate", "foreign_url", "paid", "unknown", "quota", "owned", "expiry", "oversized",
 ])
 async def test_ticket_free_target_rejects_incoherent_listing(fault: str) -> None:
     ids = [str(i + 1) for i in range(51)]
@@ -234,9 +234,11 @@ async def test_ticket_free_target_rejects_incoherent_listing(fault: str) -> None
         rows[-1] = rows[0]
     elif fault == "foreign_url":
         rows[0]["viewer_uri"] = "https://comic-days.com/episode/99"
-    elif fault == "paid":
+    elif fault in {"paid", "unknown"}:
         rows[0]["purchase_info"].update(can_read=False, is_free=False)
-        rows[0]["status"]["buy_price"] = 100
+        rows[0]["status"]["buy_price"] = 100 if fault == "paid" else None
+    elif fault == "quota":
+        rows[0] = _row("1")
     elif fault == "owned":
         rows[0]["purchase_info"]["has_purchased"] = True
     elif fault == "expiry":

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import textwrap
 from dataclasses import replace
@@ -105,12 +106,13 @@ def test_access_observation_classifies_free_ticket_grant_paid_and_unknown() -> N
     assert comicdays_access_observation(unsupported, free=False, now=now) == ("unknown", None, False)
 
 
+@pytest.mark.parametrize("free_feed", [False, True])
 @pytest.mark.parametrize("term", [None, True, "72", 71, 73])
-def test_access_observation_excludes_unsupported_locked_ticket_contract(term: object) -> None:
+def test_access_observation_excludes_unsupported_locked_ticket_contract(term: object, free_feed: bool) -> None:
     row = _row("5", ticket=True)
     row["status"]["rental_term"] = term
     assert comicdays_access_observation(
-        row, free=False, now=datetime(2026, 10, 3, tzinfo=UTC)
+        row, free=free_feed, now=datetime(2026, 10, 3, tzinfo=UTC)
     ) == ("unknown", None, False)
 
 
@@ -120,6 +122,45 @@ def test_access_observation_accepts_free_feed_ticket_support_metadata_without_qu
     assert comicdays_access_observation(
         row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
     ) == ("free", None, True)
+
+
+@pytest.mark.parametrize("price", [80, 80.0])
+def test_access_observation_uses_locked_paid_state_despite_free_feed(price) -> None:
+    row = _row("6", paid=True)
+    row["status"]["buy_price"] = price
+    assert comicdays_access_observation(
+        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+    ) == ("paid", None, True)
+
+
+@pytest.mark.parametrize("price", [None, 0, -1, True, "80", float("nan"), float("inf")])
+def test_access_observation_free_feed_with_unproven_price_is_unknown(price) -> None:
+    row = _row("6", paid=True)
+    row["status"]["buy_price"] = price
+    assert comicdays_access_observation(
+        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+    ) == ("unknown", None, False)
+
+
+@pytest.mark.parametrize("state", ["can_read", "is_free", "rental_metadata"])
+def test_access_observation_free_feed_conflict_never_grants_access(state) -> None:
+    row = _row("6", paid=True)
+    if state in {"can_read", "is_free"}:
+        row["purchase_info"][state] = True
+    else:
+        row["status"].update(rental_price=0, rental_term=72)
+    assert comicdays_access_observation(
+        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+    ) == ("unknown", None, False)
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_access_observation_free_feed_does_not_override_native_ticket_state(active) -> None:
+    expiry = "2099-01-01T00:00:00Z" if active else None
+    row = _row("6", ticket=not active, grant=active, end=expiry)
+    assert comicdays_access_observation(
+        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+    ) == ("quota", datetime.fromisoformat(expiry) if expiry else None, True)
 
 
 @pytest.mark.parametrize(
@@ -162,11 +203,12 @@ def test_access_observation_rejects_malformed_active_grant() -> None:
         lambda row: row["status"].update(rental_price=True),
     ],
 )
-def test_access_observation_rejects_conflicting_or_unavailable_rows(mutate) -> None:
+@pytest.mark.parametrize("free_feed", [False, True])
+def test_access_observation_rejects_conflicting_or_unavailable_rows(mutate, free_feed) -> None:
     row = _row("1", ticket=True)
     mutate(row)
     with pytest.raises(DiscoveryIncompleteError):
-        comicdays_access_observation(row, free=False, now=datetime(2026, 10, 3, tzinfo=UTC))
+        comicdays_access_observation(row, free=free_feed, now=datetime(2026, 10, 3, tzinfo=UTC))
 
 
 def test_access_observation_expired_or_naive_grant_is_fail_closed() -> None:
@@ -815,7 +857,7 @@ async def test_discovery_rejects_late_access_contradiction_before_yield(monkeypa
         return [full[1]] if free_only else full
     async def total(_page: object, _series: str, _episode: str) -> int:
         return 2
-    contradictory = _row("1", ticket=True)
+    contradictory = _row("1", free=True)
     contradictory["status"]["rental_end_at"] = "2026-10-06T00:00:00Z"
     async def bulk(_page: object, _series: str, *, expected_total: int) -> list[dict]:
         assert expected_total == 2
@@ -826,6 +868,76 @@ async def test_discovery_rejects_late_access_contradiction_before_yield(monkeypa
     target = WatchlistTarget("k", "w", "comicdays", "https://comic-days.com/episode/1", "x")
     with pytest.raises(DiscoveryIncompleteError):
         await anext(discovery_module.ComicDaysDiscoveryAdapter().iter_records(_FakePage(), target, "full"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expired_mode", ["paid", "unknown", "quota"])
+async def test_full_refresh_after_free_period_preserves_completed_and_updates_batch(
+    tmp_path, monkeypatch, comicdays_listing, expired_mode
+) -> None:
+    _, target = comicdays_listing
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    target = watchlist.add(
+        key=target.key, work_key=target.work_key, site=target.site, url=target.url,
+        label=target.label, archive_order=10,
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    registry = DiscoveryAdapterRegistry()
+    registry.register("comicdays", discovery_module.ComicDaysDiscoveryAdapter)
+    service = DiscoveryService(catalog, registry)
+    first = await service.discover(_FakePage(), target, "full")
+    assert first.complete is True
+    sources = {source.external_id: source for source in catalog.list_sources()}
+    completed = catalog.mark_item_completed(sources["1"].item_id)
+    archive_path = tmp_path / "existing.zip"
+    archive_path.write_bytes(b"existing archive")
+    artifact = catalog.create_artifact(
+        item_id=completed.id, kind="archive", format="zip", locator=str(archive_path),
+        storage_backend="local", state="present", byte_size=archive_path.stat().st_size,
+        sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+    )
+
+    async def changed_rows(*_args, **_kwargs):
+        # The free feed still lists 2/1, but current API access has changed.
+        rows = [_row("3", paid=True), _row("2", paid=True), _row("1", paid=True)]
+        if expired_mode == "unknown":
+            rows[1]["status"]["buy_price"] = None
+        elif expired_mode == "quota":
+            rows[1] = _row("2", ticket=True)
+        return rows
+
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", changed_rows)
+    refreshed = await service.discover(_FakePage(), target, "full")
+    assert refreshed.complete is True and refreshed.observed_count == 3
+    assert refreshed.new_count == 0 and refreshed.known_count == 3
+    assert catalog.get_source(sources["2"].id).access_mode == expired_mode
+    assert catalog.get_item(sources["2"].item_id).status == "pending"
+    assert catalog.get_source(sources["1"].id).access_mode == "paid"
+    assert catalog.get_item(completed.id).status == "completed"
+    assert catalog.get_item(completed.id).completed_at == completed.completed_at
+    assert catalog.get_artifact(artifact.id) == artifact
+    assert archive_path.read_bytes() == b"existing archive"
+    assert catalog.get_discovery_inventory_evidence(target.key) is not None
+    policies = SitePolicyRegistry()
+    policies.register("comicdays", ComicDaysSitePolicy)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    candidates = planner.plan(site="comicdays").candidates
+    if expired_mode == "quota":
+        assert [candidate.source_id for candidate in candidates] == [sources["2"].id]
+        assert candidates[0].access_strategy == "quota"
+    else:
+        assert not candidates
+
+    # Returning to a coherent free state restores pending eligibility only.
+    async def free_rows(*_args, **_kwargs):
+        return [_row("3", paid=True), _row("2", free=True), _row("1", free=True)]
+
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", free_rows)
+    assert (await service.discover(_FakePage(), target, "full")).complete is True
+    assert [candidate.source_id for candidate in planner.plan(site="comicdays").candidates] == [sources["2"].id]
+    assert catalog.get_item(completed.id).status == "completed"
+    assert catalog.get_artifact(artifact.id) == artifact
 
 
 def test_comicdays_fresh_sync_records_native_grant_and_clears_stale_grant(tmp_path) -> None:

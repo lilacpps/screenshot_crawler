@@ -238,7 +238,24 @@ def comicdays_access_observation(
     )
     if any(not isinstance(value, bool) for value in boolean_values):
         raise DiscoveryIncompleteError("Comic DAYS listing row had a malformed access flag")
-    if free:
+    # A stale free-feed entry must not hide an explicit non-free ticket state.
+    # Let the existing native ticket/grant checks below validate that state.
+    if free and not (is_free is False and is_support_ticket is True):
+        if can_read is False or is_free is False:
+            # The free Atom feed can retain entries after public access ends.
+            # Only the observed, fully locked paid shape overrides membership;
+            # other disagreements remain unknown (ticket states are handled below).
+            if (
+                can_read is False and is_free is False
+                and has_rented is False and rentable is False
+                and is_support_ticket is False and rental_end is None
+                and status.get("rental_price") is None
+                and status.get("rental_term") is None
+                and _finite_number(status.get("buy_price"))
+                and float(status["buy_price"]) > 0
+            ):
+                return "paid", None, True
+            return "unknown", None, False
         free_ticket_metadata = (
             is_support_ticket is True
             and _finite_number(status.get("rental_price"))

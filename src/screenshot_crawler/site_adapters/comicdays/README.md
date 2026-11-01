@@ -13,7 +13,20 @@ The official free-feed membership is authoritative for a coherent free row:
 unavailability, and no expiry. Comic DAYS currently also emits two such free
 rows with `is_support_ticket=true`, numeric `rental_price=0`, and integer
 `rental_term=72`; this metadata is supporting evidence and remains `free`,
-never `quota`. Malformed or contradictory variants remain fail-closed.
+never `quota`. If the free feed retains an episode whose current access flags
+are non-free or unreadable, Discovery continues with a safe classification:
+`paid` only when both flags are false, all purchase/rental flags are false,
+`is_support_ticket=false`, all rental metadata is null, and `buy_price` is a
+finite positive number. An explicit non-free ticket state (`is_free=false`,
+`is_support_ticket=true`) instead uses the existing native ticket/grant checks:
+eligible zero-price 72-hour Work Tickets become `quota`; active ticket rentals
+become `quota` with the validated expiry. Other unclassified disagreements become
+`unknown`. Paid/unknown classifications are excluded from Batch. Missing/malformed access flags, ownership,
+unavailability, malformed coherent-free metadata, and listing identity/count/order
+failures still stop the complete observation before yielding. Ticket-less direct
+initialization still requires the resulting classification to be `free`.
+Full Discovery refreshes external access state for pending and completed Items
+while preserving completed status, timestamps, artifacts, and saved files.
 For works without a Work Ticket contract, the live GraphQL response may
 explicitly contain `series.ticket=null`. The adapter preserves that as a
 Ticket-not-present state and accepts it only when the target is in the

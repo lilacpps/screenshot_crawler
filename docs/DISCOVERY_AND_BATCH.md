@@ -1252,6 +1252,19 @@ free_until = <known expiry>
 
 site上で終了日時を取得できない場合、`free_until = NULL` を許容する。手動status上書きを標準運用にはしない。
 
+Comic DAYSでは、公式無料Atomに残る話でも、現在のreadable-product APIが
+`can_read=false`かつ`is_free=false`、購入・レンタル・チケット利用可否の各flagがfalse、
+`is_support_ticket=false`、全rental metadataがNULL、有限の正の`buy_price`という
+観測済みの有料状態なら`paid`へ更新する。無料Atom掲載だけで無料とはみなさない。
+無料Atom掲載話でも、`is_free=false`かつ`is_support_ticket=true`なら既存の
+readable-productチケット判定を適用する。閲覧不可・未レンタル・チケット利用可能、
+価格0・整数72時間・期限NULLの対応済み状態は`quota`、確認済み有効レンタルは
+`quota`と観測した期限に更新する。無料feedへの掲載はこの現在の状態を上書きしない。
+その他の無料／閲覧可否の不一致で分類を確定できない場合は`unknown`として継続する。
+必須flagの欠落・型不正、ownership/unavailable状態、無料flagが揃った行の不正metadata、
+一覧identity・件数・順序の不整合は引き続きincompleteとする。
+Full Discoveryは通常のexternal state更新を行い、取得済みItemのstatus・履歴・Artifactは維持する。
+
 カドコミの検証済み形式の公開WEB話一覧では、アクセス制限表示がなく配信期限もない行を、作品IDによらず `free + free_until=NULL` とする。将来の配信期限がある行は `free + free_until`、期限切れ（現在時刻と同時を含む）は `unknown` とする。有料・購入・ログイン・チケット等の制限表示、期限の不正形式、一覧構造や話の識別が不明な場合は従来どおりfail-closedとする。これはカドコミDiscoveryの分類規則であり、一般の `unknown` SourceをBatchで無料扱いする規則ではない。既存の過去話へ反映する際は `full` Discoveryを使う。
 
 ## 8. Discovery mode
