@@ -80,3 +80,5 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [Windows GUI — Watchlist一覧・話数チェックでscope編集](gui-watchlist-scope-editor/README.md) —
   サイト別/作品別のWatchlist編集、完全話数一覧から連続範囲＋個別除外を指定、
   read-only事前プレビュー、Full DiscoveryとScope同期の段階適用（planned）。
+
+- [Watchlist URL一括登録](watchlist-url-registration/README.md) — URL形式自動検証・安全変換、作品名とhuman-readable key/work_key生成、複数URLと同一Workのscope編集、一括保存の段階実装（planned）。
