@@ -326,6 +326,43 @@
   [CAPABILITIES](06-site-coverage/CAPABILITIES.md), with unsupported reasons.
   Hanayume scoped public links alone do not prove native episode/Work/order/full
   inventory; Magapoke work redirect is not followed. No guessed seed conversion.
-- Final isolated full suite is running from `full-stage06`, with git-archived
-  tracked default YAML and final src/tests overlay + SHA256 manifest. Operational
-  YAML is never used. Completion status and final review follow its result.
+- Isolated full verification uses `full-stage06`, git-archived tracked default
+  YAML and final src/tests overlay; all 352 source/test SHA256 entries match.
+  YAML matches tracked HEAD after newline normalization; operational YAML is
+  never read. Initial all-in-one run timed out in pytest_asyncio's finalizer for
+  unchanged ComicFUZ test_comicfuz_other_episode_route, as in earlier Stage05
+  investigation. Stack/timeout recorded; no test condition/fixture was changed.
+  Pytest-timeout had already ended the process before attempted own-process
+  cleanup (PID was not found); shared CDP/user GUI was never targeted.
+- Full collection: 6,644 nodeids. The unchanged ComicFUZ browser file rerun alone
+  passed 69/69, zero skipped, 175.04s, normal teardown/exit0. The complementary
+  default suite excluding only that exact file is running (expected6,575).
+  An isolated reporting-only plugin records collection/start/report/finish; it
+  changes no fixture, result or selection. Final union and full outcomes pending.
+
+## Stage 06 observation cleanup hardening — 2026-11-03 JST
+
+- Extra caller-level synthetic regression reproduced an actual delayed POST
+  escaping between context unroute and BrowserSession.close_page's scheduled
+  Page close, even with no deliberate caller wait (normal/error 0ms cases).
+  This was treated as BLOCKING and fixed, never accepted as a timing flake.
+  The sentinel used an artificial local document and intercepted POST; no real
+  site POST, resource action or operational data was involved.
+- Small fix retains the existing restrictive Page route after observation;
+  finally sets used=True, so every later request is denied until dedicated Page
+  close. Caller owns/always closes the Page; no Page reuse exists in the five
+  current observers. Shared context/browser routes are never touched. Normal,
+  unavailable, rejected and runtime-error paths retain the restriction.
+- Final targeted/affected rerun: 469 passed, zero skipped, 39 dependency warnings,
+  111.48s. Includes lifecycle16, all metadata35/conversion26 browser cases,
+  GUI, resolver/draft/detail/save and affected Piccoma Discovery/Kadocomi tests.
+  Earlier smaller post-fix98-case run also passed. Ruff src/tests passed.
+- Independent Reviewer reproduced original race, then separately ran fixed
+  lifecycle16: all passed, zero skipped; BLOCKER resolved / gate PASS.
+  The 16 cases cover 0/20ms timer, immediate/100ms delayed close, and all four
+  success/error categories. Core and all four affected site notes synchronized.
+- The ongoing broad full run is the frozen a87e16b source/test baseline; it is
+  intentionally not mutated during execution. Final guard and this new test
+  file are verified separately by the full affected suite above. Final reporting
+  must distinguish baseline full results from post-fix validation, and must not
+  claim the entire broad suite ran the final guard. Stage07 remains untouched.

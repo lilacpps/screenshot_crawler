@@ -17,7 +17,7 @@ class ObservationRejected(ObservationUnavailable):
 
 @asynccontextmanager
 async def registration_document(page, url):
-    """Allow one exact main-frame GET, no redirects or subresource dispatch."""
+    """Guard a dedicated Page until caller closes it, including after observation."""
     used, violations = False, []
 
     async def restrict(route):
@@ -58,7 +58,9 @@ async def registration_document(page, url):
             raise ObservationRejected("作品情報の取得でredirect等を拒否しました") from None
         raise ObservationUnavailable("作品情報の通信を確認できませんでした（手動確認可）") from None
     finally:
-        await page.unroute("**/*", restrict)
+        # Removing the handler races timers with BrowserSession.close_page().
+        # Keep denying requests until the caller closes this dedicated Page.
+        used = True
 
 
 async def require_canonical(page, expected):

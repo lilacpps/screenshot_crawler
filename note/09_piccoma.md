@@ -34,6 +34,8 @@ One listing GET only; no viewer or persisted data was touched. Artificial browse
 tests cover count/order/foreign/duplicate/status/free/error/redirect failures;
 existing Discovery keeps latest-first output and existing scopes after sharing
 only its row extraction/validation helpers.
+The observation restriction remains on its dedicated Page through final close,
+including delayed-script/error cleanup; no unroute-to-close request window remains.
 
 # Piccoma current implementation snapshot
 

@@ -2631,6 +2631,9 @@ No reader/resource operation or save-time network occurs. Missing Work title may
 be manually confirmed after URL proof; missing conversion proof may not. YAML
 stores the proved seed, with original input separately shown in final preview.
 This evidence does not enable a complete-list WorkEditor capability (Stage07).
+Observations use dedicated Pages and retain their restrictive Page route through
+caller cleanup/close, including error paths. Pages are not reused for browsing;
+context-wide routing or the shared browser is never changed.
 
 ## Registration candidate drafts (Stage 02)
 

@@ -122,6 +122,15 @@ free DOM1 episode1910027, title and pure save validation without reader/resource
 Native Windows Qt 980x800/1200x940 and YAML modal captures used isolated synthetic
 data, with unchanged stores. Full test/review outcomes are in registration PROGRESS.
 
+Registration observation requires a dedicated Page. Its restrictive route stays
+installed after the observation context ends and denies all remaining requests
+until the caller closes the Page. This closes a synthetic 0ms delayed-POST race
+between unroute and BrowserSession.close_page's scheduled close, observed on
+both normal and error cleanup. Existing callers close their own Page; they do not
+reuse it. No shared context/browser route is installed or removed. Lifecycle
+regression covers normal/unavailable/rejected/runtime-error paths, 0/20ms timers,
+and immediate/100ms delayed cleanup. No actual site POST is used by this test.
+
 ## URL registration final preview and save (Stage 05, 2026-11-03)
 
 `registration/service.py` composes selected ready Work member patches into one

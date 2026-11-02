@@ -9,6 +9,9 @@ Independent Reviewer design gate passed subject to the following boundaries.
   opt-in conversion observer handles only such declared candidates.
 - Use one exact guarded work/listing document GET; no redirects, subresources,
   POSTs, reader, Discovery, Catalog/Watchlist/ZIP writes or resource actions.
+  Observation owns a dedicated Page only. Its restrictive route remains until
+  that Page closes, including success/error/exception cleanup; it is not removed
+  at context exit. The caller closes its Page and never reuses it for browsing.
 - Canonical, list container/order, unique declared count and exact DOM count,
   every row's same product/unique episode/complete status structure must agree.
   Select the first row in the observed oldest-first DOM order whose existing

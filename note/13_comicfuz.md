@@ -11,6 +11,9 @@ Viewer-to-work conversion remains unsupported. One-work shared-CDP live check
 passed for work 1970 (城下町のダンデライオン), 2026-11-03 05:54 JST; no reader,
 Discovery, Catalog/Watchlist/ZIP write or resource operation occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
+The registration Page is dedicated and its restrictive route remains through
+caller cleanup until Page close, including error/delayed-script paths. It is
+never reused for reading or Discovery; shared browser/context routing is untouched.
 
 # 13. ComicFUZ 現行実装ノート
 

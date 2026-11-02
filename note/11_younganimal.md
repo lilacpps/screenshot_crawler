@@ -11,6 +11,9 @@ and POSTs are blocked. Episode-to-series conversion remains unsupported.
 Shared-CDP live check for series 7103c2c1e9f08 returned 藍より青し on
 2026-11-03 05:54 JST; no episode/reader, resource, Discovery or data write occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
+The registration Page is dedicated and its restrictive route remains through
+caller cleanup until Page close, including error/delayed-script paths. It is
+never reused for reading or Discovery; shared browser/context routing is untouched.
 
 # 11. Younganimal current implementation
 

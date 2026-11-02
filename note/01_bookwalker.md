@@ -11,6 +11,9 @@ subresources and POSTs are blocked. Product-to-series conversion is unsupported.
 One-work shared-CDP live verification passed for series 317089 at 05:54 JST on
 2026-11-03; no product/reader was opened and no data/resource action occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
+The registration Page is dedicated and its restrictive route remains through
+caller cleanup until Page close, including error/delayed-script paths. It is
+never reused for reading or Discovery; shared browser/context routing is untouched.
 
 # 01. BookWalker 現行実装ノート
 
