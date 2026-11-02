@@ -563,7 +563,7 @@ class MainWindow(QMainWindow):
             if editor is not None and not getattr(editor, "_closed", False):
                 editor.set_active_job(active or busy)
         if self._jobs_page is not None:
-            self._jobs_page.set_start_blocked(busy)
+            self._jobs_page.set_start_blocked(busy or self._registration_open())
         self._on_checked_changed(self.model.selected_keys)
         self.tree.viewport().update()
 
@@ -1132,9 +1132,11 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             self._start_execution(request)
             self.statusBar().showMessage('Full Discoveryジョブをキューに登録しました')
+        else:
+            self.statusBar().showMessage('Watchlist保存済み。Full Discovery未実行・Catalog未同期です')
     @Slot(object)
     def _start_execution(self, request: object) -> None:
-        if self._discovery_busy():
+        if self._discovery_busy() or self._registration_open():
             self.error_label.setText("Watchlistの保存・再読込完了を待ってから実行してください")
             return
         if not isinstance(request, JobExecutionRequest):
@@ -1307,16 +1309,27 @@ class MainWindow(QMainWindow):
         if reason:
             self.error_label.setText(reason)
             return
+        if editor is not None and (editor.dirty or editor.task is not None):
+            editor.show()
+            editor.raise_()
+            editor.activateWindow()
+            self._refresh_discovery_controls()
+            return
         from .url_registration import UrlRegistrationDialog
         if editor is not None:
             editor.deleteLater()
         self._registration_editor = UrlRegistrationDialog(
             self.watchlist_path, self.catalog_path, self.runtime_path,
             snapshot=self.model.snapshot, parent=self)
+        self._registration_editor.watchlistSaved.connect(self.reload)
+        self._registration_editor.fullRequested.connect(self._run_work_full)
         self._registration_editor.show()
+        self._refresh_discovery_controls()
 
     def _run_work_full(self, payload) -> None:
-        if self._job_controller is not None and self._job_controller.active_job_id is not None:
+        if self._job_controller is not None and (self._job_controller.active_job_id is not None
+                or getattr(self._job_controller, "orphaned_live_worker", False)
+                or getattr(self._job_controller, "supervision_error", False)):
             self.error_label.setText("保存済みですが実行中JobがあるためFullを開始できません")
             return
         self._pending_work_full = payload

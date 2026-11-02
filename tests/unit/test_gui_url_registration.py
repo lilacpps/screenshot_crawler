@@ -14,6 +14,7 @@ from screenshot_crawler.gui.url_registration import UrlRegistrationDialog
 from screenshot_crawler.registration.draft import BatchRegistrationDraft
 from screenshot_crawler.registration.resolver import UrlResolver
 
+SHOW_PREVIEW = UrlRegistrationDialog._show_preview
 A = "https://shonenjumpplus.com/episode/123"
 B = "https://comic-days.com/episode/456"
 K = "https://comic-walker.com/detail/KC_004915_S"
@@ -40,7 +41,12 @@ def gui(tmp_path, monkeypatch):
     runtime.write_text("{}\n", encoding="utf-8")
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     catalog.initialize()
-    draft = BatchRegistrationDraft((), "revision", UrlResolver(_discovery_registry()))
+    from screenshot_crawler.management.catalog_reader import CatalogInventoryReader
+    from screenshot_crawler.watchlist.service import WatchlistService
+    base, revision = WatchlistService(path).read_snapshot()
+    draft = BatchRegistrationDraft(base, revision, UrlResolver(_discovery_registry()),
+        catalog_snapshot=CatalogInventoryReader().read(catalog.path))
+    monkeypatch.setattr(UrlRegistrationDialog, "_show_preview", lambda self, summary: None)
     dialog = UrlRegistrationDialog(path, catalog.path, runtime, draft=draft)
     dialog.metadata.setChecked(False)
     dialog.show()
@@ -314,3 +320,216 @@ def test_draft_preview_keeps_existing_open_segment_scope(gui, tmp_path):
     editor.dirty = False
     editor.close()
     editor.deleteLater()
+
+
+def preview_and_save(dialog):
+    dialog.preview_edit()
+    wait_for(lambda: dialog.task is None)
+    assert dialog.preview is not None, dialog.status.text()
+    dialog.save_edit()
+    wait_for(lambda: dialog.task is None)
+
+
+@pytest.mark.parametrize("outcome", ["no", "yes", "failure"])
+def test_url_to_atomic_save_main_reload_and_single_full_confirmation(gui, tmp_path, monkeypatch, outcome):
+    import asyncio
+
+    from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
+    from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+    from screenshot_crawler.gui.main_window import MainWindow
+    from screenshot_crawler.management.inventory import InventoryService
+    from screenshot_crawler.watchlist.service import WatchlistService
+    from tests.unit.test_gui_work_editor import SyntheticFull
+    dialog, _app = gui
+    window = MainWindow(dialog.catalog, dialog.path, dialog.runtime_path,
+        management_path=tmp_path / "management.sqlite", auto_load=False)
+    window.set_snapshot(InventoryService().load(dialog.catalog, dialog.path, runtime_path=dialog.runtime_path))
+    window._registration_editor = dialog
+    dialog.watchlistSaved.connect(window.reload)
+    dialog.fullRequested.connect(window._run_work_full)
+    requests, questions, full_signals = [], [], []
+    dialog.fullRequested.connect(full_signals.append)
+    def question(*args, **kwargs):
+        questions.append(args[2])
+        return QMessageBox.StandardButton.No if outcome == "no" else QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(window, "_start_execution", requests.append)
+    before = dialog.catalog.read_bytes()
+    populate(dialog, A)
+    confirm(dialog)
+    preview_and_save(dialog)
+    wait_for(lambda: bool(questions))
+    assert len(questions) == len(full_signals) == 1
+    assert window.model.selected_keys == set()
+    target = WatchlistService(dialog.path).get("test_work_jumpplus")
+    saved = dialog.path.read_bytes()
+    assert dialog.catalog.read_bytes() == before
+    assert len(requests) == (0 if outcome == "no" else 1)
+    if outcome == "no":
+        assert "未同期" in window.statusBar().currentMessage()
+    else:
+        assert set(requests[0].selected_keys) == {target.key}
+        registry = DiscoveryAdapterRegistry()
+        class FailingFull(SyntheticFull):
+            async def iter_records(self, page, target, mode):
+                raise DiscoveryIncompleteError("synthetic Full failure")
+                yield
+        registry.register(target.site, FailingFull if outcome == "failure" else SyntheticFull)
+        catalog = CatalogService(dialog.catalog)
+        result = asyncio.run(DiscoveryService(catalog, registry).discover(object(), target, "full"))
+        if outcome == "failure":
+            assert result.error and not result.complete
+        else:
+            assert result.complete
+            assert catalog.find_work(target.work_key) is not None
+            assert all(source.discovery_key == target.key for source in catalog.list_sources())
+        assert dialog.path.read_bytes() == saved
+    window.close()
+
+
+def test_full_gui_workflow_multiple_site_detail_then_save(gui, monkeypatch):
+    from PySide6.QtCore import QTimer
+
+    from screenshot_crawler.gui.work_editor import WorkEditorDialog
+    from screenshot_crawler.watchlist.service import WatchlistService
+    from tests.unit.test_registration_detail import listing
+    dialog, _app = gui
+    populate(dialog, A + "\n" + B)
+    dialog.table.setCurrentCell(0, 0)
+    confirm(dialog, work="combined")
+    dialog.table.setCurrentCell(1, 0)
+    dialog.label_edit.setText("人工作品")
+    dialog.work_combo.setCurrentIndex(dialog.work_combo.findData("1"))
+    dialog.confirm()
+    assert dialog.draft.readiness("1").status == "needs_scope"
+    original_exec = WorkEditorDialog.exec
+    def edit(editor):
+        def start():
+            for target in editor.draft.members:
+                editor.draft.set_listing(listing(target))
+            a, b = editor.draft.members
+            editor.change(lambda: editor.draft.replace_range(a.key, "2", "2", b.key, "2", "2"))
+            for target in editor.draft.members:
+                editor.confirm_scope(target.key)
+            editor.preview_edit()
+            QTimer.singleShot(20, finish)
+        def finish():
+            if editor.task is not None:
+                QTimer.singleShot(20, finish)
+            elif editor.preview is None:
+                editor.dirty = False
+                editor.reject()
+            else:
+                editor.save_edit()
+        QTimer.singleShot(0, start)
+        return original_exec(editor)
+    monkeypatch.setattr(WorkEditorDialog, "exec", edit)
+    before = dialog.path.read_bytes(), dialog.catalog.read_bytes()
+    dialog.edit_detail()
+    assert dialog.draft.readiness("1").status == "ready", dialog.status.text()
+    assert before == (dialog.path.read_bytes(), dialog.catalog.read_bytes())
+    full = []
+    dialog.fullRequested.connect(full.append)
+    preview_and_save(dialog)
+    targets = WatchlistService(dialog.path).list_targets()
+    assert len(targets) == 2 and {target.work_key for target in targets} == {"combined"}
+    assert all(target.archive_segments is not None for target in targets)
+    assert len(full) == 1 and set(full[0][0]) == {target.key for target in targets}
+
+
+def test_partial_save_retains_unselected_edits_and_reopens_same_dialog(gui, tmp_path):
+    from screenshot_crawler.gui.main_window import MainWindow
+    from screenshot_crawler.management.inventory import InventoryService
+    dialog, _app = gui
+    populate(dialog, A + "\n" + B)
+    dialog.table.setCurrentCell(0, 0)
+    confirm(dialog, work="first")
+    dialog.table.setCurrentCell(1, 0)
+    confirm(dialog, label="保留中の人工作品", work="second")
+    dialog.table.item(1, 0).setCheckState(Qt.CheckState.Unchecked)
+    kept = dialog.draft.candidates["2"]
+    preview_and_save(dialog)
+    assert not dialog.isVisible() and dialog.dirty
+    assert dialog.draft.candidates["2"] == kept
+    window = MainWindow(dialog.catalog, dialog.path, dialog.runtime_path,
+        management_path=tmp_path / "management.sqlite", auto_load=False)
+    window.set_snapshot(InventoryService().load(dialog.catalog, dialog.path, runtime_path=dialog.runtime_path))
+    window._registration_editor = dialog
+    window._open_url_registration()
+    assert window._registration_editor is dialog and dialog.isVisible()
+    assert dialog.label_edit.text() == "保留中の人工作品"
+    dialog.dirty = False
+    window.close()
+
+
+def test_saved_unverified_freezes_resave_and_does_not_emit_full(gui, monkeypatch):
+    from screenshot_crawler.watchlist.service import WatchlistService
+    dialog, _app = gui
+    populate(dialog, A)
+    confirm(dialog)
+    dialog.preview_edit()
+    wait_for(lambda: dialog.task is None)
+    assert dialog.preview is not None
+    original_apply, original_read = WatchlistService.apply_edit, WatchlistService.read_snapshot
+    committed = False
+    def apply(service, *args, **kwargs):
+        nonlocal committed
+        result = original_apply(service, *args, **kwargs)
+        committed = True
+        return result
+    def read(service):
+        if committed:
+            raise OSError("synthetic readback failure")
+        return original_read(service)
+    monkeypatch.setattr(WatchlistService, "apply_edit", apply)
+    monkeypatch.setattr(WatchlistService, "read_snapshot", read)
+    full = []
+    dialog.fullRequested.connect(full.append)
+    dialog.save_edit()
+    wait_for(lambda: dialog.task is None)
+    assert dialog._save_frozen and "保存済み" in dialog.status.text()
+    assert not dialog.save_button.isEnabled() and not dialog.preview_button.isEnabled()
+    assert not full
+    assert WatchlistService(dialog.path).get("test_work_jumpplus")
+
+
+def test_catalog_refresh_preserves_manual_candidate_and_invalidates_detail(gui):
+    dialog, _app = gui
+    populate(dialog, A)
+    confirm(dialog)
+    row = dialog.draft.candidates["1"]
+    catalog = CatalogService(dialog.catalog)
+    catalog.create_work(work_key="external", title="人工作品")
+    dialog.refresh_catalog()
+    wait_for(lambda: dialog.task is None)
+    assert dialog.draft.candidates["1"] == row
+    assert "external" in dialog.draft.existing_works
+    assert dialog.draft.works["1"].detail is None
+
+
+def test_real_final_preview_modal_is_scrollable_and_can_return_before_save(gui, monkeypatch):
+    from types import MethodType
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog, QPlainTextEdit
+    dialog, _app = gui
+    populate(dialog, A)
+    confirm(dialog)
+    monkeypatch.setattr(dialog, "_show_preview", MethodType(SHOW_PREVIEW, dialog))
+    shown, attempts = [], [0]
+    def dismiss():
+        attempts[0] += 1
+        for child in dialog.findChildren(QDialog):
+            if child.windowTitle() == "URL登録：選択Workの保存前プレビュー" and child.isVisible():
+                shown.append(child.findChild(QPlainTextEdit).toPlainText())
+                child.accept()
+                return
+        if attempts[0] < 500:
+            QTimer.singleShot(20, dismiss)
+    QTimer.singleShot(0, dismiss)
+    before = dialog.path.read_bytes()
+    dialog.preview_edit()
+    wait_for(lambda: dialog.task is None)
+    assert len(shown) == 1 and "test_work_jumpplus" in shown[0]
+    assert "UNKNOWN" in shown[0]
+    assert dialog.path.read_bytes() == before and dialog.save_button.isEnabled()

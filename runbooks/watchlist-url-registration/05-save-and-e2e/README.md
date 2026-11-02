@@ -1,6 +1,6 @@
 # Stage 05 — 最終プレビュー・原子的保存・Full導線・E2E
 
-> Status: NOT STARTED。Stage 04のdraft-only検証完了が前提。
+> Status: COMPLETE（2026-11-03）。Stage 04/05の受入・独立レビューPASS。Full suiteは6524 passed / 3 unrelated timing failures / 0 skipped。詳細と単独再実行結果は [PROGRESS.md](../PROGRESS.md)。Stage 06–07には進まない。
 
 ## Objective
 

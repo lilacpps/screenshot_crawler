@@ -35,8 +35,8 @@ Rows show URL status, native identity/title evidence, group readiness and the
 source/canonical URLs. Form edits persist across rows and grouping, retry resets
 confirmation for its Work, and a generation ignores old callbacks. Work checkbox
 selection is atomic across its members. Close/reload uses Discard/Cancel.
-The URL workflow remains no-write through Stage 04: detail is connected;
-bulk preview/save follow in Stage 05. Native Windows
+Parsing and detail remain drafts; bulk preview/save is implemented in Stage 05
+through the service described below. Native Windows
 Qt capture at 980x800 verified Japanese text and controls; offscreen captures
 had missing fonts and are not considered visual proof. GUI/adjacent regression
 coverage uses isolated files, with no operational data or live site operation.
@@ -56,7 +56,7 @@ or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
 require complete-list detail; sites outside the existing four block that path.
 Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
-Final fresh ownership validation and persistence follow in Stage 05.
+Final fresh ownership validation and persistence use registration/service.py.
 Naming uses local pykakasi >=2.3,<3 from the GUI optional dependency; ASCII titles
 bypass transliteration. Machine readings/slugs are suggestions, never identity
 proof. Missing provider/unresolved characters require manual input; no hash
@@ -78,9 +78,50 @@ ready registration. Unknown native work identity/title remain unknown.
 Kadocomi alone converts proven same-work episode URLs to work detail; optional
 detail metadata uses the caller's Page, refuses redirects, blocks subresources,
 and never calls Discovery/reader/resource/capture or writes persisted data.
-Registration candidate/naming APIs are implemented in Stage 02; the URL paste/edit GUI is implemented in Stage 03; draft-only detail is implemented in Stage 04;
-persistence follows in Stage 05. No Catalog/schema, saved key or operational data changes. New resolver
-Unit and artificial browser tests pass; resolver live behavior is unverified.
+Registration candidate/naming APIs, paste/edit GUI, draft-only detail and atomic
+Watchlist persistence are implemented through Stage 05. No Catalog/schema or
+existing key changes are made. Unit/artificial browser tests pass. Kadocomi
+exact-detail metadata has one bounded live check; other sites remain unverified
+for this resolver workflow (see note/12_kadocomi.md).
+
+## URL registration final preview and save (Stage 05, 2026-11-03)
+
+`registration/service.py` composes selected ready Work member patches into one
+Watchlist preview and one `apply_edit`. Revision/target CAS, draft fingerprint,
+fresh read-only Catalog fingerprint, key/Work uniqueness, canonical URLs,
+Source owner and complete-list TTL/confirmation proofs are revalidated under
+CatalogJobLock immediately before saving. Existing unrelated targets and stable
+fields stay intact. Explicit scope/order/segments proposals alone may change
+those fields. No Catalog, Source ownership, Item, Artifact, ZIP or history writes
+occur. A Catalog conflict or stale listing rejects the entire selected set.
+
+Source URLs are read from SourceTarget web locators. Unknown/foreign owners and
+unresolvable existing locators block; consistent existing key/native identity
+bindings can identify viewer-shaped locators without rewriting them. Display
+ownership indexes are cached per immutable snapshot and candidate signature;
+final preview/save rereads Catalog and cannot reuse a stale display result.
+New single-key Works may use a valid URL with unknown title/native ID after
+explicit human confirmation; invalid URLs and unsupported detail never bypass
+the gate. Cross-site Work membership is always a human decision.
+
+The final preview shows selected additions, existing members, scope/order/segment
+changes, evidence and remaining Full/scope-sync/renumber work. Save runs off the
+GUI thread, removes successfully read-back Works and retains unselected drafts
+and manual edits. MainWindow can reopen the retained dialog. Catalog reload
+keeps input but invalidates detail proofs. Committed/unverified readback freezes
+resave and suppresses Full until explicit baseline reload.
+
+Verified save emits changed keys/revision once to the existing Full confirmation.
+No means saved/Full not run/Catalog unsynchronized; Yes queues the independent
+existing Full job. No automatic Batch, scope-sync, renumber or Capture runs.
+No new CLI/config/schema is added; GUI extra supplies PySide6 and local pykakasi.
+Complete-list detail remains limited to magapoke/jumpplus/zeblack/comicdays.
+
+Windows native Qt screenshots cover entry, candidates, Work detail, ready rows,
+final preview, Full confirmation and saved inventory using isolated synthetic
+files. The synthetic E2E confirms unchanged Catalog and retained unselected rows.
+No operational Watchlist/Catalog/ZIP is used by these checks. Final test/review
+results and full-suite limitations are recorded in the registration PROGRESS.
 
 ## Bounded non-consuming resolver preparation (2026-10-29)
 

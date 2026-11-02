@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -110,6 +111,7 @@ class UrlRegistrationDialog(QDialog):
         self._rendering = self._form_dirty = False
         self._selected_id = None
         self.preview = None
+        self._save_frozen = False
         layout = QVBoxLayout(self)
         intro = QLabel("公式サイトの作品・話URLを改行で貼り付けてください。URL判定と作品の確認は別です。\n"
             "異サイトの同一作品は人が所属を指定します。登録解析は読取専用です。")
@@ -124,12 +126,14 @@ class UrlRegistrationDialog(QDialog):
         self.analyze_button = QPushButton("URLを解析・追加")
         self.retry_button = QPushButton("選択行を再解析")
         self.reload_button = QPushButton("基準を再読込")
+        self.refresh_button = QPushButton("Catalogを再照合")
         self.metadata = QCheckBox("安全な作品名取得も試す（対応サイトのみ）")
         self.metadata.setChecked(True)
         self.analyze_button.clicked.connect(self.analyze)
         self.retry_button.clicked.connect(self.retry_selected)
         self.reload_button.clicked.connect(self.reload_context)
-        for button in (self.analyze_button, self.retry_button, self.reload_button, self.metadata):
+        self.refresh_button.clicked.connect(self.refresh_catalog)
+        for button in (self.analyze_button, self.retry_button, self.reload_button, self.refresh_button, self.metadata):
             actions.addWidget(button)
         actions.addStretch()
         layout.addLayout(actions)
@@ -164,6 +168,7 @@ class UrlRegistrationDialog(QDialog):
         edits = QHBoxLayout()
         self.apply_button = QPushButton("編集を下書きへ反映")
         self.suggest_button = QPushButton("読みからID候補")
+        self.suggest_button.setToolTip("機械変換の読み・ローマ字は候補です。読みとIDを確認してください。")
         self.confirm_button = QPushButton("作品名・所属・IDを確認")
         self.detail_button = QPushButton("範囲・完成順の詳細編集")
         self.additional = QCheckBox("登録済み作品へ別keyを追加する")
@@ -197,7 +202,7 @@ class UrlRegistrationDialog(QDialog):
         if draft is None:
             self.reload_context()
         else:
-            self.status.setText("下書きのみ。保存機能はStage 05で接続します。")
+            self.status.setText("下書きのみ。選択Workの保存前プレビューで内容を確認してください。")
             self._render()
 
     def _input_changed(self):
@@ -211,7 +216,7 @@ class UrlRegistrationDialog(QDialog):
             self._enabled()
 
     def _guard(self):
-        if self.task is not None or self.active_job:
+        if self.task is not None or self.active_job or self._save_frozen:
             self.status.setText("処理またはJobの完了を待ってください。下書きは保持しています。")
             return False
         return self.draft is not None
@@ -221,7 +226,7 @@ class UrlRegistrationDialog(QDialog):
         self._enabled()
 
     def _enabled(self):
-        enabled = self.task is None and not self.active_job and self.draft is not None
+        enabled = self.task is None and not self.active_job and self.draft is not None and not self._save_frozen
         for widget in (self.input, self.analyze_button, self.retry_button, self.table,
                        self.form_widget, self.apply_button, self.suggest_button, self.metadata, self.additional):
             widget.setEnabled(enabled)
@@ -230,8 +235,9 @@ class UrlRegistrationDialog(QDialog):
         self.confirm_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
         self.detail_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
         self.detail_button.setToolTip("完全一覧preview対応4サイトで、範囲・担当と完成順を確認します。")
-        self.preview_button.setEnabled(False)
-        self.save_button.setEnabled(False)
+        self.preview_button.setEnabled(enabled and bool(self.draft.candidates))
+        self.save_button.setEnabled(enabled and self.preview is not None and not self._form_dirty)
+        self.refresh_button.setEnabled(enabled)
         self.reload_button.setEnabled(self.task is None and not self.active_job)
         self.close_button.setEnabled(self.task is None)
 
@@ -250,12 +256,15 @@ class UrlRegistrationDialog(QDialog):
             from screenshot_crawler.cli import _discovery_registry
             base, revision = WatchlistService(self.path).read_snapshot()
             data = CatalogInventoryReader().read(self.catalog)
-            return BatchRegistrationDraft(base, revision, UrlResolver(_discovery_registry()),
+            draft = BatchRegistrationDraft(base, revision, UrlResolver(_discovery_registry()),
                 catalog_works=tuple((work.work_key, work.title) for work in data.works), catalog_snapshot=data)
+            draft.prepare_ownership(data)
+            return draft
         self._run(load, self._context_ready)
 
     def _context_ready(self, draft):
         self.task, self.draft, self.dirty = None, draft, False
+        self.preview, self._save_frozen = None, False
         self._selected_id = None
         self.status.setText("URLを貼り付けて解析してください。登録までCatalog・ZIPは変更しません。")
         self._render()
@@ -312,6 +321,7 @@ class UrlRegistrationDialog(QDialog):
 
     def _failure(self, message):
         self.task = None
+        self.preview = None
         self.status.setText("停止（下書き保持）: " + message)
         self._enabled()
 
@@ -371,6 +381,12 @@ class UrlRegistrationDialog(QDialog):
             f"native identity: {resolution.identity_status} {resolution.site_work_identity or ''} / "
             f"title: {resolution.title_status} / human confirmed: {row.confirmed}\n"
             + "\n".join((*resolution.evidence, *resolution.warnings, *resolution.blockers, *state.reasons)))
+        if group.detail is not None:
+            self.evidence.appendPlainText("\n詳細確認:\n" + group.detail.summary)
+        hints = self.draft.title_hints(row.id)
+        if hints:
+            self.evidence.appendPlainText("\n同名の既存Work候補（所属は明示選択）: "
+                + ", ".join(f"{title} / {key}" for key, title in hints))
         self._form_dirty = False
 
     def _selection_changed(self, *_args):
@@ -467,10 +483,93 @@ class UrlRegistrationDialog(QDialog):
             self.status.setText(str(exc))
 
     def preview_edit(self):
-        self.status.setText("保存前プレビューはStage 05で接続します。")
+        if not self._guard():
+            return
+        self.apply_fields()
+        from screenshot_crawler.registration.service import RegistrationService
+        batch = copy.deepcopy(self.draft)
+        self._run(lambda: RegistrationService(self.path, self.catalog).preview(batch), self._preview_ready)
+
+    def _preview_ready(self, preview):
+        from screenshot_crawler.registration.service import draft_identity
+        self.task = None
+        if draft_identity(self.draft) != preview.draft_identity:
+            self._failure("プレビュー中に下書きが変わりました")
+            return
+        self.preview = preview
+        self.evidence.setPlainText(preview.summary)
+        self.status.setText("保存前プレビュー完了。内容を確認し、一括保存で明示確定してください。")
+        self._enabled()
+        self._show_preview(preview.summary)
+
+    def _show_preview(self, summary):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("URL登録：選択Workの保存前プレビュー")
+        dialog.resize(1000, 760)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(summary)
+        layout.addWidget(text)
+        close = QPushButton("候補画面へ戻る（一括保存はまだです）")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+        dialog.deleteLater()
 
     def save_edit(self):
-        self.status.setText("一括保存はStage 05で接続します。下書きのみです。")
+        if not self._guard():
+            return
+        self.apply_fields()
+        if self.preview is None:
+            self.status.setText("選択Workの保存前プレビューを再実行してください。")
+            return
+        from screenshot_crawler.registration.service import RegistrationService
+        batch, preview = copy.deepcopy(self.draft), self.preview
+        self._run(lambda: RegistrationService(self.path, self.catalog).save(batch, preview), self._saved)
+
+    def _saved(self, result):
+        self.task, self.preview = None, None
+        self.status.setText(result.message)
+        if not result.verified:
+            self._save_frozen = self.dirty = True
+            self._enabled()
+            self.watchlistSaved.emit()
+            return
+        from screenshot_crawler.registration.service import retain_unsaved
+        retain_unsaved(self.draft, result)
+        self._selected_id = None
+        self.dirty = bool(self.draft.candidates)
+        self._render()
+        # Temporarily hide to let MainWindow present its one Full confirmation.
+        # Unselected drafts remain in this dialog and can be reopened unchanged.
+        self.hide()
+        self.watchlistSaved.emit()
+        if result.changed_keys:
+            self.fullRequested.emit((result.changed_keys, result.revision))
+
+    def refresh_catalog(self):
+        if not self._guard():
+            return
+        self.apply_fields()
+        def read():
+            if WatchlistService(self.path).read_snapshot() != (self.draft.base, self.draft.revision):
+                raise ValueError("Watchlistが変わっています。基準を再読込する前に下書きを確認してください")
+            data = CatalogInventoryReader().read(self.catalog)
+            self.draft.prepare_ownership(data)
+            return data
+        def loaded(data):
+            self.task = None
+            self.draft.catalog_snapshot = data
+            self.draft.catalog_works = tuple((work.work_key, work.title) for work in data.works)
+            for group in self.draft.works.values():
+                group.version += 1
+                group.detail = None
+            self.draft.generation += 1
+            self.dirty, self.preview = True, None
+            self._render()
+            self.status.setText("Catalogの所有関係を再照合しました。候補編集は保持、詳細一覧は再取得・再確認が必要です。")
+        self._run(read, loaded)
 
     def _discard(self):
         return not self.dirty or QMessageBox.question(self, "未保存のURL登録",

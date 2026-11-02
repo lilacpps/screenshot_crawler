@@ -708,15 +708,26 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
         # Optional detail-only observation. Block every unproven request before
         # dispatch, including redirected documents and all subresources.
         violations = []
+        document_used = False
         async def restrict(route):
+            nonlocal document_used
             request = route.request
             if (request.is_navigation_request() and request.frame == page.main_frame
                     and request.url == resolution.discovery_url
-                    and request.redirected_from is None):
+                    and request.redirected_from is None and request.method == "GET"
+                    and not document_used):
+                document_used = True
                 # Chromium does not route every redirected request. Inspect the
                 # natural document response with redirects disabled, before the
                 # browser can follow its Location header.
-                response = await route.fetch(max_redirects=0, timeout=30_000)
+                try:
+                    response = await route.fetch(max_redirects=0, timeout=30_000)
+                except PlaywrightError:
+                    # Route callback errors otherwise reach Playwright's event
+                    # logger, including request headers. Keep failures bounded
+                    # and expose only the sanitized manual-confirmation state.
+                    await route.abort()
+                    return
                 if 300 <= response.status < 400:
                     violations.append("redirect")
                     await route.abort()

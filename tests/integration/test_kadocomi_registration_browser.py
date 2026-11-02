@@ -9,7 +9,7 @@ URL = "https://comic-walker.com/detail/KC_004915_S"
 
 
 @pytest.mark.parametrize("mode", ["ok", "missing", "multiple", "suffix", "auth",
-    "cross_host", "other_work", "http_error", "timeout"])
+    "cross_host", "other_work", "http_error", "timeout", "fetch_error"])
 async def test_detail_observation_is_restricted_and_non_consuming(browser_page, mode, monkeypatch):
     resolver = UrlResolver(_discovery_registry())
     dispatched = []
@@ -39,6 +39,9 @@ async def test_detail_observation_is_restricted_and_non_consuming(browser_page, 
     async def upstream(route, **kwargs):
         dispatched.append(route.request.url)
         assert kwargs["max_redirects"] == 0
+        if mode == "fetch_error":
+            from playwright.async_api import Error
+            raise Error("synthetic document transport failure")
         return await original_fetch(route, url=f"http://127.0.0.1:{server.server_port}/", **kwargs)
     monkeypatch.setattr(Route, "fetch", upstream)
     if mode == "timeout":

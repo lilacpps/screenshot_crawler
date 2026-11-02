@@ -339,7 +339,7 @@ Reproduce the synthetic captures with:
   --screenshots .tmp/glm-phase4-content-shots
 ```
 
-## URLから一括登録（候補・詳細の下書きGUI）
+## URLから一括登録
 
 ツールバーの「URLから登録」で専用画面を開き、URLを改行で貼り付けて解析します。
 1回100行、1URL 4096文字、全体256KiBまで。解析はbackgroundで順次実行し、
@@ -356,6 +356,38 @@ Reproduce the synthetic captures with:
 範囲・完成順を調整したあと各keyの「このkeyの範囲・担当を確認」を押してください。
 編集・一覧再取得で確認は失効します。「変更プレビュー」で差分を確認し、
 「このWorkの下書きを確定」で親画面へ戻します。この操作では保存されません。
-キャンセルはその子画面の変更のみ破棄します。保存前プレビュー・一括保存はStage 05で接続します。
+キャンセルはその子画面の変更のみ破棄します。
 完全一覧previewはmagapoke/jumpplus/zeblack/comicdaysだけが対応し、他サイトを含む
 複数keyの詳細設定は未対応の理由を表示します。
+
+「保存前プレビュー」で選択したWork全体の追加・既存設定・範囲・完成順・残作業を確認し、
+画面へ戻って「一括保存」を押します。保存直前にもWatchlist revision、Catalog、所有関係、
+詳細証拠の鮮度を検証し、選択集合を一度の原子的置換で保存します。競合時は保存されません。
+Catalog再読込では手入力を保持しますが、詳細の確認はやり直してください。
+保存済みWorkは候補から除かれ、未選択Workの編集は残ります。「URLから登録」で再開できます。
+保存後の読戻しが確認できない場合は再保存を停止し、結果を明示して再読込を求めます。
+
+保存後は既存のFull Discovery確認を一度表示します。「いいえ」なら登録だけ成功し、
+Full未実行・Catalog未同期と表示します。「はい」なら既存の独立したFull jobへ渡し、
+失敗はそのjobの結果で確認します。scope-sync、ZIP再番号化、Batchは自動実行しません。
+解析・候補編集・保存ではチケットやポイント、購入、Captureを実行しません。
+
+現在認識する起点URL（公式HTTPSホストのみ。`id`は各サイトの既存parserに従います）:
+
+| サイト | パス |
+|---|---|
+| BookWalker | `/series/id/list/` |
+| Comic DAYS | `/episode/id` |
+| COMIC FUZ | `/manga/id`（既存の`position=thumbnail`も可） |
+| 花とゆめ | `/episodes/id` |
+| Jump+ | `/episode/id` |
+| カドコミ | `/detail/KC_…_S`、同じ作品prefixの`/episodes/KC_…_E`からdetailへ変換 |
+| マガポケ | `/title/id/episode/id` |
+| マンガワン | `/manga/id/chapter/id` |
+| ピッコマ | `/web/viewer/product/episode`（登録解析時にはviewerを開きません） |
+| ヤングアニマル | `/series/id` |
+| ゼブラック | `/title/id/chapter/list` |
+
+各サイトの既存許可query以外の任意query、fragment、短縮URL、別形式の作品/書籍URL、
+percent escapeなどは未対応でブロックします。11サイトすべてのURL変換・作品名の自動取得を
+保証するものではありません。現在の自動作品名観測はカドコミのdetailだけです。

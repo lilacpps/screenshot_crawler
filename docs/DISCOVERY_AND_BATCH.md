@@ -2608,7 +2608,7 @@ strictly; existing Discovery parsers and saved targets retain their contracts.
 All eleven current entry forms are recognized. Kadocomi's proven same-work
 episode form converts to detail without opening the episode. Native identity
 and title evidence are independent of URL eligibility; missing metadata requires
-explicit human confirmation in the later registration flow.
+explicit human confirmation in the registration dialog.
 Optional Kadocomi title observation handles only the exact detail document,
 reads its unique known-suffix og:title, refuses redirects before following them,
 and blocks unproven subresources. Browser Page lifecycle stays with the caller.
@@ -2628,7 +2628,8 @@ or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
 require complete-list detail; sites outside the existing four block that path.
 Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
-Final fresh ownership validation and persistence follow in Stage 05.
+Final fresh ownership validation and persistence are performed by
+`registration/service.py` as described below.
 Naming uses local pykakasi >=2.3,<3 from the GUI optional dependency; ASCII titles
 bypass transliteration. Machine readings/slugs are suggestions, never identity
 proof. Missing provider/unresolved characters require manual input; no hash
@@ -2661,3 +2662,36 @@ Existing scope/order/segments/enabled are loaded unchanged; only explicitly
 previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.
 `validate_work_snapshot` and `catalog_snapshot_identity` are Qt-free shared
 functions; the existing GUI validation and fingerprint wrappers remain compatible.
+
+## URL registration atomic save (Stages 01–05 implemented)
+
+`RegistrationService` composes only selected ready Works into one Watchlist
+proposal. Unrelated targets and unselected drafts remain unchanged. Existing
+key/work_key/site/URL/enabled values cannot be silently replaced; scope,
+archive_order and archive_segments require the accepted Work member proof.
+Unknown native identity/title remains unknown: a strictly valid canonical URL,
+explicit human label/Work/ID confirmation and unambiguous ownership suffice for
+new single-key registration. Invalid/unsupported URLs cannot bypass validation.
+
+Preview checks the original Watchlist revision/targets, current read-only Catalog
+fingerprint, global key/Work uniqueness, source web locators and ownership,
+selected-set overlaps, canonical URLs and complete-list proofs. Save holds
+CatalogJobLock, rereads both stores, recomputes the entire preview and compares
+the draft/proposal before one revision-CAS `WatchlistService.apply_edit`.
+Source owner, Item, Artifact, Catalog schema, ZIP and acquisition history are
+never rewritten. Catalog Source URLs come from SourceTarget web locators;
+unresolved owners/locators block instead of being inferred from titles.
+Display-time ownership indexes are cached only for the same immutable snapshot
+and candidate signature; save always constructs a fresh snapshot under lock.
+
+Successful readback returns explicit changed keys/revision, removes saved Works
+from the draft and retains unselected edits. A committed write with unverified
+readback freezes resaving and does not request Full. The MainWindow asks once
+whether to run the existing independent Full Discovery job. No/Cancel means
+Watchlist saved, Full not run, Catalog not synchronized; Full failures remain
+job failures. There is no automatic scope-sync, archive renumber or Batch.
+
+The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
+Yes/No/failure and Windows GUI flow use isolated synthetic data. Only Kadocomi
+exact-detail metadata has a bounded one-work live check; the other ten resolver
+hooks and seven unsupported complete-list capabilities are not live-certified.

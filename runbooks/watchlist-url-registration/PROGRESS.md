@@ -1,17 +1,17 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 04 COMPLETE（2026-11-02）/ Stage 05 next。
+> Status: Stage 01–05 COMPLETE（2026-11-03）。Full suiteはall-greenではない（既存timing failure 3件、下記）。Stage 06–07は未着手。
 > Stage 01–05は連続実装を承認済み。Stage 06–07は対象外。
 > Runbook: [README.md](README.md)
 
 | Stage | Status | Exit evidence / next action |
 |---|---|---|
 | 00 Current contract audit | COMPLETE (static audit) | [設計・証拠](00-contract/RESEARCH.md): 11site URL/title/変換matrix、Resolver hook、Work draft/atomic save/Full境界、Kadocomi pilotとStage 01ファイル/testを確定。Liveは全site未検証 |
-| 01 URL resolver + pilot | COMPLETE | 168 new + 653 affected passed; independent review PASS |
-| 02 Registration draft + naming | COMPLETE | 256 related passed; Reviewer PASS after corrections |
-| 03 Batch registration GUI | COMPLETE | 97 GUI/adjacent integration passed; native layout capture; Reviewer PASS |
-| 04 Scope editor draft integration | COMPLETE | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
-| 05 Atomic save and E2E | NOT STARTED | CAS/lock、selected-set atomic、Full confirmation、E2E |
+| 01 URL resolver + pilot | COMPLETE (`b94b7b9`) | 168 new + 653 affected passed; independent review PASS |
+| 02 Registration draft + naming | COMPLETE (`43b096a`) | 256 related passed; Reviewer PASS after corrections |
+| 03 Batch registration GUI | COMPLETE (`a9beb15`) | 97 GUI/adjacent integration passed; native layout capture; Reviewer PASS |
+| 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
+| 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
 | 06 Site URL/metadata coverage | NOT STARTED | サイト別URL変換と非消費metadata拡張 |
 | 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
 
@@ -124,4 +124,92 @@
   by its TEMP permissions; root's short isolated basetemp runs supply test evidence.
 - Docs/DISCOVERY_AND_BATCH, GUI_README and note/00_core synchronized. No site
   adapter/live behavior changed; no new Live/Research/full run at this gate.
-  Stage 05 authorized and ready; bulk persistence remains unconnected until then.
+  Stage 05 authorized and ready; bulk persistence is completed in the checkpoint below.
+
+## Stage 05 checkpoint — 2026-11-03 JST
+
+- Added Qt-free RegistrationService: selected Work composition, final summary,
+  fresh Watchlist/Catalog/ownership/URL/complete-list proof validation under
+  CatalogJobLock, then one apply_edit with revision CAS. Conflict/stale proof
+  rejects the whole selection. Existing stable fields and unrelated targets,
+  Source owners, Catalog, ZIP and history are preserved.
+- Added background GUI preview/save, actual final-preview modal, verified
+  readback, retained unselected drafts/reopen, explicit committed-but-unverified
+  freeze, Catalog refresh without losing manual values, and existing Full
+  confirmation once. Full No reports saved/not run/unsynchronized; Yes/failure
+  use the existing independent job. No automatic Batch/scope-sync/renumber.
+- Fixed ownership lookup to use real SourceTarget web locators, with real Catalog
+  regression fixtures. Display ownership indexes are bound to the immutable
+  Catalog snapshot and candidate signature; final save always rereads under lock.
+  Partial-save candidate IDs are monotonic to avoid overwriting retained rows.
+- Kadocomi route.fetch errors are contained inside the callback and sanitized;
+  only one exact main-frame document GET is permitted. Local redirect/fetch-error
+  tests pass. Bounded live retry observed unique detail title「夫婦以上、恋人未満。」
+  at 2026-11-02 23:48 JST for KC_004915_S after same-prefix episode conversion.
+  Dedicated shared-CDP Page closed; no reader/resource/Capture or persisted data
+  action. Other ten sites' registration metadata remains live-unverified.
+- Windows native GUI synthetic E2E covered MainWindow entry, pasted candidates,
+  explicit cross-site Work assignment, per-key detail/range/segment confirmation,
+  ready rows, final preview, atomic save, Full No and reloaded inventory.
+  Catalog bytes unchanged, Full question exactly once, unselected row retained.
+  Artifacts (ignored): `.tmp/watchlist-registration/stage05-{main,candidates,detail,
+  ready,final-preview,full-confirm,main-saved}-native.png`,
+  `stage05-native-result.json`. Native Japanese text/control layout was inspected;
+  offscreen missing-font rendering is not used as visual proof.
+- Tests: 439 affected Unit/GUI/local-browser passed (zero skips); later material
+  changes additionally passed GUI 20, observer/resolver 169, cache-related 88,
+  and service/draft 36 tests. These runs overlap and are not an additive total.
+  Independent Reviewer passed the production diff and all material follow-ups,
+  separately running 95 related tests, then 10 observer and 45 service/draft/detail
+  tests. Zero remaining BLOCKING findings. Docs synchronization independently
+  reviewed as consistent. Final ruff src/tests and git diff --check passed.
+- Full suite uses an isolated Git snapshot with current src/tests/pyproject
+  overlaid and tracked default YAML, never the user's operational YAML. First
+  attempt stalled in an existing ComicFUZ asyncio fixture teardown and was
+  terminated after stack diagnosis (not a passing full run). Final 6527-test
+  rerun completed with per-test/fixture timeout 180s and verbose evidence:
+  **6524 passed, 3 failed, 0 skipped, 6737 warnings, 3216.34s (53:36)**.
+  No test was deselected; source/test hashes match the final working code.
+  New registration Unit (204), GUI (20), observer Integration (10) all passed.
+  Full is not all-green; the three unrelated timing failures are retained below.
+  Command (from the isolated snapshot, PYTHONPATH set to that snapshot):
+  `python -m pytest -vv -q -p no:cacheprovider --timeout=180 --timeout-method=thread -o faulthandler_timeout=120 --basetemp=<isolated TEMP>`.
+  pytest-timeout 2.4.0 is only a local verification tool, not a new application
+  dependency/configuration. Log: `.tmp/watchlist-registration/stage05-full-final.log`.
+- Full failure isolation:
+  `test_comicfuz_runner_crawls_verified_spreads_to_positive_end` timed out waiting
+  for stable page-turn completion (PageChangeTimeoutError, one page saved).
+  The same test passed alone on final code (3.95s) and isolated origin/main
+  (4.34s). Its test/Adapter/Runner files are unchanged from main; no unrelated
+  capture behavior was modified to conceal this failure. Independent Reviewer
+  confirmed the unrelated timing instability is not a Stage 05 blocker. Isolated
+  diagnostics are under TEMP/wur_full05final/test_comicfuz_runner_crawls_ve0.
+  Younganimal
+  `test_younganimal_initial_native_redraw_is_bounded_and_keeps_proofs[mapping_drift]`;
+  final code alone passed (1.68s), isolated origin/main alone passed (1.98s),
+  and its test/Adapter/Runner are unchanged. It failed closed before redraw began;
+  the subsequent fixture assertion subscripted a None redraw diagnostic.
+  BookWalker
+  `test_bookwalker_initial_page_rejects_counter_ahead_of_pixels_and_ignored_home`
+  uses a fake Page with 120ms deadline: it raised the expected fail-closed error,
+  but only one Home fit before the deadline (expected two). Final code alone
+  passed (0.47s), isolated origin/main alone passed (0.68s). Its test/Adapter/
+  Runner are unchanged. Independent Reviewer confirmed all three paths are
+  outside registration and do not block Stage 05; no guard/fixture was weakened.
+  Test timing stabilization remains a separate maintenance limitation.
+- Final-code follow-ups: service/draft/detail 45 passed (3.97s), GUI 20 passed
+  (6.03s), native GUI E2E repeated successfully, ruff and diff check passed.
+- Research/probe suite was not separately expanded (no PoC changes). New site
+  URL conversion and seven-site complete-list capability remain out of scope.
+
+## Stage 06 / 07 handoff (NOT STARTED)
+
+- Stage 06: add site-specific URL forms/metadata only after non-consuming evidence;
+  ten sites have no automatic title observation. Percent-escaped URLs remain
+  conservatively blocked. HTTP-200 login/content ambiguity needs further bounded
+  metadata research; title text never becomes native identity or save proof.
+- Stage 07: add complete-list read-only preview for bookwalker/comicfuz/hanayume/
+  kadocomi/mangaone/piccoma/younganimal individually. Until then, new single-key
+  safe/manual registration works, but multi-key/existing-Work additions needing
+  detail block with a reason. No cross-site automatic Work merge is introduced.
+- No Stage 06/07 implementation, main merge or operational data modification.

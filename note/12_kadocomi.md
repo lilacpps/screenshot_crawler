@@ -4,7 +4,16 @@ Work entry and same-prefix episode-to-work conversion; work identity. Optional e
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. The observer permits only one main-frame GET to the exact
+detail URL, fetches with max_redirects=0, and aborts all other requests. Fetch
+errors are caught inside the route callback and returned as sanitized manual
+candidates, without logging request headers.
+Bounded live check (2026-11-02 23:48 JST): episode
+KC_0049150000100001_E converted to detail KC_004915_S; the exact detail document
+reported unique og:title「夫婦以上、恋人未満。」. A dedicated shared-CDP Page was
+closed afterward; no reader/episode navigation, resource action, Capture,
+Watchlist/Catalog/ZIP write occurred. This is one-work metadata evidence only,
+not general live certification of arbitrary forms or complete-list preview.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # 12. Kadocomi current implementation

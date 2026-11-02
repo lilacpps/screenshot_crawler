@@ -1,6 +1,7 @@
 """Qt-free, no-write registration drafts. Grouping is an explicit human choice."""
 
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from screenshot_crawler.registration.models import UrlResolution
 from screenshot_crawler.registration.naming import available_name, slug, suggest_name, valid_slug
@@ -53,6 +54,11 @@ class BatchRegistrationDraft:
     works: dict[str, RegistrationWork] = field(default_factory=dict)
     generation: int = 0
     raw_input: str = ""
+    _serial: int = 0
+    _owner_data: object | None = field(default=None, init=False, repr=False)
+    _owner_basis: tuple = field(default=(), init=False, repr=False)
+    _owner_infos: tuple = field(default=(), init=False, repr=False)
+    _owner_results: dict = field(default_factory=dict, init=False, repr=False)
 
     def members(self, group_id: str) -> tuple[RegistrationCandidate, ...]:
         return tuple(row for row in self.candidates.values() if row.group_id == group_id)
@@ -88,7 +94,8 @@ class BatchRegistrationDraft:
                         and old.site_work_identity == result.site_work_identity)):
                 self.candidates[candidate.id] = replace(candidate, origins=(*candidate.origins, (line, raw)))
                 return candidate.id
-        row_id = str(len(self.candidates) + 1)
+        self._serial += 1
+        row_id = str(self._serial)
         suggestion = suggest_name(result.title or "")
         reserved = set(self.existing_works) | {work.work_key for work in self.works.values()}
         work_key = available_name(suggestion.work_key, reserved)
@@ -112,6 +119,8 @@ class BatchRegistrationDraft:
     def _key_suggestion(self, work_key: str, site: str, *, exclude: str = "") -> str:
         used = {target.key for target in self.base} | {
             row.key for row in self.candidates.values() if row.id != exclude}
+        if self.catalog_snapshot is not None:
+            used.update(source.discovery_key for source in self.catalog_snapshot.sources if source.discovery_key)
         return available_name(f"{slug(work_key)}_{site}" if slug(work_key) and site else "", used)
 
     def edit_candidate(self, candidate_id: str, *, label=None, reading=None, key=None) -> None:
@@ -224,50 +233,100 @@ class BatchRegistrationDraft:
             return WorkReadiness("needs_manual_confirmation", tuple(dict.fromkeys(manual)))
         if needs_detail and group.detail is None:
             return WorkReadiness("needs_scope", ("全keyの範囲・担当・完成順を詳細編集で確認してください",))
+        if group.detail is not None and any(not 0 <= (datetime.now(UTC) - listing.observed_at).total_seconds() <= 300
+                for listing in group.detail.listings):
+            return WorkReadiness("needs_scope", ("完全一覧が古いため、このWorkを再取得・再確認してください",))
         return WorkReadiness("ready")
 
-    def ownership_blockers(self, group_id: str, data) -> tuple[str, ...]:
-        group = self.works[group_id]
+    def prepare_ownership(self, data) -> None:
+        """Parse immutable Catalog ownership once, in the context-loading worker.
+
+        The cache is object/saved-identity bound, never a substitute for the
+        fresh Catalog read performed under the final save lock.
+        """
+        basis = tuple((row.key, row.work_key, row.site, row.url) for row in self.base)
+        if self._owner_data is data and self._owner_basis == basis:
+            return
         items = {item.id: item for item in data.items}
         works = {work.id: work.work_key for work in data.works}
-        targets = {target.key: target for target in self.targets_for(group_id)}
         base_by_key = {target.key: target for target in self.base}
+        source_urls = {}
+        for target in data.targets:
+            if target.backend == "web":
+                source_urls.setdefault(target.source_id, []).append(target.locator)
+        infos = []
+        # Repeated web locators or bound keys need no repeated site parsing.
+        resolutions_by_url = {}
+        def resolve(url):
+            if url not in resolutions_by_url:
+                resolutions_by_url[url] = self.resolver.resolve(url)
+            return resolutions_by_url[url]
+        for source in data.sources:
+            owner_work = works[items[source.item_id].work_id]
+            urls = tuple(source_urls.get(source.id, ()))
+            resolutions = tuple(resolve(url) for url in urls)
+            error = None
+            if any(result.status != "blocked" and result.site != source.site for result in resolutions):
+                error = "既存Sourceのweb取得元とサイトが一致しません"
+            elif not resolutions or any(old.status == "blocked" for old in resolutions):
+                # Only an already bound, consistent native Work identity can
+                # disambiguate a viewer-shaped Source; never rewrite its URL.
+                bound = base_by_key.get(source.discovery_key)
+                known = resolve(bound.url) if bound else None
+                if (bound is not None and bound.site == source.site and bound.work_key == owner_work
+                        and known.status != "blocked" and known.site_work_identity):
+                    if any(old.site_work_identity and old.site_work_identity != known.site_work_identity
+                           for old in resolutions if old.status != "blocked"):
+                        error = "既存Sourceと所有keyの作品identityが矛盾しています"
+                    else:
+                        resolutions = (known,)
+                else:
+                    error = "同一サイトの既存Source URL/所有の照合が未確定です"
+            infos.append((source, owner_work, urls, resolutions, error))
+        self._owner_data, self._owner_basis, self._owner_infos = data, basis, tuple(infos)
+        self._owner_results.clear()
+
+    def ownership_blockers(self, group_id: str, data) -> tuple[str, ...]:
+        self.prepare_ownership(data)
+        group, members = self.works[group_id], self.members(group_id)
+        member_targets = self.targets_for(group_id)
+        signature = (group.work_key, member_targets, tuple((row.key, row.resolution, row.existing_keys)
+            for row in members))
+        previous = self._owner_results.get(group_id)
+        if previous is not None and previous[0] == signature:
+            return previous[1]
+        targets = {target.key: target for target in member_targets}
+        new_keys, sites = {row.key for row in members}, {row.resolution.site for row in members}
         errors = []
-        for row in self.members(group_id):
+        for row in members:
             matches = [target for target in self.base if target.key in row.existing_keys]
             if any(target.work_key != group.work_key for target in matches):
                 errors.append("同一URL/作品の既存keyが別Workに所属しています")
-        for source in data.sources:
-            owner_work = works[items[source.item_id].work_id]
+        for source, owner_work, urls, resolutions, error in self._owner_infos:
+            if source.discovery_key in new_keys:
+                errors.append("Catalogに既存の所有keyがあります。新規keyで横取り・再所属できません")
             if owner_work == group.work_key and source.acquisition_enabled:
                 owner = targets.get(source.discovery_key)
                 if owner is None or owner.site != source.site:
                     errors.append("既存Sourceの所有key/サイトが不明です")
-            if source.site not in {row.resolution.site for row in self.members(group_id)}:
+            if source.site not in sites:
                 continue
-            old = self.resolver.resolve(source.url)
-            if old.status == "blocked":
-                # A Source may use a viewer shape different from its Watchlist
-                # entry. Only an already bound, consistent native Work identity
-                # can disambiguate it; never repair/convert the stored URL.
-                bound = base_by_key.get(source.discovery_key)
-                known = self.resolver.resolve(bound.url) if bound else None
-                if (bound is not None and bound.site == source.site and bound.work_key == owner_work
-                        and known.status != "blocked" and known.site_work_identity):
-                    old = known
-                else:
-                    errors.append("同一サイトの既存Source URL/所有の照合が未確定です")
-                    continue
-            for row in self.members(group_id):
+            if error:
+                errors.append(error)
+                continue
+            for row in members:
                 result = row.resolution
-                same = (source.url == result.discovery_url or (old.status != "blocked"
+                same = result.discovery_url in urls or any(old.status != "blocked"
                     and old.site == result.site and (old.discovery_url == result.discovery_url
-                        or (result.site_work_identity and old.site_work_identity == result.site_work_identity))))
+                        or (result.site_work_identity and old.site_work_identity == result.site_work_identity))
+                    for old in resolutions)
                 if same and owner_work != group.work_key:
                     errors.append("既存Sourceは別Workに所属しています。自動移動できません")
                 if same and source.discovery_key is None:
                     errors.append("既存Sourceの所有keyが不明です")
-        return tuple(dict.fromkeys(errors))
+        result = tuple(dict.fromkeys(errors))
+        self._owner_results[group_id] = signature, result
+        return result
 
     def title_hints(self, candidate_id: str) -> tuple[tuple[str, str], ...]:
         """Display hints only; calling this never changes membership."""

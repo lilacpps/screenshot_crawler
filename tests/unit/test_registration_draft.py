@@ -186,6 +186,6 @@ def test_unresolved_catalog_owner_blocks_without_write(source_url, owner_key):
     row = add(batch, A)
     ready(batch, row)
     batch.catalog_snapshot = NS(works=(NS(id=1, work_key="other"),), items=(NS(id=1, work_id=1),),
-        sources=(NS(item_id=1, site="jumpplus", discovery_key=owner_key,
-            acquisition_enabled=True, url=source_url),))
+        sources=(NS(id=1, item_id=1, site="jumpplus", discovery_key=owner_key,
+            acquisition_enabled=True),), targets=(NS(source_id=1, backend="web", locator=source_url),))
     assert batch.readiness(row).status == "blocked"
