@@ -82,14 +82,21 @@ site-owned optional hooks accept the eleven current Discovery entry forms.
 Common strict HTTPS/authority/length/escape guards precede the existing parsers.
 Unsupported query/fragment/paths remain blocked. URL validity does not imply a
 ready registration. Unknown native work identity/title remain unknown.
-Kadocomi alone converts proven same-work episode URLs to work detail; optional
-detail metadata uses the caller's Page, refuses redirects, blocks subresources,
+Kadocomi converts proven same-work episode URLs to work detail; Zeblack also
+maps numeric viewer paths to the same title's chapter/list without opening a
+viewer. Optional metadata uses the caller's Page, refuses redirects, blocks subresources,
 and never calls Discovery/reader/resource/capture or writes persisted data.
 Registration candidate/naming APIs, paste/edit GUI, draft-only detail and atomic
 Watchlist persistence are implemented through Stage 05. No Catalog/schema or
 existing key changes are made. Unit/artificial browser tests pass. Kadocomi
-exact-detail metadata has one bounded live check; other sites remain unverified
-for this resolver workflow (see note/12_kadocomi.md).
+exact-detail metadata has one bounded live check. Stage 06A additionally observes
+BookWalker/ComicFUZ/Younganimal work documents and Piccoma's same-product listing
+for title only, with one-work live evidence each. The new small observation
+helper permits one exact main-frame GET, no redirects/subresource/POST dispatch,
+and checks canonical before site-owned native ID/title/episode-binding rules.
+Missing metadata preserves manual registration of already safe URLs; rejected
+identity/navigation blocks. Existing Kadocomi behavior is unchanged. Other sites'
+metadata remains unverified/unsupported; complete-list capabilities are unchanged.
 
 ## URL registration final preview and save (Stage 05, 2026-11-03)
 

@@ -1,10 +1,15 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Series entry; series identity.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. Optional exact-series document observation requires a
+unique matching canonical, unique og:title, and document title matching the
+observed `<work> - <author> | ヤングアニマルWeb` shape. Redirects, subresources
+and POSTs are blocked. Episode-to-series conversion remains unsupported.
+Shared-CDP live check for series 7103c2c1e9f08 returned 藍より青し on
+2026-11-03 05:54 JST; no episode/reader, resource, Discovery or data write occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # 11. Younganimal current implementation

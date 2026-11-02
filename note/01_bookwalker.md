@@ -1,10 +1,15 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Series-list entry; series identity.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. Optional title observation reads only the exact series
+document, requires its unique matching canonical and the observed unique
+`h1` shape `『...』の電子書籍一覧`, and returns the enclosed title. Redirects,
+subresources and POSTs are blocked. Product-to-series conversion is unsupported.
+One-work shared-CDP live verification passed for series 317089 at 05:54 JST on
+2026-11-03; no product/reader was opened and no data/resource action occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # 01. BookWalker 現行実装ノート

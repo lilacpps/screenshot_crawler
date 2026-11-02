@@ -135,6 +135,33 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                data = page.locator("#__NEXT_DATA__")
+                if await data.count() != 1:
+                    raise ObservationUnavailable("作品ページのnative情報がありません（手動確認可）")
+                binding = await data.evaluate("e => {const d=JSON.parse(e.textContent); return [d.page, d.query?.mangaId]}")
+                expected = parse_comicfuz_work_url(resolution.discovery_url)
+                if binding != ["/manga/[mangaId]", expected.work_id]:
+                    from screenshot_crawler.registration.observation import ObservationRejected
+                    raise ObservationRejected("作品ページのnative IDが対象作品と一致しません")
+                titles = await page.locator('meta[property="og:title"]').evaluate_all("els => els.map(e => e.content)")
+                if len(titles) != 1 or titles[0] != await page.title():
+                    raise ObservationUnavailable("作品名metadataが一意に一致しません（手動確認可）")
+                result = observed_title(resolution, titles[0], resolution.discovery_url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     async def iter_records(
         self,
         page: Page,

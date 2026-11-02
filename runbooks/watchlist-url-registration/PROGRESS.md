@@ -1,7 +1,7 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01–05 COMPLETE（2026-11-03）。Full suiteはall-greenではない（既存timing failure 3件、下記）。Stage 06–07は未着手。
-> Stage 01–05は連続実装を承認済み。Stage 06–07は対象外。
+> Status: Stage 01–05 COMPLETE / Stage 06 IN PROGRESS（2026-11-03追加依頼）。Full suiteはall-greenではない（既存timing failure 3件、下記）。Stage 07は未着手。
+> Stage 01–05に続きStage 06を承認済み。Stage 07は対象外。
 > Runbook: [README.md](README.md)
 
 | Stage | Status | Exit evidence / next action |
@@ -12,7 +12,7 @@
 | 03 Batch registration GUI | COMPLETE (`a9beb15`) | 97 GUI/adjacent integration passed; native layout capture; Reviewer PASS |
 | 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
-| 06 Site URL/metadata coverage | NOT STARTED | サイト別URL変換と非消費metadata拡張 |
+| 06 Site URL/metadata coverage | IN PROGRESS | 追加依頼により開始。サイト別URL変換と非消費metadata拡張 |
 | 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
@@ -237,7 +237,39 @@
   `search-results-native.png`, `search-preview-yaml-native.png`,
   `search-preview-native-result.json`. No network or real data used.
 
-## Stage 06 / 07 handoff (NOT STARTED)
+## Stage 06A checkpoint — 2026-11-03 JST
+
+- New Stage 06 request supersedes the earlier stop-at-05 instruction. Stage 07
+  remains outside scope. Baseline feature branch `09c040d`; user YAML/locks/log
+  unchanged and never used as test data.
+- Added pure numeric Zeblack viewer→same-title chapter/list conversion. Added
+  optional title observations for BookWalker, ComicFUZ, Younganimal and Piccoma.
+  Small registration/observation.py permits one exact main-frame document GET,
+  rejects redirects and aborts subresources/POSTs. Caller owns shared CDP Page.
+  Canonical and site-local native/title/episode-binding proofs precede title use.
+  Existing Kadocomi, Discovery/Batch/capture and complete-list preview unchanged.
+- Bounded investigation: Zeblack 3957 static list/detail had generic title only;
+  Manga ONE /manga/2379 returned 404; Magapoke /title/00695 returned 302, not
+  followed. Hanayume series work document exposes title but work→seed proof is
+  not yet implemented. No reader/episode was opened, no resource/POST/API action.
+- Production metadata live verified via dedicated shared-CDP Pages, one GET each
+  at 2026-11-03 05:54 JST: BookWalker series 317089; ComicFUZ work 1970;
+  Younganimal series 7103c2c1e9f08; Piccoma product 28600/episode 1910027 input,
+  navigating only product listing. All four returned title; Page cleanup done.
+  Evidence is sanitized metadata JSON only under `.tmp/watchlist-registration/`.
+- Targeted: 209 resolver/new metadata/old Kadocomi tests passed, zero skipped;
+  affected Discovery + registration drafts/detail/save/GUI: 348 passed, zero
+  skipped (18.86s). Independent Reviewer PASS / zero BLOCKING, separately 199
+  resolver/metadata tests. Ruff/diff check passed. Additional malformed-native
+  containment case passed (1 passed, 34 deliberately deselected by targeted -k,
+  no skips): direct observe also returns a sanitized manual candidate because
+  the async document context catches PlaywrightError raised inside the body.
+- Notes core + five affected sites and docs/GUI_README, DISCOVERY_AND_BATCH
+  synchronized. Capability evidence/unsupported boundaries are recorded in
+  [Stage 06 matrix](06-site-coverage/CAPABILITIES.md). Stage 06 is still in progress;
+  work/listing→seed needs a minimal bounded proof/preview/save contract (06B).
+
+## Original Stage 06 / 07 handoff (Stage 06 now active)
 
 - Stage 06: add site-specific URL forms/metadata only after non-consuming evidence;
   ten sites have no automatic title observation. Percent-escaped URLs remain
@@ -247,4 +279,5 @@
   kadocomi/mangaone/piccoma/younganimal individually. Until then, new single-key
   safe/manual registration works, but multi-key/existing-Work additions needing
   detail block with a reason. No cross-site automatic Work merge is introduced.
-- No Stage 06/07 implementation, main merge or operational data modification.
+- Original handoff excluded Stage 06/07 implementation. The new request now
+  authorizes Stage 06; no Stage 07, main merge or operational data modification.

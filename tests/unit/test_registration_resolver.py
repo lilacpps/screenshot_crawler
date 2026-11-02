@@ -80,6 +80,24 @@ def test_kadocomi_pilot_same_work_conversion(resolver, query):
     assert result.title is None
 
 
+@pytest.mark.parametrize("url", [
+    "https://zebrack-comic.shueisha.co.jp/title/3957/chapter/464465/viewer",
+    "https://zebrack-comic.shueisha.co.jp/title/003957/chapter/00464465/viewer",
+])
+def test_zeblack_viewer_converts_without_opening_reader(resolver, url):
+    result = resolver.resolve(url)
+    title = url.split("/")[4]
+    assert result.status == "converted"
+    assert result.discovery_url == f"https://zebrack-comic.shueisha.co.jp/title/{title}/chapter/list"
+    assert result.site_work_identity == "zeblack-title:" + title
+    assert result.title is None
+
+
+@pytest.mark.parametrize("suffix", ["?x=1", "#top", "/", ";x"])
+def test_zeblack_viewer_conversion_does_not_relax_url_safety(resolver, suffix):
+    assert resolver.resolve("https://zebrack-comic.shueisha.co.jp/title/3957/chapter/464465/viewer" + suffix).status == "blocked"
+
+
 async def test_observation_rejects_tampered_resolution(resolver):
     result = resolver.resolve(URLS["kadocomi"])
     assert (await resolver.observe(None, replace(result, discovery_url="https://evil.test"))).status == "blocked"

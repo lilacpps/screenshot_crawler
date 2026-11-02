@@ -1,10 +1,17 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
-Chapter-list entry; title identity. Label is not treated as observed site metadata.
+Chapter-list entry; title identity. Numeric `/title/<id>/chapter/<id>/viewer`
+inputs now convert to the same-title chapter/list using existing parsers without
+opening the viewer. Leading zeroes are preserved. Query/fragment/trailing slash
+and unsafe authority remain blocked. Label is not observed site metadata.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. Bounded exact-document checks of title 3957 list/detail
+on 2026-11-03 05:44 JST returned only the generic site og:title and no work name
+without scripts. Automatic title observation remains unsupported; no reader,
+API/subresource, resource or data action occurred. Pure conversion is tested;
+the newly mapped viewer is never navigated for registration.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート

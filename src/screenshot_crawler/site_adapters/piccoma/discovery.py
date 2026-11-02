@@ -337,6 +337,34 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        identity = parse_piccoma_viewer_url(resolution.discovery_url)
+        document_url = f"https://piccoma.com/web/product/{identity.product_id}/episodes"
+        try:
+            async with registration_document(page, document_url):
+                await require_canonical(page, document_url)
+                rows = await page.locator(ROW_SELECTOR).evaluate_all(
+                    "els => els.map(e => [e.dataset.product_id, e.dataset.episode_id])")
+                if (len(rows) > MAX_EPISODE_ROWS or not rows
+                        or any(row[0] != identity.product_id for row in rows)
+                        or rows.count([identity.product_id, identity.episode_id]) != 1):
+                    from screenshot_crawler.registration.observation import ObservationRejected
+                    raise ObservationRejected("入力話が同じ作品の一覧に一意に存在しません")
+                titles = await page.locator(TITLE_SELECTOR).all_text_contents()
+                if len(titles) != 1:
+                    raise ObservationUnavailable("一覧の作品名が一意に確認できません（手動確認可）")
+                result = observed_title(resolution, titles[0], document_url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     def incremental_stop_decision(
         self,
         record: DiscoveredRecord,

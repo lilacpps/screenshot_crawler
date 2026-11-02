@@ -1,6 +1,15 @@
 # Stage 06 — サイト別のURL変換拡張と検証
 
-> Status: NOT STARTED。Stage 05のpilot vertical sliceを壊さず、サイト単位で進める。
+> Status: IN PROGRESS（2026-11-03追加依頼）。Stage 05のpilot vertical sliceを壊さず、サイト単位で進める。Stage 07は対象外。
+
+## Execution contract (2026-11-03)
+
+- Baseline: feature/watchlist-url-registration `09c040d`。運用YAML/locks/logの既存変更を保護し、入力やtest fixtureとして読まない。
+- 順序: URLだけで確定できるZeblack変換 → 非消費の作品ページでmetadata/自然な同作品linkを有界観測 → 全11siteのcapability matrixを更新。各siteは独立に検証し、未確認を実装しない。
+- Probeはshared CDPの専用Pageを一人で操作し、readerやepisodeを開かず、まず正確な作品/listing documentへの一回GETとredirect拒否・subresource遮断で調べる。保存する証拠はURL shape・title/identity/link等のmetadataのみ。Cookie/HTML本文/漫画画像を保存しない。
+- 不明点: dynamic work-to-seed経路、作品所属の一意性、非消費title根拠。確認できない場合はunsupportedを残す。安全な正規起点の手動確認経路は維持する。
+- 受入: 新変換のstrict URL/identity tests、人工DOM/responseのredirect/mismatch/auth/error/no-write Integration、変更site Discovery regressionと登録GUI/save回帰、ruff。共通resolver/modelを変更する場合は根拠と最小範囲を明示し、影響に応じfullも実施。
+- checkpointごとに対応site note/core note、capability matrix、PROGRESSを同期する。Stage 07の完全一覧previewには入らない。
 
 ## Objective
 

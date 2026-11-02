@@ -1193,6 +1193,29 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                titles = await page.locator('meta[property="og:title"]').evaluate_all("els => els.map(e => e.content)")
+                if len(titles) != 1:
+                    raise ObservationUnavailable("作品名metadataが一意ではありません（手動確認可）")
+                document_title = await page.title()
+                if not (document_title.startswith(titles[0] + " - ")
+                        and document_title.endswith(" | ヤングアニマルWeb")):
+                    raise ObservationUnavailable("作品名とページ見出しが一致しません（手動確認可）")
+                result = observed_title(resolution, titles[0], resolution.discovery_url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     def incremental_stop_decision(
         self,
         record: DiscoveredRecord,

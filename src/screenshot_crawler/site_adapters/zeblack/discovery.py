@@ -228,6 +228,10 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         parts = parse_zeblack_chapter_list_url(url)
         if parts is None:
+            viewer = parse_zeblack_viewer_url(url)
+            if viewer is not None and re.fullmatch(r"[0-9]+", viewer.title_id) and re.fullmatch(r"[0-9]+", viewer.chapter_id):
+                parts = ZeblackListIdentity(viewer.title_id)
+        if parts is None:
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, parts.canonical_url, f"zeblack-title:{parts.title_id}")
 

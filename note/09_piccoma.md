@@ -1,10 +1,16 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Viewer-shaped entry; product identity. Registration never navigates the viewer.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. Optional title observation derives the same-product
+`/web/product/<id>/episodes` document from the viewer-shaped input, requires
+matching canonical and product-bound rows with the input episode exactly once,
+then reads the unique existing TITLE_SELECTOR. It never opens the viewer.
+Redirects/subresources/POSTs are blocked. Listing-to-viewer conversion is not
+yet implemented. Shared-CDP live check on product 28600 / episode 1910027 returned
+ベルセルク at 2026-11-03 05:54 JST without resource or persisted-data action.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # Piccoma current implementation snapshot

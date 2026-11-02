@@ -2613,6 +2613,12 @@ Optional Kadocomi title observation handles only the exact detail document,
 reads its unique known-suffix og:title, refuses redirects before following them,
 and blocks unproven subresources. Browser Page lifecycle stays with the caller.
 No general HTTP resolver or metadata fallback to full Discovery is added.
+Stage 06A also supports pure Zeblack numeric viewer-to-list conversion and
+optional BookWalker/ComicFUZ/Younganimal work-title observation. Piccoma observes
+only the derived product listing and requires its input episode exactly once.
+These four use a small one-document guard with no redirect/subresource/POST
+dispatch and canonical plus site-owned native binding/title checks. They do not
+provide new complete-list preview capabilities or change existing Discovery.
 
 ## Registration candidate drafts (Stage 02)
 
@@ -2700,6 +2706,7 @@ them. Search and visible readiness reasons in the GUI do not change grouping,
 ownership, confirmation, validation or persistence rules.
 
 The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
-Yes/No/failure and Windows GUI flow use isolated synthetic data. Only Kadocomi
-exact-detail metadata has a bounded one-work live check; the other ten resolver
-hooks and seven unsupported complete-list capabilities are not live-certified.
+Yes/No/failure and Windows GUI flow use isolated synthetic data. Kadocomi
+exact-detail metadata and the four Stage 06A paths have bounded one-work live
+checks. Other resolver metadata and seven unsupported complete-list capabilities
+are not live-certified.

@@ -368,6 +368,28 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                headings = await page.locator("h1").all_text_contents()
+                if len(headings) != 1:
+                    raise ObservationUnavailable("シリーズ名が一意に確認できません（手動確認可）")
+                match = re.fullmatch(r"『(.+)』の電子書籍一覧", " ".join(headings[0].split()))
+                if match is None:
+                    raise ObservationUnavailable("未確認のシリーズ見出しです（手動確認可）")
+                result = observed_title(resolution, match.group(1), resolution.discovery_url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     async def iter_records(
         self,
         page: Page,

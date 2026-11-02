@@ -1,10 +1,15 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Work entry and exact position=thumbnail hint; work identity.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
 site-owned pure hook. Existing Discovery input, capture and access semantics
 are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
+inferred from a label. Optional exact-work document observation requires matching
+canonical, unique `__NEXT_DATA__` page `/manga/[mangaId]`/query.mangaId and
+unique og:title equal to document.title. Redirects/subresources/POSTs are blocked.
+Viewer-to-work conversion remains unsupported. One-work shared-CDP live check
+passed for work 1970 (城下町のダンデライオン), 2026-11-03 05:54 JST; no reader,
+Discovery, Catalog/Watchlist/ZIP write or resource operation occurred.
 Complete-list preview capability is unchanged (see the site behavior below).
 
 # 13. ComicFUZ 現行実装ノート
