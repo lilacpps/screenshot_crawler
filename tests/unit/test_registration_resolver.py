@@ -98,6 +98,29 @@ def test_zeblack_viewer_conversion_does_not_relax_url_safety(resolver, suffix):
     assert resolver.resolve("https://zebrack-comic.shueisha.co.jp/title/3957/chapter/464465/viewer" + suffix).status == "blocked"
 
 
+@pytest.mark.parametrize("url,expected", [
+    ("https://zebrack-comic.shueisha.co.jp/title/00123", URLS['zeblack'].replace('/123/', '/00123/')),
+    (URLS['hanayume'] + '/9', URLS['hanayume']),
+    (URLS['hanayume'].replace('://', '://www.') + '/10/', URLS['hanayume']),
+])
+def test_proven_registration_aliases(resolver, url, expected):
+    result = resolver.resolve(url)
+    assert result.status == 'converted' and result.input_url == url
+    assert result.discovery_url == expected and resolver.resolution_error(result) is None
+
+
+@pytest.mark.parametrize('url', [
+    'https://zebrack-comic.shueisha.co.jp/title/abc',
+    'https://zebrack-comic.shueisha.co.jp/title/123/',
+    URLS['hanayume'] + '/0', URLS['hanayume'] + '/-1', URLS['hanayume'] + '/01',
+    URLS['hanayume'] + '/9/2', URLS['hanayume'] + '/9?x=1',
+    URLS['hanayume'] + '/9#top', URLS['hanayume'] + '/%39',
+    'https://zebrack-comic.shueisha.co.jp/title/123?title_id=999',
+])
+def test_aliases_keep_strict_safety(resolver, url):
+    assert resolver.resolve(url).status == 'blocked'
+
+
 async def test_observation_rejects_tampered_resolution(resolver):
     result = resolver.resolve(URLS["kadocomi"])
     assert (await resolver.observe(None, replace(result, discovery_url="https://evil.test"))).status == "blocked"

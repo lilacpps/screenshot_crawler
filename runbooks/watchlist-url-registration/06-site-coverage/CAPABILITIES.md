@@ -1,22 +1,57 @@
 # Stage 06 registration capability matrix
 
-Updated 2026-11-03, Phase 06A/B. These are separate capabilities; title observation
+Updated 2026-11-03, Phase 06A/B and seven-site follow-up. These are separate capabilities; title observation
 does not imply URL conversion, complete-list preview or free/paid eligibility.
 All existing strict canonical entry forms remain usable with human confirmation.
 
 | Site | Canonical input | Additional conversion | Automatic title | Complete-list detail |
 |---|---|---|---|---|
 | bookwalker | series/list | product→series unsupported (membership/ambiguity not proved) | exact series document, canonical + unique known h1; one-work live | Stage 07, unsupported |
-| comicdays | episode | series/work→seed unsupported | no proven non-reader path from episode | existing supported |
+| comicdays | episode | www/trailing slash→canonical; series/work→seed unsupported | exact static episode metadata: canonical + readableProduct.id/series.id/title + matching heading; 3 works live | existing supported |
 | comicfuz | manga/work | viewer→work unsupported (work ID absent from viewer URL) | canonical + native page/mangaId + matching title/og:title; one-work live | Stage 07, unsupported |
-| hanayume | episode | series→seed unsupported: scoped public links observed, but native episode/Work binding, order and completeness not established for registration | safe series document exposes title; episode→work association remains unproved | Stage 07, unsupported |
-| jumpplus | episode | work→seed unsupported; /series is multi-work navigation | no proven non-reader work identity path from episode | existing supported |
-| kadocomi | detail/work | same-prefix episode→detail (Stage 01) | existing exact-detail og:title, one-work live | Stage 07, unsupported |
-| magapoke | title/episode | work→seed unsupported: bounded work endpoint redirected; no proven non-consuming seed | work endpoint returned 302 in bounded probe; not followed | existing supported |
-| mangaone | manga/chapter | work→seed unsupported | known /manga/work endpoint returned 404; no reader fallback | Stage 07, unsupported |
+| hanayume | episode | `/episodes/<13hex>/<positive page>`→base, www/trailing slash→canonical; series→seed unsupported | exact static base episode: canonical + unique strict official Work anchor/title; 3 works live | Stage 07, unsupported |
+| jumpplus | episode | www/trailing slash→canonical; work→seed unsupported; /series is multi-work navigation | exact static episode metadata: canonical + readableProduct.id/series.id/title + matching heading; 3 works live | existing supported |
+| kadocomi | detail/work | same-prefix episode→detail, supported query removal (Stage 01) | canonical + native work queryKey/code/title preferred; known og:title fallback, conflicts block; 2 works live | Stage 07, unsupported |
+| magapoke | title/episode | existing canonical aliases only; work→seed unsupported | exact static episode metadata: canonical + unique Work h1 + present og:title agreement; 3 works live | existing supported |
+| mangaone | manga/chapter | canonical chapter only; work→seed unsupported | canonical + unique og:title/document title agreement and known numeric episode suffix; 3 works live | Stage 07, unsupported |
 | piccoma | web/viewer/product/episode | exact web/product/id/episodes → observed first unconditional-free DOM seed, with 0..300s proof; one-work live | derived product listing, canonical + product/episode binding + unique title; one-work live | Stage 07, unsupported |
 | younganimal | series/work | episode→series unsupported (work ID absent) | canonical + unique og:title/document-title shape; one-work live | Stage 07, unsupported |
-| zeblack | title/chapter/list | numeric title/chapter/viewer→same-title list, pure | static list/detail returned generic site name only; unsupported | existing supported |
+| zeblack | title/chapter/list | numeric title root or title/chapter/viewer→same-title list, pure | fixed public title_detail GET; exact response URL/status/type/size + unique native title ID/name; 3 works live | existing supported |
+
+Follow-up live verification at 2026-11-03 08:11 JST used production observers on
+all fourteen supplied URLs plus six distinct Watchlist URL/label samples (the
+first Kadocomi sample duplicated a supplied Work). All twenty returned titles
+and passed pure resolution/save validation. No full Watchlist sweep. Watchlist
+was explicitly authorized as read-only ground truth; it is never a runtime
+title table/fallback or test fixture. Evidence: ignored
+`.tmp/watchlist-registration/coverage_followup_live.json`.
+
+For Magapoke/MangaONE/ComicDAYS/Jump+/Hanayume, only the requested static HTML
+metadata document is fetched; scripts, images, iframes and POSTs are denied, so
+no viewer is initialized. Kadocomi uses the same guard on its derived detail
+page, now retained until dedicated Page close. Zeblack's official frontend
+proved the fixed public GET `/api/browser/title_detail?os=browser&title_id=<id>&tab=detail`
+on api2.zebrack-comic.com: Response21 TitleDetailView1/2 are ID/name. This is a
+site-owned metadata exception, with no shell/JS/viewer/chapter inventory request.
+Missing metadata retains explicit manual confirmation; binding/navigation
+contradictions block. Titles do not create native grouping proofs or auto-merge.
+ComicDAYS/Jump+ validate the episode-bound JSON series ID's shape, without
+independently proving a persisted series identity. Hanayume's strict Work link
+is title evidence, without an independent native episode/Work binding proof.
+These three sites therefore retain identity unknown; a matching title alone
+cannot combine episodes or Works. Stage07's complete-list proof is separate.
+
+All document observers additionally replace the response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. Inline
+viewer bootstrap cannot run; inert JSON/text metadata remains readable. The
+dedicated Page's route guard still remains through close. Lifecycle tests inject
+their POST timer explicitly through Page.evaluate, independently of HTML script
+execution, so CSP cannot hide an unroute/cleanup regression.
+
+Official names retain subtitles and typography: Kadocomi KC_005686_S returns
+「シンコンクエスト 魔王の娘は真面目勇者を堕としたい♡」; Hanayume's sampled
+「Ｓ・Ａ」uses full-width letters while the existing label uses half-width.
+No legitimate digits, subtitles or existing labels are silently removed.
 
 Phase 06A evidence: `.tmp/watchlist-registration/stage06-probe-work-docs.json`,
 `stage06-probe-binding.json`, `stage06-probe-zeblack.json`, `stage06a-live.json`.

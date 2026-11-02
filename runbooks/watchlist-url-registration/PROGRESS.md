@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01-06 COMPLETE (2026-11-03). Final coverage: 6,660 unique nodes / zero skips. Two broad attempts timed out in async teardown; completed partitions and final guard validation are distinguished below. Stage 07 not started.
+> Status: Stage 01-06 COMPLETE, including the seven-site title follow-up (2026-11-03). Current targeted344 pass; affected1020 pass with one Windows path-length failure passing on short-path rerun. Earlier full-suite evidence is distinguished below. Stage 07 not started.
 > Stage 01–05に続きStage 06を承認済み。Stage 07は対象外。
 > Runbook: [README.md](README.md)
 
@@ -12,7 +12,7 @@
 | 03 Batch registration GUI | COMPLETE (`a9beb15`) | 97 GUI/adjacent integration passed; native layout capture; Reviewer PASS |
 | 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
-| 06 Site URL/metadata coverage | IN PROGRESS | 追加依頼により開始。サイト別URL変換と非消費metadata拡張 |
+| 06 Site URL/metadata coverage | COMPLETE (follow-up checkpoint) | 11site title hooks、追加7site live20、targeted344 pass、独立review PASS。詳細・affectedの環境制限は末尾参照 |
 | 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
@@ -367,7 +367,7 @@
   must distinguish baseline full results from post-fix validation, and must not
   claim the entire broad suite ran the final guard. Stage07 remains untouched.
 
-## Stage 06 final acceptance — COMPLETE, 2026-11-03 JST
+## Initial Stage 06 acceptance — COMPLETE, 2026-11-03 JST (before seven-site follow-up)
 
 - Feature checkpoints: `0943c76` (06A title observations/Zeblack conversion),
   `a87e16b` (06B Piccoma proved work-listing conversion), `7f64880` (Page-lifetime
@@ -437,3 +437,89 @@
   Stage07 is **not started**: complete-list detail remains magapoke/jumpplus/
   zeblack/comicdays only. Remaining seven sites' full-list proof/scope editor,
   and additional non-consuming URL conversion research, remain future work.
+
+## Stage 06 seven-site title follow-up — 2026-11-03 JST
+
+- Baseline `91309b0` on feature/watchlist-url-registration. The latest request
+  explicitly expands the earlier narrow metadata scope: supplied episode HTML
+  metadata may be read once without executing a viewer. The subsequent user
+  instruction permits a few operational Watchlist URL/label pairs as read-only
+  ground truth, without a full sweep, runtime lookup or real-data test fixture.
+- Implemented title observation for Magapoke, MangaONE, ComicDAYS, Jump+ and
+  Hanayume; improved Kadocomi to use exact native Work query/code/title before
+  known og:title fallback. Zeblack uses the official frontend's fixed public
+  title_detail GET, validating response URL/status/type/size and bounded native
+  protobuf Response21 TitleDetailView1/2. It reads no chapter inventory, JS or
+  viewer. Native title removes any need to strip visual list/volume suffixes.
+- New pure conversions: numeric Zeblack `/title/<id>`→same-title chapter/list;
+  Hanayume `/episodes/<13hex>/<positive page>`→base episode. Existing www/slash,
+  Kadocomi episode/query and Zeblack viewer conversions retain their boundaries.
+  Work→seed/share/short URLs are not generally supported; see the current matrix.
+- All document observers now replace response CSP to prohibit inline/external
+  scripts, objects, workers and form submission. Static DOM/inert JSON remains
+  readable. The existing redirect/subresource/POST guard stays until Page close.
+  The independent lifecycle tests explicitly inject timers with Page.evaluate,
+  so this guard remains tested independently of HTML script blocking.
+- ComicDAYS/Jump+ check the episode ID plus native series ID shape/title;
+  Hanayume checks a unique official Work anchor. These are title evidence only,
+  without independent persisted Work binding proofs: identity remains unknown
+  and human assignment is mandatory. Missing metadata retains Decision A's
+  explicit manual registration; observed contradictions remain blocked.
+- Final CSP-enabled production observers verified all14 supplied URLs and6
+  additional distinct Watchlist samples, at08:16 JST. Kadocomi's first sample
+  duplicated a supplied Work and was not fetched again as an extra sample.
+  All20 returned titles and passed pure save validation. Hanayume's sample
+  full-width Ｓ・Ａ matches the half-width label under NFKC; existing labels are
+  not edited. Kadocomi KC_005686_S intentionally retains the official full name
+  「シンコンクエスト 魔王の娘は真面目勇者を堕としたい♡」.
+- The same final CSP guard also passed live regression at08:20 JST on the four
+  previously verified BookWalker/ComicFUZ/Younganimal/Piccoma works; Piccoma
+  still selected the proven first unconditional-free seed without opening it.
+  Evidence (ignored): coverage_followup_live.json and
+  coverage-followup-other-four-live.json under .tmp/watchlist-registration/.
+- Native Windows GUI used actual _ResolveWorker/CDP observation on one supplied
+  URL per site, with isolated empty Watchlist/Catalog/runtime files. Seven
+  labels auto-populated; explicit confirmation and actual saved-YAML preview
+  showed all labels, canonical Zeblack/Hanayume URLs and input/saved URL labels.
+  No save/Full/Capture was executed. Both isolated stores and operational YAML
+  hashes were unchanged. Captures: native-seven-{analyzed,ready-1200,ready-980,
+  preview}.png; result native-seven-result.json. At980x800 the list scrolls;
+  form/actions remain reachable, with no broken controls or missing fonts.
+- Tests: initial targeted267 passed/0skip. Final source targeted344 passed/0skip
+  (all document/API observers, conversion, lifecycle16, strict resolver).
+  The first CSP test iteration had6 test-only failures from evaluating a
+  rejected redirect's destroyed document; the assertion now runs only for
+  loaded documents, while redirect/block and single-GET assertions remain.
+  Final344 passed after this correction. Ruff src/tests and diff whitespace
+  checks pass.
+- Wider27-file affected suite completed1020 passed/1 failed/0skip (664.48s).
+  Failure: existing Hanayume Batch [already-granted-start] exceeded Windows path
+  length under the long isolated basetemp, failing to create .manifest.json.tmp.
+  Both parameters passed with short isolated basetemp w7h1 (2 passed/0skip).
+  No packaging/access/fixture contract was weakened. Final metadata-only changes
+  after the wider run began are wholly covered by the final344 checks.
+  Supplementary final-source Hanayume/Kadocomi replay:85 passed/1 same long-path
+  failure/0skip (310.10s); the short-path2 passed run above covers that failure.
+  Replay reports include call/teardown checkpoints in
+  followup-affected-remainder.jsonl. This does not replace or imply a clean
+  monolithic full-suite result.
+- Full pytest was not repeated for this follow-up: changes are confined to
+  registration observation and site metadata hooks, with no Core/Runner,
+  Catalog/Watchlist model, Discovery algorithm or save validation changes. All
+  observation callers and affected site Discovery/edit/save contracts are
+  covered above. Earlier full-suite evidence is historical, not a new full run.
+  Live coverage is bounded to the named works/metadata, not every account,
+  expired episode, special MangaONE chapter-title shape, rights or Capture flow.
+- Independent reviewer: seven-site production review and final CSP/MangaONE
+  title-separator/source/test/docs review PASS/no BLOCKING. Final PROGRESS
+  synchronization was independently rechecked and accepted (final gate PASS).
+  Short-path Hanayume rerun:2 passed/0skip.
+- Notes synchronized:00_core and all11 site notes (four existing metadata sites
+  also receive the shared CSP change). GUI_README, decisions, runbook/matrix
+  updated. Production files: registration/observation.py and seven site-local
+  discovery.py hooks; tests: resolver, Kadocomi browser fixture and two new
+  metadata integration files. No stable key/owner/scope/order/segments changes,
+  automatic cross-site merge or operational data write.
+- Remaining: Stage07 complete-list previews for the other seven sites remain
+  NOT STARTED. Independent Work/episode binding proofs and further safe
+  work→seed URL forms require separate evidence. No main merge/push.

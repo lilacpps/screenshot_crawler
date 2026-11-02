@@ -397,6 +397,46 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, canonical_comicdays_episode_url(url), None)
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                values = await page.locator('#episode-json').evaluate_all(
+                    "nodes => nodes.map(node => node.getAttribute('data-value'))")
+                if len(values) != 1 or not isinstance(values[0], str) or len(values[0]) > MAX_ATOM_BODY:
+                    raise ObservationUnavailable("Comic DAYSの作品情報が一意に確認できません（手動確認可）")
+                try:
+                    payload = json.loads(values[0])
+                except ValueError:
+                    raise ObservationUnavailable("Comic DAYSの作品情報を解析できません（手動確認可）") from None
+                product = payload.get('readableProduct') if isinstance(payload, dict) else None
+                if not isinstance(product, dict):
+                    raise ObservationUnavailable("Comic DAYSの話情報がありません（手動確認可）")
+                if product.get('id') is None:
+                    raise ObservationUnavailable("Comic DAYSの話IDがありません（手動確認可）")
+                if product.get('id') != parse_comicdays_episode_url(resolution.discovery_url):
+                    raise ObservationRejected("Comic DAYSの作品情報が別の話を指しています")
+                series = product.get('series')
+                if (not isinstance(series, dict) or not isinstance(series.get('id'), str)
+                        or re.fullmatch(r'[0-9]+', series['id']) is None):
+                    raise ObservationUnavailable("Comic DAYSの作品IDが確認できません（手動確認可）")
+                title = series.get('title')
+                headings = await page.locator('.series-header-title').all_text_contents()
+                if isinstance(title, str) and title and headings and [" ".join(t.split()) for t in headings] != [" ".join(title.split())]:
+                    raise ObservationRejected("Comic DAYSの作品名と作品情報が一致しません")
+                result = observed_title(resolution, title, page.url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True
     supports_exclusion_replay = True

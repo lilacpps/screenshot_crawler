@@ -17,6 +17,20 @@ never reused for reading or Discovery; shared browser/context routing is untouch
 Final Page-lifetime guard live recheck on the same series7103c2c1e9f08 passed at
 2026-11-03 07:43 JST: title and pure validation accepted; one document GET only.
 
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
+
+
+CSP-guard live regression passed on the same previously verified Work at
+2026-11-03 08:20 JST: title and pure resolution validation accepted; one
+work/listing GET only. Evidence: coverage-followup-other-four-live.json.
+
 # 11. Younganimal current implementation
 
 ## Shared Catalog v7 / automatic acquisition scope (2026-10-23)

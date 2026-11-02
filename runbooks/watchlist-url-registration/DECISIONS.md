@@ -19,6 +19,14 @@
 
 ## 受け入れmatrix
 
+Stage06追加依頼（2026-11-03）: 指定episodeの静的HTMLを一回GETし、
+inline/external scriptをCSPで実行禁止にしたmetadata観測を許可する。
+Zeblackは公式frontendで確認した固定の公開title_detail GETのみをsite固有の
+例外とする。作品名の取得は完全一覧・native grouping identityの証明ではない。
+ComicDAYS/Jump+/Hanayumeはidentity unknownを維持し、人が所属を確定する。
+運用Watchlist URL/labelは追加指示により少数の読取照合に限って使い、
+実装の固定lookupやテストfixtureにはしない。
+
 | URL | identity/title | 操作 | 登録状態 |
 |---|---|---|---|
 | 安全な正規URL | verified/observed | 既存照合を確認 | 検証後ready |

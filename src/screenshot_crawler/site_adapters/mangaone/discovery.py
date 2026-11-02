@@ -127,6 +127,34 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, url, f"mangaone-work:{parts.work_id}")
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                titles = await page.locator('meta[property="og:title"]').evaluate_all(
+                    "nodes => nodes.map(node => node.content)")
+                if len(titles) != 1:
+                    raise ObservationUnavailable("マンガワンの作品名metadataが一意に確認できません（手動確認可）")
+                episode_title = " ".join(titles[0].split())
+                document_title = " ".join((await page.title()).split())
+                if document_title != episode_title + " | マンガワン":
+                    raise ObservationRejected("マンガワンの作品名metadataが一致しません")
+                match = _TITLE_EPISODE.fullmatch(episode_title)
+                if match is None:
+                    raise ObservationUnavailable("マンガワンの既知の話名形式ではありません（手動確認可）")
+                result = observed_title(resolution, match.group('title'), page.url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     supports_bounded_discovery = True
 
     async def iter_records(

@@ -36,7 +36,13 @@ async def registration_document(page, url):
                     violations.append(True)
                     await route.abort()
                 else:
-                    await route.fulfill(response=response)
+                    # Read static metadata without executing an episode viewer's
+                    # inline bootstrap (external scripts are also denied).
+                    await route.fulfill(response=response, headers={
+                        **response.headers,
+                        'content-security-policy': "script-src 'none'; object-src 'none'; "
+                        "worker-src 'none'; form-action 'none'",
+                    })
             except PlaywrightError:
                 # Catch inside the callback: event error logs can contain headers.
                 await route.abort()

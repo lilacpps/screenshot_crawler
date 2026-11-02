@@ -1,20 +1,40 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
-Work entry and same-prefix episode-to-work conversion; work identity. Optional exact-detail og:title observation blocks redirect and subresources; never opens reader.
-Strict new-entry URL validation is supplied by registration/resolver.py and the
-site-owned pure hook. Existing Discovery input, capture and access semantics
-are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. The observer permits only one main-frame GET to the exact
-detail URL, fetches with max_redirects=0, and aborts all other requests. Fetch
-errors are caught inside the route callback and returned as sanitized manual
-candidates, without logging request headers.
-Bounded live check (2026-11-02 23:48 JST): episode
-KC_0049150000100001_E converted to detail KC_004915_S; the exact detail document
-reported unique og:title「夫婦以上、恋人未満。」. A dedicated shared-CDP Page was
-closed afterward; no reader/episode navigation, resource action, Capture,
-Watchlist/Catalog/ZIP write occurred. This is one-work metadata evidence only,
-not general live certification of arbitrary forms or complete-list preview.
-Complete-list preview capability is unchanged (see the site behavior below).
+Work entry and same-prefix episode→work / supported query removal preserve
+URL-derived Work identity. Optional detail metadata now uses the shared
+registration_document guard (retained until Page close), plus exact canonical.
+The exact dehydrated query key `/api/contents/details/work` with workCode must
+bind native work.code to the requested Work; native work.title is preferred.
+Unique og:title with the known site suffix remains a fallback. Native/og title
+or Work-code disagreement blocks. Comics/volume labels are never stripped by
+guessing, so legitimate digits and official subtitles are preserved.
+Live 2026-11-03: KC_004915_S「夫婦以上、恋人未満。」、KC_005686_S
+「シンコンクエスト 魔王の娘は真面目勇者を堕としたい♡」verified, from
+user inputs with episodeType=first. The latter is the official full Work name;
+the requested shorthand is not hardcoded as a replacement. No episode/viewer
+navigation is needed for Kadocomi. Complete-list preview remains Stage 07.
+
+Strict new-entry validation stays in registration/resolver.py and site-owned
+hooks. Metadata is optional (GUI checkbox initially on); safe canonical URLs
+with missing metadata retain explicit human confirmation, while identity or
+navigation contradictions block. Human labels never become site evidence.
+Each document observer denies scripts/images/iframes/POSTs and redirects and
+keeps its guard until the caller closes the dedicated shared-CDP Page.
+Registration performs no ticket/point/purchase/Capture, full Discovery or
+Watchlist/Catalog/ZIP/history write. Tests use artificial isolated data. URL/label
+samples from operational Watchlist were read only with the user's explicit
+permission, never used as a runtime title lookup or copied into fixtures.
+Existing Discovery/scope/order/segments/access/capture behavior is unchanged.
+Evidence and test/review results: runbooks/watchlist-url-registration/PROGRESS.md.
+
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # 12. Kadocomi current implementation
 

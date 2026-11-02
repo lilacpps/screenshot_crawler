@@ -1,11 +1,35 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
-Chapter entry; work identity. Registration never opens the chapter for metadata.
-Strict new-entry URL validation is supplied by registration/resolver.py and the
-site-owned pure hook. Existing Discovery input, capture and access semantics
-are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
-Complete-list preview capability is unchanged (see the site behavior below).
+Chapter entry preserves its URL-derived Work identity. Optional metadata reads
+one exact chapter HTML document with all scripts/subresources/POSTs denied. A
+unique canonical must equal the entry; og:title must agree with document.title
+ending ` | マンガワン`. Only the observed `作品名 第N話` (+known part suffix)
+form is stripped, so the site brand/unknown chapter shapes remain manual.
+Live 2026-11-03: 2084/191459「遥かなるマナーバトル」、28639/359935
+「嫁をダンジョンで殺したい」、sample2379/214131「獣王と薬草」verified.
+Work-only→chapter conversion remains unsupported.
+
+Strict new-entry validation stays in registration/resolver.py and site-owned
+hooks. Metadata is optional (GUI checkbox initially on); safe canonical URLs
+with missing metadata retain explicit human confirmation, while identity or
+navigation contradictions block. Human labels never become site evidence.
+Each document observer denies scripts/images/iframes/POSTs and redirects and
+keeps its guard until the caller closes the dedicated shared-CDP Page.
+Registration performs no ticket/point/purchase/Capture, full Discovery or
+Watchlist/Catalog/ZIP/history write. Tests use artificial isolated data. URL/label
+samples from operational Watchlist were read only with the user's explicit
+permission, never used as a runtime title lookup or copied into fixtures.
+Existing Discovery/scope/order/segments/access/capture behavior is unchanged.
+Evidence and test/review results: runbooks/watchlist-url-registration/PROGRESS.md.
+
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # 02. Manga ONE 現行実装ノート
 

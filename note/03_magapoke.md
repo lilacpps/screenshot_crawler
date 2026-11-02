@@ -1,11 +1,33 @@
-## Watchlist URL registration hook (Stage 01, 2026-11-02)
+## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
-Episode entry; title identity (leading zeroes preserved).
-Strict new-entry URL validation is supplied by registration/resolver.py and the
-site-owned pure hook. Existing Discovery input, capture and access semantics
-are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Resolver live verification has not been performed.
-Complete-list preview capability is unchanged (see the site behavior below).
+Episode entry preserves title identity and leading zeroes. Optional metadata
+uses one exact HTML document GET, unique matching canonical and the unique
+`h1.p-episode__comic-ttl` Work heading. Present unique og:title must start with
+that full Work title. Episode headings are never used as a Work name.
+Live 2026-11-03: title01932「へうげもの」、01522「柊さんちの吸血事情」、
+sample02770「しゅごキャラ！」verified. Work-root→seed remains unsupported.
+
+Strict new-entry validation stays in registration/resolver.py and site-owned
+hooks. Metadata is optional (GUI checkbox initially on); safe canonical URLs
+with missing metadata retain explicit human confirmation, while identity or
+navigation contradictions block. Human labels never become site evidence.
+Each document observer denies scripts/images/iframes/POSTs and redirects and
+keeps its guard until the caller closes the dedicated shared-CDP Page.
+Registration performs no ticket/point/purchase/Capture, full Discovery or
+Watchlist/Catalog/ZIP/history write. Tests use artificial isolated data. URL/label
+samples from operational Watchlist were read only with the user's explicit
+permission, never used as a runtime title lookup or copied into fixtures.
+Existing Discovery/scope/order/segments/access/capture behavior is unchanged.
+Evidence and test/review results: runbooks/watchlist-url-registration/PROGRESS.md.
+
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # 03. Magapoke
 

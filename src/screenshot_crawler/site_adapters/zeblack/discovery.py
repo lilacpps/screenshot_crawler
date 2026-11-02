@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from urllib.parse import urlsplit
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -36,6 +37,7 @@ from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
     decode_zeblack_chapter_records,
     decoded_chapter_content,
     map_zeblack_access_mode,
+    parse_zeblack_protobuf_wire,
 )
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
@@ -228,12 +230,70 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         parts = parse_zeblack_chapter_list_url(url)
         if parts is None:
+            root = re.fullmatch(r"/title/([0-9]+)", urlsplit(url).path)
+            if root is not None:
+                parts = ZeblackListIdentity(root.group(1))
             viewer = parse_zeblack_viewer_url(url)
             if viewer is not None and re.fullmatch(r"[0-9]+", viewer.title_id) and re.fullmatch(r"[0-9]+", viewer.chapter_id):
                 parts = ZeblackListIdentity(viewer.title_id)
         if parts is None:
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, parts.canonical_url, f"zeblack-title:{parts.title_id}")
+
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+        )
+        identity = parse_zeblack_chapter_list_url(resolution.discovery_url)
+        # Fixed public metadata endpoint observed in the official frontend.
+        # Never navigate the viewer or fetch a chapter inventory for a title.
+        url = (f"https://{ZEBLACK_API_HOST}/api/browser/title_detail"
+               f"?os=browser&title_id={identity.title_id}&tab=detail")
+        response = None
+        try:
+            response = await page.request.get(url, max_redirects=0, timeout=20_000)
+            if response.url != url or 300 <= response.status < 400:
+                raise ObservationRejected("ゼブラックの作品情報が未対応のURLへ遷移しました")
+            if response.status != 200:
+                raise ObservationUnavailable("ゼブラックの作品情報を取得できません（手動確認可）")
+            headers = response.headers
+            if headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/protobuf':
+                raise ObservationUnavailable("ゼブラックの作品情報形式を確認できません（手動確認可）")
+            size = headers.get('content-length')
+            if size is not None and (not size.isdecimal() or int(size) > MAX_PROTOBUF_BODY_BYTES):
+                raise ObservationUnavailable("ゼブラックの作品情報サイズが不正です（手動確認可）")
+            body = await response.body()
+            fields = parse_zeblack_protobuf_wire(body)
+            if any(field.field_number == 1000 for field in fields):
+                raise ObservationUnavailable("ゼブラックが作品情報エラーを返しました（手動確認可）")
+            details = [field for field in fields if field.field_number == 21]
+            if len(details) > 1:
+                raise ObservationRejected("ゼブラックの作品情報が重複しています")
+            if len(details) != 1 or details[0].wire_type != 2 or not details[0].nested:
+                raise ObservationUnavailable("ゼブラックの作品情報が一意に確認できません（手動確認可）")
+            ids = [field for field in details[0].nested if field.field_number == 1]
+            names = [field for field in details[0].nested if field.field_number == 2]
+            if len(ids) > 1 or len(names) > 1:
+                raise ObservationRejected("ゼブラックの作品ID・作品名が重複しています")
+            if len(ids) != 1 or ids[0].wire_type != 0:
+                raise ObservationUnavailable("ゼブラックの作品IDが一意に確認できません（手動確認可）")
+            if ids[0].value != int(identity.title_id):
+                raise ObservationRejected("ゼブラックの作品情報が別の作品を指しています")
+            if len(names) != 1 or names[0].wire_type != 2:
+                raise ObservationUnavailable("ゼブラックの作品名が一意に確認できません（手動確認可）")
+            title = names[0].value.decode('utf-8')
+            return observed_title(resolution, title, url)
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+        except (PlaywrightError, ZeblackProtobufError, UnicodeError, ValueError):
+            return observation_failure(resolution, ObservationUnavailable(
+                "ゼブラックの作品情報を確認できません（手動確認可）"))
+        finally:
+            if response is not None:
+                await response.dispose()
 
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True

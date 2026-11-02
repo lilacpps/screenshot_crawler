@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
 from urllib.parse import urljoin, urlsplit
@@ -705,62 +705,67 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
                             f"kadocomi-work:{parts.work_id}")
 
     async def observe_registration_metadata(self, page, resolution):
-        # Optional detail-only observation. Block every unproven request before
-        # dispatch, including redirected documents and all subresources.
-        violations = []
-        document_used = False
-        async def restrict(route):
-            nonlocal document_used
-            request = route.request
-            if (request.is_navigation_request() and request.frame == page.main_frame
-                    and request.url == resolution.discovery_url
-                    and request.redirected_from is None and request.method == "GET"
-                    and not document_used):
-                document_used = True
-                # Chromium does not route every redirected request. Inspect the
-                # natural document response with redirects disabled, before the
-                # browser can follow its Location header.
-                try:
-                    response = await route.fetch(max_redirects=0, timeout=30_000)
-                except PlaywrightError:
-                    # Route callback errors otherwise reach Playwright's event
-                    # logger, including request headers. Keep failures bounded
-                    # and expose only the sanitized manual-confirmation state.
-                    await route.abort()
-                    return
-                if 300 <= response.status < 400:
-                    violations.append("redirect")
-                    await route.abort()
-                else:
-                    await route.fulfill(response=response)
-            else:
-                if request.is_navigation_request():
-                    violations.append(request.url)
-                await route.abort()
-        await page.route("**/*", restrict)
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
         try:
-            response = await page.goto(resolution.discovery_url, wait_until="domcontentloaded",
-                                       timeout=30_000)
-            if violations or page.url != resolution.discovery_url:
-                return resolution.blocked("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually")
-            if response is None or not response.ok:
-                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-            titles = await page.locator('meta[property="og:title"]').evaluate_all(
-                "nodes => nodes.map(node => node.content)")
-            if len(titles) != 1:
-                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-            try:
-                title = _canonical_work_title(titles[0])
-            except DiscoveryIncompleteError:
-                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-            return replace(resolution, title=title,
-                evidence=(*resolution.evidence, f"detail og:title: {page.url}; {now_jst().isoformat()}"))
-        except PlaywrightError:
-            if violations:
-                return resolution.blocked("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually")
-            return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-        finally:
-            await page.unroute("**/*", restrict)
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                work_id = parse_kadocomi_work_url(resolution.discovery_url).work_id
+                values = await page.locator('#__NEXT_DATA__').all_text_contents()
+                title = None
+                if len(values) > 1:
+                    raise ObservationUnavailable("カドコミの作品情報が一意に確認できません（手動確認可）")
+                if values:
+                    if len(values[0]) > MAX_NATIVE_JSON_BYTES:
+                        raise ObservationUnavailable("カドコミの作品情報が大きすぎます（手動確認可）")
+                    try:
+                        payload = json.loads(values[0])
+                    except ValueError:
+                        raise ObservationUnavailable("カドコミの作品情報を解析できません（手動確認可）") from None
+                    props = payload.get('props') if isinstance(payload, dict) else None
+                    page_props = props.get('pageProps') if isinstance(props, dict) else None
+                    state = page_props.get('dehydratedState') if isinstance(page_props, dict) else None
+                    queries = state.get('queries') if isinstance(state, dict) else None
+                    matches = [query for query in queries if isinstance(query, dict)
+                        and query.get('queryKey') == ['/api/contents/details/work', {'workCode': work_id}]
+                    ] if isinstance(queries, list) else []
+                    if len(matches) > 1:
+                        raise ObservationRejected("カドコミの作品情報が重複しています")
+                    if matches:
+                        query_state = matches[0].get('state')
+                        data = query_state.get('data') if isinstance(query_state, dict) else None
+                        work = data.get('work') if isinstance(data, dict) else None
+                        if isinstance(work, dict):
+                            if work.get('code') is not None and work['code'] != work_id:
+                                raise ObservationRejected("カドコミの作品情報が別の作品を指しています")
+                            if work.get('code') == work_id:
+                                title = work.get('title')
+                titles = await page.locator('meta[property="og:title"]').evaluate_all(
+                    "nodes => nodes.map(node => node.content)")
+                if len(titles) > 1:
+                    raise ObservationUnavailable("カドコミの作品名が一意に確認できません（手動確認可）")
+                fallback = None
+                if titles:
+                    try:
+                        fallback = _canonical_work_title(titles[0])
+                    except DiscoveryIncompleteError:
+                        pass
+                if isinstance(title, str) and title.strip():
+                    if fallback and " ".join(title.split()) != " ".join(fallback.split()):
+                        raise ObservationRejected("カドコミの作品名と作品情報が一致しません")
+                else:
+                    title = fallback
+                result = observed_title(resolution, title, page.url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
 
     supports_bounded_discovery = True
     allow_inferred_display_positions = False

@@ -390,20 +390,25 @@ Full未実行・Catalog未同期と表示します。「はい」なら既存の
 | BookWalker | `/series/id/list/` |
 | Comic DAYS | `/episode/id` |
 | COMIC FUZ | `/manga/id`（既存の`position=thumbnail`も可） |
-| 花とゆめ | `/episodes/id` |
+| 花とゆめ | `/episodes/id`、`/episodes/id/ページ番号`はbase episodeへ変換 |
 | Jump+ | `/episode/id` |
 | カドコミ | `/detail/KC_…_S`、同じ作品prefixの`/episodes/KC_…_E`からdetailへ変換 |
 | マガポケ | `/title/id/episode/id` |
 | マンガワン | `/manga/id/chapter/id` |
 | ピッコマ | `/web/viewer/product/episode`（登録解析時にはviewerを開きません） |
 | ヤングアニマル | `/series/id` |
-| ゼブラック | `/title/id/chapter/list` |
+| ゼブラック | `/title/id/chapter/list`、数値`/title/id`やviewer URLは同作品のlistへ変換 |
 
 各サイトの既存許可query以外の任意query、fragment、短縮URL、別形式の作品/書籍URL、
-percent escapeなどは未対応でブロックします。11サイトすべてのURL変換・作品名の自動取得を
-保証するものではありません。現在の自動作品名観測は、カドコミ・BookWalker・COMIC FUZ・
-ヤングアニマル・ピッコマに対応します。ピッコマは入力のviewerを開かず同作品の一覧を読みます。
-ゼブラックは数値IDのviewer URLからchapter/listへも変換できます。
+percent escapeなどは未対応でブロックします。作品名の自動取得は現在11サイトすべてに
+対応しますが、取得できるのは確認済みのページ構造・metadata形式の場合です。
+マガポケ・マンガワン・Comic DAYS・Jump+・花とゆめも、話URLから作品名を取得します。
+話名・著者名・巻数は作品名へ混ぜず、カドコミは内部の正式作品名を優先します。
+正式名に含まれる副題・数字・全角文字は残します。取得後のlabelは手動でも調整できます。
+HTMLのscriptを実行せず、ゼブラックは固定された公開作品情報APIだけを読みます。
+ピッコマは入力のviewerを開かず同作品の一覧を読みます。作品名が取得できなくても、
+安全な正規URLが確定していれば手入力して明示確認できます。
+一方、作品ページから話URLへの変換はサイトごとに対応が異なり、全サイト共通ではありません。
 
 ピッコマは `/web/product/id/episodes` も、安全なURL変換がONなら対応します。
 作品一覧の件数・表示順・同じ作品の話かを確認し、無条件で無料の最初の話URLを保存先にします。

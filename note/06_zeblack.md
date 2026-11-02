@@ -1,18 +1,44 @@
-## Watchlist URL registration hook (Stage 06A, 2026-11-03)
+## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
-Chapter-list entry; title identity. Numeric `/title/<id>/chapter/<id>/viewer`
-inputs now convert to the same-title chapter/list using existing parsers without
-opening the viewer. Leading zeroes are preserved. Query/fragment/trailing slash
-and unsafe authority remain blocked. Label is not observed site metadata.
-Strict new-entry URL validation is supplied by registration/resolver.py and the
-site-owned pure hook. Existing Discovery input, capture and access semantics
-are unchanged. Title is unknown unless independently observed; no identity is
-inferred from a label. Bounded exact-document checks of title 3957 list/detail
-on 2026-11-03 05:44 JST returned only the generic site og:title and no work name
-without scripts. Automatic title observation remains unsupported; no reader,
-API/subresource, resource or data action occurred. Pure conversion is tested;
-the newly mapped viewer is never navigated for registration.
-Complete-list preview capability is unchanged (see the site behavior below).
+Numeric `/title/<id>` now converts purely to `/title/<id>/chapter/list`.
+The existing numeric viewer→same-title list conversion remains; leading zeroes
+are preserved. No generic suffix, query or redirect cleanup is attempted.
+Static list HTML is a generic shell, so optional title observation instead uses
+the official frontend's fixed public metadata GET:
+`https://api2.zebrack-comic.com/api/browser/title_detail?os=browser&title_id=<numeric>&tab=detail`.
+This site-owned API exception never navigates HTML/JS/viewer or calls Discovery.
+Redirects are disabled; exact response URL, HTTP200, application/protobuf and
+existing body limits are required. Existing bounded wire parsing reads only
+Response.field21 TitleDetailView.field1 ID / field2 UTF8 name. Error1000,
+missing/malformed fields cannot provide metadata; duplicates and ID mismatches
+block. No title-list suffix removal is needed because the native field is clean.
+Responses are disposed. No auth secrets are read/stored or query copied from
+input. API failures expose sanitized manual warnings, never request headers.
+Live 2026-11-03: title119690 root→list「きみは四葉のクローバー」、5123
+「アオのハコ」、sample86「この音とまれ！」verified. Existing four-site
+complete-list detail capability is unchanged.
+
+Strict new-entry validation stays in registration/resolver.py and site-owned
+hooks. Metadata is optional (GUI checkbox initially on); safe canonical URLs
+with missing metadata retain explicit human confirmation, while identity or
+navigation contradictions block. Human labels never become site evidence.
+Each document observer denies scripts/images/iframes/POSTs and redirects and
+keeps its guard until the caller closes the dedicated shared-CDP Page.
+Registration performs no ticket/point/purchase/Capture, full Discovery or
+Watchlist/Catalog/ZIP/history write. Tests use artificial isolated data. URL/label
+samples from operational Watchlist were read only with the user's explicit
+permission, never used as a runtime title lookup or copied into fixtures.
+Existing Discovery/scope/order/segments/access/capture behavior is unchanged.
+Evidence and test/review results: runbooks/watchlist-url-registration/PROGRESS.md.
+
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 

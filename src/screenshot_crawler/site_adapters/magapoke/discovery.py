@@ -150,6 +150,31 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, canonical_magapoke_episode_url(parts), f"magapoke-title:{parts.title_id}")
 
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                titles = await page.locator('h1.p-episode__comic-ttl').all_text_contents()
+                if len(titles) != 1 or not titles[0].strip():
+                    raise ObservationUnavailable("マガポケの作品名が一意に確認できません（手動確認可）")
+                title = " ".join(titles[0].split())
+                meta = await page.locator('meta[property="og:title"]').evaluate_all(
+                    "nodes => nodes.map(node => node.content)")
+                if len(meta) == 1 and not " ".join(meta[0].split()).startswith(title + " | "):
+                    raise ObservationRejected("マガポケの作品名とmetadataが一致しません")
+                result = observed_title(resolution, title, page.url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
+
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True
     supports_exclusion_replay = True

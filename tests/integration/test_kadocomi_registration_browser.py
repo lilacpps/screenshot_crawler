@@ -30,7 +30,7 @@ async def test_detail_observation_is_restricted_and_non_consuming(browser_page, 
             title = '<meta property="og:title" content="人工作品｜カドコミ (コミックウォーカー)">'
             body = {"missing": "", "multiple": title * 2,
                 "suffix": title.replace("カドコミ", "unknown")}.get(mode, title)
-            self.wfile.write((body + '<img src="https://evil.test/image">').encode())
+            self.wfile.write((f'<link rel="canonical" href="{URL}">' + body + '<img src="https://evil.test/image">').encode())
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

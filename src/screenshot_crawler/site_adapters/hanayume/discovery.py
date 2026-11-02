@@ -1445,10 +1445,33 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
         from urllib.parse import urlsplit
         if urlsplit(url).query not in ("",):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-        parts = parse_hanayume_episode_url(url)
-        if parts is None:
+        match = _parse_https_site_url(url, RANGE_PATH)
+        if match is None:
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
-        return resolved_url(url, canonical_hanayume_episode_url(url), None)
+        return resolved_url(url, f"https://hanayume.com/episodes/{match.group('seed_id')}", None)
+
+    async def observe_registration_metadata(self, page, resolution):
+        from screenshot_crawler.registration.observation import (
+            ObservationRejected,
+            ObservationUnavailable,
+            observation_failure,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        try:
+            async with registration_document(page, resolution.discovery_url):
+                await require_canonical(page, resolution.discovery_url)
+                links = await page.locator(WORK_LINK_SELECTOR).evaluate_all(
+                    "nodes => nodes.map(node => ({url: node.href, title: node.textContent}))")
+                if len(links) != 1:
+                    raise ObservationUnavailable("花とゆめ＋の作品名が一意に確認できません（手動確認可）")
+                if parse_hanayume_work_url(links[0]['url']) is None:
+                    raise ObservationRejected("花とゆめ＋の作品リンクが公式作品URLではありません")
+                result = observed_title(resolution, links[0]['title'], page.url)
+            return result
+        except ObservationUnavailable as exc:
+            return observation_failure(resolution, exc)
 
     supports_bounded_discovery = True
 

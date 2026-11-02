@@ -95,8 +95,21 @@ for title only, with one-work live evidence each. The new small observation
 helper permits one exact main-frame GET, no redirects/subresource/POST dispatch,
 and checks canonical before site-owned native ID/title/episode-binding rules.
 Missing metadata preserves manual registration of already safe URLs; rejected
-identity/navigation blocks. Existing Kadocomi behavior is unchanged. Other sites'
-metadata remains unverified/unsupported; complete-list capabilities are unchanged.
+identity/navigation blocks. The Stage06 follow-up adds bounded title metadata
+for Magapoke/MangaONE/ComicDAYS/Jump+/Hanayume and improves Kadocomi to prefer
+native Work data. All six use the shared one-document guard; supplied episode
+HTML is read with scripts/subresources denied, without viewer initialization.
+Zeblack instead makes one fixed site-owned public title_detail GET with strict
+response URL/status/type/size and native title ID/name validation. This explicit
+metadata API exception does not use chapter inventory or full Discovery.
+Zeblack numeric title-root→list and Hanayume numeric position suffix→base are
+new pure conversions. No shared resolver/model/save changes or new native
+identity/grouping proof: title evidence never automatically merges Works.
+Live20 URL observations (14 supplied +6 distinct Watchlist URL/label samples)
+verified titles and pure save validation. Samples are authorized read-only
+ground truth; no operational writes or lookup fallback. Official subtitles and
+full-width spelling are preserved. Test/review evidence is in PROGRESS.md.
+Complete-list capabilities remain the existing four sites; Stage07 not started.
 
 Stage 06B adds optional Piccoma `/web/product/<id>/episodes` to canonical seed
 conversion. Pure parsing stays blocked, with only a safe observation URL; the
@@ -121,6 +134,15 @@ Production observation of product28600 at 2026-11-03 06:16 JST verified 432 rows
 free DOM1 episode1910027, title and pure save validation without reader/resources.
 Native Windows Qt 980x800/1200x940 and YAML modal captures used isolated synthetic
 data, with unchanged stores. Full test/review outcomes are in registration PROGRESS.
+
+
+Registration document observation now replaces response CSP with script-src
+'none', object-src 'none', worker-src 'none' and form-action 'none'. This blocks
+inline viewer bootstrap as well as external scripts, while inert JSON and static
+metadata stay readable. The route guard remains installed until dedicated Page
+close; lifecycle tests inject timers via Page.evaluate independently of CSP.
+This affects metadata observation only, never ordinary Discovery/capture Pages.
+Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 Registration observation requires a dedicated Page. Its restrictive route stays
 installed after the observation context ends and denies all remaining requests

@@ -1,6 +1,15 @@
 # Stage 06 — サイト別のURL変換拡張と検証
 
-> Status: COMPLETE (2026-11-03). Only proved URL conversions/metadata are enabled. All eleven site boundaries: CAPABILITIES.md. Results: ../PROGRESS.md. Stage 07 not started.
+> Status: COMPLETE, including seven-site title follow-up (2026-11-03). All eleven site boundaries: CAPABILITIES.md. Results: ../PROGRESS.md. Stage 07 not started.
+
+## Follow-up execution contract (2026-11-03)
+
+- 最新のユーザー指定を優先し、Magapoke / Manga ONE / ComicDAYS / Jump+ / Hanayume / Kadocomi / Zeblack の作品名取得と、証拠のあるURL変換を追加する。
+- 指定episode URLのmetadata documentを一回GETすることを許可する。JavaScript・画像・iframe等のsubresourceは遮断し、viewer初期化・閲覧操作・権利消費は行わない。これは下記初回契約の「episodeを開かず」を、この追加依頼の範囲で置き換える。
+- Zeblackは公式frontendで確認した固定の公開title_detail GETを使用し、responseのtitle ID/nameだけを検証する。chapter inventory / Full Discovery / Captureで代用しない。
+- ユーザーの追加指示により、運用watchlist.yamlのURL/labelを少数の正解データとして読み取り参照してよい。全件実サイト確認やfixtureへのコピーは行わない。運用データへの書込みは禁止し、テストは人工データで隔離する。
+- 指定各2作品と少数の既存labelサンプルで確認する。URL安全性・metadata欠落時の明示手動確認・矛盾時のblockを維持し、独立差分レビューとsite/登録回帰テストを実施する。
+- 新規native identity証明modelや完全一覧previewは追加しない。既存key / scope / order / segments / 保存契約は維持し、Stage 07へ進まない。
 
 ## Execution contract (2026-11-03)
 
