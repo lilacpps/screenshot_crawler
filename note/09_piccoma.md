@@ -11,7 +11,21 @@ then reads the unique existing TITLE_SELECTOR. It never opens the viewer.
 Redirects/subresources/POSTs are blocked. Shared-CDP live check on product
 28600 / episode 1910027 returned
 ベルセルク at 2026-11-03 05:54 JST without resource or persisted-data action.
-Complete-list preview capability is unchanged (see the site behavior below).
+Complete-list preview is now supported (Stage07A). It reads the static product
+listing with the registration document guard, requiring exact canonical,
+one content/list/title, oldest-first class, declared/exact row count, every
+product/episode/status structure and the target episode exactly once. A second
+row read must agree. It returns latest-first rows with native IDs and DOM-based
+positions N..1 without Catalog, viewer, resource or file operations.
+Exclusion Discovery uses this same observation: prepare_exclusion_preview binds
+the immutable records to Page, full target and a30-second monotonic TTL. The
+one-shot replay rejects missing/expired/mismatched/consumed proof before any
+re-read or write, validates boundaries/holes and captures the full inventory
+with excluded rows outside selection. Normal non-exclusion Discovery is unchanged.
+Live production preview verified product28600/seed1910027:432rows, positions432..1,
+digest and a pure one-hole selection accepted. No Full job or save ran.
+Tests:128 targeted and109 affected passed/0skip; independent review PASS.
+Current Stage07 evidence and remaining sites: registration PROGRESS.md.
 
 `/web/product/<id>/episodes` is now an optional observed-conversion input, never
 a directly saved Discovery URL. Without the GUI safe-observation option or with

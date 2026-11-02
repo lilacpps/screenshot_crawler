@@ -23,6 +23,7 @@ URLS = {
     "comicdays": "https://comic-days.com/episode/4",
     "magapoke": "https://pocket.shonenmagazine.com/title/123/episode/4",
     "zeblack": "https://zebrack-comic.shueisha.co.jp/title/123/chapter/list",
+    "piccoma": "https://piccoma.com/web/viewer/123/4",
 }
 
 
@@ -66,7 +67,7 @@ def detail(batch, group):
 
 
 @pytest.mark.parametrize("site", URLS)
-def test_four_site_detail_is_immutable_no_write_and_one_work_only(tmp_path, site):
+def test_supported_site_detail_is_immutable_no_write_and_one_work_only(tmp_path, site):
     batch, path, catalog = setup_batch(tmp_path)
     a = add(batch, site, "first")
     other = "comicdays" if site != "comicdays" else "jumpplus"

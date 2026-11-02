@@ -1,3 +1,16 @@
+## Stage07 complete-list preview coverage (2026-11-03)
+
+Piccoma now joins Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
+preview and registration Work detail. Its static listing validates canonical,
+exact count, native row identity/status/order and target membership; returns
+latest-first positions and digest. No normal Discovery job or store write is
+used for preview. Exclusion Discovery preflight prepares the same records for
+one-shot replay, bound to Page/full target/30s TTL; stale/missing proof fails
+without rereading. Existing four sites and ordinary Discovery remain unchanged.
+Other six sites remain under investigation, visibly unsupported until their
+complete identity/order proof and safe exclusion behavior are implemented.
+Evidence/tests/independent review are in the registration PROGRESS.md.
+
 
 ## URL registration Work detail drafts (Stage 04)
 

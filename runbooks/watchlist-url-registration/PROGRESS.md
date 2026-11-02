@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01-06 COMPLETE, including the seven-site title follow-up (2026-11-03). Current targeted344 pass; affected1020 pass with one Windows path-length failure passing on short-path rerun. Earlier full-suite evidence is distinguished below. Stage 07 not started.
+> Status: Stage 01-06 COMPLETE; Stage07 IN PROGRESS (2026-11-03). Piccoma complete-list preview/replay added; remaining sites under investigation. Prior Stage06 test evidence is distinguished below.
 > Stage 01–05に続きStage 06を承認済み。Stage 07は対象外。
 > Runbook: [README.md](README.md)
 
@@ -13,7 +13,7 @@
 | 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
 | 06 Site URL/metadata coverage | COMPLETE (follow-up checkpoint) | 11site title hooks、追加7site live20、targeted344 pass、独立review PASS。詳細・affectedの環境制限は末尾参照 |
-| 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
+| 07 Listing preview coverage | IN PROGRESS | 07A Piccoma追加:5サイト対応。残り6サイトを個別検証 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
 
@@ -523,3 +523,37 @@
 - Remaining: Stage07 complete-list previews for the other seven sites remain
   NOT STARTED. Independent Work/episode binding proofs and further safe
   work→seed URL forms require separate evidence. No main merge/push.
+
+## Stage07A — Piccoma complete-list preview / exclusion replay (2026-11-03)
+
+- User authorized Stage07 after `12ce30f`. Feature branch and pre-existing
+  crawler/watchlist/uv.lock/egg-info/lock/log changes retained, not staged.
+- Static product listing produces a strict complete ListingPreview using the
+  existing count/order/product/episode/status parser and native DOM positions.
+  Script/subresource/POST and redirects stay blocked; viewer is never opened.
+  Preview and a second row snapshot agree before success. No Catalog exists
+  in the preview service and no normal Full/job is called to build the listing.
+- Exclusions support a one-shot same-observation replay bound to Page and the
+  entire target with30s TTL. Missing/stale/different/consumed proof fails before
+  reread or writes. Preflight validates boundaries/holes before Catalog Work
+  creation. Normal unscoped/bounded non-exclusion Discovery remains unchanged.
+- Tests:128 targeted passed/0skip (new browser preview/replay + site parser,
+  registration draft/detail);109 affected passed/0skip (normal Piccoma Discovery,
+  registration atomic save/detail, WorkDraft and both GUI editors). Ruff/diff
+  checks required at checkpoint. Independent source review PASS/no BLOCKING.
+- Production live preview product28600/seed1910027 returned432unique rows,
+  positions432..1, correct native identity/digest and accepted a pure one-hole
+  selection. Evidence ignored: stage07_piccoma_live.json. This is one-work list
+  evidence, not every account/product. No Full, save, ticket, purchase or capture.
+- Files: Piccoma discovery.py, registration/draft.py capability list, new
+  test_piccoma_listing_preview_browser.py and expanded registration detail cases;
+  GUI_README plus core/Piccoma notes and runbook status synchronized.
+- Other bounded probes: Hanayume/Younganimal first range each parsed30 rows.
+  Kadocomi complete native history has123records with explicit ordinal gaps;
+  current SelectionPlanner requires contiguous positions, so it is not yet
+  enabled. BookWalker shows native total11 and11unique card products; repeated
+  links inside one card must be distinguished from duplicate products.
+  ComicFUZ native34chapters but legacy DOM selector does not match; MangaONE
+  now returns RSC without legacy chapterList. These are evidence/contract issues,
+  not permission to fabricate completeness or silently change normal Discovery.
+- Stage07 remains IN PROGRESS; no Stage08/main merge/push.

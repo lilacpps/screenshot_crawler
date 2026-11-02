@@ -363,7 +363,7 @@ Reproduce the synthetic captures with:
 編集・一覧再取得で確認は失効します。「変更プレビュー」で差分を確認し、
 「このWorkの下書きを確定」で親画面へ戻します。この操作では保存されません。
 キャンセルはその子画面の変更のみ破棄します。
-完全一覧previewはmagapoke/jumpplus/zeblack/comicdaysだけが対応し、他サイトを含む
+完全一覧previewはmagapoke/jumpplus/zeblack/comicdays/piccomaが対応し、他サイトを含む
 複数keyの詳細設定は未対応の理由を表示します。
 
 「保存前プレビュー」で選択したWork全体の追加・既存設定・範囲・完成順・残作業を確認し、

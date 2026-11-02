@@ -11,12 +11,14 @@ import re
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from urllib.parse import urlparse
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -383,6 +385,59 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
         return resolved_url(url, canonical_piccoma_viewer_url(url), f"piccoma-product:{parts.product_id}")
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+
+    async def preview_complete_listing(self, page: Page, target: WatchlistTarget) -> ListingPreview:
+        self._exclusion_preview_cache = None
+        preview, _records = await self._read_preview_listing(page, target)
+        return preview
+
+    async def prepare_exclusion_preview(self, page: Page, target: WatchlistTarget) -> ListingPreview:
+        self._exclusion_preview_cache = None
+        preview, records = await self._read_preview_listing(page, target)
+        self._exclusion_preview_cache = (id(page), target, monotonic() + 30, records)
+        return preview
+
+    async def _read_preview_listing(self, page: Page, target: WatchlistTarget):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            registration_document,
+            require_canonical,
+        )
+        identity = parse_piccoma_viewer_url(target.url)
+        if target.site != 'piccoma' or identity is None:
+            raise DiscoveryIncompleteError('Piccoma preview requires a strict viewer-shaped target URL')
+        url = f'https://piccoma.com/web/product/{identity.product_id}/episodes'
+        try:
+            async with registration_document(page, url):
+                await require_canonical(page, url)
+                if (await page.locator(LISTING_SELECTOR).count() != 1
+                        or await page.locator('#js_contentBody').count() != 1):
+                    raise DiscoveryIncompleteError('Piccoma preview list is missing or ambiguous')
+                classes = (await page.locator(LISTING_SELECTOR).get_attribute('class') or '').split()
+                if 'PCM-list_asc' not in classes or 'PCM-list_desc' in classes:
+                    raise DiscoveryIncompleteError('Piccoma preview order is not oldest-first')
+                titles = await page.locator(TITLE_SELECTOR).all_text_contents()
+                counts = list(TOTAL_EPISODES.finditer(await page.locator('#js_contentBody').inner_text()))
+                if len(titles) != 1 or not titles[0].strip() or len(counts) != 1:
+                    raise DiscoveryIncompleteError('Piccoma preview title/count is missing or ambiguous')
+                snapshot = await _read_listing_rows(page)
+                records = _parse_listing_rows(rows=snapshot, product_id=identity.product_id,
+                    canonical_title=titles[0], declared_count=int(counts[0]['count']), scope=None,
+                    observed_at=datetime.now(UTC))
+                if identity.external_id not in {record.source.external_id for record in records}:
+                    raise DiscoveryIncompleteError('Piccoma preview target episode is absent')
+                if snapshot != await _read_listing_rows(page):
+                    raise DiscoveryIncompleteError('Piccoma preview changed while reading')
+        except ObservationUnavailable as exc:
+            raise DiscoveryIncompleteError('Piccoma preview document could not be verified') from exc
+        listing_identity = f'piccoma-product:{identity.product_id}'
+        rows = tuple(ListingRow(record.source.external_id, record.source.url,
+            record.source.global_display_position, record.item.order_label or '',
+            record.source.access_mode, listing_identity) for record in records)
+        return ListingPreview(target.site, target.key, target.url, listing_identity,
+            rows, True, datetime.now(UTC), listing_digest(listing_identity, rows)), records
 
     async def observe_registration_conversion(self, page, resolution):
         from screenshot_crawler.registration.models import ObservedUrlConversion, conversion_now
@@ -490,6 +545,28 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        cached = getattr(self, '_exclusion_preview_cache', None)
+        self._exclusion_preview_cache = None
+        scope = target.discovery_scope
+        if scope is not None and scope.excluded_external_ids:
+            if cached is None or cached[:2] != (id(page), target) or monotonic() > cached[2]:
+                raise DiscoveryIncompleteError('Piccoma exclusions require a fresh same-Page complete listing')
+            all_records = cached[3]
+            urls = {record.source.url: index for index, record in enumerate(all_records)}
+            start = urls.get(scope.from_url, -1) if scope.from_url else 0
+            end = urls.get(scope.through_url, -1) if scope.through_url else len(all_records) - 1
+            if start < 0 or end < start:
+                raise DiscoveryIncompleteError('Piccoma exclusion boundaries are missing or reversed')
+            records = all_records[start:end + 1]
+            if not set(scope.excluded_external_ids).issubset({r.source.external_id for r in records}):
+                raise DiscoveryIncompleteError('Piccoma exclusions are absent from the bounded listing')
+            records = [r for r in records if r.source.external_id not in scope.excluded_external_ids]
+            if mode == 'full':
+                self.capture_complete_listing_inventory(target=target, all_records=all_records,
+                    selected_records=records, listing_identity=f'piccoma-product:{parse_piccoma_viewer_url(target.url).product_id}')
+            for record in records:
+                yield record
+            return
         target_identity = parse_piccoma_viewer_url(target.url)
         if target_identity is None:
             raise DiscoveryIncompleteError(
