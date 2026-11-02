@@ -2730,7 +2730,12 @@ changes remain outside the Zeblack Discovery phase.
 ### Archive health check and recrawl preparation (implemented)
 
 `scripts/prepare_recrawl.py` inspects only `completed` Catalog Items in an
-exact `--site` and/or Work title scope. It does not run Discovery or modify
+exact `--site`, Work title and/or repeated `--item-id` scope. ID selection
+intersects any supplied site/work filters and alone is a sufficient scope.
+IDs are Catalog Item IDs, not ZIP prefixes; duplicates are processed once.
+Unknown, non-completed, unsupported or out-of-scope requested IDs reject the
+whole operation before archive inspection/apply, and non-selected Items' ZIPs
+are not inspected. It does not run Discovery or modify
 sources, source targets, crawl runs, or ZIP contents. The current site policy
 mapping is intentionally limited to the confirmed production capture paths:
 Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
@@ -2738,8 +2743,8 @@ MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback
 mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
 mapping was added on 2026-10-19 after the fractional-destination capture correction.
 BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback.
-A cover-only `page-0001.png` is `PREFERRED_ONLY` when the archive also contains
-at least one JPEG companion; all other PNGs remain recrawl candidates. This is
+First-ten-saved-page and last-five-saved-page PNGs are accepted when the archive also contains
+at least one JPEG companion; other body PNGs remain recrawl candidates. This is
 an extension-based recrawl policy, not proof that every PNG has reduced
 fidelity: a verified native-size PNG retained after codec failure is also
 classified as a fallback format.
@@ -2750,7 +2755,13 @@ ZIP page members are inspected at archive root with case-insensitive
 extensions. `PREFERRED_ONLY`, `FALLBACK_INCLUDED`, `UNEXPECTED_FORMAT`,
 `BROKEN`, `MISSING`, and `AMBIGUOUS_ARTIFACT` are reported using site-neutral
 classifications. Default output lists only problems; `--show-all` also lists
-preferred items. `--ignore-missing` keeps MISSING in the classification
+preferred items. `--force` requires explicit `--item-id` selection and includes
+selected `PREFERRED_ONLY` archives for a user-requested visual recapture; it
+retains their classification and prints `(explicit recrawl)`. Forced preferred
+Items appear in the default report and candidate count. `--force` without
+Item IDs is rejected before opening the Catalog. It cannot bypass ambiguity,
+archive recheck/backup collision guards or `--ignore-missing` semantics.
+`--ignore-missing` keeps MISSING in the classification
 summary but excludes it from problems, recrawl candidates, and apply changes;
 with `--show-all` it is printed as `MISSING (ignored)`.
 
@@ -2777,15 +2788,33 @@ inspection; the prior sidecar is not restored over it. A foreign, malformed, or
 unprovable status remains a hard stop for operator review.
 
 BookWalker usage: `python scripts/prepare_recrawl.py --site bookwalker --catalog
-catalog.sqlite --show-all` performs a read-only scan. Exactly one root member
-named `page-0001.png` (case-insensitive) is an allowed fallback only when at
-least one JPEG member exists and no JPEG has the `page-0001` stem. No additional
-PNG is permitted by this exception; unexpected formats remain problematic.
-An accepted cover PNG plus JPEG body is `PREFERRED_ONLY`, with
-`allowed_fallback_count=1` and `fallback_count=0`, and is excluded from apply.
-Body PNGs, PNG-only archives, nonstandard PNG naming and duplicate first-page
-PNG/JPEG remain recrawl candidates. ZIP entry order is not reading order and
-does not affect the rule. `ArchiveInspection.allowed_fallback_count` is appended
+catalog.sqlite --show-all` performs a read-only scan. As of 2026-11-02, the
+PNGs at saved-page numbers 1 through 10 and the five highest saved-page numbers are
+allowed fallbacks when at least one JPEG member exists. Head/tail range acceptance
+requires all JPEG/PNG members to use unique canonical `page-NNNN` names
+(at least four digits, with normal zero padding); ZIP member order is ignored.
+The existing standalone cover exception independently requires a unique
+`page-0001` stem, even when other members use old names.
+Allowed positions are counted once in `allowed_fallback_count`, including when
+other body PNGs remain. An archive with only these allowed PNGs and JPEGs is
+`PREFERRED_ONLY`, has `fallback_count=0`, and is excluded from apply unless
+explicit Item IDs plus `--force` request a recapture. Other body
+PNGs, PNG-only archives, nonstandard naming, duplicate page numbers and
+unexpected formats remain problems outside that standalone cover exception.
+The first ten mean saved-page numbers 1 through 10, not the first ten PNGs.
+The last five positions mean the last five
+saved images, not the last five PNGs or the viewer's terminal counter.
+
+2026-11-02 explicit Item selection validation: 68 Unit cases passed, 0 skipped,
+including repeated/multiple IDs, ID-only scope, site/work intersection errors,
+unknown/non-completed IDs, forced preferred archive backups with exact ZIP-byte
+preservation, non-selected Item/Source/history preservation, ambiguity and ignored
+missing guards. Ruff and diff checks passed. A real Catalog dry-run for BookWalker
+Items 1874/1880 inspected exactly two `PREFERRED_ONLY` archives and reported two
+explicit recrawl candidates. No operational `--apply` or live recrawl was run.
+Browser Integration/Research/full suite were not run for this isolated maintenance
+script change; no shared Core/Batch execution or browser behavior changed.
+`ArchiveInspection.allowed_fallback_count` is appended
 after the pre-existing fields, preserving positional constructor compatibility;
 printed inspection details include `allowed_fallback`.
 
@@ -2798,12 +2827,17 @@ are outside scope. `--apply` explicitly uses the existing backup/Artifact/
 pending workflow and preserves source grants and historical runs. Batch access
 policy still decides whether a pending item is readable. Details and examples:
 `docs/BOOKWALKER_RECRAWL.md` and `note/01_bookwalker.md`.
-Validation for this integration: all 43 preparation-script Unit cases passed
+Validation for the head-ten/tail-five policy: all 74 preparation-script Unit cases passed
 (0 failed/skipped; one existing pytest-asyncio deprecation warning), including
 all existing site policies and synthetic apply. Ruff (`scripts/prepare_recrawl.py
 src tests`) and diff checks passed. No browser Integration, Research/Probe,
 real Catalog apply, live recrawl or full repository suite was run because only
 the archive-policy script and its documentation changed.
+The 11 Youjitsu archives were inspected read-only: all PNGs occur in head/last-five
+positions, reducing format-policy candidates from eight to zero. ZIPs and Catalog
+were not changed. Boundaries at page 10/11, head/tail overlap, numeric ZIP-order
+independence, legacy-cover compatibility, nonstandard/duplicate names, PNG-only
+archives and explicit forced selection are covered by the script tests.
 
 Hanayume usage: `python scripts/prepare_recrawl.py --site hanayume --work "暁のヨナ"
 --catalog catalog.sqlite --ignore-missing` is read-only; adding `--apply` moves the selected
@@ -2947,11 +2981,13 @@ preservation. No real site or CDP was accessed, and no operational Catalog,
 Watchlist, Books, quota, or ticket input was used; all fixtures were synthetic.
 ## BookWalker PNG recrawl and durable diagnostics (2026-10-30)
 
-BookWalker archive inspection treats a cover-only `page-0001.png` as
-`PREFERRED_ONLY` when the same archive has at least one JPEG companion; the
-cover may then be selected for recrawl, but this is not a body or terminal
-exception. All other PNGs, including PNG-only covers and terminal-looking
-images, remain `FALLBACK_INCLUDED`. The adapter may classify a positively
+BookWalker archive inspection accepts first-ten-saved-page and last-five-saved-page PNGs when
+the same archive has at least one JPEG companion, under the canonical naming
+rules above. An archive with only these PNGs and JPEGs is `PREFERRED_ONLY` and
+excluded from recrawl/apply by default; explicit `--item-id` selection with
+`--force` may request a visual recapture. Other body PNGs and PNG-only archives remain
+`FALLBACK_INCLUDED`. This is an accepted output policy by position, independent
+of terminal-image recognition. The adapter may classify a positively
 identified terminal notice/logo as an AD screen during normal navigation, but
 this state decision does not alter ZIP or Catalog recrawl policy. Unknown
 terminal images remain content.

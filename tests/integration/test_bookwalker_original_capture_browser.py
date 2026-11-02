@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import base64
+import json
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from PIL import Image
 from playwright.async_api import Page
 
-from screenshot_crawler.core.errors import PageChangeTimeoutError
+from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
 from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
@@ -572,18 +574,22 @@ async def test_terminal_approximate_layout_rejects_counter_change(
 
 
 @pytest.mark.parametrize("role", ["notice", "logo"])
+@pytest.mark.parametrize("canvas_size", [(1905, 944), (2859, 1481), (3840, 2160)])
 async def test_terminal_approximate_layout_handles_wide_renderer_canvas(
     browser_page: Page,
     role: str,
+    canvas_size: tuple[int, int],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _setup_synthetic_terminal_page(browser_page)
     await browser_page.evaluate(
         """
-        role => {
+        ({role, width, height}) => {
           const canvas = window.__syntheticTarget;
-          canvas.width = 1905;
-          canvas.height = 944;
+          canvas.width = width;
+          canvas.height = height;
+          document.querySelector('#pageSliderCounter').textContent =
+            role === 'notice' ? '2/3' : '3/3';
           canvas.setAttribute('data-bookwalker-trace-id', 'wide-terminal');
           const context = canvas.getContext('2d');
           context.fillStyle = 'white';
@@ -612,7 +618,7 @@ async def test_terminal_approximate_layout_handles_wide_renderer_canvas(
           });
         }
         """,
-        role,
+        {"role": role, "width": canvas_size[0], "height": canvas_size[1]},
     )
     adapter = BookWalkerAdapter()
     raw = await browser_page.locator(
@@ -630,11 +636,46 @@ async def test_terminal_approximate_layout_handles_wide_renderer_canvas(
     monkeypatch.setitem(
         terminal_match._TERMINAL_DENSITY, role, calibrated["inkDensity"]
     )
-    matched = await adapter._approx_terminal_canvas(  # type: ignore[arg-type]
-        browser_page.locator("#renderer .currentScreen canvas"), role,
-        expected_content_id="synthetic", expected_counter="2/3",
+    adapter._initial_content_id = "synthetic"
+
+    async def unexpected_native(*_args: object) -> None:
+        raise AssertionError("complete canvas must match without native fallback")
+
+    monkeypatch.setattr(adapter, "_native_terminal_artifact", unexpected_native)
+    matched, details = await adapter._terminal_ad_state(browser_page)
+    assert matched is True
+    assert details["reason"] == "stable complete-canvas terminal image"
+    assert details["role"] == role
+    await browser_page.locator("#pageSliderCounter").evaluate(
+        "node => node.textContent = '1/3'"
     )
-    assert matched is not None
+    assert (await adapter._terminal_ad_state(browser_page))[0] is False
+
+
+@pytest.mark.parametrize(
+    ("canvas_size", "accepted"),
+    [((4096, 2048), True), ((4096, 2049), False), ((4097, 2), False)],
+)
+async def test_terminal_descriptor_bounds_before_png_encoding(
+    browser_page: Page, canvas_size: tuple[int, int], accepted: bool,
+) -> None:
+    await _setup_synthetic_terminal_page(browser_page)
+    canvas = browser_page.locator("#renderer .currentScreen canvas")
+    await canvas.evaluate(
+        """(canvas, [width, height]) => {
+          canvas.width = width; canvas.height = height;
+          const original = canvas.toDataURL.bind(canvas);
+          window.__terminalEncodingCalled = false;
+          canvas.toDataURL = (...args) => {
+            window.__terminalEncodingCalled = true;
+            return original(...args);
+          };
+        }""",
+        list(canvas_size),
+    )
+    raw = await canvas.evaluate(TERMINAL_DESCRIPTOR_SCRIPT)
+    assert (raw is not None) is accepted
+    assert await browser_page.evaluate("window.__terminalEncodingCalled") is accepted
 
 
 @pytest.mark.parametrize("previous_mode", ["none", "body"])
@@ -1363,8 +1404,22 @@ async def test_p4b_current_roi_actual_hook_and_element_identity(
         assert result["available"] is False or result["exact"] is False, result
 
 
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["none", "content_version", "geometry_generation", "selected_tuple", "transient", "write_failure",
+     "redraw_once", "redraw_twice", "redraw_page_change", "redraw_geometry_change",
+     "redraw_missing_snapshot", "redraw_final_roi_change", "redraw_no_original",
+     "redraw_counter_during_retry", "redraw_canvas_during_retry", "redraw_missing_calls",
+     "redraw_materialize_error", "redraw_version_during_retry", "redraw_source_change",
+     "redraw_overlay", "redraw_overlay_no_original", "redraw_overlay_late",
+     "redraw_baseline_anchor_change", "redraw_baseline_identity", "redraw_baseline_size",
+     "redraw_baseline_missing"],
+)
 async def test_p4b_exact_two_batch_anchor_joins_both_rois_in_one_task(
     browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
 ) -> None:
     async def fulfill(route) -> None:
         await route.fulfill(content_type="text/html", body="<html><body></body></html>")
@@ -1393,12 +1448,14 @@ async def test_p4b_exact_two_batch_anchor_joins_both_rois_in_one_task(
           sourceB.width = 600; sourceB.height = 600;
           sourceB.getContext('2d').fillStyle = 'rgb(160,80,20)';
           sourceB.getContext('2d').fillRect(0, 0, 600, 600);
+          window.__batchSources = [sourceA, sourceB];
           const context = renderer.getContext('2d');
           context.drawImage(sourceA, 0, 0, 600, 600, 0, 0, 600, 600);
           context.drawImage(sourceB, 0, 0, 600, 600, 600, 0, 600, 600);
           window.__bookwalkerDirectOneHopGeometryState = element => ({
-            token: 'batch-geometry', traceEpoch: 1, geometryVersion: 2,
-            contentVersion: 5, geometryHistoryIncomplete: false,
+            token: window.__batchGeometryGeneration || 'batch-geometry',
+            traceEpoch: 1, geometryVersion: window.__batchGeometryVersion || 2,
+            contentVersion: window.__batchContentVersion || 5, geometryHistoryIncomplete: false,
             observerFlushed: true, observerAvailable: true,
             observerTakeRecordsAvailable: true, unknownMutation: false,
             resetEpoch: 1, width: element.width, height: element.height,
@@ -1438,6 +1495,210 @@ async def test_p4b_exact_two_batch_anchor_joins_both_rois_in_one_task(
     )
     anchor = await adapter._p4b_batch_initial_anchor(target, calls, handle)
     assert anchor is not None, setup
+    assert "batch_initial_anchor_failure" not in adapter._capture_debug["bookwalker_capture"]
+    if failure_mode != "none":
+        monkeypatch.setenv("BOOKWALKER_DIAGNOSTICS_DIR", str(tmp_path))
+        await adapter.configure_run(browser_page, "direct")
+        await browser_page.locator("#pageSliderCounter").evaluate(
+            "node => node.textContent = '2/10'"
+        )
+        initial_join = adapter._p4b_batch_initial_anchor
+        join_count = 0
+
+        async def changed_join(canvas, selected, renderer, selection=None):
+            nonlocal join_count
+            join_count += 1
+            if failure_mode.startswith("redraw"):
+                if join_count == 1 or failure_mode == "redraw_twice":
+                    await browser_page.evaluate(
+                        """() => {
+                          const canvas = document.querySelector('#renderer canvas');
+                          const context = canvas.getContext('2d');
+                          window.__batchSources.forEach((source, index) => {
+                            const sourceContext = source.getContext('2d');
+                            sourceContext.fillStyle = index === 0 ? 'rgb(30,60,90)' : 'rgb(90,60,30)';
+                            sourceContext.fillRect(0, 0, 600, 600);
+                            context.drawImage(source, 0, 0, 600, 600, index * 600, 0, 600, 600);
+                          });
+                          window.__batchGeometryVersion = (window.__batchGeometryVersion || 2) + 2;
+                          window.__batchContentVersion = (window.__batchContentVersion || 5) + 15;
+                        }"""
+                    )
+                    if failure_mode.startswith("redraw_overlay"):
+                        await target.evaluate("""c => {
+                          const ctx = c.getContext('2d');
+                          ctx.font = '14px sans-serif'; ctx.fillStyle = 'black';
+                          ctx.fillText('315 synthetic title', 20, 20);
+                          ctx.fillText('314', 1140, 20);
+                        }""")
+                    if failure_mode == "redraw_page_change":
+                        await browser_page.locator('#pageSliderCounter').evaluate(
+                            "node => node.textContent = '3/10'"
+                        )
+                if join_count == 2 and failure_mode == "redraw_missing_snapshot":
+                    await browser_page.evaluate(
+                        "snapshot => window.__bookwalkerNativeSnapshots.delete(snapshot)",
+                        selected[1]["targetSnapshotId"],
+                    )
+            elif failure_mode == "selected_tuple":
+                selected[1]["sourceContentVersion"] += 1
+            elif failure_mode == "geometry_generation":
+                await browser_page.evaluate(
+                    "window.__batchGeometryGeneration = 'batch-geometry-next'"
+                )
+            else:
+                await browser_page.evaluate("window.__batchContentVersion = 6")
+            result = await initial_join(canvas, selected, renderer, selection)
+            if failure_mode == "transient":
+                await browser_page.evaluate("window.__batchContentVersion = 5")
+            return result
+
+        monkeypatch.setattr(adapter, "_p4b_batch_initial_anchor", changed_join)
+        if failure_mode in {"redraw_no_original", "redraw_overlay_no_original"}:
+            adapter.enable_original_jpeg_capture = False
+        if failure_mode.startswith("redraw_baseline"):
+            capture_baseline = adapter._initial_batch_retry_roi_baseline
+
+            async def changed_baseline(*args):
+                if failure_mode == "redraw_baseline_anchor_change":
+                    await browser_page.locator('#pageSliderCounter').evaluate(
+                        "node => node.textContent = '3/10'"
+                    )
+                result = await capture_baseline(*args)
+                if failure_mode == "redraw_baseline_identity":
+                    await result.evaluate("b => b.parts[0].sourceId = 'changed'")
+                elif failure_mode == "redraw_baseline_size":
+                    await result.evaluate("b => b.canvases[0].width = 1")
+                elif failure_mode == "redraw_baseline_missing":
+                    await result.dispose()
+                    return None
+                return result
+
+            monkeypatch.setattr(adapter, "_initial_batch_retry_roi_baseline", changed_baseline)
+        if failure_mode in {
+            "redraw_counter_during_retry", "redraw_canvas_during_retry", "redraw_missing_calls",
+            "redraw_version_during_retry", "redraw_source_change",
+        }:
+            original_wait = browser_page.wait_for_timeout
+
+            async def mutate_during_retry(milliseconds):
+                await original_wait(milliseconds)
+                assert milliseconds == 100
+                if failure_mode == "redraw_counter_during_retry":
+                    await browser_page.locator('#pageSliderCounter').evaluate(
+                        "node => node.textContent = '3/10'"
+                    )
+                elif failure_mode == "redraw_canvas_during_retry":
+                    await target.evaluate("c => c.replaceWith(c.cloneNode(false))")
+                elif failure_mode == "redraw_missing_calls":
+                    await browser_page.evaluate("window.__bookwalkerNativeDrawCalls = []")
+                elif failure_mode == "redraw_version_during_retry":
+                    await browser_page.evaluate(
+                        "window.__batchGeometryVersion = 2; window.__batchContentVersion = 5"
+                    )
+                else:
+                    await target.evaluate("""c => {
+                      const source = document.createElement('canvas');
+                      source.width = 600; source.height = 600;
+                      source.getContext('2d').fillRect(0, 0, 600, 600);
+                      c.getContext('2d').drawImage(source, 0, 0, 600, 600, 0, 0, 600, 600);
+                    }""")
+
+            monkeypatch.setattr(browser_page, "wait_for_timeout", mutate_during_retry)
+        if failure_mode == "redraw_materialize_error":
+            async def broken_materialization(*_args):
+                raise adapter_module.CaptureUnavailableError("synthetic materialization error")
+
+            monkeypatch.setattr(adapter, "_materialize_native_source_crops", broken_materialization)
+        if failure_mode == "redraw_geometry_change":
+            original_boxes = adapter._page_draw_rectangles
+            box_reads = 0
+
+            async def changed_boxes(page, canvas):
+                nonlocal box_reads
+                box_reads += 1
+                boxes = await original_boxes(page, canvas)
+                if box_reads > 1:
+                    boxes[0] = {**boxes[0], "x": boxes[0]["x"] + 1}
+                return boxes
+
+            monkeypatch.setattr(adapter, "_page_draw_rectangles", changed_boxes)
+        if failure_mode in {"redraw_final_roi_change", "redraw_overlay_late"}:
+            async def mutate_after_materialization(*_args):
+                await browser_page.locator('#renderer canvas').evaluate(
+                    "c => c.getContext('2d').fillRect(0, 0, 1, 1)"
+                )
+
+            monkeypatch.setattr(adapter, "_capture_original_jpegs", mutate_after_materialization)
+        if failure_mode == "write_failure":
+            adapter._diagnostics_path = tmp_path  # A directory cannot be opened as JSONL.
+        recovered = failure_mode in {
+            "redraw_once", "redraw_no_original", "redraw_overlay", "redraw_overlay_no_original",
+        }
+        if recovered:
+            output = await adapter.capture_page(browser_page)
+            assert output is not None and len(output) == 2
+            # Fresh right/left source pixels, not the buffers selected before repaint.
+            assert [Image.open(BytesIO(part.data)).convert('RGB').getpixel((0, 0)) for part in output] == [
+                (90, 60, 30), (30, 60, 90),
+            ]
+            if failure_mode.startswith("redraw_overlay"):
+                # Header pixels belong to the settled-frame guard, not the source artifact.
+                assert [Image.open(BytesIO(part.data)).convert('RGB').getextrema() for part in output] == [
+                    ((90, 90), (60, 60), (30, 30)), ((30, 30), (60, 60), (90, 90)),
+                ]
+        else:
+            with pytest.raises(UnknownPageStateError):
+                await adapter.capture_page(browser_page)
+        debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_capture"]
+        if not recovered:
+            assert debug["failure_reason"] is not None
+        if failure_mode.startswith("redraw"):
+            if failure_mode == "redraw_page_change":
+                assert join_count == 1
+                assert "batch_initial_anchor_retry" not in debug
+            else:
+                retry = debug["batch_initial_anchor_retry"]
+                assert retry["attempt_count"] == 1
+                assert retry["output_verified"] is recovered
+                assert join_count <= 2
+                if recovered:
+                    assert retry["final_roi_proof"]["exact"] is True
+                    assert all(part["differing_pixel_count"] == 0 for part in retry["final_roi_proof"]["current"])
+                    assert adapter._p4b_redraw_attempted is True
+                    rows = [json.loads(line) for line in adapter._diagnostics_path.read_text().splitlines()]
+                    assert len(rows) == 1
+                    assert rows[0]["batch_initial_anchor_retry"] == retry
+                    assert rows[0]["failure_reason"] is None
+            return
+        assert debug["failure_reason"] == "BookWalker strict batch initial anchor changed"
+        assert debug["original_match"]["original_attempt_count"] == 0
+        failure = debug["batch_initial_anchor_failure"]
+        assert len(failure["checks"]) == 2
+        first, second = failure["checks"]
+        assert [first["stage"], second["stage"]] == ["initial_join", "failure_recheck"]
+        assert first["selection"]["counter"] == first["common"]["counter"] == "2/10"
+        if failure_mode == "selected_tuple":
+            assert first["reason"] == "selected renderer B anchor mismatch"
+            assert first["parts"][1]["selected_mismatches"] == ["sourceContentVersion"]
+        else:
+            expected_field = "geometryToken" if failure_mode == "geometry_generation" else "targetContentVersion"
+            assert first["changed_from_selection"] == [expected_field]
+        if failure_mode == "transient":
+            assert second["changed_from_selection"] == []
+            assert first["common"]["targetContentVersion"] == 6
+            assert second["common"]["targetContentVersion"] == 5
+        encoded = json.dumps(failure)
+        assert "batch-geometry" not in encoded
+        assert "data:image" not in encoded
+        if failure_mode != "write_failure":
+            rows = [json.loads(line) for line in adapter._diagnostics_path.read_text().splitlines()]
+            assert len(rows) == 1
+            assert rows[0]["batch_initial_anchor_failure"] == failure
+            assert rows[0]["failure_reason"] == debug["failure_reason"]
+        adapter._reset_capture_debug()
+        assert "batch_initial_anchor_failure" not in adapter._capture_debug["bookwalker_capture"]
+        return
     proof = await adapter._p4b_batch_current_roi_atomic_proof(
         browser_page, calls, anchor, handle
     )
@@ -2853,6 +3114,12 @@ async def test_capture_page_default_proves_executed_clear_scaled_reconstruction(
         ("both", "executed", "dom"),
         ("both", "executed", "redraw"),
         ("both", "executed", "redraw_twice"),
+        ("both", "executed", "initial_redraw"),
+        ("first_only", "executed", "initial_redraw"),
+        ("both", "executed", "initial_and_late_redraw"),
+        ("both", "legacy", "initial_overlay"),
+        ("first_only", "legacy", "initial_overlay"),
+        ("both", "executed", "initial_overlay"),
     ],
 )
 async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_closed(
@@ -2865,6 +3132,29 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
         def __init__(self) -> None:
             super().__init__()
             self._w2_compare_calls = 0
+            self._w2_initial_joins = 0
+
+        async def _p4b_batch_initial_anchor(self, canvas, calls, renderer, selection_anchor=None):
+            self._w2_initial_joins += 1
+            if mutation in {"initial_redraw", "initial_and_late_redraw", "initial_overlay"} and self._w2_initial_joins == 1:
+                await browser_page.locator('#spread-renderer').evaluate("c => c.__w2Redraw()")
+                if mutation == "initial_overlay":
+                    await browser_page.locator('#spread-renderer').evaluate("""c => {
+                      const ctx = c.getContext('2d');
+                      ctx.font = '14px sans-serif'; ctx.fillStyle = 'black';
+                      ctx.fillText('315 synthetic title', 20, 20);
+                      ctx.fillText('314', 1140, 20);
+                    }""")
+            return await super()._p4b_batch_initial_anchor(canvas, calls, renderer, selection_anchor)
+
+        async def _initial_batch_retry_roi_baseline(self, page, selected, anchor, renderer):
+            if mutation == "initial_overlay":
+                # Reproduce the old failure against immediate post-image snapshots.
+                old_proof = await self._p4b_batch_current_roi_atomic_proof(page, selected, anchor, renderer)
+                assert old_proof["available"] is True
+                assert old_proof["exact"] is False
+                assert all(part["differing_pixel_count"] > 0 for part in old_proof["current"])
+            return await super()._initial_batch_retry_roi_baseline(page, selected, anchor, renderer)
 
         async def get_capture_target(self, page: Page):
             return page.locator("#spread-renderer")
@@ -2927,7 +3217,7 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
                         document.querySelector('#pageSliderCounter').textContent = '3/322';
                       } else if (kind === 'dom') {
                         renderer.replaceWith(renderer.cloneNode(true));
-                      } else if (kind === 'redraw' || kind === 'redraw_twice') {
+                      } else if (kind === 'redraw' || kind === 'redraw_twice' || kind === 'initial_and_late_redraw') {
                         renderer.__w2Redraw?.();
                       }
                     }
@@ -3023,31 +3313,45 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
         """,
         {"encodedA": encoded_a, "encodedB": encoded_b, "clearMode": clear_mode},
     )
+    if mutation == "initial_and_late_redraw":
+        with pytest.raises(adapter_module.UnknownPageStateError):
+            await adapter.capture_page(browser_page)
+        assert adapter._w2_initial_joins == 2
+        assert adapter._w2_compare_calls == 2  # Initial recovery consumed the one retry.
+        return
     if mutation == "redraw_twice":
         with pytest.raises(adapter_module.UnknownPageStateError):
             await adapter.capture_page(browser_page)
         assert adapter._w2_compare_calls == 4
         return
-    if mutation not in {"none", "redraw"}:
+    if mutation not in {"none", "redraw", "initial_redraw", "initial_overlay"} or (
+        mutation == "initial_overlay" and clear_mode == "executed"
+    ):
         with pytest.raises(adapter_module.UnknownPageStateError):
             await adapter.capture_page(browser_page)
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None
+    if mutation in {"initial_redraw", "initial_overlay"}:
+        assert adapter._w2_initial_joins == 2
+        retry = adapter._capture_debug["bookwalker_capture"]["batch_initial_anchor_retry"]
+        assert retry["output_verified"] is True
+        assert retry["final_roi_proof"]["exact"] is True
     if candidate_mode == "first_only":
         assert [capture.mime_type for capture in captures] == [
             "image/png", "image/png"
         ], adapter._capture_debug
         assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == "native_png"
         shadow = adapter._capture_debug["bookwalker_capture"]["lossless_shadow"]
-        assert shadow["p4b_batch_atomic_proof"]["exact"] is True, shadow
-        assert all(
-            current["available"] is True
-            and current["dimensions_equal"] is True
-            and current["exact"] is True
-            and current["differing_pixel_count"] == 0
-            for current in shadow["p4b_batch_atomic_proof"]["current"]
-        )
+        if clear_mode != "legacy":
+            assert shadow["p4b_batch_atomic_proof"]["exact"] is True, shadow
+            assert all(
+                current["available"] is True
+                and current["dimensions_equal"] is True
+                and current["exact"] is True
+                and current["differing_pixel_count"] == 0
+                for current in shadow["p4b_batch_atomic_proof"]["current"]
+            )
         return
     assert [capture.mime_type for capture in captures] == ["image/jpeg", "image/jpeg"], adapter._capture_debug
     assert len(captures) == 2

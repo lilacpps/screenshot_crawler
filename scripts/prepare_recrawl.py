@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import zipfile
@@ -56,7 +57,8 @@ class ArchivePolicy:
     preferred_extensions: frozenset[str]
     fallback_extensions: frozenset[str]
     # This is a classification exception, not a change to the capture policy.
-    allow_first_page_png: bool = False
+    allowed_head_png_pages: int = 0
+    allowed_tail_png_pages: int = 0
 
     def __post_init__(self) -> None:
         preferred = frozenset(_normalize_extension(value) for value in self.preferred_extensions)
@@ -74,9 +76,10 @@ SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
     "bookwalker": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
         fallback_extensions=frozenset({".png"}),
-        # BookWalker captures its cover as page-0001, which can legitimately
-        # need a PNG fallback even when the rest of the book is JPEG.
-        allow_first_page_png=True,
+        # Accepted PNG positions are an archive recrawl policy, independent
+        # of whether capture can identify a terminal notice/logo.
+        allowed_head_png_pages=10,
+        allowed_tail_png_pages=5,
     ),
     "comicdays": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
@@ -155,6 +158,8 @@ class ScanReport:
     results: tuple[ScanResult, ...]
     scanned_completed_items: int
     unsupported_sources: int = 0
+    selected_item_ids: tuple[int, ...] = ()
+    forced_item_ids: frozenset[int] = frozenset()
 
     def counts(self) -> Counter[str]:
         counts: Counter[str] = Counter(result.classification.value for result in self.results)
@@ -188,7 +193,10 @@ class ScanReport:
         return tuple(
             result
             for result in self.results
-            if result.classification in recrawl
+            if (result.classification in recrawl or (
+                result.classification is ArchiveClassification.PREFERRED_ONLY
+                and result.item.id in self.forced_item_ids
+            ))
             and not (
                 ignore_missing
                 and result.classification is ArchiveClassification.MISSING
@@ -290,21 +298,36 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                     unexpected_count=unexpected,
                     reason="archive contains no page images",
                 )
-            # Allow exactly one BookWalker cover PNG only when a distinct JPEG
-            # body page exists. ZIP entry order is not reading order; the
-            # normal BookWalker crawl starts at the cover, and Core numbers the
-            # first saved image page-0001. A PNG-only archive, an additional
-            # body PNG, or a duplicate page-0001 JPEG still needs a re-crawl.
-            allowed_fallback = int(
-                policy.allow_first_page_png
-                and preferred > 0
-                and len(fallback_names) == 1
-                and fallback_names[0].lower() == "page-0001.png"
-                and not any(
-                    PurePosixPath(name).stem.lower() == "page-0001"
-                    for name in preferred_names
-                )
-            )
+            # BookWalker accepts head/tail PNGs when a JPEG companion exists.
+            # Saved page numbers, not ZIP order or terminal-image recognition,
+            # define accepted positions. Ambiguous/nonstandard numbering does
+            # not receive an exception; PNG-only archives remain fallback.
+            allowed_names: set[str] = set()
+            if preferred > 0 and (policy.allowed_head_png_pages > 0 or policy.allowed_tail_png_pages > 0):
+                page_names = preferred_names + fallback_names
+                # Keep the existing unique-cover exception independent of
+                # other members' numbering; wider head/tail ranges need the
+                # complete canonical numbering proof below.
+                stems = Counter(PurePosixPath(name).stem.lower() for name in page_names)
+                if policy.allowed_head_png_pages > 0 and stems["page-0001"] == 1:
+                    allowed_names.update(name for name in fallback_names if name.lower() == "page-0001.png")
+                numbered: dict[int, str] = {}
+                for name in page_names:
+                    match = re.fullmatch(r"page-([0-9]{4,})", PurePosixPath(name).stem.lower())
+                    if match is None:
+                        break
+                    number = int(match[1])
+                    if number < 1 or number in numbered or match[0] != f"page-{number:04d}":
+                        break
+                    numbered[number] = name
+                else:
+                    tail = set(sorted(numbered)[-policy.allowed_tail_png_pages:]) if policy.allowed_tail_png_pages > 0 else set()
+                    allowed_names.update(
+                        name for number, name in numbered.items()
+                        if (number <= policy.allowed_head_png_pages or number in tail)
+                        and name in fallback_names and PurePosixPath(name).suffix.lower() == ".png"
+                    )
+            allowed_fallback = len(allowed_names)
             fallback -= allowed_fallback
             if unexpected:
                 classification = ArchiveClassification.UNEXPECTED_FORMAT
@@ -422,6 +445,8 @@ def scan_catalog(
     *,
     site: str | None = None,
     work: str | None = None,
+    item_ids: Iterable[int] | None = None,
+    force: bool = False,
 ) -> ScanReport:
     """Scan completed Items in an exact site/work scope without mutation."""
 
@@ -434,6 +459,13 @@ def scan_catalog(
         work = work.strip()
         if not work:
             raise PrepareRecrawlError("work must be non-empty")
+    selected_ids = None if item_ids is None else set(item_ids)
+    if selected_ids is not None and (not selected_ids or any(
+        not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in selected_ids
+    )):
+        raise PrepareRecrawlError("item IDs must be non-empty positive integers")
+    if force and not selected_ids:
+        raise PrepareRecrawlError("--force requires explicit --item-id selection")
 
     works, items, sources, _targets = catalog.read_works_items_sources_and_targets(site=site)
     works_by_id = {value.id: value for value in works}
@@ -441,6 +473,8 @@ def scan_catalog(
     selected_sources_by_item: dict[int, list[Source]] = {}
     unsupported_sources = 0
     for source in sources:
+        if selected_ids is not None and source.item_id not in selected_ids:
+            continue
         item = items_by_id.get(source.item_id)
         current_work = works_by_id.get(item.work_id) if item is not None else None
         if item is None or current_work is None or item.status != "completed":
@@ -456,6 +490,14 @@ def scan_catalog(
             unsupported_sources += 1
             continue
         selected_sources_by_item.setdefault(item.id, []).append(source)
+
+    if selected_ids is not None:
+        missing = selected_ids - selected_sources_by_item.keys()
+        if missing:
+            raise PrepareRecrawlError(
+                "item IDs are not completed supported items in the selected site/work scope: "
+                + ", ".join(str(value) for value in sorted(missing))
+            )
 
     runs_by_source: dict[int, list[CrawlRun]] = {}
     artifacts_by_run: dict[int, list[Artifact]] = {}
@@ -518,6 +560,8 @@ def scan_catalog(
         results=tuple(results),
         scanned_completed_items=len(results),
         unsupported_sources=unsupported_sources,
+        selected_item_ids=tuple(sorted(selected_ids)) if selected_ids else (),
+        forced_item_ids=frozenset(selected_ids) if force else frozenset(),
     )
 
 
@@ -565,7 +609,7 @@ def apply_scan_results(
     destination_root = _backup_root(Path(backup_root), timestamp)
     for entry in report.results:
         classification = entry.classification
-        if classification is ArchiveClassification.PREFERRED_ONLY:
+        if classification is ArchiveClassification.PREFERRED_ONLY and entry.item.id not in report.forced_item_ids:
             continue
         if classification is ArchiveClassification.AMBIGUOUS_ARTIFACT:
             result.skipped_ambiguous += 1
@@ -677,10 +721,12 @@ def _quoted(value: str | None) -> str:
     return '""' if value is None else repr(value)
 
 
-def _print_result(entry: ScanResult, *, ignored_missing: bool = False) -> None:
+def _print_result(entry: ScanResult, *, ignored_missing: bool = False, forced: bool = False) -> None:
     label = entry.classification.value
     if ignored_missing:
         label += " (ignored)"
+    if forced:
+        label += " (explicit recrawl)"
     print(label)
     title = entry.item.item_title or entry.item.order_label or entry.item.order_key
     print(f"  item={entry.item.id} order={entry.item.order_label or entry.item.order_key or '-'} title={_quoted(title)}")
@@ -700,14 +746,19 @@ def _print_scan(report: ScanReport, *, site: str | None, work: str | None, show_
     print("Scope:")
     print(f"  site: {site or '<all supported sites>'}")
     print(f"  work: {work or '<all works>'}")
+    if report.selected_item_ids:
+        print("  item IDs: " + ", ".join(str(value) for value in report.selected_item_ids))
+        print(f"  force selected items: {bool(report.forced_item_ids)}")
     print()
     visible = (
-        report.results
-        if show_all
+        tuple(entry for entry in report.results if (
+            show_all or not ignore_missing or entry.classification is not ArchiveClassification.MISSING
+        ))
+        if show_all or report.forced_item_ids
         else report.problem_results(ignore_missing=ignore_missing)
     )
     if visible:
-        print("Items:" if show_all else "Problems:")
+        print("Items:" if show_all or report.forced_item_ids else "Problems:")
         for entry in visible:
             _print_result(
                 entry,
@@ -715,6 +766,10 @@ def _print_scan(report: ScanReport, *, site: str | None, work: str | None, show_
                     show_all
                     and ignore_missing
                     and entry.classification is ArchiveClassification.MISSING
+                ),
+                forced=(
+                    entry.item.id in report.forced_item_ids
+                    and entry.classification is ArchiveClassification.PREFERRED_ONLY
                 ),
             )
             print()
@@ -740,6 +795,16 @@ def _print_scan(report: ScanReport, *, site: str | None, work: str | None, show_
         print(f"  unsupported sources skipped: {report.unsupported_sources}")
 
 
+def _positive_item_id(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("item ID must be a positive integer") from exc
+    if result <= 0:
+        raise argparse.ArgumentTypeError("item ID must be a positive integer")
+    return result
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="prepare_recrawl.py",
@@ -747,6 +812,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--site", help="Exact site scope")
     parser.add_argument("--work", help="Exact Work.title scope")
+    parser.add_argument("--item-id", type=_positive_item_id, action="append", help="Exact Catalog Item ID; repeat for multiple items")
+    parser.add_argument("--force", action="store_true", help="Include PREFERRED_ONLY items; requires explicit --item-id")
     parser.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
     parser.add_argument("--library-dir", type=Path, default=Path("output/Books"))
     parser.add_argument(
@@ -768,12 +835,15 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
-    if args.site is None and args.work is None:
-        print("ERROR one of --site or --work is required", file=sys.stderr)
+    if args.site is None and args.work is None and not args.item_id:
+        print("ERROR one of --site, --work or --item-id is required", file=sys.stderr)
+        return 1
+    if args.force and not args.item_id:
+        print("ERROR --force requires explicit --item-id selection", file=sys.stderr)
         return 1
     try:
         catalog = CatalogService(args.catalog)
-        report = scan_catalog(catalog, site=args.site, work=args.work)
+        report = scan_catalog(catalog, site=args.site, work=args.work, item_ids=args.item_id, force=args.force)
         _print_scan(
             report,
             site=args.site,

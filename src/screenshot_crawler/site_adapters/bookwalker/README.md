@@ -74,10 +74,47 @@ Cleanup restored
 the created page to `1/322` with render readiness and closed it; the original
 context remained at two pages. No W2 capture, live JPEG, or image artifact was
 produced. The safe manifest is recorded in `note/01_bookwalker.md`.
-The new exact-two live JPEG path remains unexercised: the separate bounded
+At the W1/W2 checkpoint the new exact-two live JPEG path was unexercised: the separate bounded
 page-317 diagnostic had four geometry boxes, no matching destination, and zero
 JPEG candidates. The synthetic two-part tests therefore do not constitute a
 live JPEG success claim.
+
+## Initial spread-selection redraw retry
+
+A failed initial two-part anchor may retry once when its raw recheck proves
+the same authorized book, counter, pinned canvas, dimensions, generations and
+complete safety flags, with only geometry/content versions both advancing.
+Other changes remain `UNKNOWN`. After 100 ms, both page boxes and native draw
+calls are selected again. Layout/source identities must match, versions and
+operation indices cannot regress, and the fresh initial anchor must pass.
+
+Every recovered return path, including native PNG and original-JPEG-disabled
+capture, freezes both settled current DOM ROIs immediately after fresh selection,
+in one synchronous task guarded by the complete before/after renderer stamp
+and selected tuples. Private canvas copies are held only for this capture.
+Before output, both current ROIs must exactly match these settled copies with
+the same stamp and tuples. This frame-stability check includes page-number/title
+overlays already present at fresh selection; it does not infer overlay regions,
+exclude header pixels, or apply tolerance. Source-native PNG/JPEG validation
+still uses the immutable source/draw snapshots. Existing strict executed-clear
+reconstruction retains its separate immediate-target/current-ROI pixel gate;
+the settled baseline cannot replace that provenance proof.
+A second race, missing witness or snapshot/baseline, changed identity/layout,
+materialization failure, or any post-baseline differing pixel stops the capture.
+Initial recovery consumes the capture's existing one-redraw
+budget; it cannot chain another reconstruction retry. The normal successful
+path, capture format priority, access/pacing settings and Core fallback policy
+are unchanged. No new configuration is required.
+
+The bounded diagnostics retain `batch_initial_anchor_retry` with attempt count
+and final proof/output status, including recovered middle-page JPEG successes.
+Synthetic tests reproduce the retained `97/350` race and the `315/350` final
+comparison failure caused by comparing immediate image snapshots against a
+settled renderer with later header drawing. They verify source-native PNG and
+legacy JPEG recovery with headers, plus rejection of later pixel changes,
+missing/mismatched baselines and strict executed-clear overlay mismatches.
+The user Batch recurrence passed reselection but failed the former immediate
+ROI check; real-viewer recovery with the settled baseline remains unverified.
 
 ## Viewer and capture target
 
@@ -101,6 +138,55 @@ the cover has multiple visible draw rectangles, they are combined into one
 outer content rectangle before capture. Other spreads remain separate
 right-to-left page artifacts. This prevents a two-part cover from becoming
 `page-0001` / `page-0002` while removing the viewer's outer margins.
+
+Native cover geometry is restricted to the current renderer dimensions and
+trace/reset epochs, after the latest proven executed full clear or observed
+canvas dimension reset. The existing clear witness requires successful native
+execution with identity transform, known unclipped state and complete observer/
+canvas/epoch checks. Earlier body-page rectangles remain in the provenance
+ledger and are excluded when a later proven boundary exists. Multiple current-frame
+cover regions are still combined; artwork with white borders is not trimmed
+by pixel colour. An unobserved boundary retains the existing single-rectangle
+path only when all records have one identical rectangle and current dimensions/
+epochs. Ambiguous or missing current geometry is rechecked once after 50 ms,
+then becomes `UNKNOWN`; a counter change during recheck also stops. This applies
+before native selection and to rendered fallback, so a failure cannot silently
+save an old union. Body geometry, explicit canvas mode and the no-record
+pixel-bound fallback keep their existing behavior.
+
+`bookwalker_capture.cover_geometry` diagnostics retain the boundary, record
+counts and up to four selected rectangles. Synthetic browser tests reproduce
+the old 1086x983 cover with 391 white columns and verify a 695x983 current-frame
+crop, native selection, true-cover union, white borders and fail-closed cases.
+Known live limitation: the 19:47 Item1880 recrawl retained a body rectangle and
+three cover draws after the same initial canvas-reset boundary, so the union
+still included 391 white columns. A reset/clear epoch alone does not distinguish
+repainting within that epoch. A synthetic white-background `fillRect` reproduces
+this shape, but the real renderer's replacement operation is not retained and
+has not been attributed. This case remains unresolved; waiting longer does not
+remove old ledger entries. Item1874's defective ZIP was skipped as completed in
+that Batch and remains an older artifact. Explicit per-Item recrawl preparation
+is available through `prepare_recrawl.py --item-id ... --force`; no further
+capture-policy change or live recapture was performed during this investigation.
+
+For the next recurrence, native tracing retains the first renderer capture's
+execution ledger in `cover_geometry.renderer_operations`: up to four connected
+renderer canvases and 64 events each, with eviction/failure counts and a
+`truncated` flag. Events include counter, canvas/trace/reset identity, dimensions,
+operation order and actual native return, source/destination rectangles, colour,
+transform, clip-safety, alpha/composite/filter/shadow and before/after versions.
+Text/image contents, signed URLs and credentials are excluded. A missing native
+return or truncated ledger cannot establish successful execution or absence.
+Collection stops at the first native-success or rendered-fallback cleanup;
+source/proof buffers and all capture decisions are unchanged.
+
+The existing `output/diagnostics/bookwalker/run-<UUID>.jsonl` contains these
+records automatically (`BOOKWALKER_DIAGNOSTICS_DIR` overrides the directory).
+Inspect the latest cover row, including `rendered_fallback_complete`, and any
+`kind=cover_renderer_operations` row emitted when unrelated debug exceeded the
+per-row cap. Failed-run metadata also carries the ledger. Existing row/run size
+limits and best-effort failure isolation remain. No new setting or live-site
+probe is required to enable logging; real recurrence verification is pending.
 
 For a purchased product, the product control may expose
 `data-action-label="read_purchased"` while displaying `読む`; this is treated as the owned
@@ -188,6 +274,20 @@ identity from filename, extension, or visual similarity. Successful and fallback
 capture attempts also write bounded, sanitized diagnostics JSONL under
 `output/diagnostics/bookwalker/` (override with `BOOKWALKER_DIAGNOSTICS_DIR`).
 
+For `BookWalker strict batch initial anchor changed`, capture diagnostics retain
+`batch_initial_anchor_failure`: the first rejected join and the existing
+failure recheck, with before/after counter, canvas identity, trace/geometry/
+content versions, per-part selected source/snapshot tuples and changed-field
+names. Opaque geometry generation values are omitted, but their change is
+reported. The first failure remains available even if the recheck is stable.
+The same data is in the failed run's `diagnostics/metadata.json` under
+`adapter_debug.bookwalker_capture`; the JSONL capture row includes the error
+message in `failure_reason`. Logging is enabled automatically with no added
+successful-path browser reads and does not change capture, retry or stopping.
+It is bounded and sanitized, and logging failures cannot mask the original
+capture error. On a future recurrence, use the metrics path/item ID to locate
+the failed run's metadata and corresponding diagnostics JSONL.
+
 ## Browser Session policy
 
 The adopted target architecture uses one shared Crawler Chrome/profile for all real sites.
@@ -236,10 +336,11 @@ Live headed-CDP checks confirmed:
 - renderer geometry-based page split
 - final `59/59` transition where the BookWalker logo appears in the canvas while `#endOfBook` becomes visible
 
-The prepare-recrawl scanner treats a cover-only `page-0001.png` with a JPEG
-companion as `PREFERRED_ONLY`; body and PNG-only pages remain
-`FALLBACK_INCLUDED`. Terminal-image handling is an adapter navigation decision
-and does not create a recrawl exception.
+The prepare-recrawl scanner accepts PNGs at saved-page numbers 1 through 10
+and the last five saved-page numbers when a JPEG companion exists, under the
+naming rules in `docs/BOOKWALKER_RECRAWL.md`. Other body PNGs and PNG-only archives
+remain `FALLBACK_INCLUDED`. This positional acceptance is independent of the
+adapter's terminal-image navigation decision.
 
 These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
 

@@ -390,21 +390,35 @@ async def test_bookwalker_terminal_native_artifact_roles_are_position_specific()
 
 
 @pytest.mark.asyncio
-async def test_bookwalker_diagnostics_are_bounded_and_redacted(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("oversized_cover", [False, True])
+async def test_bookwalker_diagnostics_are_bounded_and_redacted(tmp_path, monkeypatch, oversized_cover) -> None:
     monkeypatch.setenv("BOOKWALKER_DIAGNOSTICS_DIR", str(tmp_path))
     adapter = BookWalkerAdapter()
     await adapter.configure_run(object(), "direct")  # type: ignore[arg-type]
-    adapter._append_diagnostic(
-        {
+    payload = {
             "url": "https://example.invalid/?signed-secret=1",
             "headers": {"authorization": "secret"},
             "safe": "kept",
         }
-    )
+    if oversized_cover:
+        payload["unrelated_large_debug"] = ["x" * 512] * 300
+        payload["cover_geometry"] = {"renderer_operations": {
+            "available": True, "events": [{"operation": "fillRect", "native_returned": True,
+                "url": "https://example.invalid/?signed-secret=1"}],
+        }}
+    adapter._append_diagnostic(payload)
     paths = list(tmp_path.glob("run-*.jsonl"))
     assert len(paths) == 1
     record = json.loads(paths[0].read_text(encoding="utf-8"))
-    assert record["safe"] == "kept"
+    if oversized_cover:
+        assert record["kind"] == "cover_renderer_operations"
+        assert record["cover_geometry"]["renderer_operations"]["events"] == [
+            {"operation": "fillRect", "native_returned": True},
+        ]
+        assert "unrelated_large_debug" not in record
+        assert paths[0].stat().st_size < 128 * 1024
+    else:
+        assert record["safe"] == "kept"
     assert "url" not in record
     assert "headers" not in record
 
@@ -530,6 +544,49 @@ def test_bookwalker_diagnostics_redact_secret_values_and_unsupported_repr() -> N
         "safe": "known native artifact",
         "object": "<unsupported>",
     }
+
+
+def test_bookwalker_batch_anchor_failure_diagnostics_are_bounded_and_sanitized(
+    monkeypatch,
+) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic-book"
+    selection = {
+        "bookIdentity": "synthetic-book", "counter": "315/350",
+        "geometryToken": "opaque-private-generation", "targetContentVersion": 1,
+        "cookie": "private-cookie", "payload": "data:image/png;base64,private",
+    }
+    calls = [
+        {"canvasId": "renderer", "traceOperationIndex": index, "sourceContentVersion": 5}
+        for index in (10, 20)
+    ]
+    probe = {
+        "available": False, "reason": "batch common renderer stamp changed",
+        "parts": [
+            {**selection, "targetContentVersion": version,
+             "selected": {**adapter._p4b_selected_expected(call), "url": "private-url"}}
+            for call, version in zip(calls, (2, 3), strict=True)
+        ],
+    }
+    for stage in ("initial_join", "failure_recheck", "discarded"):
+        adapter._record_batch_initial_anchor_failure(stage, "stamp changed", selection, calls, probe)
+    failure = adapter._capture_debug["bookwalker_capture"]["batch_initial_anchor_failure"]
+    assert [row["stage"] for row in failure["checks"]] == ["initial_join", "failure_recheck"]
+    first = failure["checks"][0]
+    assert first["probe_reason"] == "batch common renderer stamp changed"
+    assert first["common"] is None
+    assert first["changed_between_parts"] == ["targetContentVersion"]
+    assert first["parts"][0]["changed_from_selection"] == ["targetContentVersion"]
+    encoded = json.dumps(failure)
+    assert "private" not in encoded
+    assert "geometryToken" not in encoded  # It did not change; no token values are retained.
+
+    def broken_diagnostics(_value):
+        raise RuntimeError("diagnostic-only failure")
+
+    monkeypatch.setattr(adapter, "_safe_diagnostic_value", broken_diagnostics)
+    adapter._record_batch_initial_anchor_failure("ignored", "ignored", selection, calls, probe)
+    assert len(failure["checks"]) == 2
 
 
 @pytest.mark.asyncio

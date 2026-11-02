@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from screenshot_crawler.site_adapters.bookwalker.terminal_match import (
@@ -32,9 +33,12 @@ def _synthetic_terminal() -> bytes:
     return _png(image)
 
 
-def test_descriptor_uses_actual_png_and_is_stable_under_white_padding() -> None:
+@pytest.mark.parametrize("canvas_size", [(360, 480), (2859, 1481)])
+def test_descriptor_uses_actual_png_and_is_stable_under_white_padding(
+    canvas_size: tuple[int, int],
+) -> None:
     base = Image.open(io.BytesIO(_synthetic_terminal())).convert("RGBA")
-    padded = Image.new("RGBA", (360, 480), (255, 255, 255, 255))
+    padded = Image.new("RGBA", canvas_size, (255, 255, 255, 255))
     padded.alpha_composite(base, (90, 120))
     first = describe_terminal_png(_png(base))
     second = describe_terminal_png(_png(padded))
@@ -42,6 +46,29 @@ def test_descriptor_uses_actual_png_and_is_stable_under_white_padding() -> None:
     assert first["perceptualHash256"] == second["perceptualHash256"]
     assert first["foregroundAspect"] == second["foregroundAspect"]
     assert first["inkDensity"] == second["inkDensity"]
+
+
+@pytest.mark.parametrize(
+    ("canvas_size", "accepted"),
+    [((4096, 2048), True), ((4096, 2049), False), ((4097, 2), False)],
+)
+def test_descriptor_bounds_before_pixel_decode(
+    canvas_size: tuple[int, int], accepted: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = Image.new("RGB", canvas_size, "white")
+    ImageDraw.Draw(image).rectangle((0, 0, 1, 1), fill="black")
+    png = _png(image)
+    original_load = Image.Image.load
+    decoded = False
+
+    def track_load(self: Image.Image, *args: object, **kwargs: object):
+        nonlocal decoded
+        decoded = True
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "load", track_load)
+    assert (describe_terminal_png(png) is not None) is accepted
+    assert decoded is accepted
 
 
 def test_transparent_margin_is_flattened_to_white() -> None:

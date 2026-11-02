@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-31
+最終同期: 2026-11-02
 
 ## Current normal-crawl initial position guard (2026-10-31)
 
@@ -74,6 +74,160 @@ separate page-317 diagnostic observed four geometry boxes but no matching
 destination and zero JPEG candidates, so the new exact-two live path remains
 unexercised and has no live JPEG claim.
 
+### Initial two-part redraw recovery (2026-11-02)
+
+The observed pre-selection race now has one bounded recovery attempt. It is
+eligible only when the existing raw failure recheck supplies a complete common
+anchor and both selected tuples, both `geometryVersion` and
+`targetContentVersion` increased, and every other common field is unchanged:
+authorized book, exact counter, connected pinned canvas, dimensions, geometry
+generation, trace/reset epochs and complete observer/safety flags. A changed
+identity/generation, missing witness, selected-tuple mismatch, or a change to
+only one version is not eligible. Diagnostic JSON is never retry authority.
+
+After a 100 ms bounded settle, the adapter re-reads a pre-selection anchor on
+the same pinned element, requires the same fixed fields and no version
+regression, obtains page boxes and native draw calls anew, and selects both
+parts again. Boxes and source IDs/canvases/rectangles/destinations must remain
+the same, selected operation indices cannot regress, and the usual initial
+batch proof must join this fresh selection. The old native buffers are not
+materialized or reused. A second race, missing selection/snapshot, or read/
+materialization failure becomes `UNKNOWN`, never an optional Core fallback.
+
+Before any recovered output is returned (original JPEG, reconstructed JPEG,
+or native PNG, including disabled original-JPEG capture), both current DOM
+ROIs must exactly match private settled-renderer copies taken immediately
+after the fresh initial anchor. Baseline creation and final comparison each
+run in one synchronous browser task with the same complete before/after
+common stamp and selected immutable draw tuples. Original target snapshots
+must still exist with valid dimensions. The baseline itself is bound to the
+same common stamp/tuples and is held via a per-capture Playwright JSHandle;
+it is disposed on success and failure and never serialized into diagnostics.
+This checks frame stability across capture, including already-rendered page
+numbers/titles, rather than incorrectly requiring the complete renderer to
+equal an earlier immediate post-image snapshot. No header recognition, pixel
+exclusion, tolerance or output re-encoding is used. Output source identity,
+mapping and JPEG coefficient checks retain their existing immutable source/
+draw snapshots. Strict executed-clear reconstruction independently retains
+its immediate-target/current-ROI exact provenance proof; this settled-frame
+guard cannot replace or bypass it. Missing proof or any post-baseline differing
+pixel stops the capture. This initial recovery consumes the existing one-redraw budget for
+the capture, so a later reconstruction race cannot start a second retry.
+There is no page navigation, global pacing/access change, new CLI/environment
+setting, re-encoding rule, or change to the ordinary successful capture path.
+
+`batch_initial_anchor_retry` records `attempt_count=1`, `output_verified`,
+`settled_roi_baseline` availability/reason, and the final ROI proof when
+reached, alongside the retained first failure. Final proof reason
+`settled current DOM ROI batch exact` identifies the settled-frame comparison.
+Recovered middle-page JPEGs are kept in the bounded JSONL instead of being
+compacted as ordinary JPEG successes. The implementation is based on the
+retained live failure trace below; local synthetic tests reproduce a fresh
+two-part redraw, verify new native pixels and source-native JPEG recovery,
+and cover the fail-closed boundaries. The first retained post-fix normal Batch
+recurrence below passed fresh selection but failed the final ROI proof; full
+recovered output remains unverified on the real viewer.
+Validation including the settled-frame correction: 353 affected Unit/browser-Integration cases
+passed, 0 skipped; Ruff for `src tests` and `git diff --check` passed. The
+selection includes native/original capture and both adapter browser files.
+Research/Probe and full repository suite were not run because this is a
+BookWalker-local recovery without shared/Core changes. No real-site probe was
+run during implementation: retained live evidence defines the race, while
+synthetic fixtures verify the recovery contract. The subsequent user Batch
+recurrence supplies the following real-viewer limitation.
+
+The 2026-11-02 16:26 JST normal Batch (metrics run
+`73c6faf3d5e84a94943b9c860a617c0f`, capture diagnostic run
+`4c2e999e084b4b12baee9a974142effd`) stopped at `315/350` after 313 saved
+images. Initial selection observed geometry/content versions 457/3432, while
+the join observed 459/3447. The one fresh-selection retry succeeded, and both
+legacy direct reconstruction parts passed mapping, raw JPEG and coefficient
+checks. The final proof was available but not exact: right ROI `(952,0,739,983)`
+had 141 differing pixels, and left ROI `(213,0,739,983)` had 1,648, each with
+maximum channel difference 255. Before/after anchors were identical at
+459/3447, with the same canvas, book, counter and selected tuples. Thus this
+stop is a stable target-snapshot/current-renderer pixel mismatch, not another
+anchor race. `returned_path=reconstructed_jpeg` and `output_used=true` describe
+the prepared candidate; `output_verified=false` means the failing spread was
+not returned or saved.
+
+Offline inspection of the retained 1904x985 failure screenshot found exactly
+141 non-white pixels in the right ROI's top 30 rows (page number `314`, global
+bbox `[1648,13,1671,23)`) and 1,648 in the left ROI's top 30 rows (page number
+`315` plus book title, bbox `[233,12,555,25)`). Both counts equal the respective
+proof differences. Together with the independently observed historical
+page-counter `fillText` case below, this strongly supports post-image renderer
+header drawing as the cause. This run did not retain the expected target RGBA,
+pixel-difference coordinates or an operation ledger, so exact localization and
+operation attribution for every differing pixel remain unproven. The former
+retry-wide final proof compared immediate post-image target snapshots with the
+later complete renderer and rejected such overlays. The settled-frame baseline
+above corrects that comparison for the recovery guard; the separate strict
+executed-clear proof remains unchanged. The diagnosis used retained logs/
+screenshot only, without live access. Browser-backed synthetic regressions
+reproduce the former mismatch before baseline creation, then check source-native
+PNG and legacy reconstructed JPEG recovery with later page-number/title drawing.
+Output pixels remain equal to the source image without those headers. Later
+pixel mutations (even when the synthetic stamp is unchanged), changed/missing
+baseline identities/dimensions, missing target snapshots and anchor changes
+during baseline creation still fail closed. A strict executed-clear spread with
+the same overlay still rejects its separate provenance proof. No real-site
+verification has been run for the settled-frame correction.
+
+### Initial two-part anchor failure diagnostics (2026-11-02)
+
+`BookWalker strict batch initial anchor changed` now retains bounded
+`batch_initial_anchor_failure` metadata in `bookwalker_capture`. Its `checks`
+contain at most the first rejected `initial_join` and the existing
+`failure_recheck`, including the rejection/probe reasons, pre-selection and
+observed common/per-part counter, authorized content identity, canvas IDs,
+dimensions, connection/observer flags, trace/reset epochs, geometry/content
+versions, expected/observed selected tuples, snapshot IDs, source versions,
+rectangles, and exact changed-field names. The first rejected read survives
+even when the recheck has become stable. Opaque geometry generation values are
+not stored; a change is reported by the `geometryToken` field name only.
+Records use an explicit field projection and the existing sanitizer, without
+page bytes, signed URLs, cookies, or full raw trace payloads.
+
+The same details appear in the bounded, sanitized
+`output/diagnostics/bookwalker/run-<UUID>.jsonl` capture row (override:
+`BOOKWALKER_DIAGNOSTICS_DIR`) and in a failed Batch run's
+`output/batch/bookwalker/item-.../diagnostics/metadata.json` under
+`adapter_debug.bookwalker_capture`. The capture row now also retains the
+actual `UnknownPageStateError` message as `failure_reason`. No new setting or
+additional ordinary-success browser read is required. Diagnostic collection
+summarizes existing reads; the separately bounded recovery above controls
+retries, while pacing, access, ZIP and Catalog behavior is unchanged.
+Diagnostic construction/write failures cannot replace the capture
+error, and per-capture metadata resets before the next capture.
+
+The older source1874 failure occurred at `315/350` after 313 saved images,
+without retained anchor differences. The 2026-11-02 15:35 JST recurrence
+(`2e67c7b8ddbf4980807a3a2cc7dec039`, diagnostic run
+`ec03c4ccc98348e6bfb47019c3426de9`) failed in the first candidate at `97/350`
+after 95 saved images. Its pre-selection and first join share the same book,
+counter, canvas ID `2`, trace epoch `105`, reset epoch `2`, dimensions, and
+observer/safety flags. Only `geometryVersion` (148 -> 150) and
+`targetContentVersion` (1079 -> 1094) changed, while retained native calls
+increased from two to four. Both selected tuples match the observed tuples,
+and both parts agree on the new common stamp. The existing failure recheck
+still observes the same new stamp (150/1094), but rejects its mismatch against
+the original pre-selection stamp (148/1079). This establishes additional
+renderer drawing during the multi-read selection window as this failure's
+immediate mechanism; it is not confined to the second book. It does not prove
+before/after pixel equality or explain what caused the viewer's extra drawing.
+The failure occurs before source materialization, JPEG matching or final ROI
+proof. These retained observations motivate the implemented initial recovery
+above; they are not post-fix live recovery evidence.
+Local synthetic tests cover content/geometry generation changes, selected
+source-version mismatch, a transient failed first join followed by a stable
+recheck, inter-part common-stamp differences, sanitization/bounds, and log
+write/construction failure isolation. The earlier diagnostics-only checkpoint
+validated 240 distinct affected
+Unit/browser-Integration cases passed, 0 skipped; Ruff and diff checks passed.
+No live-site verification, Research/Probe or full suite was needed for this
+adapter-local diagnostic-only change.
+
 ## Shared work-key scope inventory (2026-10-22)
 
 BookWalker Discovery exposes a complete site-listing identity/position inventory
@@ -131,12 +285,28 @@ The default is read-only and does not open the viewer, call Discovery, consume
 access resources, or modify Catalog/files. Only completed Items with recorded
 successful ZIP Artifacts are inspected; orphan ZIPs are not discovered.
 
-JPEG-only archives are `PREFERRED_ONLY`. A cover-only `page-0001.png` with at
-least one JPEG companion is also `PREFERRED_ONLY`; it remains eligible for
-recrawl without being counted as a fallback problem. Body PNGs, PNG-only
-archives, duplicate first-page PNG/JPEG, nonstandard PNG naming and unsupported
-formats remain problems under the extension policy. ZIP member order does not
-affect the saved-page naming rule. No terminal-image exception is applied.
+JPEG-only archives are `PREFERRED_ONLY`. As of 2026-11-02, PNGs at saved-page
+numbers 1 through 10 and the last five saved-page numbers are accepted when at
+least one JPEG companion exists. Archives containing only these allowed PNGs
+and JPEGs are `PREFERRED_ONLY` and excluded from recrawl/apply by default.
+Repeated `--item-id` filters individual Catalog Items, intersecting optional
+site/work scope. With explicit IDs, `--force` also includes `PREFERRED_ONLY`
+archives for a visually defective cover; classification and ambiguity/missing
+safeguards remain unchanged. IDs are not ZIP prefixes: in the inspected Catalog,
+ZIP 013 is Item 1880 and ZIP 019 is Item 1874. The verified read-only command is
+`python scripts/prepare_recrawl.py --site bookwalker --work "ようこそ実力至上主義の教室へ" --item-id 1880 --item-id 1874 --force`.
+It reports exactly two candidates; `--apply` is a separate opt-in to backup
+those ZIPs and return those Items to pending. Other body PNGs,
+PNG-only archives, ambiguous duplicate page numbers, nonstandard PNG naming
+and unsupported formats remain problems. Head/tail ranges require all JPEG/PNG
+members to use unique canonical saved-page names, sorted numerically regardless
+of ZIP order; they are not the viewer's original counter or the last five PNGs.
+The existing standalone cover exception independently requires a unique
+`page-0001` member and remains valid when other members use old names. The
+allowed positions count toward `allowed_fallback_count` even when another body
+PNG still requires recrawl, and overlapping head/tail positions count once.
+The head is saved-page numbers 1 through 10, not the first ten PNGs.
+This is accepted positional PNG output, independent of terminal recognition.
 
 The scanner does not inspect image provenance or prove that the named first
 page is a cover. PNG classification is not a quality verdict: source-native
@@ -150,11 +320,28 @@ eligibility; preparation does not grant access.
 
 Implementation: `scripts/prepare_recrawl.py`; examples and scope limitations:
 `docs/BOOKWALKER_RECRAWL.md`. Verification uses the synthetic preparation-script
-Unit selection: 43 passed, 0 failed/skipped, with one existing pytest-asyncio
+Unit selection: 74 passed, 0 failed/skipped, with one existing pytest-asyncio
 deprecation warning, including the pre-existing site policies and apply workflow.
 Ruff (`scripts/prepare_recrawl.py src tests`) and diff checks passed.
+The current 11 ZIPs under the Youjitsu library folder were checked read-only.
+Format-based candidates fall from eight to zero because all PNGs are within
+the first nine or last five saved pages. Representative head PNGs are colour
+front matter (2048x1496) and title pages (694x983). This observation motivates
+the accepted position policy without asserting source provenance or complete
+visual quality. Audit details are in
+`.tmp/bw-head10-policy-audit-20261102/archive-summary.json`.
+No ZIP/Catalog changes, real-site access or operational apply was performed.
+The policy is script-local, so browser Integration/Research/full pytest were
+not rerun. Synthetic tests cover 10/11 boundaries, overlap, numbering and force.
 No real Catalog apply, browser/live recrawl, Research/Probe or full repository
 suite is required for this script-policy integration; capture code is unchanged.
+Read-only inspection of source121's current 330-image archive found PNGs at
+saved pages 1, 326 and 329. All three are allowed under the user-selected
+cover-plus-last-five rule, including the survey/contact notice at page 326.
+The archive is `PREFERRED_ONLY` with zero fallback and three allowed PNGs.
+This policy does not classify notices by image contents or exempt end matter
+outside those positions automatically. No Catalog apply or ZIP rewrite was
+performed.
 
 ## 1.1 Historical Stage 01 source-native baseline (2026-10-05)
 
@@ -510,6 +697,169 @@ manifestには複数target時に `part` / `parts` を記録する。
 geometryとpixel boundsのどちらも取れない場合だけ、表紙artworkを推測で
 切らないためviewer canvas全体へfallbackする。2ページ目以降の見開きは
 従来どおり右ページ→左ページの個別artifactとする。
+
+### 表紙の現在フレームによるgeometry選択（2026-11-02）
+
+既定のnative captureでは、`_page_draw_rectangles()` は冒頭ページだけ
+描画履歴を現在のcanvas寸法・trace epoch・reset epochで絞る。さらに、
+現在のrenderer active segmentが保持する実行済みfull-clear witness、または
+observer付きcanvas dimension resetを境界として、operation indexが境界より
+新しい矩形だけを採用する。full-clearは既存の実行前後のidentity transform、
+既知の非clip状態、context lossなし、observer flush、引数・canvas寸法・
+epoch・target identity等の検証に成功したwitnessだけを使う。未検証の
+clear呼び出しや、単なる待機時間は境界の根拠にしない。古い描画履歴自体は
+保持し、source-native/JPEG/direct-one-hopのprovenanceやgeometry ledgerを
+消去・書き換えない。本文ページの矩形選択は従来どおり。
+
+**現在の既知の制約:** この境界は最後に確認できたclear/resetであり、
+同じepoch内の全描画が現在の表紙とは限らない。clear/resetを挟まない再描画
+では古い本文矩形も境界より後に残り、`current cover frame` と記録されても
+unionが広がる場合がある。下記の013再発で実際に観測済みであり、この経路を
+解消済みとは扱わない。待機だけでは記録済みの古い矩形は消えない。
+
+境界を観測していなくても、全recordが現在の寸法・epochに属し、矩形が
+同一の1種類だけなら既存の単一矩形経路を維持する。異なる複数矩形があり
+境界不明、または境界後のcurrent drawが見つからない場合は50ms後に1回だけ
+同じcanvasを再確認する。再確認中のcounter変更、または未解決状態は
+`UnknownPageStateError`。native captureのoptional fallback境界でも停止を
+維持し、古いunionや非白色pixel cropへ暗黙fallbackしない。実際にgeometry
+recordがない場合の既存pixel-bound fallbackと、明示的canvas modeの従来の
+geometry fallbackは変更していない。同じ現在フレームに2つの表紙領域が
+あれば、両方を保持して1つのunion targetにする。非白色画素でgeometryを
+縮めないため、表紙自体の白い縁も保持する。
+
+`bookwalker_capture.cover_geometry` は選択可否・理由・counter・境界の種別/
+operation/epoch・元/採用record数・最大4つの採用矩形を記録する。既存の
+capture diagnostic JSONLとfailed-run metadataにも残る。CLI・設定・出力形式の
+優先順位・Home操作回数・アクセス/pacingは変更していない。
+
+修正前は同じcanvas IDの履歴をまとめて採用し、重複・完全包含だけを
+除去していたため、古い本文矩形と表紙矩形が部分的に重なると両方が残った。
+Home後の画素安定確認だけでは、その古いgeometry履歴は除去されなかった。
+以下の保存成果物が今回の修正の根拠である。
+
+手元の `output/Books/ライトノベル/ようこそ実力至上主義の教室へ/` の
+`020-...-第05巻-...zip`（source1873、349枚）と
+`021-...-第06巻-...zip`（source1872、350枚）を調査した。双方の
+`page-0001.png` は1086x983で、非白色bboxは `[0,0,695,983)`、右端391列は
+完全な白色だった。絵の領域は同じ比率の縦長表紙であり、今回確認した問題は
+右余白の混入。元画像との完全比較は行っておらず、全画素の欠落有無は未証明。
+対応する診断run `947c74564faa42f581160787b0f01ada`（第05巻）と
+`509ae77ea47d4012806db1131e6ea7a5`（第06巻）の最初の行は、それぞれ
+`1/349`・`1/350`、`box_count=2`、`cover_spread_requires_union` を記録する。
+この診断行はnative captureが表紙union fallbackへ渡す直前の記録であり、
+`returned_path=native_png` をsource-native成功の証拠にはしない。両方とも
+JPEG照合前にこの分岐へ進んでいる。
+
+対応するmetrics run `1952fa9435a24099bb1a25f9da385955`（第05巻）と
+`bb44b7a2ca234ae7a6cc80aac169c5e0`（第06巻）の最初の読書位置通知は、
+それぞれ `readStartPage=44,pageNums=[44,45,1,2]` と
+`readStartPage=76,pageNums=[76,77,1,2]`。途中位置から冒頭へ戻ったことと
+2矩形union判定が、履歴混入の機序を強く支持する。ただし実runの最初の
+2矩形の座標・描画操作自体は保存されておらず、その正確な帰属は未証明。
+
+外部接続のない人工Chromiumページで、本文の描画、clear、表紙の描画を
+同じcanvas上で行いproductionの `get_capture_targets()` を実行した。
+旧矩形 `[952,0,739,983]` と新表紙 `[605,0,695,983]` の部分重なりが残り、
+1086x983・非白色695x983・右余白391列が再現した（2ケース成功）。これは
+実runの座標を復元したものではなく、同じ機序と出力寸法の人工再現である。
+隔離結果は `.tmp/bw-youjitsu-cover-audit-20261102/synthetic-history-replay.json`。
+既存ZIPは変更していない。実サイトへのアクセスも行っていない。
+修正後は既存cover geometry testをparameterizeし、clear/reset後の旧本文領域
+除外、695x983の新表紙、同一frameの2領域union、白縁保持、境界不明、clip/
+transform付きclearの不採用、current draw/epoch欠落、遅延再描画、再確認中の
+counter変更を確認する。native PNG選択が1領域になり、UNKNOWNがCoreの
+fallbackへ流れないことも検証する。targeted cover browser testsは14 passed、
+0 skipped。関連するadapter/native/originalのUnit・browser Integrationは
+364 passed、0 skipped。最終の診断項目とnative停止境界の追加後もtargeted
+14件を再確認し、Ruff `src tests` と `git diff --check` は成功した。
+BookWalker内の修正でshared/Coreには変更がないためfull suiteおよび独立の
+Research/Probe suiteは未実行。実サイトで今回の2冊を再取得した検証は未実施で、
+人工browserの成功を実サイトでの修復成功とは扱わない。直近の初期batch retry
+最終ROI検証修正とは別のcover geometry経路の修正である。
+
+### 013・019の表紙再調査と現在の未解決条件（2026-11-02）
+
+metrics `20261102T184435721270+0900-bookwalker-normal-6b3152cafd28454ab8e775abf2921721.jsonl`
+の013（第11巻、Item/Source1880、CrawlRun19162）は19:47開始、19:56に
+completedとなった。表紙は1086x983で非白色bbox `[0,0,695,983)`、右391列が
+白色。最初の読書位置通知は `readStartPage=347,pageNums=[347,348,1,2]`。
+capture diagnostic run `593e8933a5fc4e90b4669269db95c129` の冒頭 `1/355`
+では、`cover_geometry` がreset境界operation4/trace1/reset2の後の4描画を
+すべて採用していた。矩形は本文の `[952,0,739,983]` 1件と表紙の
+`[605,0,695,983]` 3件で、2種類の矩形をunion fallbackへ渡した。この外接範囲
+が1086x983になり、391列の余白を説明する。前回修正のepoch/boundary条件
+だけでは、実際の画面置換後に残った古い描画を除外できないことが確定した。
+
+019（実画像は2年生編4.5、保存名のorder labelは第05巻、Item/Source1874、
+CrawlRun19150）のZIPは17:55作成の旧成果物。同じ1086x983・右391列の
+余白があるが、今回のmetricsでは `completed` のためskippedで、再取得されて
+いない。capture diagnostic run `a76f19146c024858a238a1ffb16c5ad5` も
+cover union分岐を記録するが、`cover_geometry` はまだない。013の再発と
+019の旧成果物残存は区別する。両ZIPは現在の形式検査では `PREFERRED_ONLY`
+なので、個別の再取得準備には明示IDと`--force`が必要。
+
+隔離した人工Chromiumで、同じcanvas上の旧本文→白背景置換→表紙3描画を
+比較した。実行済み `clearRect` を挟む場合は695x983になり、白背景の
+`fillRect` だけでは境界が初期resetのまま残り、実ログと同じ4矩形・1086x983を
+再現した。結果は `.tmp/bw-cover-recurrence-20261102/frame-boundary-comparison.json`。
+実runはrenderer操作ledgerやstyle/stateを保存していないため、実際の置換命令が
+`fillRect`だったかは未確定。寸法や矩形一致だけでその命令を断定しない。
+次の実装では同一epoch内の画面置換を証明できる条件が必要であり、単なる待機延長、
+最新矩形1件の採用、非白色trim、PNG/JPEG変換では解決済み扱いにしない。
+この再調査では取得判定を変更せず、個別recrawl準備スクリプトと、次回再発用の
+下記renderer実行診断を実装した。保存ZIP/Catalogへのapplyや実サイトアクセスは
+行わず、ログ/成果物確認と人工browser比較・synthetic testsで検証した。
+
+### 表紙rendererの実行命令ログ（2026-11-02）
+
+既定native modeの最初のcapture向けに、実際にDOMの`#renderer`配下へ接続
+されたcanvasの命令を独立したdiagnostic ledgerへ記録する。offscreen sourceや
+内部検証canvasは記録対象にしない。canvasは最大4個、各canvasの直近64命令を
+保持し、event/canvasのeviction件数、recording failure件数、`truncated`を示す。
+途中で履歴が欠けた場合は、記録がないことを「その命令がなかった」証拠にしない。
+
+`bookwalker_capture.cover_geometry.renderer_operations.events` に、連番、
+operation index/trace epoch/reset epoch、canvas ID・寸法、前後counter/content
+version、命令/メソッド名、引数・矩形・source/destination・source ID/寸法を残す。
+描画状態は前後transform、context safety/clip既知状態、context loss、alpha、
+composite、filter、shadow、正規化された単色fill styleまたはgradient/patternの
+種類を保持する。矩形の引数がprimitive finite numberだったかも記録する。
+文字列の本文・画像内容・source URL・Cookie等は保存しない。counterは数字と
+slashの形式のみ最大64文字、色は許容形式のみ最大96文字として既存sanitizerも通す。
+
+`drawImage`、`clearRect`、`fillRect`、`putImageData`、transform/reset、
+text/path/clip/save/restoreをattempt時に記録し、nativeメソッドが正常に戻った
+場合だけ `native_returned=true` と実行後version/stateを記録する。戻りを観測
+していない命令は実行成功の証拠にしない。canvas width/height resetも実行済みの
+前後寸法・versionとして記録する。原処理が投げる例外や原キャプチャ結果を
+diagnosticが変更しない。ログの値をnative association/JPEG proof/geometry選択の
+authorityには一切使わない。
+
+geometry選択時の記録を取り、native attempt終了時に同じcanvas IDの最新ledgerへ
+更新する。source-native成功時の既存trace cleanup、またはCoreのrendered fallback
+保存後のtarget cleanupで収集を止める。trace reset後もこのdiagnosticは保持され、
+後続本文ページの命令を収集し続けない。rendered fallback後は
+`collection_phase=rendered_fallback_complete` の最終capture行も追記するので、
+最初のnative拒否行だけを見ず、同じdiagnostic runの最新の表紙行も確認する。
+
+出力は既存の `output/diagnostics/bookwalker/run-<UUID>.jsonl`（overrideは既存の
+`BOOKWALKER_DIAGNOSTICS_DIR`）と、失敗時metadataのadapter debug。JSONLには
+authorized `book_identity` も残す。他のJPEG debugで行が128KiB上限を超える場合、
+cover evidenceだけを `kind=cover_renderer_operations` 行として保存する。
+既存の1行128KiB・1run256行/4MiB上限は維持する。ログ読み出し・生成・保存失敗は
+best effortで、元の成功/UNKNOWNや例外を置換しない。新しいCLI/設定は不要。
+
+ローカルbrowser testsは白fillRectとclearRectの区別、白色/矩形/epoch/counter/
+実行後version、transform/alpha/composite/filter、native例外の未成功扱い、
+event/canvas上限、記録/読み出し失敗の非干渉、収集停止、rendered fallback後の
+JSONL実保存を検証する。大きい行からcover-only evidenceを保存し、秘密値を
+redactするUnit caseも既存testへ追加した。recrawl 68件を含むaffected groupは
+439 passed、0 skipped。追加state/failure caseを含む最終diagnostic/cover groupは
+30 passed、0 skipped。Ruffとdiff checkは成功。BookWalker-local診断と独立の
+maintenance script変更のためfull suite/独立Research suiteは未実行で、実サイトで
+再発してこのログを採れた検証もまだない。013の根本原因の操作帰属や恒久対策は
+未確定のままとし、次回の実行命令列から判定する。
 
 ## 6. Browser Session / CDP
 
@@ -3267,10 +3617,37 @@ Ruff, py_compile, and git diff --check pass.
 
 The R2 terminal matcher was calibrated from retained native notice/logo artifacts and checked against Root's 990-image original corpus: four registered positives passed, with positive Hamming distances 0, 0, 0, and 6; the 1905x944 padded transformations measured 40 for notice and 2 for logo. All 990 nonterminal negatives remained outside the provisional distance-64 bound (minimum 100 for notice and 102 for logo). The matcher uses no source/JPEG attribution and does not change cover/source capture; the complete-canvas check runs before geometry splitting and may recognize only the registered terminal roles. If it fails, the existing native terminal path is attempted; terminal output may be smaller or PNG.
 
+As of 2026-11-02, complete-canvas terminal inspection accepts at most
+8,388,608 backing pixels and 4096 pixels per axis. The browser checks these
+bounds before PNG encoding; Python applies the same pixel budget before
+decoding/converting pixels. This covers the observed 2859x1481 canvas and
+3840x2160 canvases while retaining a bounded memory/work budget. Counter-role,
+authorized CID, pinned canvas, unchanged-frame checks, pHash/aspect/density
+thresholds and native fallback rules are unchanged. There is no new CLI or
+environment setting, hash registration, source attribution, or output format.
+
+The source-121 volume-6 batch retained its 329/330 notice because its
+2859x1481 backing canvas (4,234,179 pixels) exceeded the former 4,000,000-pixel
+browser guard and its 960x1280 native notice hash was unregistered. The 330/330
+logo was recognized and omitted. An offline browser replay of that retained
+notice at the recorded destination (1429,0,1111,1479), on a white canvas of the
+recorded size, now passes the production complete-canvas path with pHash
+distance 42. This is an offline replay, not a live post-fix tail verification.
+Synthetic browser regressions cover both roles at the observed size and 4K,
+reject nonterminal counter positions, and enforce pixel/axis limits before
+encoding. Python tests enforce the same bounds before pixel decoding. The
+existing ZIP and Catalog are not rewritten. Live tail verification remains
+deferred because of the maruyomi time limit; cover capture is unchanged.
+Validation for this change: 176 affected unit/browser-integration cases passed,
+0 skipped (172 in the affected run, plus four diagnostic cases rerun with a
+workspace-local temporary directory after the default pytest temp directory
+denied access). Ruff for `src tests` and `git diff --check` passed. Research
+and full-suite runs were not needed for this terminal-local bounds change.
+
 
 BookWalker capture now writes bounded, sanitized adapter-local JSONL diagnostics under output/diagnostics/bookwalker (or BOOKWALKER_DIAGNOSTICS_DIR) with a fresh run UUID. Before geometry splitting, the adapter reads the complete current visible canvas and may recognize only the N-1/N notice or N/N logo using a white-flattened foreground union, aspect-preserving 32x32 normalization, calibrated 256-bit perceptual hash, pinned actual canvas identity, known initial viewer cid, and an unchanged counter/frame. If that check fails, the existing native terminal path is attempted and remains fail-closed on missing selected operation/source/target identity, full source bounds, actual connected DOM canvas identity, actual viewer cid, stable counter, source and target content versions, geometry token/version, snapshot IDs, or mismatched initial/before/after anchors. A trace ID is optional. This layout classifier does not attribute a source or JPEG and does not save a cropped subregion. Unknown, mixed, unstable, or mismatched terminal images remain content.
 
-A terminal AD transition records its source identity so a native trace reset that temporarily demotes the same page to CONTENT cannot save it as body content; retry remains bounded and END/final navigation still wins. Ordinary body JPEG successes are compacted out of the bounded sidecar after the cover/tail slots, while cover, fallback, terminal and failure records remain. The cover-only page-0001 exception remains `PREFERRED_ONLY` when a JPEG companion exists; body and terminal PNGs remain fallback candidates. No terminal-image exception is applied by prepare_recrawl.py.
+A terminal AD transition records its source identity so a native trace reset that temporarily demotes the same page to CONTENT cannot save it as body content; retry remains bounded and END/final navigation still wins. Ordinary body JPEG successes are compacted out of the bounded sidecar after the cover/tail slots, while cover, fallback, terminal and failure records remain. `prepare_recrawl.py` accepts first-ten-saved-page and last-five-saved-page PNGs when a JPEG companion exists under the naming rules above. Other body PNGs remain fallback candidates; this positional acceptance does not depend on recognizing terminal images.
 
 A bounded historical owned item124 live check returned cover original JPEG 1443x2048 from eight candidates, matched the then-recorded notice/logo native hashes, reached END, and restored the shared context from two pages to two after closing the created page; it is not a guarantee for the later batch lifecycle.
 
@@ -3326,10 +3703,10 @@ authoritative; PNG dimensions may be 722x1024 or 666x944 depending on the
 observed path, while a 1443x2048 source candidate is not a guarantee of output
 size. No upscaling, JPEG re-encoding, or candidate guessing was added.
 
-The cover-only `page-0001.png` recrawl policy is `PREFERRED_ONLY` when the
-archive contains at least one JPEG companion. Other PNGs remain fallback
-candidates; there is no body or terminal-image exception. The three isolated
-recrawl-check dry-run results are: source125 preferred-only with one allowed
+The current recrawl policy accepts first-ten-saved-page and last-five-saved-page PNGs with at
+least one JPEG companion; other body PNGs remain fallback candidates. The
+three historical isolated recrawl-check dry-run results under the former
+cover-only rule were: source125 preferred-only with one allowed
 cover candidate, and sources124/126 fallback-included for extra PNGs. No
 Catalog or ZIP write was made by the dry run.
 

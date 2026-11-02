@@ -11,6 +11,9 @@ from typing import Any
 
 from PIL import Image, ImageChops
 
+# Allow a full 4K backing canvas while bounding PNG encoding and descriptor work.
+_MAX_TERMINAL_PIXELS = 8 * 1024 * 1024
+
 TERMINAL_DESCRIPTOR_SCRIPT = r"""
 canvas => {
   try {
@@ -33,7 +36,7 @@ canvas => {
     const height = Number(canvas.height);
     if (!Number.isInteger(width) || !Number.isInteger(height) ||
         width < 2 || height < 2 || width > 4096 || height > 4096 ||
-        width * height > 4000000) return null;
+        width * height > __MAX_TERMINAL_PIXELS__) return null;
     const contentId = new URL(location.href).searchParams.get('cid')?.trim() || null;
     const counter = document.querySelector('#pageSliderCounter')?.textContent?.trim() || null;
     if (!contentId || !counter) return null;
@@ -48,7 +51,7 @@ canvas => {
     return null;
   }
 }
-"""
+""".replace("__MAX_TERMINAL_PIXELS__", str(_MAX_TERMINAL_PIXELS))
 
 
 _COSINES = tuple(
@@ -88,10 +91,14 @@ def describe_terminal_png(png_bytes: bytes) -> dict[str, Any] | None:
     """Build the terminal descriptor from the same PNG bytes used at runtime."""
 
     try:
-        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-        width, height = image.size
-        if width < 2 or height < 2 or width > 4096 or height > 4096:
-            return None
+        with Image.open(io.BytesIO(png_bytes)) as source:
+            width, height = source.size
+            if (
+                width < 2 or height < 2 or width > 4096 or height > 4096
+                or width * height > _MAX_TERMINAL_PIXELS
+            ):
+                return None
+            image = source.convert("RGBA")
         white = Image.new("RGBA", image.size, (255, 255, 255, 255))
         flat = Image.alpha_composite(white, image).convert("RGB")
         darkest = ImageChops.darker(

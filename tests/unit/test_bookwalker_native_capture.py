@@ -351,6 +351,58 @@ def _native_call_fixture(*, constructor: str | None = "ImageBitmap") -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [None, "bookIdentity", "counter", "actualCanvasId", "geometryToken", "traceEpoch",
+     "resetEpoch", "canvasWidth", "unsafe", "observer", "missing_part", "selected_tuple",
+     "one_version_only", "regressed_version", "bool_version", "unavailable"],
+)
+def test_initial_batch_retry_requires_only_observed_version_changes(mutation) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "book"
+    before = {
+        "traceId": "2", "actualCanvasId": "2", "bookIdentity": "book", "counter": "97/350",
+        "geometryToken": "epoch", "traceEpoch": 105, "resetEpoch": 2,
+        "canvasWidth": 1904, "canvasHeight": 985, "connected": True,
+        "geometryHistoryIncomplete": False, "observerFlushed": True,
+        "observerAvailable": True, "observerTakeRecordsAvailable": True, "unknownMutation": False,
+        "geometryVersion": 148, "targetContentVersion": 1079,
+    }
+    after = {**before, "geometryVersion": 150, "targetContentVersion": 1094}
+    calls = [
+        {
+            "canvasId": "2", "traceOperationIndex": index + 10, "traceEpoch": 105,
+            "sourceId": "source", "sourceCanvasId": "source-canvas", "sourceContentVersion": 3,
+            "fullSourceSnapshotId": f"source-{index}", "targetSnapshotId": f"target-{index}",
+            "targetContentVersionAfter": 1080 + index,
+            "sourceRect": {"x": 0, "y": 0, "width": 600, "height": 600},
+            "destination": {"x": index * 600, "y": 0, "width": 600, "height": 600},
+        }
+        for index in range(2)
+    ]
+    if mutation in {"bookIdentity", "counter", "actualCanvasId", "geometryToken"}:
+        after[mutation] = "different"
+    elif mutation in {"traceEpoch", "resetEpoch", "canvasWidth"}:
+        after[mutation] += 1
+    elif mutation == "unsafe":
+        before["unknownMutation"] = after["unknownMutation"] = True
+    elif mutation == "observer":
+        before["observerAvailable"] = after["observerAvailable"] = False
+    elif mutation == "one_version_only":
+        after["geometryVersion"] = before["geometryVersion"]
+    elif mutation == "regressed_version":
+        after["targetContentVersion"] = 1078
+    elif mutation == "bool_version":
+        after["targetContentVersion"] = True
+    parts = [{**after, "selected": adapter._p4b_selected_expected(call)} for call in calls]
+    probe = {"available": mutation != "unavailable", "common": after, "parts": parts}
+    if mutation == "missing_part":
+        parts.pop()
+    if mutation == "selected_tuple":
+        parts[1]["selected"]["sourceContentVersion"] += 1
+    assert adapter._initial_batch_redraw_retry_allowed(before, calls, probe) is (mutation is None)
+
+
 def test_executed_clear_promotion_requires_single_native_selection() -> None:
     assert adapter_module._strict_executed_clear_capture_allowed(1, 1) is True
     assert adapter_module._strict_executed_clear_capture_allowed(2, 2) is False

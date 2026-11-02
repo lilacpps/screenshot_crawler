@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -1148,37 +1149,236 @@ async def test_bookwalker_keeps_first_page_cover_spread_as_one_target(
     ) == {"width": 1600, "height": 1000}
 
 
+@pytest.mark.parametrize(
+    "transition",
+    ["clean", "clear", "reset", "spread", "white_border", "missing_boundary",
+     "clipped_clear", "transformed_clear", "missing_current", "wrong_epoch",
+     "delayed_redraw", "counter_during_recheck"],
+)
 async def test_bookwalker_crops_first_page_cover_to_draw_geometry(
-    browser_page: Page,
+    browser_page: Page, transition: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    await browser_page.evaluate(bookwalker_adapter_module._DRAW_TRACE_SCRIPT)
     await browser_page.set_content(
         """
         <span id="pageSliderCounter">1 / 10</span>
         <div id="renderer">
           <div class="currentScreen">
-            <canvas width="2000" height="1000" style="width:2000px;height:1000px"></canvas>
+            <canvas width="1904" height="985" style="width:1904px;height:985px"></canvas>
           </div>
         </div>
         """
     )
     await browser_page.evaluate(
         """
-        () => {
+        mode => {
           const canvas = document.querySelector('canvas');
-          canvas.dataset.bookwalkerTraceId = 'cover';
-          window.__bookwalkerDrawCalls = [
-            {canvasId: 'cover', destination: [700, 0, 600, 1000]},
-          ];
+          canvas.width = 1904; canvas.height = 985;
+          const ctx = canvas.getContext('2d');
+          const previous = document.createElement('canvas');
+          previous.width = 739; previous.height = 983;
+          previous.getContext('2d').fillRect(0, 0, 739, 983);
+          const cover = document.createElement('canvas');
+          cover.width = 695; cover.height = 983;
+          const source = cover.getContext('2d');
+          source.fillStyle = 'white'; source.fillRect(0, 0, 695, 983);
+          source.fillStyle = 'rgb(20,40,60)';
+          source.fillRect(mode === 'white_border' ? 30 : 0, 0,
+                          mode === 'white_border' ? 635 : 695, 983);
+          if (mode !== 'clean') {
+            ctx.drawImage(previous, 952, 0);
+            if (mode === 'reset') canvas.width = 1904;
+            else {
+              if (mode === 'clipped_clear') {
+                ctx.beginPath(); ctx.rect(0, 0, 100, 100); ctx.clip();
+              }
+              if (mode === 'transformed_clear') ctx.translate(10, 0);
+              ctx.clearRect(0, 0, 1904, 985);
+              if (mode === 'transformed_clear') ctx.resetTransform();
+            }
+          }
+          ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1904, 985);
+          window.__drawFreshCover = () => ctx.drawImage(cover, 605, 0);
+          if (!['missing_current', 'delayed_redraw', 'counter_during_recheck'].includes(mode)) {
+            if (mode === 'spread') {
+              ctx.drawImage(cover, 213, 0); ctx.drawImage(cover, 996, 0);
+            } else window.__drawFreshCover();
+          }
+          if (mode === 'missing_boundary') {
+            delete window.__bookwalkerTransformTrace.activeSegments[canvas.dataset.bookwalkerTraceId];
+          }
+          if (mode === 'wrong_epoch') window.__bookwalkerDrawCalls.at(-1).traceEpoch += 1;
         }
-        """
+        """,
+        transition,
     )
+    waits = []
+    original_wait = browser_page.wait_for_timeout
 
-    targets = await BookWalkerAdapter().get_capture_targets(browser_page)
+    async def settle(milliseconds):
+        waits.append(milliseconds)
+        await original_wait(milliseconds)
+        if transition == "delayed_redraw":
+            await browser_page.evaluate("window.__drawFreshCover()")
+        elif transition == "counter_during_recheck":
+            await browser_page.locator('#pageSliderCounter').evaluate("n => n.textContent = '2/10'")
 
+    monkeypatch.setattr(browser_page, "wait_for_timeout", settle)
+    adapter = BookWalkerAdapter()
+    if transition in {
+        "missing_boundary", "clipped_clear", "transformed_clear", "missing_current",
+        "wrong_epoch", "counter_during_recheck",
+    }:
+        with pytest.raises(bookwalker_adapter_module.UnknownPageStateError):
+            await adapter.get_capture_targets(browser_page)
+        assert waits == [50]
+        assert await browser_page.locator('canvas[data-bookwalker-capture-run]').count() == 0
+        if transition != "counter_during_recheck":
+            # UNKNOWN must also escape the optional native-capture boundary;
+            # Core must not receive None and save an old union crop instead.
+            waits.clear()
+            with pytest.raises(bookwalker_adapter_module.UnknownPageStateError):
+                await adapter.capture_page(browser_page)
+            assert waits == [50]
+            assert adapter._capture_debug["bookwalker_capture"]["failure_reason"] is not None
+        return
+    targets = await adapter.get_capture_targets(browser_page)
     assert len(targets) == 1
     assert await targets[0].evaluate(
         "element => ({width: element.width, height: element.height})"
-    ) == {"width": 600, "height": 1000}
+    ) == {"width": 1478 if transition == "spread" else 695, "height": 983}
+    assert waits == ([50] if transition == "delayed_redraw" else [])
+    debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_capture"]["cover_geometry"]
+    assert debug["reason"] == "current cover frame"
+    assert debug["selected_count"] == (2 if transition == "spread" else 1)
+    if transition != "clean":
+        assert debug["recorded_count"] > debug["selected_count"]  # History is retained, not erased.
+    if transition == "white_border":
+        assert await targets[0].evaluate("c => [...c.getContext('2d').getImageData(0,0,1,1).data]") == [255,255,255,255]
+    # Exercise native selection too: a single fresh cover no longer takes the
+    # union fallback just because a stale body draw is still in the ledger.
+    if transition in {"clear", "reset", "white_border"}:
+        captures = await adapter.capture_page(browser_page)
+        assert captures is not None and len(captures) == 1
+        assert Image.open(io.BytesIO(captures[0].data)).size == (695, 983)
+        assert adapter._capture_debug["bookwalker_capture"]["native_selection"]["box_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "mode", ["fill_background", "clear_background", "reader_failure", "failed_native", "truncated", "canvas_eviction",
+             "recorder_failure", "state_changes"],
+)
+async def test_bookwalker_cover_renderer_diagnostics_record_execution_without_changing_capture(
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_DIAGNOSTICS_DIR", str(tmp_path))
+    adapter = BookWalkerAdapter()
+    await adapter.configure_run(browser_page, "direct")
+    await browser_page.evaluate(bookwalker_adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.set_content(
+        '<span id="pageSliderCounter">347/355</span><div id="renderer">'
+        '<div class="currentScreen"><canvas></canvas></div></div>'
+    )
+    await browser_page.evaluate("""mode => {
+      const c=document.querySelector('#renderer canvas');c.width=1904;c.height=985;
+      const ctx=c.getContext('2d');
+      const old=document.createElement('canvas');old.width=739;old.height=983;
+      old.getContext('2d').fillRect(0,0,739,983);
+      const cover=document.createElement('canvas');cover.width=695;cover.height=983;
+      cover.getContext('2d').fillStyle='rgb(20,40,60)';
+      cover.getContext('2d').fillRect(0,0,695,983);
+      ctx.drawImage(old,952,0);
+      document.querySelector('#pageSliderCounter').textContent='1/355';
+      if(mode!=='fill_background')ctx.clearRect(0,0,1904,985);
+      if(mode==='state_changes') {
+        ctx.save();ctx.translate(3,0);ctx.globalAlpha=0.5;
+        ctx.globalCompositeOperation='copy';ctx.filter='blur(1px)';
+      }
+      ctx.fillStyle='white';ctx.fillRect(0,0,1904,985);
+      if(mode==='state_changes')ctx.restore();
+      for(let i=0;i<3;i++)ctx.drawImage(cover,605,0);
+      if(mode==='recorder_failure') {
+        Object.defineProperty(ctx,'fillStyle',{get(){throw new Error('synthetic recorder failure');}});
+        ctx.drawImage(cover,605,0);
+      }
+      if(mode==='failed_native') {
+        try { ctx.drawImage(document.createElement('div'),0,0,695,983); } catch(error) {}
+      }
+      if(mode==='truncated') for(let i=0;i<160;i++)ctx.fillRect(0,984,1,1);
+      if(mode==='reader_failure') window.__bookwalkerCoverRendererDiagnostics=()=>{throw new Error('synthetic');};
+      if(mode==='canvas_eviction') for(let i=0;i<5;i++) {
+        const extra=document.createElement('canvas');extra.width=20;extra.height=20;
+        document.querySelector('#renderer').appendChild(extra);
+        extra.getContext('2d').fillRect(0,0,20,20);
+      }
+    }""", mode)
+    if mode == "canvas_eviction":
+        result = await browser_page.locator('#renderer .currentScreen canvas').evaluate(
+            "c => window.__bookwalkerCoverRendererDiagnostics(c)"
+        )
+        assert result["available"] is False
+        assert result["truncated"] is True and result["evicted_canvases"] > 0
+        return
+    captures = await adapter.capture_page(browser_page)
+    if mode in {"fill_background", "failed_native"}:
+        # A failed extra native call can affect the existing optional selection;
+        # diagnostics must keep that behavior rather than grant capture authority.
+        if captures is None:
+            targets = await adapter.get_capture_targets(browser_page)
+            assert await targets[0].evaluate('c => [c.width,c.height]') == (
+                [1086,983] if mode == "fill_background" else [1300,983]
+            )
+            await adapter.cleanup_capture_targets(browser_page)
+    else:
+        assert captures is not None and len(captures) == 1
+        assert Image.open(io.BytesIO(captures[0].data)).size == (695,983)
+    debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_capture"]
+    ledger = debug["cover_geometry"]["renderer_operations"]
+    if mode == "reader_failure":
+        assert ledger["available"] is False
+        assert debug["cover_geometry"]["renderer_operations_refresh_failed"] is True
+        return
+    assert ledger["available"] is True
+    assert ledger["stopped"] is True
+    assert len(ledger["events"]) <= ledger["event_limit"] == 64
+    if mode == "recorder_failure":
+        assert ledger["truncated"] is True and ledger["recording_failures"] > 0
+    elif mode == "truncated":
+        assert ledger["truncated"] is True and ledger["evicted_events"] > 0
+    else:
+        assert ledger["truncated"] is False
+        events = ledger["events"]
+        assert any(e["operation"] == "canvas_dimension_reset" and e["native_returned"] for e in events)
+        prior = next(e for e in events if e["operation"] == "drawImage")
+        assert prior["counter_before"] == "347/355" and prior["native_returned"] is True
+        background = next(e for e in events if e["operation"] == "fillRect")
+        assert background["native_returned"] is True
+        assert background["fill_style"] == "#ffffff"
+        assert background["arguments"] == [0,0,1904,985]
+        assert background["arguments_primitive_finite"] is True
+        assert background["counter_before"] == "1/355"
+        assert background["context_safety_before"]["knownNoClip"] is True
+        assert background["content_version_after"] > background["content_version_before"]
+        assert background["global_alpha"] == (0.5 if mode == "state_changes" else 1)
+        assert background["composite"] == ("copy" if mode == "state_changes" else "source-over")
+        assert background["filter"] == ("blur(1px)" if mode == "state_changes" else "none")
+        assert background["transform_before"]["e"] == (3 if mode == "state_changes" else 0)
+        if mode == "failed_native":
+            assert any(e["operation"] == "drawImage" and not e["native_returned"] for e in events)
+    count = ledger["observed_count"]
+    await browser_page.locator('#renderer .currentScreen canvas').evaluate(
+        "c => c.getContext('2d').fillRect(0,0,1,1)"
+    )
+    stopped = await browser_page.locator('#renderer .currentScreen canvas').evaluate(
+        "c => window.__bookwalkerCoverRendererDiagnostics(c)"
+    )
+    assert stopped["observed_count"] == count
+    assert adapter._diagnostics_path is not None
+    rows = [json.loads(line) for line in adapter._diagnostics_path.read_text().splitlines()]
+    assert rows[-1]["cover_geometry"]["renderer_operations"] == ledger
+    if mode == "fill_background":
+        assert rows[-1]["returned_path"] == "rendered_canvas"
+        assert rows[-1]["cover_geometry"]["collection_phase"] == "rendered_fallback_complete"
 
 
 async def test_bookwalker_crops_cover_from_pixels_when_geometry_is_missing(
