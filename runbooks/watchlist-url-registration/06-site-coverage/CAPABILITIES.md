@@ -34,6 +34,11 @@ input stays blocked with no human override. Proof/URLs/identity/age are rechecke
 purely in readiness/preview/save; YAML stores only the canonical seed URL and the
 preview labels original input vs saved URL. Native Qt and tests use synthetic
 data; they are not additional live certification of other products.
+The final Page-lifetime guard was also live checked at 2026-11-03 07:43 JST on
+the same BookWalker317089, ComicFUZ1970, Younganimal7103c2c1e9f08 and Piccoma28600
+works. Four exact work/listing GETs returned titles and accepted pure validation;
+Piccoma again converted to1910027 without opening it. Dedicated Pages were closed.
+Evidence: `stage06-final-live.json`. No other work/account states are certified.
 
 All eleven canonical forms are covered by strict offline parser tests. Live
 certification is bounded to the explicit works above, not every Work/account or

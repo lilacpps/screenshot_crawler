@@ -130,6 +130,16 @@ both normal and error cleanup. Existing callers close their own Page; they do no
 reuse it. No shared context/browser route is installed or removed. Lifecycle
 regression covers normal/unavailable/rejected/runtime-error paths, 0/20ms timers,
 and immediate/100ms delayed cleanup. No actual site POST is used by this test.
+Final guarded observers were live rechecked at 2026-11-03 07:43 JST on the same
+four verified works (BookWalker/ComicFUZ/Younganimal/Piccoma listing conversion):
+all returned titles and accepted pure resolution validation. Four exact document
+GETs only; dedicated Pages closed, no reader/resources or persisted-data action.
+Stage06 final verification covers6,660 unique test nodes via completed baseline,
+isolated retries and final-source continuation; skip0, no missing node. Two
+existing async fixture teardown timeouts are recorded separately, so this is not
+a clean monolithic full run. Final-source affected469 and independent lifecycle16
+passed. Exact snapshots/manifests, overlap accounting, live/GUI limits and all
+checkpoint commits are recorded in runbooks/watchlist-url-registration/PROGRESS.md.
 
 ## URL registration final preview and save (Stage 05, 2026-11-03)
 

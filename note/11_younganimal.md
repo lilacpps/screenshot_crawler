@@ -14,6 +14,8 @@ Complete-list preview capability is unchanged (see the site behavior below).
 The registration Page is dedicated and its restrictive route remains through
 caller cleanup until Page close, including error/delayed-script paths. It is
 never reused for reading or Discovery; shared browser/context routing is untouched.
+Final Page-lifetime guard live recheck on the same series7103c2c1e9f08 passed at
+2026-11-03 07:43 JST: title and pure validation accepted; one document GET only.
 
 # 11. Younganimal current implementation
 

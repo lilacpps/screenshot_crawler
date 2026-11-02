@@ -1,9 +1,9 @@
 # Watchlist URL一括登録 — 実装Runbook
 
-> Status: Stage 01–05 COMPLETE（2026-11-03）。関連テスト・独立レビューPASS。Full suiteは既存のtiming failure 3件あり（詳細はPROGRESS）。
+> Status: Stage 01-06 COMPLETE (2026-11-03). Partitioned coverage: 6,660 unique nodes, zero skips. Two async teardown timeouts and final-source validation scope are documented in PROGRESS. Stage 07 not started.
 > 対象: Windows PySide6 GUI、Watchlist、read-only URL解析、既存WorkEditor。Phase 00から順番に実施する。
 > Authority: AGENTS.md → docs/SPEC.md / docs/ARCHITECTURE.md → docs/DISCOVERY_AND_BATCH.md / docs/BOUNDED_DISCOVERY.md → docs/TEST_STRATEGY.md → docs/DECISIONS.md → code/tests。Runbookは既存契約を上書きしない。
-> Stage 06は2026-11-03の追加依頼により開始。Stage 07へは進まない。採用されたユーザー判断は [DECISIONS.md](DECISIONS.md)、検証結果と制限は [PROGRESS.md](PROGRESS.md)。
+> Stage 06 completed under the 2026-11-03 request. Stop before Stage 07. Adopted decisions: [DECISIONS.md](DECISIONS.md); evidence and limits: [PROGRESS.md](PROGRESS.md).
 
 ## Goal / ユーザー要求
 

@@ -1,6 +1,6 @@
 # Stage 06 — サイト別のURL変換拡張と検証
 
-> Status: IN PROGRESS（2026-11-03追加依頼）。Stage 05のpilot vertical sliceを壊さず、サイト単位で進める。Stage 07は対象外。
+> Status: COMPLETE (2026-11-03). Only proved URL conversions/metadata are enabled. All eleven site boundaries: CAPABILITIES.md. Results: ../PROGRESS.md. Stage 07 not started.
 
 ## Execution contract (2026-11-03)
 

@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01–05 COMPLETE / Stage 06 IN PROGRESS（2026-11-03追加依頼）。Full suiteはall-greenではない（既存timing failure 3件、下記）。Stage 07は未着手。
+> Status: Stage 01-06 COMPLETE (2026-11-03). Final coverage: 6,660 unique nodes / zero skips. Two broad attempts timed out in async teardown; completed partitions and final guard validation are distinguished below. Stage 07 not started.
 > Stage 01–05に続きStage 06を承認済み。Stage 07は対象外。
 > Runbook: [README.md](README.md)
 
@@ -266,10 +266,10 @@
   the async document context catches PlaywrightError raised inside the body.
 - Notes core + five affected sites and docs/GUI_README, DISCOVERY_AND_BATCH
   synchronized. Capability evidence/unsupported boundaries are recorded in
-  [Stage 06 matrix](06-site-coverage/CAPABILITIES.md). Stage 06 is still in progress;
+  [Stage 06 matrix](06-site-coverage/CAPABILITIES.md). At the 06A checkpoint Stage 06 was still in progress;
   work/listing→seed needs a minimal bounded proof/preview/save contract (06B).
 
-## Original Stage 06 / 07 handoff (Stage 06 now active)
+## Original Stage 06 / 07 handoff (historical; Stage 06 completed below)
 
 - Stage 06: add site-specific URL forms/metadata only after non-consuming evidence;
   six sites still have no automatic title observation. Percent-escaped URLs remain
@@ -336,7 +336,7 @@
   cleanup (PID was not found); shared CDP/user GUI was never targeted.
 - Full collection: 6,644 nodeids. The unchanged ComicFUZ browser file rerun alone
   passed 69/69, zero skipped, 175.04s, normal teardown/exit0. The complementary
-  default suite excluding only that exact file is running (expected6,575).
+  default suite excluding only that exact file collected6,575; its later teardown timeout and continuation are recorded below.
   An isolated reporting-only plugin records collection/start/report/finish; it
   changes no fixture, result or selection. Final union and full outcomes pending.
 
@@ -361,8 +361,79 @@
   lifecycle16: all passed, zero skipped; BLOCKER resolved / gate PASS.
   The 16 cases cover 0/20ms timer, immediate/100ms delayed close, and all four
   success/error categories. Core and all four affected site notes synchronized.
-- The ongoing broad full run is the frozen a87e16b source/test baseline; it is
+- The broad full run used the frozen a87e16b source/test baseline; it is
   intentionally not mutated during execution. Final guard and this new test
   file are verified separately by the full affected suite above. Final reporting
   must distinguish baseline full results from post-fix validation, and must not
   claim the entire broad suite ran the final guard. Stage07 remains untouched.
+
+## Stage 06 final acceptance — COMPLETE, 2026-11-03 JST
+
+- Feature checkpoints: `0943c76` (06A title observations/Zeblack conversion),
+  `a87e16b` (06B Piccoma proved work-listing conversion), `7f64880` (Page-lifetime
+  observation restriction). Final documentation checkpoint follows this record.
+  Feature branch retained; no main merge/push or operational data modification.
+- Added capabilities are precisely the [11-site matrix](06-site-coverage/CAPABILITIES.md):
+  Zeblack numeric viewer→same-title list; four title observers (BookWalker,
+  ComicFUZ, Younganimal, Piccoma); Piccoma product/episodes→proved first free DOM
+  seed. Kadocomi's prior pilot remains. Unsupported forms are not rescued by
+  human confirmation. Unknown metadata on safe canonical URLs retains explicit
+  human confirmation; cross-site Work membership never auto-merges.
+- Final-source live recheck 2026-11-03 07:43 JST: same four previously observed
+  Works, four exact work/listing GETs, titles and pure validation accepted.
+  Piccoma again proved432 same-product rows and selected1910027. Dedicated Pages
+  closed; no reader, resource, Discovery, Capture, Catalog/Watchlist/ZIP/history
+  action. Evidence `.tmp/watchlist-registration/stage06-final-live.json`.
+- Broad verification was not a clean monolithic run. Initial ComicFUZ teardown
+  timed out; the next broad run then passed1,980 calls but timed out during
+  unchanged Younganimal test_episode_429's async fixture finalizer. Its body
+  passed in0.08s; incomplete teardown was NOT counted as success. Final-source
+  isolated rerun of that exact case passed normally:1 passed, zero skipped,
+  exit0,1.84s. ComicFUZ's separate69-case run also finished normally (above).
+  No fixture, timeout expectation, guard or assertion was weakened to hide this.
+- Completed baseline subset:1,979 nodes with passing call AND teardown reports.
+  Final source continuation selected all remaining nodes plus all469 affected
+  cases using an explicit pytest @argsfile. Result: **4,702 passed, zero skipped,
+  exit0,632.57s**, with6,616 existing dependency deprecation warnings.
+  All469 final affected cases are included in this completed continuation,
+  in addition to the earlier independent469-case rerun and Reviewer lifecycle16.
+- Machine audit:1,979 baseline ∪69 ComicFUZ ∪1 isolated Younganimal ∪4,702 final
+  continuation = **6,660 unique final collection nodes**, missing0/skips0,
+  all with passing call+teardown witnesses.91 baseline cases were revalidated in
+  the final continuation;1,888 baseline-only cases retain the frozen-source
+  evidence. These counts are not added without accounting for overlap.
+  The two timeout attempts remain explicitly unsuccessful executions.
+  Independent Reviewer inspected the final audit/manifests/live/docs and passed
+  the final evidence gate with no BLOCKER before the documentation checkpoint.
+- Final source/test manifest353 files matches the current tree. Baseline→final
+  differs only in registration/observation.py and the new lifecycle test file;
+  all affected observers/GUI/save tests ran on final source. The entire6,660
+  suite was NOT rerun in one invocation after the guard fix. Final collection
+  added exactly16 lifecycle nodes and removed none. Snapshot YAML is git-archived
+  tracked default data (newline-normalized equality checked), never operational
+  YAML/Catalog/ZIP. Reporting-only plugin does not change test fixtures/results.
+- Audit artifacts: `.tmp/watchlist-registration/stage06-final-audit.json`,
+  `stage06-partition-plan.json`, baseline/final manifest JSON, collection and
+  report JSONL, `stage06-full*.log`, `stage06-final-resume.log`,
+  `stage06-guard-final-affected.log`. Ruff src/tests PASS; diff check PASS.
+- Independent Reviewer final implementation/docs/native-GUI gate PASS, then
+  original lifecycle race reproduced and fixed; independent16-case rerun PASS.
+  No unresolved Stage06 BLOCKING finding remains. Windows Qt980x800/1200x940,
+  candidate form/checkbox and actual-YAML preview are verified with synthetic
+  stores; no visual breakage or disabled required control was observed.
+- Major source files: discovery/base.py; gui/url_registration.py;
+  registration/{models,resolver,observation,draft,service}.py;
+  site_adapters/{bookwalker,comicfuz,piccoma,younganimal,zeblack}/discovery.py.
+  Tests: unit/test_registration_{resolver,conversion}.py,
+  unit/test_gui_url_registration.py and integration/test_registration_
+  {metadata,conversion,page_lifecycle}_browser.py. Updated docs:
+  DISCOVERY_AND_BATCH,GUI_README and this runbook's README/DECISIONS/PROGRESS,
+  06 README/CAPABILITIES/PROOF_CONTRACT. Updated notes:00_core,01_bookwalker,
+  06_zeblack,09_piccoma,11_younganimal,13_comicfuz.
+- Limits/handoff: live evidence covers one Work per enabled observation site,
+  not every Work/login/expired campaign/account state. Other six title observers
+  and unproved product/share/episode transformations remain unsupported, per
+  matrix; escaped URLs stay blocked. Piccoma conversion proof expires after300s.
+  Stage07 is **not started**: complete-list detail remains magapoke/jumpplus/
+  zeblack/comicdays only. Remaining seven sites' full-list proof/scope editor,
+  and additional non-consuming URL conversion research, remain future work.

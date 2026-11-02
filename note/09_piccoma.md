@@ -36,6 +36,9 @@ existing Discovery keeps latest-first output and existing scopes after sharing
 only its row extraction/validation helpers.
 The observation restriction remains on its dedicated Page through final close,
 including delayed-script/error cleanup; no unroute-to-close request window remains.
+Final Page-lifetime guard live recheck on the same product28600 passed at
+2026-11-03 07:43 JST: 432 rows, free DOM1 seed1910027, title and pure validation
+accepted. One listing GET, dedicated Page closed; seed viewer was never opened.
 
 # Piccoma current implementation snapshot
 

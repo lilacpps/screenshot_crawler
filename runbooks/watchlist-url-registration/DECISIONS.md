@@ -1,6 +1,6 @@
 # Watchlist URL一括登録 — Stage 00後の採用決定（2026-11-02）
 
-> Status: ADOPTED DESIGN / Stage 01–05 IMPLEMENTED（2026-11-03）。追加依頼でStage 06進行中、Stage 07未着手。Stage 00の静的監査記録は [RESEARCH.md](00-contract/RESEARCH.md)。上位authorityが優先。実行証拠は [PROGRESS.md](PROGRESS.md)。
+> Status: ADOPTED DESIGN / Stage 01-06 IMPLEMENTED (2026-11-03). Stage 07 not started. Higher authorities prevail. Stage 00 audit: [RESEARCH.md](00-contract/RESEARCH.md); execution evidence and limits: [PROGRESS.md](PROGRESS.md).
 
 ## Decision A — 正規URLが安全なら、ID/title未取得でも手動登録可能
 
