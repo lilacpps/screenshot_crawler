@@ -1,7 +1,7 @@
 # Watchlist URL Registration — Progress
 
 > Status: Stage 00 COMPLETE（2026-11-02、静的監査のみ）/ production NOT IMPLEMENTED。
-> Stage 01以降は未着手。今回の作業はStage 00で停止する。
+> Stage 01以降は未着手。ユーザー判断によりStage 01–07の計画を更新済み（production未実装）。
 > Runbook: [README.md](README.md)
 
 | Stage | Status | Exit evidence / next action |
@@ -12,7 +12,8 @@
 | 03 Batch registration GUI | NOT STARTED | URL貼付、解析進捗、修正、draft保持、GUI tests |
 | 04 Scope editor draft integration | NOT STARTED | work-scoped 編集結果を未保存で返す、stale/overlap tests |
 | 05 Atomic save and E2E | NOT STARTED | CAS/lock、selected-set atomic、Full confirmation、E2E |
-| 06 Site URL conversion coverage | NOT STARTED | サイト単位に検証・拡張、未対応明示、tests |
+| 06 Site URL/metadata coverage | NOT STARTED | サイト別URL変換と非消費metadata拡張 |
+| 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
 
@@ -32,3 +33,10 @@
 - 各Stage終了時に、証拠（読み取った関数/関連テスト/fixture/現行site挙動）、判定した仮定、未解決・BLOCKER、次Stageに進んでよい根拠を追記。
 - 旧Stageの結果を未検証で COMPLETE にしない。サイト実観測なしなら「未検証」と記す。
 - 通常運用のwatchlist.yaml、catalog.sqlite、Books/ZIP、Cookie、quotaデータは変更しない。検証は隔離された一時データのみ。
+
+## 2026-11-02 Stage 00後の確定判断
+
+- [DECISIONS.md](DECISIONS.md): 現行Discovery用の安全な正規URLが確定するなら、作品ID/title未取得でもunknownのままlabel/Work/keyを手動確認して登録可能。URL不正・起点不明は手動確認でもブロック。保存直前の所有競合・Catalog/Watchlist照合は必須。
+- 初期のread-only完全一覧preview対応はmagapoke/jumpplus/zeblack/comicdaysの4サイトだけ。7サイトの詳細設定が必要なWorkは理由付きblockedとし、後続Stage 07でサイト単位に拡張。
+- Stage 01の対象は11サイトの厳格な正規URL判定、Kadocomi episode→work pilot、identity/title unknown状態の表現。手動確認と一括保存はStage 02–05。Stage 06はサイト別URL変換/metadata、Stage 07は完全一覧preview拡張。
+- Stage 00の監査時点記録を改変しない。今回の更新はRunbook文書のみで、コード・テスト・運用Watchlist/Catalog/ZIP/Chromeは変更していない。
