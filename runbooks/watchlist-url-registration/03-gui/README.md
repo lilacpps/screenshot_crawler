@@ -1,6 +1,6 @@
 # Stage 03 — GUI一括URL入力・解析結果編集
 
-> Status: NOT STARTED。Stage 02のdraft APIを利用。原則このStageでは永続保存しない。
+> Status: COMPLETE。検証は ../PROGRESS.md のStage 03 checkpoint。永続保存なし。
 
 ## Objective
 

@@ -338,3 +338,20 @@ Reproduce the synthetic captures with:
   --sample-output .tmp/glm-phase4-content-inputs `
   --screenshots .tmp/glm-phase4-content-shots
 ```
+
+## URLから一括登録（Stage 03：下書きGUI）
+
+ツールバーの「URLから登録」で専用画面を開き、URLを改行で貼り付けて解析します。
+1回100行、1URL 4096文字、全体256KiBまで。解析はbackgroundで順次実行し、
+作品名の取得は対応する安全な経路だけに限定します。CDPが使えなくても、正規URLが
+確定していれば手動確認候補を残します。解析自体で登録・Discovery・Captureはしません。
+行を選んで作品名、読み、work_key、key、所属Workを編集します。「読みからID候補」は
+機械提案です。「作品名・所属・IDを確認」で現在の編集を明示確定してください。
+元URLを修正した場合は再解析が必要です。不正URLを確認操作で通すことはできません。
+所属コンボで他の下書きWorkや既存Workを選ぶときも、異サイト作品の同一性は利用者が
+判断します。既存WorkのIDは編集できません。登録対象チェックはWork全体に反映され、
+メイン画面の実行チェックとは独立しています。未選択の候補や行切替前の手入力も保持します。
+選択行の再解析は他の候補を消しません。画面を閉じるときは破棄/取消を確認します。
+Stage 03時点では詳細編集・保存前プレビュー・一括保存は無効です。Stage 04/05で接続します。
+完全一覧previewはmagapoke/jumpplus/zeblack/comicdaysだけが対応し、他サイトを含む
+複数keyの詳細設定は未対応の理由を表示します。

@@ -220,6 +220,7 @@ class MainWindow(QMainWindow):
         self._pending_editor_full: str | None = None
         self._pending_work_full: tuple | None = None
         self._work_editor = None
+        self._registration_editor = None
         self._session_job_ids: list[str] = []
         self._monitor_followed_active_id: str | None = None
         self._initial_expand_done = False
@@ -361,6 +362,9 @@ class MainWindow(QMainWindow):
         self.work_editor_button = QPushButton("新規登録・範囲・置換")
         self.work_editor_button.clicked.connect(self._open_work_editor)
         toolbar.addWidget(self.work_editor_button)
+        self.url_registration_button = QPushButton("URLから登録")
+        self.url_registration_button.clicked.connect(self._open_url_registration)
+        toolbar.addWidget(self.url_registration_button)
         self.expand_button = QPushButton("全展開")
         self.expand_button.clicked.connect(self.tree.expandAll)
         toolbar.addWidget(self.expand_button)
@@ -499,7 +503,13 @@ class MainWindow(QMainWindow):
     def _discovery_busy(self) -> bool:
         return self._discovery_save_worker is not None or self._discovery_refresh
 
+    def _registration_open(self) -> bool:
+        editor = getattr(self, "_registration_editor", None)
+        return editor is not None and editor.isVisible()
+
     def _discovery_block_reason(self) -> str:
+        if self._registration_open():
+            return "URL登録の編集を完了または閉じてください"
         if self._closed or self._discovery_busy():
             return "Watchlistを保存・再読込中です"
         if self._loading or self._inventory_stale:
@@ -544,6 +554,11 @@ class MainWindow(QMainWindow):
             control.setEnabled(not busy and not self._loading)
         self.watchlist_button.setEnabled(not busy)
         self.work_editor_button.setEnabled(not busy)
+        self.url_registration_button.setEnabled(not busy)
+        registration = getattr(self, "_registration_editor", None)
+        if registration is not None:
+            registration.set_active_job(active or busy or bool(controller and (
+                getattr(controller, "orphaned_live_worker", False) or getattr(controller, "supervision_error", False))))
         for editor in (getattr(self, "_watchlist_editor", None), self._work_editor):
             if editor is not None and not getattr(editor, "_closed", False):
                 editor.set_active_job(active or busy)
@@ -632,6 +647,13 @@ class MainWindow(QMainWindow):
         self._refresh_discovery_controls()
 
     def _invalidate_watchlist_editor_for_path_change(self) -> bool:
+        registration = getattr(self, "_registration_editor", None)
+        if registration is not None:
+            if registration.task is not None or not registration._discard():
+                return False
+            registration.dirty = False
+            registration.close()
+            self._registration_editor = None
         if self._discovery_busy():
             self.statusBar().showMessage("Watchlistの保存・再読込完了を待ってください")
             return False
@@ -985,7 +1007,7 @@ class MainWindow(QMainWindow):
         if self.model.snapshot is not None:
             self._refresh_site_resource_controls()
         enabled = bool(checked) and self.model.snapshot is not None and not self._loading
-        if self._discovery_busy():
+        if self._discovery_busy() or self._registration_open():
             enabled = False
         if self._job_controller is not None and getattr(self._job_controller, "orphaned_live_worker", False):
             enabled = False
@@ -1005,7 +1027,7 @@ class MainWindow(QMainWindow):
         The GUI signs only the already loaded selection and execution inputs;
         the worker performs the latest Catalog planning under its job lock.
         """
-        if self._discovery_busy():
+        if self._discovery_busy() or self._registration_open():
             self.error_label.setText("Watchlistの保存・再読込完了を待ってから実行してください")
             return
         snapshot = self.model.snapshot
@@ -1233,7 +1255,7 @@ class MainWindow(QMainWindow):
     def _open_watchlist_editor(self) -> None:
         """Open an independent editor page without changing Inventory checks."""
 
-        if self._discovery_busy():
+        if self._discovery_busy() or self._registration_open():
             return
 
         if getattr(self, "_watchlist_editor", None) is None or self._watchlist_editor._closed:
@@ -1261,7 +1283,7 @@ class MainWindow(QMainWindow):
         self._watchlist_editor.activateWindow()
 
     def _open_work_editor(self) -> None:
-        if self._discovery_busy():
+        if self._discovery_busy() or self._registration_open():
             return
         from .work_editor import WorkEditorDialog
 
@@ -1274,6 +1296,24 @@ class MainWindow(QMainWindow):
         self._work_editor.show()
         self._work_editor.raise_()
         self._work_editor.activateWindow()
+
+    def _open_url_registration(self) -> None:
+        editor = self._registration_editor
+        if editor is not None and editor.isVisible():
+            editor.raise_()
+            editor.activateWindow()
+            return
+        reason = self._discovery_block_reason()
+        if reason:
+            self.error_label.setText(reason)
+            return
+        from .url_registration import UrlRegistrationDialog
+        if editor is not None:
+            editor.deleteLater()
+        self._registration_editor = UrlRegistrationDialog(
+            self.watchlist_path, self.catalog_path, self.runtime_path,
+            snapshot=self.model.snapshot, parent=self)
+        self._registration_editor.show()
 
     def _run_work_full(self, payload) -> None:
         if self._job_controller is not None and self._job_controller.active_job_id is not None:
@@ -1296,6 +1336,10 @@ class MainWindow(QMainWindow):
         if self._job_controller is None:
             return
         state = self._job_controller.poll()
+        if self._registration_editor is not None:
+            self._registration_editor.set_active_job(self._job_controller.active_job_id is not None
+                or self._discovery_busy() or getattr(self._job_controller, "orphaned_live_worker", False)
+                or getattr(self._job_controller, "supervision_error", False))
         self._refresh_emergency_controls()
         if self._work_editor is not None:
             self._work_editor.set_active_job(self._job_controller.active_job_id is not None or self._discovery_busy())
@@ -1329,7 +1373,7 @@ class MainWindow(QMainWindow):
             if state != "succeeded":
                 self.statusBar().showMessage(f"ジョブ停止: {state}（自動再試行なし）")
                 return
-            if self._job_controller.active_job_id is None and not self._discovery_busy():
+            if self._job_controller.active_job_id is None and not self._discovery_busy() and not self._registration_open():
                 for queued_id in tuple(self._session_job_ids):
                     try:
                         if self._job_store is not None and self._job_store.get_job(queued_id)["state"] == "queued":
@@ -1366,6 +1410,12 @@ class MainWindow(QMainWindow):
         self.model._emit_check_updates()
 
     def closeEvent(self, event: Any) -> None:
+        registration = getattr(self, "_registration_editor", None)
+        if registration is not None:
+            if registration.task is not None or not registration._discard():
+                event.ignore()
+                return
+            registration.dirty = False
         if self._discovery_busy():
             self.statusBar().showMessage("Watchlistの保存・再読込完了を待ってから閉じてください")
             event.ignore()

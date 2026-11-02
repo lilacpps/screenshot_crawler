@@ -1,3 +1,20 @@
+## URL registration GUI (Stage 03, 2026-11-02)
+
+MainWindow opens an application-modal URL draft dialog without changing Inventory
+execution checks. Paths, other editors and job starts are guarded while open;
+active/unverified jobs disable registration. One sequential worker resolves up
+to 100 inputs, with 60s metadata and 10m batch limits. Optional metadata alone
+uses a dedicated CDP Page via the shared BrowserSession and closes only that Page.
+Pure URL parsing is browser-free; CDP errors preserve manual candidates.
+Rows show URL status, native identity/title evidence, group readiness and the
+source/canonical URLs. Form edits persist across rows and grouping, retry resets
+confirmation for its Work, and a generation ignores old callbacks. Work checkbox
+selection is atomic across its members. Close/reload uses Discard/Cancel.
+Stage 03 is no-write: detail/preview/save are visibly disabled. Native Windows
+Qt capture at 980x800 verified Japanese text and controls; offscreen captures
+had missing fonts and are not considered visual proof. GUI/adjacent regression
+coverage uses isolated files, with no operational data or live site operation.
+
 
 ## Registration candidate drafts (Stage 02)
 
@@ -35,8 +52,8 @@ ready registration. Unknown native work identity/title remain unknown.
 Kadocomi alone converts proven same-work episode URLs to work detail; optional
 detail metadata uses the caller's Page, refuses redirects, blocks subresources,
 and never calls Discovery/reader/resource/capture or writes persisted data.
-Registration candidate/naming APIs are implemented in Stage 02; GUI and
-persistence follow in Stages 03-05. No Catalog/schema, saved key or operational data changes. New resolver
+Registration candidate/naming APIs are implemented in Stage 02; the URL paste/edit GUI is implemented in Stage 03; detail and
+persistence follow in Stages 04-05. No Catalog/schema, saved key or operational data changes. New resolver
 Unit and artificial browser tests pass; resolver live behavior is unverified.
 
 ## Bounded non-consuming resolver preparation (2026-10-29)
