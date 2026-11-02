@@ -22,6 +22,7 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     clean_bookwalker_title,
     split_bookwalker_title,
@@ -353,6 +354,17 @@ def map_bookwalker_access_mode(
 
 class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate products from one explicit BookWalker series list."""
+
+    registration_hosts = ('bookwalker.jp', 'www.bookwalker.jp')
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_bookwalker_series_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, f"https://bookwalker.jp/series/{parts.series_id}/list/", f"bookwalker-series:{parts.series_id}")
 
     supports_bounded_discovery = True
 

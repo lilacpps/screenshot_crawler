@@ -1,3 +1,12 @@
+## Watchlist URL registration hook (Stage 01, 2026-11-02)
+
+Chapter-list entry; title identity. Label is not treated as observed site metadata.
+Strict new-entry URL validation is supplied by registration/resolver.py and the
+site-owned pure hook. Existing Discovery input, capture and access semantics
+are unchanged. Title is unknown unless independently observed; no identity is
+inferred from a label. Resolver live verification has not been performed.
+Complete-list preview capability is unchanged (see the site behavior below).
+
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
 ## Current implementation snapshot (updated 2026-10-29)

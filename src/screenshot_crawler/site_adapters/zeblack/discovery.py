@@ -23,6 +23,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.zeblack.adapter import (
     ZEBLACK_VIEWER_HOST,
     parse_zeblack_viewer_url,
@@ -218,6 +219,17 @@ class _ProtobufResponseObserver:
 
 class ZeblackDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate the complete Zeblack chapter list in canonical order."""
+
+    registration_hosts = ('zebrack-comic.shueisha.co.jp',)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_zeblack_chapter_list_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, parts.canonical_url, f"zeblack-title:{parts.title_id}")
 
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True

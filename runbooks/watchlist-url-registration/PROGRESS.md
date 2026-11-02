@@ -1,13 +1,13 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 00 COMPLETE（2026-11-02、静的監査のみ）/ production NOT IMPLEMENTED。
-> Stage 01以降は未着手。ユーザー判断によりStage 01–07の計画を更新済み（production未実装）。
+> Status: Stage 01 COMPLETE（2026-11-02）/ Stage 02 next。
+> Stage 01–05は連続実装を承認済み。Stage 06–07は対象外。
 > Runbook: [README.md](README.md)
 
 | Stage | Status | Exit evidence / next action |
 |---|---|---|
 | 00 Current contract audit | COMPLETE (static audit) | [設計・証拠](00-contract/RESEARCH.md): 11site URL/title/変換matrix、Resolver hook、Work draft/atomic save/Full境界、Kadocomi pilotとStage 01ファイル/testを確定。Liveは全site未検証 |
-| 01 URL resolver + pilot | NOT STARTED | 厳格なnormalization/parser + 1site converter + tests |
+| 01 URL resolver + pilot | COMPLETE | 168 new + 653 affected passed; independent review PASS |
 | 02 Registration draft + naming | NOT STARTED | ローマ字候補、同一性・重複、Work/grouping、pure tests |
 | 03 Batch registration GUI | NOT STARTED | URL貼付、解析進捗、修正、draft保持、GUI tests |
 | 04 Scope editor draft integration | NOT STARTED | work-scoped 編集結果を未保存で返す、stale/overlap tests |
@@ -40,3 +40,23 @@
 - 初期のread-only完全一覧preview対応はmagapoke/jumpplus/zeblack/comicdaysの4サイトだけ。7サイトの詳細設定が必要なWorkは理由付きblockedとし、後続Stage 07でサイト単位に拡張。
 - Stage 01の対象は11サイトの厳格な正規URL判定、Kadocomi episode→work pilot、identity/title unknown状態の表現。手動確認と一括保存はStage 02–05。Stage 06はサイト別URL変換/metadata、Stage 07は完全一覧preview拡張。
 - Stage 00の監査時点記録を改変しない。今回の更新はRunbook文書のみで、コード・テスト・運用Watchlist/Catalog/ZIP/Chromeは変更していない。
+
+## Stage 01 checkpoint — 2026-11-02 JST
+
+- Base: latest fetched origin/main `82e9f92`; feature/watchlist-url-registration.
+  User config/Watchlist/locks/log changes preserved, not used as test data.
+- Implemented immutable URL evidence, bounded pure resolver, all 11 site-owned
+  canonical entry hooks, Kadocomi same-work episode-to-detail conversion and
+  optional detail-only og:title observation. Native work identity stays unknown
+  for episode-only Comic DAYS/Jump+/Hanayume; title unknown unless observed.
+- All unsafe/unsupported URL forms stay blocked. Percent escapes are conservatively
+  unsupported. Kadocomi natural document response uses Playwright route.fetch
+  with max_redirects=0 to reject Location before Chromium follows it; all other
+  requests are blocked. No general HTTP client, reader or acquisition action.
+- Tests: 168 new Unit/artificial-browser passed; 653 affected Discovery/listing/
+  Kadocomi browser passed; zero skips. Ruff src/tests and diff check passed.
+  Independent Reviewer: PASS, zero blockers. Full/Research not run at this stage
+  (bounded change); Live resolver not verified. HTTP-200 authentication/content
+  ambiguity remains a metadata expansion concern for Stage 06, never save proof.
+- Docs and core/all 11 site notes synchronized. No CLI/GUI/schema or data mutation.
+  Next Stage 02 permitted by tests and review.

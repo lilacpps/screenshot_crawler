@@ -26,6 +26,17 @@ class DiscoveryAdapter(ABC):
     """Enumerate site-specific listing results without knowing Catalog."""
 
     supports_bounded_discovery: ClassVar[bool] = False
+    registration_hosts: ClassVar[tuple[str, ...]] = ()
+
+    def resolve_registration_url(self, url: str):
+        """Optional pure registration hook; existing Discovery remains unchanged."""
+        from screenshot_crawler.registration.models import UrlResolution
+        return UrlResolution(input_url=url, blockers=("未対応のURL形式です",))
+
+    async def observe_registration_metadata(self, page, resolution):
+        """Optional non-consuming metadata; never fall back to Discovery."""
+        return resolution
+
     supports_exclusion_only_scope: ClassVar[bool] = False
     # Exclusion discovery must process the exact complete listing that was
     # validated before Catalog writes. Adapters supporting that path must

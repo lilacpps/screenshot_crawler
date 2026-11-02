@@ -1,3 +1,12 @@
+## Watchlist URL registration hook (Stage 01, 2026-11-02)
+
+Series-list entry; series identity.
+Strict new-entry URL validation is supplied by registration/resolver.py and the
+site-owned pure hook. Existing Discovery input, capture and access semantics
+are unchanged. Title is unknown unless independently observed; no identity is
+inferred from a label. Resolver live verification has not been performed.
+Complete-list preview capability is unchanged (see the site behavior below).
+
 # 01. BookWalker 現行実装ノート
 
 このファイルはBookWalker Adapterの**現在の実装詳細と実サイト観測**をまとめる。BookWalker固有の実装・運用を変更した場合は、このnoteも同じ変更で更新する。

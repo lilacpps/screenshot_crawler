@@ -25,6 +25,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 ALLOWED_HOSTS = frozenset({"comic-days.com", "www.comic-days.com"})
@@ -384,6 +385,17 @@ async def fetch_comicdays_readable_product_page(
 
 class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
     """Yield a complete Atom listing classified by first-party access state."""
+
+    registration_hosts = ('comic-days.com', 'www.comic-days.com')
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_comicdays_episode_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, canonical_comicdays_episode_url(url), None)
 
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True

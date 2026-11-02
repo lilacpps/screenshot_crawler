@@ -1,3 +1,12 @@
+## Watchlist URL registration hook (Stage 01, 2026-11-02)
+
+Work entry and same-prefix episode-to-work conversion; work identity. Optional exact-detail og:title observation blocks redirect and subresources; never opens reader.
+Strict new-entry URL validation is supplied by registration/resolver.py and the
+site-owned pure hook. Existing Discovery input, capture and access semantics
+are unchanged. Title is unknown unless independently observed; no identity is
+inferred from a label. Resolver live verification has not been performed.
+Complete-list preview capability is unchanged (see the site behavior below).
+
 # 12. Kadocomi current implementation
 
 ## Shared Catalog v7 / automatic acquisition scope (2026-10-23)

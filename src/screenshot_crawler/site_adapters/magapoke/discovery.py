@@ -22,6 +22,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 MAGAPOKE_HOST = "pocket.shonenmagazine.com"
@@ -137,6 +138,17 @@ def magapoke_rental_grant_until(
 
 class MagapokeDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate every episode from one Magapoke episode URL."""
+
+    registration_hosts = ('pocket.shonenmagazine.com',)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_magapoke_episode_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, canonical_magapoke_episode_url(parts), f"magapoke-title:{parts.title_id}")
 
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True

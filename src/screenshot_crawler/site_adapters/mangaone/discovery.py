@@ -23,6 +23,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 LISTING_SELECTOR = "#chapterList"
@@ -114,6 +115,17 @@ def mangaone_title_from_page_title(raw_title: str | None) -> str | None:
 
 class MangaOneDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate Manga ONE chapters from the chapter listing."""
+
+    registration_hosts = ('manga-one.com',)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_mangaone_chapter_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, url, f"mangaone-work:{parts.work_id}")
 
     supports_bounded_discovery = True
 

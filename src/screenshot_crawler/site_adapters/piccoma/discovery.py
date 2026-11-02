@@ -26,6 +26,7 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 ALLOWED_HOSTS = frozenset({"piccoma.com", "www.piccoma.com"})
@@ -322,6 +323,17 @@ def _apply_scope(
 
 class PiccomaDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate a Piccoma product's full native episode list."""
+
+    registration_hosts = ('piccoma.com', 'www.piccoma.com')
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_piccoma_viewer_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, canonical_piccoma_viewer_url(url), f"piccoma-product:{parts.product_id}")
 
     supports_bounded_discovery = True
 

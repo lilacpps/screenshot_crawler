@@ -25,6 +25,7 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.hanayume.access import hanayume_access_profile
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
@@ -1437,6 +1438,17 @@ def _apply_discovery_scope(
 
 class HanayumeDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate a complete work listing through its observed range links."""
+
+    registration_hosts = ('hanayume.com', 'www.hanayume.com')
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_hanayume_episode_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, canonical_hanayume_episode_url(url), None)
 
     supports_bounded_discovery = True
 

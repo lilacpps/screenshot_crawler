@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import pairwise
 from urllib.parse import urljoin, urlsplit
@@ -27,6 +27,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.kadocomi.access import kadocomi_access_profile
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
@@ -693,6 +694,62 @@ def _canonical_work_title(raw_title: object) -> str:
 
 class KadocomiDiscoveryAdapter(DiscoveryAdapter):
     """Read and validate the exact currently public episode list before yielding."""
+
+    registration_hosts = ("comic-walker.com",)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        parts = parse_kadocomi_work_url(url) or parse_kadocomi_episode_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, f"https://comic-walker.com/detail/{parts.work_id}",
+                            f"kadocomi-work:{parts.work_id}")
+
+    async def observe_registration_metadata(self, page, resolution):
+        # Optional detail-only observation. Block every unproven request before
+        # dispatch, including redirected documents and all subresources.
+        violations = []
+        async def restrict(route):
+            request = route.request
+            if (request.is_navigation_request() and request.frame == page.main_frame
+                    and request.url == resolution.discovery_url
+                    and request.redirected_from is None):
+                # Chromium does not route every redirected request. Inspect the
+                # natural document response with redirects disabled, before the
+                # browser can follow its Location header.
+                response = await route.fetch(max_redirects=0, timeout=30_000)
+                if 300 <= response.status < 400:
+                    violations.append("redirect")
+                    await route.abort()
+                else:
+                    await route.fulfill(response=response)
+            else:
+                if request.is_navigation_request():
+                    violations.append(request.url)
+                await route.abort()
+        await page.route("**/*", restrict)
+        try:
+            response = await page.goto(resolution.discovery_url, wait_until="domcontentloaded",
+                                       timeout=30_000)
+            if violations or page.url != resolution.discovery_url:
+                return resolution.blocked("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually")
+            if response is None or not response.ok:
+                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+            titles = await page.locator('meta[property="og:title"]').evaluate_all(
+                "nodes => nodes.map(node => node.content)")
+            if len(titles) != 1:
+                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+            try:
+                title = _canonical_work_title(titles[0])
+            except DiscoveryIncompleteError:
+                return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+            return replace(resolution, title=title,
+                evidence=(*resolution.evidence, f"detail og:title: {page.url}; {now_jst().isoformat()}"))
+        except PlaywrightError:
+            if violations:
+                return resolution.blocked("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually")
+            return replace(resolution, warnings=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        finally:
+            await page.unroute("**/*", restrict)
 
     supports_bounded_discovery = True
     allow_inferred_display_positions = False

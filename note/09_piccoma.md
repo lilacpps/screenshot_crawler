@@ -1,3 +1,12 @@
+## Watchlist URL registration hook (Stage 01, 2026-11-02)
+
+Viewer-shaped entry; product identity. Registration never navigates the viewer.
+Strict new-entry URL validation is supplied by registration/resolver.py and the
+site-owned pure hook. Existing Discovery input, capture and access semantics
+are unchanged. Title is unknown unless independently observed; no identity is
+inferred from a label. Resolver live verification has not been performed.
+Complete-list preview capability is unchanged (see the site behavior below).
+
 # Piccoma current implementation snapshot
 
 ## Point-priced campaign episodes are paid (2026-10-25)

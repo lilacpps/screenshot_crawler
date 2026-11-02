@@ -30,6 +30,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 JST = timezone(timedelta(hours=9), name="JST")
@@ -263,6 +264,17 @@ class _StructuredStateObserver:
 
 class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate Jump+ episode rows safely in latest-first order."""
+
+    registration_hosts = ('shonenjumpplus.com', 'www.shonenjumpplus.com')
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_jumpplus_episode_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, canonical_jumpplus_episode_url(url), None)
 
     supports_bounded_discovery = True
     supports_exclusion_only_scope = True

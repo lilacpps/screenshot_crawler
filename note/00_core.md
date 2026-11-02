@@ -1,3 +1,17 @@
+## Watchlist URL registration (Stage 01, 2026-11-02)
+
+Read-only registration/resolver.py injects the existing Discovery registry;
+site-owned optional hooks accept the eleven current Discovery entry forms.
+Common strict HTTPS/authority/length/escape guards precede the existing parsers.
+Unsupported query/fragment/paths remain blocked. URL validity does not imply a
+ready registration. Unknown native work identity/title remain unknown.
+Kadocomi alone converts proven same-work episode URLs to work detail; optional
+detail metadata uses the caller's Page, refuses redirects, blocks subresources,
+and never calls Discovery/reader/resource/capture or writes persisted data.
+There is no CLI or GUI entry yet; registration persistence follows in Stages
+02-05. No Catalog/schema, saved key or operational data changes. New resolver
+Unit and artificial browser tests pass; resolver live behavior is unverified.
+
 ## Bounded non-consuming resolver preparation (2026-10-29)
 
 `SiteAdapter.configure_access_resource_resolution()` optionally receives the

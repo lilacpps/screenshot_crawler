@@ -27,6 +27,7 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.younganimal.access import younganimal_access_profile
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
@@ -1178,6 +1179,17 @@ def _apply_discovery_scope(
 
 class YounganimalDiscoveryAdapter(DiscoveryAdapter):
     """Buffer and validate every declared range before yielding any record."""
+
+    registration_hosts = ('younganimal.com',)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("",):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_younganimal_work_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, f"https://younganimal.com/series/{parts}", f"younganimal-series:{parts}")
 
     supports_bounded_discovery = True
 

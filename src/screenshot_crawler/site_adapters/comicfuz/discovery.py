@@ -25,6 +25,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 SITE_HOST = "comic-fuz.com"
@@ -120,6 +121,17 @@ def _flatten_chapters(page_props: Mapping[str, object]) -> list[tuple[str, str]]
 
 class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
     """Reconcile ComicFUZ's current public chapter list into Discovery records."""
+
+    registration_hosts = ('comic-fuz.com',)
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        from urllib.parse import urlsplit
+        if urlsplit(url).query not in ("", "position=thumbnail"):
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        parts = parse_comicfuz_work_url(url)
+        if parts is None:
+            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
+        return resolved_url(url, f"https://comic-fuz.com/manga/{parts.work_id}", f"comicfuz-work:{parts.work_id}")
 
     supports_bounded_discovery = True
 

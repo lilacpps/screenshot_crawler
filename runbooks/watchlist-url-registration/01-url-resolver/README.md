@@ -1,6 +1,6 @@
 # Stage 01 — Read-only URL Resolverとpilot site
 
-> Status: NOT STARTED。Stage 00のmatrix/契約とCheckpoint承認を開始条件とする。
+> Status: COMPLETE。実装・検証記録は ../PROGRESS.md のStage 01 checkpoint。
 
 ## Objective
 
