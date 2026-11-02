@@ -220,3 +220,13 @@ Stage 01 tests: 新規Unit→全11siteの`tests/unit/test_<site>_discovery.py`�
 実施: ローカルfile/関数/test期待値の読取、git branch/HEAD/status、文書リンク・差分の確認。辞書ライブラリの公式公開文書だけWeb参照（漫画サイトへはアクセスなし）。
 
 未実行: pytest（Unit/Integration/full全て）、ruff、Research/Probe、Live。production/test codeの変更がない文書監査のため。実行test 0、test skip 0（skipを含むrun自体なし）。実運用ファイル・Chrome・Catalog・ZIPの操作なし。
+
+## 11. Stage 00後の確定事項（ユーザー判断 / 2026-11-02）
+
+この追補は監査当時の観測・判断を改変せず、後から確定した仕様を記録するもの。後続Stageの実装契約は [DECISIONS.md](../DECISIONS.md) および各Stage READMEが優先し、上位authorityと競合する場合は上位authorityに従う。
+
+- **作品IDが自動取得できなくても手動登録可能**: 公式hostと厳格parserで現行Discovery用の安全な正規URLが確定できる場合、native work identityやtitleが不明でもunknownを保った手動登録候補とする。ユーザーがlabel・新規/既存Work・key/work_keyを明示確認し、保存直前のWatchlist/Catalog所有・競合照合に通れば登録可。自動ID証拠がないことを偽装せず、URL未対応/危険・既存Sourceの所有不明を手動確認で救済しない。
+- **URL statusと登録stateの分離**: valid/converted/blockedはURLの適格性、identity/title verified/unknownは根拠、needs_manual_confirmation/ready/needs_scope/blockedは後続の操作・保存状態。Stage 01は前2者のDTOまで実装し、人の確認UIと保存はStage 02–05へ委ねる。
+- **最初は4サイトで詳細編集完成**: read-only完全一覧preview対応はmagapoke/jumpplus/zeblack/comicdays。未対応7siteの複数key Workは保留し、後続Stage 07で段階拡張。Stage 06はURL変換と非消費作品metadataに限定。通常FullのCatalog更新でread-only previewを代用しない。
+
+この追補は設計判断であり、Stage 01以降のproduction実装・Live検証が済んだことを意味しない。
