@@ -202,6 +202,41 @@
 - Research/probe suite was not separately expanded (no PoC changes). New site
   URL conversion and seven-site complete-list capability remain out of scope.
 
+## Stage 05 usability follow-up — 2026-11-03 JST
+
+- Added existing-Work search above the membership combo: partial matching across
+  Catalog title, all saved labels/keys/sites and work_key, NFKC/casefold with
+  whitespace AND terms and match/total count. Current/pending selection is kept
+  visible; filtering does not change membership, confirmation, dirty state or
+  preview. Search text survives row changes; grouping remains explicit.
+- Added the visible reason/action table column and moved readiness explanations
+  to the first lines of selected-row evidence. Work-key collision, invalid URL,
+  missing confirmation and unsupported/stale detail reasons use the existing
+  readiness authority without weakening validation.
+- Final preview starts with add/update/unchanged counts and readable YAML
+  excerpts: additions, existing entries before and after changes. Field names,
+  order and optional scope/order/segments use the existing writer serializer via
+  read-only format_targets_yaml. Dataclass repr removed from settings display.
+  The excerpt explicitly omits comments/unchanged content; actual save preserves
+  them through the unchanged writer/CAS/atomic path.
+- Major files: gui/url_registration.py, registration/service.py,
+  watchlist/service.py, existing GUI/service tests. docs/GUI_README,
+  docs/DISCOVERY_AND_BATCH and note/00_core synchronized. No site behavior or
+  operational YAML/Catalog/ZIP/history changes.
+- Targeted GUI first 27 passed; final GUI/service/normal WorkEditor/Watchlist/
+  WorkDraft affected selection **182 passed, 0 skipped** (37.34s). Independent
+  Reviewer: **PASS / zero BLOCKING**, separately 46 GUI/service tests passed.
+  Ruff src/tests and git diff --check passed. Full/Research/live and additional
+  browser-backed Integration were not repeated: presentation plus read-only
+  serialization only, no writer/network/capture branch changes. Qt GUI integration
+  and isolated native Windows visual QA were performed.
+- Native screenshots at 1200x940 and 980x800: visible search/count/reasons,
+  filtered dropdown and YAML-first preview. Isolated report confirms 2/3 matches,
+  work_key collision explanation, YAML shown, and unchanged Watchlist/Catalog.
+  Artifacts: `.tmp/watchlist-registration/search-reasons-{980,1200}-native.png`,
+  `search-results-native.png`, `search-preview-yaml-native.png`,
+  `search-preview-native-result.json`. No network or real data used.
+
 ## Stage 06 / 07 handoff (NOT STARTED)
 
 - Stage 06: add site-specific URL forms/metadata only after non-consuming evidence;

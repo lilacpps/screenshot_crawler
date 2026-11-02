@@ -90,11 +90,8 @@ class RegistrationService:
                 if old and (old.work_key, old.site, old.url, old.label, old.enabled) != (
                         target.work_key, target.site, target.url, target.label, target.enabled):
                     raise ValueError("既存keyのidentity/基本設定は変更できません")
-                summary.append(f"  {'既存' if old else '追加'} {target.key} / {target.site} / {target.label}\n"
-                    f"    {target.url}\n    scope={target.discovery_scope!r}\n"
-                    f"    archive_order={target.archive_order!r}; archive_segments={target.archive_segments!r}")
-                if old and old != target:
-                    summary.append(f"    変更前: scope={old.discovery_scope!r}; order={old.archive_order!r}; segments={old.archive_segments!r}")
+                action = "追加" if old is None else "更新" if old != target else "変更なし"
+                summary.append(f"  {action}: {target.label} / {target.site} / {target.key}")
             for row in batch.members(group_id):
                 summary.append(f"  入力: {row.resolution.input_url}\n    → {row.resolution.discovery_url}\n"
                     f"    identity={row.resolution.identity_status}; title={row.resolution.title_status}; 人の確認済み")
@@ -125,7 +122,21 @@ class RegistrationService:
         summary.append("Fullは独立ジョブです。No/取消は保存のみ・Catalog未同期。失敗しても設定は保存済みです。"
             "\nScope sync・既存ZIPのaudit/renumber・Batchは必要に応じて別途明示実行してください。ここでは起動しません。")
         return RegistrationPreview(targets, revision, catalog_snapshot_identity(data), draft_identity(batch),
-            selected, changed, "\n".join(summary))
+            selected, changed, self._yaml_changes(base, targets) + "\n\n" + "\n".join(summary))
+
+    def _yaml_changes(self, base, targets):
+        previous = {target.key: target for target in base}
+        added = tuple(target for target in targets if target.key not in previous)
+        updated = tuple(target for target in targets if target.key in previous and target != previous[target.key])
+        sections = [(f"watchlist.yaml への変更: 追加 {len(added)}件 / 更新 {len(updated)}件 / "
+                     f"既存のまま {len(base) - len(updated)}件"),
+                    ("追加・更新する項目をYAMLで表示します（targetsの抜粋）。まだ保存していません。\n"
+                     "既存コメント・空白・変更しない項目は表示を省略し、保存時は従来どおり保持します。")]
+        for title, rows in (("追加する項目", added),
+                            ("既存項目の変更前", tuple(previous[target.key] for target in updated)),
+                            ("既存項目の変更後", updated)):
+            sections.append(f"\n【{title}】\n" + (self.watchlist.format_targets_yaml(rows) if rows else "（なし）\n"))
+        return "\n".join(sections)
 
     @staticmethod
     def _claim(owners, identity, group_id):

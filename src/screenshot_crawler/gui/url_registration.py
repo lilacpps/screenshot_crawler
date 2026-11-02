@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+import unicodedata
 from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -137,8 +139,9 @@ class UrlRegistrationDialog(QDialog):
             actions.addWidget(button)
         actions.addStretch()
         layout.addLayout(actions)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(("登録対象", "URL判定", "サイト", "作品名", "Work / key", "登録準備"))
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(("登録対象", "URL判定", "サイト", "作品名", "Work / key", "登録準備",
+            "理由・必要な操作"))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -147,7 +150,8 @@ class UrlRegistrationDialog(QDialog):
         self.table.setColumnWidth(2, 100)
         self.table.setColumnWidth(3, 190)
         self.table.setColumnWidth(4, 260)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(5, 100)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         self.table.currentCellChanged.connect(self._selection_changed)
         self.table.itemChanged.connect(self._checked)
         layout.addWidget(self.table, 2)
@@ -155,10 +159,20 @@ class UrlRegistrationDialog(QDialog):
         form = QFormLayout(self.form_widget)
         self.url_edit, self.label_edit, self.reading_edit = QLineEdit(), QLineEdit(), QLineEdit()
         self.work_combo, self.work_edit, self.key_edit = QComboBox(), QLineEdit(), QLineEdit()
+        self.work_search = QLineEdit()
+        self.work_search.setPlaceholderText("作品名・work_key・登録keyで既存作品を検索")
+        self.work_search.setClearButtonEnabled(True)
+        self.work_search.setToolTip("部分一致。空白で複数条件。検索だけでは所属を変更しません。選択中のWorkは常に表示します。")
+        self.work_search.textChanged.connect(self._filter_works)
+        self.work_matches = QLabel()
+        search = QHBoxLayout()
+        search.addWidget(self.work_search, 1)
+        search.addWidget(self.work_matches)
         self.work_combo.setMinimumContentsLength(25)
         self.work_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         for label, control in (("元URL（修正後に再解析）", self.url_edit), ("作品名 label", self.label_edit),
-                ("読み / ローマ字候補の入力", self.reading_edit), ("所属Work（明示選択）", self.work_combo),
+                ("読み / ローマ字候補の入力", self.reading_edit), ("既存作品を検索", search),
+                ("所属Work（明示選択）", self.work_combo),
                 ("work_key", self.work_edit), ("key", self.key_edit)):
             form.addRow(label, control)
             if isinstance(control, QLineEdit):
@@ -335,7 +349,8 @@ class UrlRegistrationDialog(QDialog):
             group = self.draft.works[row.group_id]
             state = self.draft.readiness(group.id)
             values = ("", row.resolution.status, row.resolution.site or "—", row.label or "作品名未確認",
-                f"{group.work_key or '未確定'} / {row.key or '未確定'}", state.status)
+                f"{group.work_key or '未確定'} / {row.key or '未確定'}", state.status,
+                " / ".join(state.reasons) or "登録できます")
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, row.id)
@@ -359,28 +374,24 @@ class UrlRegistrationDialog(QDialog):
         row = self.draft.candidates.get(self._selected_id) if self.draft else None
         if row is None:
             self.form_widget.setEnabled(False)
+            self.evidence.clear()
             return
         group = self.draft.works[row.group_id]
         for edit, value in ((self.url_edit, row.resolution.input_url), (self.label_edit, row.label),
                 (self.reading_edit, row.reading), (self.work_edit, group.work_key), (self.key_edit, row.key)):
             edit.setText(value)
-        self.work_combo.clear()
-        for work in self.draft.works.values():
-            if not work.existing:
-                self.work_combo.addItem(f"新規: {work.work_key or 'Work ' + work.id}", work.id)
-        for key, title in self.draft.existing_works.items():
-            self.work_combo.addItem(f"既存: {title} / {key}", "existing:" + key)
-        self.work_combo.addItem("この候補を別の新規Workへ分離", "detach")
-        self.work_combo.setCurrentIndex(self.work_combo.findData(group.id))
+        self._populate_work_choices(group.id)
         self.work_edit.setReadOnly(group.existing)
         self.additional.setChecked(row.additional)
         self.additional.setVisible(bool(row.existing_keys))
         state = self.draft.readiness(group.id)
         resolution = row.resolution
-        self.evidence.setPlainText(f"元URL: {resolution.input_url}\n起点URL: {resolution.discovery_url or '未確定'}\n"
+        self.evidence.setPlainText(f"登録準備: {state.status}\n"
+            + "\n".join(f"理由・必要な操作: {reason}" for reason in state.reasons)
+            + f"\n元URL: {resolution.input_url}\n起点URL: {resolution.discovery_url or '未確定'}\n"
             f"native identity: {resolution.identity_status} {resolution.site_work_identity or ''} / "
             f"title: {resolution.title_status} / human confirmed: {row.confirmed}\n"
-            + "\n".join((*resolution.evidence, *resolution.warnings, *resolution.blockers, *state.reasons)))
+            + "\n".join((*resolution.evidence, *resolution.warnings, *resolution.blockers)))
         if group.detail is not None:
             self.evidence.appendPlainText("\n詳細確認:\n" + group.detail.summary)
         hints = self.draft.title_hints(row.id)
@@ -388,6 +399,40 @@ class UrlRegistrationDialog(QDialog):
             self.evidence.appendPlainText("\n同名の既存Work候補（所属は明示選択）: "
                 + ", ".join(f"{title} / {key}" for key, title in hints))
         self._form_dirty = False
+
+    def _filter_works(self, _text):
+        if self.draft is not None:
+            self._populate_work_choices(self.work_combo.currentData())
+
+    def _populate_work_choices(self, selected):
+        # Filtering is presentation only: retain even a pending explicit choice,
+        # block combo signals, and never apply fields or invalidate a preview.
+        def normalize(value):
+            return unicodedata.normalize("NFKC", value).casefold()
+        terms = normalize(self.work_search.text()).split()
+        existing = self.draft.existing_works
+        aliases = {key: [key, title] for key, title in existing.items()}
+        for key, title in self.draft.catalog_works:
+            aliases[key].append(title)
+        for target in self.draft.base:
+            aliases[target.work_key].extend((target.label, target.key, target.site))
+        matches = {key for key, values in aliases.items()
+                   if all(term in normalize(" ".join(values)) for term in terms)}
+        self.work_combo.blockSignals(True)
+        try:
+            self.work_combo.clear()
+            for work in self.draft.works.values():
+                if not work.existing:
+                    self.work_combo.addItem(f"新規: {work.work_key or 'Work ' + work.id}", work.id)
+            for key, title in existing.items():
+                value = "existing:" + key
+                if key in matches or value == selected:
+                    self.work_combo.addItem(f"既存: {title} / {key}", value)
+            self.work_combo.addItem("この候補を別の新規Workへ分離", "detach")
+            self.work_combo.setCurrentIndex(self.work_combo.findData(selected))
+        finally:
+            self.work_combo.blockSignals(False)
+        self.work_matches.setText(f"既存 {len(matches)} / {len(existing)}件")
 
     def _selection_changed(self, *_args):
         if self._rendering or self.task is not None:
@@ -509,6 +554,7 @@ class UrlRegistrationDialog(QDialog):
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit()
         text.setReadOnly(True)
+        text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         text.setPlainText(summary)
         layout.addWidget(text)
         close = QPushButton("候補画面へ戻る（一括保存はまだです）")

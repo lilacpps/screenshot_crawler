@@ -84,9 +84,74 @@ def test_paste_partial_failure_manual_confirmation_and_no_write(gui):
     assert dialog.draft.candidates["1"].resolution.title is None
     dialog.table.setCurrentCell(2, 0)
     assert not dialog.confirm_button.isEnabled()
-    assert "blocked" in dialog.evidence.toPlainText() or dialog.draft.readiness("3").status == "blocked"
+    reasons = dialog.draft.readiness("3").reasons
+    assert reasons and reasons[0] in dialog.table.item(2, 6).text()
+    assert dialog.evidence.toPlainText().startswith("登録準備: blocked\n理由・必要な操作: " + reasons[0])
     assert not dialog.save_button.isEnabled()
     assert before == (dialog.path.read_bytes(), dialog.catalog.read_bytes())
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("星の冒険", "hoshi_adventure"),  # Catalog title survives a different Watchlist label.
+    ("特装版", "hoshi_adventure"),  # Every label in a multi-key Work is searchable.
+    ("ＨＯＳＨＩ ADVENTURE", "hoshi_adventure"),
+    ("ALPHA_COMICDAYS", "hoshi_adventure"),
+    ("別の物語", "other_work"),
+    ("該当する作品なし", None),
+])
+def test_existing_work_search_is_read_only_and_matches_titles_and_ids(gui, query, expected):
+    from screenshot_crawler.registration.service import draft_identity
+    from screenshot_crawler.watchlist.models import WatchlistTarget
+    dialog, _app = gui
+    populate(dialog, A)
+    confirm(dialog)
+    batch = dialog.draft
+    batch.catalog_works = (("hoshi_adventure", "星の冒険"), ("other_work", "別の物語")) + tuple(
+        (f"work_{i}", f"既存作品{i}") for i in range(500))
+    batch.base = (
+        WatchlistTarget("alpha_comicdays", "hoshi_adventure", "comicdays", B, "星の冒険 特装版"),
+        WatchlistTarget("alpha_jumpplus", "hoshi_adventure", "jumpplus", A, "ほしの冒険"),
+    )
+    dialog._render()
+    before = draft_identity(batch), dialog.path.read_bytes(), dialog.catalog.read_bytes()
+    marker = dialog.preview = object()
+    dialog.dirty = False
+    dialog.work_search.setText(query)
+    visible = {dialog.work_combo.itemData(i) for i in range(dialog.work_combo.count())
+               if dialog.work_combo.itemData(i).startswith("existing:")}
+    assert visible == ({"existing:" + expected} if expected else set())
+    assert dialog.work_combo.currentData() == "1"
+    assert dialog.work_matches.text() == f"既存 {bool(expected):d} / 502件"
+    assert not dialog._form_dirty and not dialog.dirty and dialog.preview is marker
+    QTest.keyClick(dialog.work_search, Qt.Key.Key_Return)
+    assert dialog.task is None and dialog.preview is marker
+    assert before == (draft_identity(batch), dialog.path.read_bytes(), dialog.catalog.read_bytes())
+
+
+def test_search_preserves_pending_and_current_work_choice_and_shows_collision_reason(gui):
+    dialog, _app = gui
+    dialog.draft.catalog_works = (("existing_work", "既存の作品"), ("other_work", "別作品"))
+    populate(dialog, A + "\n" + B)
+    dialog.table.setCurrentCell(0, 0)
+    confirm(dialog, work="existing_work")
+    assert dialog.table.item(0, 5).text() == "blocked"
+    assert "work_keyが別Workと衝突" in dialog.table.item(0, 6).text()
+    assert "work_keyが別Workと衝突" in dialog.evidence.toPlainText().split("元URL:")[0]
+    dialog.work_search.setText("既存の作品")
+    dialog.work_combo.setCurrentIndex(dialog.work_combo.findData("existing:existing_work"))
+    assert dialog._form_dirty
+    dialog.work_search.setText("一致なし")
+    assert dialog.work_combo.currentData() == "existing:existing_work"
+    assert dialog.draft.candidates["1"].group_id == "1"  # Search cannot apply a pending choice.
+    dialog.apply_fields()
+    assert dialog.draft.candidates["1"].group_id == "existing:existing_work"
+    assert dialog.work_combo.currentData() == "existing:existing_work"
+    assert dialog.work_edit.isReadOnly()
+    dialog.table.setCurrentCell(1, 0)
+    assert dialog.work_search.text() == "一致なし"
+    assert dialog.work_combo.currentData() == "2"
+    dialog.work_search.clear()
+    assert dialog.work_matches.text() == "既存 2 / 2件"
 
 
 def test_edits_survive_row_switch_retry_and_group_selection(gui):

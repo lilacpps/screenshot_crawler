@@ -3,14 +3,22 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import yaml
 
 from screenshot_crawler.catalog.job_lock import CatalogJobLock
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader
 from screenshot_crawler.registration.detail import accept_detail
 from screenshot_crawler.registration.service import RegistrationService, retain_unsaved
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 from tests.unit.test_registration_detail import URLS, add, detail, setup_batch
+
+
+def yaml_section(preview, title):
+    excerpt = preview.summary.split(f"【{title}】\n", 1)[1].split("\n【", 1)[0]
+    # The final YAML section is followed by the human-readable Work summary.
+    excerpt = excerpt.split("\n\n選択したWork", 1)[0]
+    return yaml.safe_load(excerpt)["targets"]
 
 
 def source(catalog, *, site="jumpplus", url=URLS["jumpplus"], owner="owner", work_key="other", external_id="4"):
@@ -38,6 +46,10 @@ def test_selected_set_single_apply_preserves_unselected_drafts_catalog_zip_and_c
     preview = service.preview(batch)
     assert "UNKNOWN" in preview.summary and "first_jumpplus" in preview.summary
     assert "second_comicdays" not in preview.summary
+    planned = yaml_section(preview, "追加する項目")
+    assert planned == [{"key": "first_jumpplus", "work_key": "first", "site": "jumpplus",
+        "url": URLS["jumpplus"], "enabled": True, "label": "人工作品"}]
+    assert "追加 1件 / 更新 0件 / 既存のまま 1件" in preview.summary
     calls = []
     apply = service.watchlist.apply_edit
     def count(*args, **kwargs):
@@ -48,6 +60,8 @@ def test_selected_set_single_apply_preserves_unselected_drafts_catalog_zip_and_c
     assert result.verified and calls == [True]
     assert {target.key for target in WatchlistService(path).list_targets()} == {"legacy", "first_jumpplus"}
     assert path.read_text(encoding="utf-8").startswith("# 人の注釈\n")
+    actual = yaml.safe_load(path.read_text(encoding="utf-8"))["targets"]
+    assert planned == [target for target in actual if target["key"] == "first_jumpplus"]
     assert original == (catalog.path.read_bytes(), archive.read_bytes())
     retain_unsaved(batch, result)
     assert batch.candidates[b] == kept and b in batch.works
@@ -106,7 +120,8 @@ def test_real_catalog_source_target_ownership_guard(tmp_path, url, owner, work_k
     assert before == (path.read_bytes(), catalog.path.read_bytes())
 
 
-def test_existing_work_addition_preserves_old_fields_and_saves_one_composed_proposal(tmp_path):
+@pytest.mark.parametrize("change_scope", [False, True])
+def test_existing_work_addition_preserves_old_fields_and_saves_one_composed_proposal(tmp_path, change_scope):
     batch, path, catalog = setup_batch(tmp_path)
     old = WatchlistTarget("legacy_key", "legacy_work", "jumpplus", URLS["jumpplus"], "旧label", False,
         archive_order=7)
@@ -121,16 +136,32 @@ def test_existing_work_addition_preserves_old_fields_and_saves_one_composed_prop
     request, draft, _result = detail(batch, group)
     # The helper uses sequential order for new Works; preserve the old order
     # here and explicitly append the incoming source.
-    draft.update(old)
+    updated_old = replace(old, discovery_scope=DiscoveryScope(excluded_external_ids=("1",))) if change_scope else old
+    draft.update(updated_old)
     new = draft.members[1]
     draft.update(replace(new, archive_order=8))
     from screenshot_crawler.watchlist.work_edit import validate_work_snapshot
     result = validate_work_snapshot(draft, batch.catalog_snapshot, batch.revision)
     accept_detail(batch, request, result, {target.key for target in draft.members})
     service = RegistrationService(path, catalog.path)
-    saved = service.save(batch, service.preview(batch))
+    preview = service.preview(batch)
+    planned = yaml_section(preview, "追加する項目")
+    assert {target["key"] for target in planned} == {new.key, batch.candidates[b].key}
+    if change_scope:
+        assert yaml_section(preview, "既存項目の変更前")[0]["enabled"] is False
+        assert "discovery_scope" not in yaml_section(preview, "既存項目の変更前")[0]
+        updated = yaml_section(preview, "既存項目の変更後")
+        assert updated[0]["discovery_scope"] == {"excluded_external_ids": ["1"]}
+        assert updated[0]["archive_order"] == 7
+    else:
+        assert "既存項目の変更後】\n（なし）" in preview.summary
+    saved = service.save(batch, preview)
     assert saved.verified
-    assert WatchlistService(path).get(old.key) == old
+    assert WatchlistService(path).get(old.key) == updated_old
+    actual = yaml.safe_load(path.read_text(encoding="utf-8"))["targets"]
+    assert planned == [target for target in actual if target["key"] in {new.key, batch.candidates[b].key}]
+    if change_scope:
+        assert updated == [target for target in actual if target["key"] == old.key]
     assert {target.work_key for target in saved.targets} == {"legacy_work", batch.works[b].work_key}
 
 
@@ -147,6 +178,11 @@ def test_multiple_site_group_scope_segments_and_stale_proof(tmp_path, monkeypatc
     service = RegistrationService(path, catalog.path)
     preview = service.preview(batch)
     assert all(target.archive_segments is not None for target in preview.targets)
+    planned = yaml_section(preview, "追加する項目")
+    assert all("archive_segments" in target for target in planned)
+    assert any("discovery_scope" in target for target in planned)
+    assert "DiscoveryScope(" not in preview.summary and "ArchiveSegment(" not in preview.summary
+    assert WatchlistService(path)._load_content(yaml.safe_dump({"targets": planned})) == list(preview.targets)
     import screenshot_crawler.registration.draft as module
     class Later(datetime):
         @classmethod

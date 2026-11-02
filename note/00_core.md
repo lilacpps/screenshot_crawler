@@ -35,6 +35,13 @@ Rows show URL status, native identity/title evidence, group readiness and the
 source/canonical URLs. Form edits persist across rows and grouping, retry resets
 confirmation for its Work, and a generation ignores old callbacks. Work checkbox
 selection is atomic across its members. Close/reload uses Discard/Cancel.
+The existing-Work search filters the combo by NFKC/casefolded partial matches
+across Catalog title, every saved label/key/site and work_key; whitespace terms
+are ANDed. It shows matching/total counts. New draft choices and the current
+choice (including a pending explicit choice) stay visible. Filtering blocks
+combo signals and never edits the draft, confirmation, selection or preview.
+The search persists across row changes. Readiness reasons are visible in the
+table's reason/action column and first in selected-row evidence, not tooltip-only.
 Parsing and detail remain drafts; bulk preview/save is implemented in Stage 05
 through the service described below. Native Windows
 Qt capture at 980x800 verified Japanese text and controls; offscreen captures
@@ -105,7 +112,14 @@ explicit human confirmation; invalid URLs and unsupported detail never bypass
 the gate. Cross-site Work membership is always a human decision.
 
 The final preview shows selected additions, existing members, scope/order/segment
-changes, evidence and remaining Full/scope-sync/renumber work. Save runs off the
+changes, evidence and remaining Full/scope-sync/renumber work. It begins with
+added/updated/unchanged counts and readable YAML
+excerpts for additions and existing-member before/after changes. The read-only
+WatchlistService.format_targets_yaml delegates to the existing writer serializer
+so field names/order, Unicode values and optional scope/order/segments match
+saved targets. Existing comments/formatting are omitted from the excerpt and
+preserved by the unchanged patch writer; this is not a whole-file replacement.
+No dataclass repr is used for the registration settings preview. Save runs off the
 GUI thread, removes successfully read-back Works and retains unselected drafts
 and manual edits. MainWindow can reopen the retained dialog. Catalog reload
 keeps input but invalidates detail proofs. Committed/unverified readback freezes

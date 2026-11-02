@@ -2691,6 +2691,14 @@ whether to run the existing independent Full Discovery job. No/Cancel means
 Watchlist saved, Full not run, Catalog not synchronized; Full failures remain
 job failures. There is no automatic scope-sync, archive renumber or Batch.
 
+The registration preview starts with added/updated/unchanged counts and YAML
+excerpts of additions and existing-target before/after changes. A read-only
+`WatchlistService.format_targets_yaml` uses the writer's existing serializer;
+optional fields retain their actual on-disk names and omission rules. Excerpts
+omit unrelated targets and comments, while the unchanged save path preserves
+them. Search and visible readiness reasons in the GUI do not change grouping,
+ownership, confirmation, validation or persistence rules.
+
 The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
 Yes/No/failure and Windows GUI flow use isolated synthetic data. Only Kadocomi
 exact-detail metadata has a bounded one-work live check; the other ten resolver

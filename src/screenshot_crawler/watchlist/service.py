@@ -84,6 +84,14 @@ class WatchlistService:
 
     content_digest = revision
 
+    def format_targets_yaml(self, targets: Iterable[WatchlistTarget]) -> str:
+        """Format a target excerpt with the writer's field names/order, without I/O.
+
+        This is a display excerpt, not a whole-file edit or a replacement for
+        preview_edit validation; existing comments/formatting are not rendered.
+        """
+        return self._serialize_targets(list(targets))
+
     def read_snapshot(self) -> tuple[tuple[WatchlistTarget, ...], str]:
         """Parse targets and compute their revision from the same file read."""
 
