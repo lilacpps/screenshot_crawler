@@ -1,7 +1,12 @@
 # Stage 00 — 現行契約監査・URL形式matrix / 設計確定
 
-> Status: NOT STARTED。**このStageのみ先に実施**。production code・実Watchlist/Catalog変更禁止。
+> Status: COMPLETE（2026-11-02、静的監査のみ）。**Stage 01以降は未着手**。production code・実Watchlist/Catalog変更禁止。
 > Prerequisite: main READMEを読み、branch/HEAD、既存作業差分を記録する。
+
+成果物: [RESEARCH.md](RESEARCH.md)。11サイトmatrix、現行WorkEditor/保存契約、
+採用するResolver連携・pilot・下書き/命名設計、Stage別受入条件と未検証事項を記録した。
+新Resolverの実サイト検証は全サイト未実施。7サイトの完全一覧preview未対応を
+詳細編集のblockerとして区別し、Stage 01の静的実装を妨げるblockerはないと判断した。
 
 ## Objective
 
