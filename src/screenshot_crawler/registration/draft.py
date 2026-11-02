@@ -202,6 +202,10 @@ class BatchRegistrationDraft:
         for row in rows:
             if row.resolution.status == "blocked":
                 blocked.extend(row.resolution.blockers or ("URL blocked",))
+            if row.resolution.conversion_proof:
+                error = self.resolver.resolution_error(row.resolution)
+                if error:
+                    blocked.append(error)
             if not row.label.strip() or not valid_slug(row.key) or not row.confirmed:
                 manual.append("作品名・Work所属・keyを明示確認してください")
             if row.existing_keys and not row.additional:

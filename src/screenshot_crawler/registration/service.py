@@ -77,11 +77,9 @@ class RegistrationService:
             if errors:
                 raise ValueError(" / ".join(errors))
             for row in batch.members(group_id):
-                fresh = batch.resolver.resolve(row.resolution.input_url)
-                if (fresh.status == "blocked" or fresh.site != row.resolution.site
-                        or fresh.discovery_url != row.resolution.discovery_url
-                        or fresh.site_work_identity != row.resolution.site_work_identity):
-                    raise ValueError("安全な正規URLの証拠が一致しません。再解析してください")
+                error = batch.resolver.resolution_error(row.resolution)
+                if error:
+                    raise ValueError(error)
             members = group.detail.members if group.detail is not None else batch.targets_for(group_id)
             targets = member_patch(targets, group.work_key, members)
             summary.append(f"\nWork: {group.work_key} ({'既存Workへ追加' if group.existing else '新規'})")
@@ -93,7 +91,7 @@ class RegistrationService:
                 action = "追加" if old is None else "更新" if old != target else "変更なし"
                 summary.append(f"  {action}: {target.label} / {target.site} / {target.key}")
             for row in batch.members(group_id):
-                summary.append(f"  入力: {row.resolution.input_url}\n    → {row.resolution.discovery_url}\n"
+                summary.append(f"  入力URL: {row.resolution.input_url}\n    保存URL: {row.resolution.discovery_url}\n"
                     f"    identity={row.resolution.identity_status}; title={row.resolution.title_status}; 人の確認済み")
             if group.detail is None:
                 summary.append("  Catalog影響: UNKNOWN（完全一覧未取得）。新規単一key・scopeなし。所有確認は既知URL/identityのみ。")

@@ -2620,6 +2620,18 @@ These four use a small one-document guard with no redirect/subresource/POST
 dispatch and canonical plus site-owned native binding/title checks. They do not
 provide new complete-list preview capabilities or change existing Discovery.
 
+Stage 06B adds Piccoma's exact product/episodes listing as an optional observed
+conversion input. Pure parse remains blocked; one guarded listing GET must prove
+canonical, oldest-first order, declared/exact count and same-product unique
+episode/status rows. The existing site classifier selects the first unconditional
+free DOM row. Immutable ephemeral input/document/seed/native-ID/DOM/access/time
+evidence must pass the fresh pending parser, safe canonical seed parser,
+site-owned default-deny validator and 0..300s age at readiness/preview/save.
+No reader/resource operation or save-time network occurs. Missing Work title may
+be manually confirmed after URL proof; missing conversion proof may not. YAML
+stores the proved seed, with original input separately shown in final preview.
+This evidence does not enable a complete-list WorkEditor capability (Stage07).
+
 ## Registration candidate drafts (Stage 02)
 
 `registration/draft.py` is Qt-free and performs no persistence. It preserves

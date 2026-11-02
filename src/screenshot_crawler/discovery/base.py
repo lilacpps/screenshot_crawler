@@ -37,6 +37,14 @@ class DiscoveryAdapter(ABC):
         """Optional non-consuming metadata; never fall back to Discovery."""
         return resolution
 
+    async def observe_registration_conversion(self, page, resolution):
+        """Optional explicit conversion of a blocked observation candidate."""
+        return resolution
+
+    def validate_registration_conversion(self, resolution) -> bool:
+        """Default deny; only a proved site-owned conversion can opt in."""
+        return False
+
     supports_exclusion_only_scope: ClassVar[bool] = False
     # Exclusion discovery must process the exact complete listing that was
     # validated before Catalog writes. Adapters supporting that path must

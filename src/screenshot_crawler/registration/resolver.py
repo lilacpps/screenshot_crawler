@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import replace
+from datetime import datetime
 from urllib.parse import urlsplit
 
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
@@ -40,6 +41,8 @@ class UrlResolver:
                 raise ValueError("未対応の公式hostです。対応サイトのDiscovery起点URLを指定してください")
             site, adapter = matches[0]
             result = replace(adapter.resolve_registration_url(url), site=site)
+            if result.observation_url and safe_url(result.observation_url) not in adapter.registration_hosts:
+                raise ValueError("観測先URLが確定できません")
             if result.status != "blocked" and (not result.discovery_url
                     or safe_url(result.discovery_url) not in adapter.registration_hosts):
                 raise ValueError("変換先URLが確定できません")
@@ -53,6 +56,46 @@ class UrlResolver:
         if fresh.status == "blocked" or fresh != resolution:
             return fresh.blocked("URL解析結果が一致しません")
         return await self.registry.create(fresh.site).observe_registration_metadata(page, fresh)
+
+    async def observe_conversion(self, page, resolution: UrlResolution) -> UrlResolution:
+        fresh = self.resolve(resolution.input_url)
+        if fresh != resolution or fresh.status != "blocked" or not fresh.observation_url:
+            return resolution.blocked("安全な変換の観測候補が一致しません")
+        observed = await self.registry.create(fresh.site).observe_registration_conversion(page, fresh)
+        if observed.status != "blocked":
+            error = self.resolution_error(observed)
+            if error:
+                return observed.blocked(error)
+        return observed
+
+    def resolution_error(self, resolution: UrlResolution) -> str | None:
+        """Pure validation shared by readiness, preview and locked final save."""
+        from screenshot_crawler.registration.models import conversion_now
+        fresh = self.resolve(resolution.input_url)
+        if resolution.status == "blocked" or fresh.site != resolution.site:
+            return "安全な正規URLが確定していません。再解析してください"
+        proof = resolution.conversion_proof
+        if proof is None:
+            if (fresh.status == "blocked" or fresh.discovery_url != resolution.discovery_url
+                    or fresh.site_work_identity != resolution.site_work_identity
+                    or fresh.observation_url != resolution.observation_url):
+                return "安全な正規URLの証拠が一致しません。再解析してください"
+            return None
+        if (fresh.status != "blocked" or not fresh.observation_url or resolution.status != "converted"
+                or (proof.input_url, proof.site, proof.observation_url, proof.discovery_url, proof.site_work_identity)
+                != (resolution.input_url, resolution.site, fresh.observation_url,
+                    resolution.discovery_url, resolution.site_work_identity)
+                or resolution.observation_url != fresh.observation_url):
+            return "URL変換の入力・観測先・保存URLの証拠が一致しません"
+        if (not isinstance(proof.observed_at, datetime) or proof.observed_at.utcoffset() is None
+                or not 0 <= (conversion_now() - proof.observed_at).total_seconds() <= 300):
+            return "URL変換の証拠が古いか不正です。URLを再解析してください"
+        seed = self.resolve(resolution.discovery_url)
+        if (seed.status == "blocked" or seed.site != resolution.site or seed.discovery_url != resolution.discovery_url
+                or (seed.site_work_identity and seed.site_work_identity != resolution.site_work_identity)
+                or not self.registry.create(resolution.site).validate_registration_conversion(resolution)):
+            return "URL変換の作品・話の結び付けを確認できません"
+        return None
 
 
 def split_inputs(text: str) -> tuple[tuple[int, str], ...]:

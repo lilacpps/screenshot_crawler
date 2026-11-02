@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
@@ -192,25 +192,16 @@ def piccoma_manual_grant_until(
     return observed_at + timedelta(hours=hours - 1) if hours is not None else None
 
 
-def _parse_listing_rows(
-    *,
-    rows: Sequence[dict[str, object]],
-    product_id: str,
-    canonical_title: str,
-    declared_count: int,
-    scope: DiscoveryScope | None,
-    observed_at: datetime | None = None,
-) -> list[DiscoveredRecord]:
-    """Validate and buffer a complete DOM snapshot before any record is yielded."""
-
-    if not canonical_title.strip():
-        raise DiscoveryIncompleteError("Piccoma product title was missing")
+def _validated_listing_rows(
+    rows: Sequence[dict[str, object]], product_id: str, declared_count: int,
+    observed_at: datetime,
+) -> list[PiccomaListingRow]:
+    """Validate native rows without inventing a Work title or changing DOM order."""
     if declared_count < 1 or declared_count > MAX_EPISODE_ROWS:
         raise DiscoveryIncompleteError("Piccoma episode count was missing or exceeded the row cap")
     if len(rows) != declared_count:
         raise DiscoveryIncompleteError("Piccoma episode listing count did not match its header")
 
-    observed_at = observed_at or datetime.now(UTC)
     parsed_rows: list[PiccomaListingRow] = []
     seen_ids: set[str] = set()
     for dom_index, raw in enumerate(rows):
@@ -257,6 +248,26 @@ def _parse_listing_rows(
                 ),
             )
         )
+
+    return parsed_rows
+
+
+def _parse_listing_rows(
+    *,
+    rows: Sequence[dict[str, object]],
+    product_id: str,
+    canonical_title: str,
+    declared_count: int,
+    scope: DiscoveryScope | None,
+    observed_at: datetime | None = None,
+) -> list[DiscoveredRecord]:
+    """Validate and buffer a complete DOM snapshot before any record is yielded."""
+
+    if not canonical_title.strip():
+        raise DiscoveryIncompleteError("Piccoma product title was missing")
+    parsed_rows = _validated_listing_rows(
+        rows, product_id, declared_count, observed_at or datetime.now(UTC)
+    )
 
     canonical_rows = list(reversed(parsed_rows))
     if scope is not None:
@@ -321,6 +332,37 @@ def _apply_scope(
     return rows[start : end + 1]
 
 
+async def _read_listing_rows(page):
+    return await page.locator(ROW_SELECTOR).evaluate_all(
+        """anchors => anchors.map(anchor => {
+          const cards = anchor.querySelectorAll('.PCM-epList_ep');
+          const card = cards.length === 1 ? cards[0] : null;
+          const title = card?.querySelector('.PCM-epList_title');
+          const statuses = card ? [...card.querySelectorAll('.PCM-epList_status')] : [];
+          const status = statuses.length === 1 ? statuses[0] : null;
+          const markers = status
+            ? [status, ...status.querySelectorAll('[class]')]
+                .flatMap(node => [...node.classList])
+                .filter(name => name.startsWith('PCM-epList_status_'))
+            : [];
+          return {
+            product_id: anchor.getAttribute('data-product_id'),
+            episode_id: anchor.getAttribute('data-episode_id'),
+            title: title?.innerText?.trim() || null,
+            status_count: statuses.length,
+            status_markers: [...new Set(markers)],
+            status_label: status?.innerText?.trim() || '',
+            point_prices: status ? [
+              ...(status.matches('.PCM-epList_status_point.js_point') ? [status] : []),
+              ...status.querySelectorAll(
+                '.PCM-epList_status_point.js_point, .PCM-epList_status_point .js_point'
+              ),
+            ].map(node => node.innerText.trim()) : [],
+          };
+        })"""
+    )
+
+
 class PiccomaDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate a Piccoma product's full native episode list."""
 
@@ -332,10 +374,76 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         parts = parse_piccoma_viewer_url(url)
         if parts is None:
+            product = parse_piccoma_listing_url(url)
+            if product:
+                return UrlResolution(input_url=url,
+                    observation_url=f"https://piccoma.com/web/product/{product}/episodes",
+                    blockers=("作品一覧の安全な話URL変換が必要です。安全なURL変換を有効にして再解析してください",))
             return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         return resolved_url(url, canonical_piccoma_viewer_url(url), f"piccoma-product:{parts.product_id}")
 
     supports_bounded_discovery = True
+
+    async def observe_registration_conversion(self, page, resolution):
+        from screenshot_crawler.registration.models import ObservedUrlConversion, conversion_now
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            observed_title,
+            registration_document,
+            require_canonical,
+        )
+        product = parse_piccoma_listing_url(resolution.observation_url)
+        if product is None:
+            return resolution.blocked("作品一覧URLが確定していません")
+        try:
+            async with registration_document(page, resolution.observation_url):
+                await require_canonical(page, resolution.observation_url)
+                if (await page.locator(LISTING_SELECTOR).count() != 1
+                        or await page.locator("#js_contentBody").count() != 1):
+                    raise ObservationUnavailable("作品一覧が一意に確認できません")
+                classes = (await page.locator(LISTING_SELECTOR).get_attribute("class") or "").split()
+                if "PCM-list_asc" not in classes or "PCM-list_desc" in classes:
+                    raise ObservationUnavailable("作品一覧の古い話からの表示順を確認できません")
+                body = await page.locator("#js_contentBody").inner_text()
+                counts = [int(m["count"]) for m in TOTAL_EPISODES.finditer(body)]
+                if len(counts) != 1:
+                    raise ObservationUnavailable("作品一覧の総話数が一意に確認できません")
+                now = conversion_now()
+                rows = _validated_listing_rows(await _read_listing_rows(page), product, counts[0], now)
+                chosen = next((row for row in rows if row.access_mode == "free"), None)
+                if chosen is None:
+                    raise ObservationUnavailable("無条件で無料の話がありません。チケット・待てば無料・購入では変換できません")
+                seed = f"https://piccoma.com/web/viewer/{product}/{chosen.identity.episode_id}"
+                identity = f"piccoma-product:{product}"
+                proof = ObservedUrlConversion(
+                    resolution.input_url, "piccoma", resolution.observation_url, seed, identity,
+                    chosen.identity.external_id, chosen.dom_index, len(rows),
+                    ("PCM-list_asc", f"declared-count:{len(rows)}", "status-count:1", FREE_MARKER, "¥0"), now,
+                )
+                result = replace(resolution, status="converted", discovery_url=seed,
+                    site_work_identity=identity, conversion_proof=proof, blockers=(),
+                    evidence=(*resolution.evidence,
+                        (f"same-product oldest-first free seed: {proof.selected_external_id}; "
+                         f"DOM {proof.dom_index + 1}/{proof.row_count}; {now.isoformat()}")),
+                    warnings=("一覧から確定した保存URLと作品名を明示確認してください",))
+                titles = await page.locator(TITLE_SELECTOR).all_text_contents()
+                if len(titles) == 1 and titles[0].strip():
+                    result = observed_title(result, titles[0], resolution.observation_url)
+            return result
+        except (ObservationUnavailable, DiscoveryIncompleteError) as exc:
+            return resolution.blocked("安全なURL変換を確認できません: " + str(exc).replace("（手動確認可）", ""))
+
+    def validate_registration_conversion(self, resolution):
+        proof = resolution.conversion_proof
+        product = parse_piccoma_listing_url(resolution.observation_url or "")
+        seed = parse_piccoma_viewer_url(resolution.discovery_url or "")
+        return bool(proof and product and seed and seed.product_id == product
+            and proof.site_work_identity == f"piccoma-product:{product}"
+            and proof.selected_external_id == seed.external_id
+            and type(proof.dom_index) is int and type(proof.row_count) is int
+            and 0 <= proof.dom_index < proof.row_count <= MAX_EPISODE_ROWS
+            and proof.selection_evidence == ("PCM-list_asc", f"declared-count:{proof.row_count}",
+                "status-count:1", FREE_MARKER, "¥0"))
 
     async def observe_registration_metadata(self, page, resolution):
         from screenshot_crawler.registration.observation import (
@@ -447,34 +555,7 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError(
                     "Piccoma episode listing count did not match its header"
                 )
-            rows = await page.locator(ROW_SELECTOR).evaluate_all(
-                """anchors => anchors.map(anchor => {
-                  const cards = anchor.querySelectorAll('.PCM-epList_ep');
-                  const card = cards.length === 1 ? cards[0] : null;
-                  const title = card?.querySelector('.PCM-epList_title');
-                  const statuses = card ? [...card.querySelectorAll('.PCM-epList_status')] : [];
-                  const status = statuses.length === 1 ? statuses[0] : null;
-                  const markers = status
-                    ? [status, ...status.querySelectorAll('[class]')]
-                        .flatMap(node => [...node.classList])
-                        .filter(name => name.startsWith('PCM-epList_status_'))
-                    : [];
-                  return {
-                    product_id: anchor.getAttribute('data-product_id'),
-                    episode_id: anchor.getAttribute('data-episode_id'),
-                    title: title?.innerText?.trim() || null,
-                    status_count: statuses.length,
-                    status_markers: [...new Set(markers)],
-                    status_label: status?.innerText?.trim() || '',
-                    point_prices: status ? [
-                      ...(status.matches('.PCM-epList_status_point.js_point') ? [status] : []),
-                      ...status.querySelectorAll(
-                        '.PCM-epList_status_point.js_point, .PCM-epList_status_point .js_point'
-                      ),
-                    ].map(node => node.innerText.trim()) : [],
-                  };
-                })"""
-            )
+            rows = await _read_listing_rows(page)
         except DiscoveryIncompleteError:
             raise
         except (PlaywrightError, TimeoutError) as exc:

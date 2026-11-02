@@ -1,4 +1,4 @@
-## Watchlist URL registration hook (Stage 06A, 2026-11-03)
+## Watchlist URL registration hook (Stage 06A/B, 2026-11-03)
 
 Viewer-shaped entry; product identity. Registration never navigates the viewer.
 Strict new-entry URL validation is supplied by registration/resolver.py and the
@@ -8,10 +8,32 @@ inferred from a label. Optional title observation derives the same-product
 `/web/product/<id>/episodes` document from the viewer-shaped input, requires
 matching canonical and product-bound rows with the input episode exactly once,
 then reads the unique existing TITLE_SELECTOR. It never opens the viewer.
-Redirects/subresources/POSTs are blocked. Listing-to-viewer conversion is not
-yet implemented. Shared-CDP live check on product 28600 / episode 1910027 returned
+Redirects/subresources/POSTs are blocked. Shared-CDP live check on product
+28600 / episode 1910027 returned
 ベルセルク at 2026-11-03 05:54 JST without resource or persisted-data action.
 Complete-list preview capability is unchanged (see the site behavior below).
+
+`/web/product/<id>/episodes` is now an optional observed-conversion input, never
+a directly saved Discovery URL. Without the GUI safe-observation option or with
+failed proof it remains blocked, with no manual bypass. A dedicated one-document
+observer requires canonical, one list/content container, PCM-list_asc only,
+one declared total matching exact rows and every row's same product, unique
+episode, nonempty episode title and single status wrapper. It reuses the existing
+native row extractor/validator and classify_piccoma_access. The first free row in
+DOM order becomes the canonical viewer-shaped seed; numeric IDs/reversed
+Discovery output are not used. Quota/personal rental/paid/unknown rows never
+qualify. Missing/ambiguous Work title stays unknown and needs a human label.
+No reader/resource/capture/Discovery runs. In-memory immutable proof binds original
+input, listing, product, seed, DOM position/count, free evidence and timestamp;
+generic preview/save revalidation requires 0..300s age and site-owned consistency.
+YAML saves the seed, while preview retains input and saved URL separately. URL
+edit/retry clears proof. No new complete-list scope editing is enabled (Stage07).
+Production observe_conversion on product28600 at 2026-11-03 06:16 JST returned
+432 rows, first DOM free episode1910027, titleベルセルク and accepted pure proof.
+One listing GET only; no viewer or persisted data was touched. Artificial browser
+tests cover count/order/foreign/duplicate/status/free/error/redirect failures;
+existing Discovery keeps latest-first output and existing scopes after sharing
+only its row extraction/validation helpers.
 
 # Piccoma current implementation snapshot
 

@@ -55,13 +55,14 @@ class _ResolveWorker(QRunnable):
         self.signals = _ResolveSignals()
 
     def run(self):
-        async def observe(result):
+        async def observe(result, *, conversion=False):
             from screenshot_crawler.core.browser import BrowserSession, resolve_cdp_endpoint
             session, page = None, None
             try:
                 session = await BrowserSession.connect(resolve_cdp_endpoint(site=result.site))
                 page = await session.new_page()
-                return await self.resolver.observe(page, result)
+                action = self.resolver.observe_conversion if conversion else self.resolver.observe
+                return await action(page, result)
             finally:
                 try:
                     if page is not None:
@@ -79,6 +80,11 @@ class _ResolveWorker(QRunnable):
                     result = UrlResolution(input_url=raw, blockers=(f"解析失敗: {exc}",))
                 if time.monotonic() >= deadline:
                     result = result.blocked("解析上限10分に達しました。後で再試行してください")
+                elif self.metadata and result.observation_url and result.status == "blocked":
+                    try:
+                        result = await asyncio.wait_for(observe(result, conversion=True), timeout=60)
+                    except Exception:  # noqa: BLE001 - blocked remains blocked, no manual bypass
+                        result = result.blocked("作品一覧からの安全なURL変換を確認できませんでした")
                 elif self.metadata and result.status != "blocked":
                     try:
                         adapter = self.resolver.registry.create(result.site)
@@ -129,7 +135,7 @@ class UrlRegistrationDialog(QDialog):
         self.retry_button = QPushButton("選択行を再解析")
         self.reload_button = QPushButton("基準を再読込")
         self.refresh_button = QPushButton("Catalogを再照合")
-        self.metadata = QCheckBox("安全な作品名取得も試す（対応サイトのみ）")
+        self.metadata = QCheckBox("安全なURL変換・作品名取得も試す（対応サイトのみ）")
         self.metadata.setChecked(True)
         self.analyze_button.clicked.connect(self.analyze)
         self.retry_button.clicked.connect(self.retry_selected)

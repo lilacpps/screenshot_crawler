@@ -204,6 +204,58 @@ def test_cdp_failure_leaves_safe_url_manual_candidate(gui):
     assert dialog.draft.readiness("1").status == "ready"
 
 
+def test_work_conversion_is_explicit_opt_in_and_keeps_saved_seed_separate(gui, monkeypatch):
+    from screenshot_crawler.core.browser import BrowserSession
+    from tests.unit.test_registration_conversion import LIST, SEED, converted
+    dialog, _app = gui
+    before = dialog.path.read_bytes(), dialog.catalog.read_bytes()
+    calls = []
+    class Session:
+        async def new_page(self):
+            calls.append("page")
+            return object()
+        async def close_page(self, page):
+            calls.append("close_page")
+        async def close(self):
+            calls.append("close")
+    async def connect(*args, **kwargs):
+        calls.append("connect")
+        return Session()
+    async def observe(page, result):
+        calls.append("observe_conversion")
+        assert result.status == "blocked" and result.observation_url == LIST
+        return converted(dialog.draft.resolver)
+    monkeypatch.setattr(BrowserSession, "connect", connect)
+    monkeypatch.setattr(dialog.draft.resolver, "observe_conversion", observe)
+    populate(dialog, LIST)
+    assert calls == [] and dialog.draft.candidates["1"].resolution.status == "blocked"
+    assert not dialog.confirm_button.isEnabled()
+    dialog.metadata.setChecked(True)
+    dialog.retry_selected()
+    wait_for(lambda: dialog.task is None)
+    assert calls == ["connect", "page", "observe_conversion", "close_page", "close"]
+    result = dialog.draft.candidates["1"].resolution
+    assert result.input_url == LIST and result.discovery_url == SEED
+    confirm(dialog)
+    assert dialog.draft.readiness("1").status == "ready"
+    assert before == (dialog.path.read_bytes(), dialog.catalog.read_bytes())
+    # Changing the URL discards observed evidence and requires fresh parsing/confirmation.
+    dialog.url_edit.setText(A)
+    dialog.apply_fields()
+    assert dialog.draft.candidates["1"].resolution.conversion_proof is None
+    assert not dialog.confirm_button.isEnabled()
+
+
+def test_conversion_cdp_failure_stays_blocked(gui):
+    from tests.unit.test_registration_conversion import LIST
+    dialog, _app = gui
+    dialog.metadata.setChecked(True)
+    populate(dialog, LIST)
+    row = dialog.draft.candidates["1"]
+    assert row.resolution.status == "blocked" and row.resolution.conversion_proof is None
+    assert not dialog.confirm_button.isEnabled()
+
+
 def test_cancel_and_busy_keep_draft(gui, monkeypatch):
     dialog, _app = gui
     populate(dialog, A)

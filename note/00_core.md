@@ -98,6 +98,30 @@ Missing metadata preserves manual registration of already safe URLs; rejected
 identity/navigation blocks. Existing Kadocomi behavior is unchanged. Other sites'
 metadata remains unverified/unsupported; complete-list capabilities are unchanged.
 
+Stage 06B adds optional Piccoma `/web/product/<id>/episodes` to canonical seed
+conversion. Pure parsing stays blocked, with only a safe observation URL; the
+GUI's optional initially-checked safe-observation control explicitly includes
+URL conversion and may be disabled. One guarded listing GET validates canonical,
+oldest-first order, declared/exact row count and every row's product/episode/status
+structure using the existing site parser/classifier. It chooses the first
+unconditional-free DOM row, never quota/rental/paid/unknown or numeric-ID order.
+No viewer is opened. The immutable in-memory proof binds input/document/seed,
+native identity, selected external ID, DOM position/count, access evidence and
+aware timestamp. Shared pure resolution_error checks these bindings, the current
+safe seed parser, site-owned validation and 0..300s age at readiness/preview/save;
+no network runs under save locks. Expired evidence requires reanalysis. URL edit,
+retry and blocked() discard evidence. Safe canonical entries without evidence
+retain manual confirmation. A proved conversion may have unknown title.
+Watchlist YAML stores only the canonical seed URL; input URL/proof stay in memory.
+Final preview explicitly labels input vs saved URL and shows actual saved YAML.
+This is not a complete-list WorkEditor proof; existing four preview sites stay
+unchanged. Piccoma Discovery shares its unchanged native row extraction/validation
+with conversion, then retains its existing reversed output order/scope handling.
+Production observation of product28600 at 2026-11-03 06:16 JST verified 432 rows,
+free DOM1 episode1910027, title and pure save validation without reader/resources.
+Native Windows Qt 980x800/1200x940 and YAML modal captures used isolated synthetic
+data, with unchanged stores. Full test/review outcomes are in registration PROGRESS.
+
 ## URL registration final preview and save (Stage 05, 2026-11-03)
 
 `registration/service.py` composes selected ready Work member patches into one

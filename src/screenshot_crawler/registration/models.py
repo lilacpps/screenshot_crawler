@@ -1,7 +1,26 @@
 """Immutable URL evidence, independent of Watchlist registration readiness."""
 
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Literal
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedUrlConversion:
+    input_url: str
+    site: str
+    observation_url: str
+    discovery_url: str
+    site_work_identity: str
+    selected_external_id: str
+    dom_index: int
+    row_count: int
+    selection_evidence: tuple[str, ...]
+    observed_at: datetime
+
+
+def conversion_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +34,8 @@ class UrlResolution:
     evidence: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
+    observation_url: str | None = None
+    conversion_proof: ObservedUrlConversion | None = None
 
     @property
     def identity_status(self) -> str:
@@ -25,7 +46,7 @@ class UrlResolution:
         return "observed" if self.title else "unknown"
 
     def blocked(self, reason: str) -> "UrlResolution":
-        return replace(self, status="blocked", blockers=(*self.blockers, reason))
+        return replace(self, status="blocked", conversion_proof=None, blockers=(*self.blockers, reason))
 
 
 def resolved_url(url: str, canonical: str, identity: str | None = None) -> UrlResolution:

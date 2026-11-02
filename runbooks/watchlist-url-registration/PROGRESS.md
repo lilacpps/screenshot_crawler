@@ -272,7 +272,7 @@
 ## Original Stage 06 / 07 handoff (Stage 06 now active)
 
 - Stage 06: add site-specific URL forms/metadata only after non-consuming evidence;
-  ten sites have no automatic title observation. Percent-escaped URLs remain
+  six sites still have no automatic title observation. Percent-escaped URLs remain
   conservatively blocked. HTTP-200 login/content ambiguity needs further bounded
   metadata research; title text never becomes native identity or save proof.
 - Stage 07: add complete-list read-only preview for bookwalker/comicfuz/hanayume/
@@ -281,3 +281,51 @@
   detail block with a reason. No cross-site automatic Work merge is introduced.
 - Original handoff excluded Stage 06/07 implementation. The new request now
   authorizes Stage 06; no Stage 07, main merge or operational data modification.
+
+## Stage 06B checkpoint — 2026-11-03 JST
+
+- Implements the separately reviewed [conversion contract](06-site-coverage/PROOF_CONTRACT.md).
+  Piccoma product/episodes input stays blocked with only a safe observation URL
+  until its optional one-document observer proves a canonical, same-product,
+  oldest-first listing with exact declared count and valid unique native rows.
+  The existing site access classifier selects the first unconditional-free DOM
+  row; quota/rental/paid/unknown are never eligible. Existing Discovery shares
+  only its unchanged row extraction/validation and retains reverse output/scope.
+- Immutable in-memory input/document/seed/product/selected-ID/DOM/access/time proof
+  is checked by the fresh pending parse, canonical seed parse, site validator and
+  aware 0..300s age in readiness/preview/save. No network occurs under save lock.
+  Retry/URL edit/blocked clear proof. Unknown title still supports human label
+  confirmation after a proven URL. No proof means blocked, no manual override.
+  YAML stores the canonical viewer-shaped seed; input and saved URL are explicitly
+  labeled in final preview. Proof is not persisted and no schema/config is added.
+- The GUI checkbox label explicitly includes safe conversion and title lookup.
+  It retains the existing initially-checked metadata preference; OFF never uses
+  CDP and leaves listing input blocked. Analyze uses the visible selection; there
+  is no additional permission modal or reader navigation. Stage07 is unchanged.
+- Production observe_conversion live check 2026-11-03 06:16 JST on product28600:
+  432 same-product rows, oldest-first DOM1 free episode1910027, titleベルセルク,
+  canonical seed and pure proof accepted. Dedicated shared-CDP Page closed.
+  One exact listing GET, no viewer/redirect/subresource/POST/resource operation.
+  Initial restricted-network attempt failed closed; authorized network retry
+  succeeded. No normal Watchlist/Catalog/ZIP/history or comic data was used.
+- Targeted: 313 passed, zero skipped (21.36s), proof tamper/TTL/future/naive,
+  strict pending/unsafe parser, isolated YAML parity/expiry atomic save, browser
+ 26 count/order/foreign/duplicate/status/no-free/error/redirect cases and Piccoma
+  unit regression. Affected: 140 passed, zero skipped (68.90s), GUI opt-in/error/
+  edit invalidation, registration draft/detail/save, Piccoma Discovery browser,
+  35 metadata and Kadocomi browser. Ruff src/tests and diff check passed.
+- Independent Reviewer implementation gate PASS / no BLOCKING; separately
+ 64 conversion cases passed, two setup errors from its Windows temp ACL (not
+  implementation failures). Root's isolated-save cases passed. Direct observer's
+  inner locator PlaywrightError is sanitized by registration_document; failed
+  conversion stays blocked. Native Windows Qt 980x800/1200x940 and final YAML
+  modal inspected: Japanese text and controls fit, saved seed and original URL
+  visible; stores unchanged. Artifacts `.tmp/watchlist-registration/stage06-*-native.png`
+  and `stage06-native-result.json`, all synthetic/no network.
+- All eleven capability boundaries are now audited in
+  [CAPABILITIES](06-site-coverage/CAPABILITIES.md), with unsupported reasons.
+  Hanayume scoped public links alone do not prove native episode/Work/order/full
+  inventory; Magapoke work redirect is not followed. No guessed seed conversion.
+- Final isolated full suite is running from `full-stage06`, with git-archived
+  tracked default YAML and final src/tests overlay + SHA256 manifest. Operational
+  YAML is never used. Completion status and final review follow its result.
