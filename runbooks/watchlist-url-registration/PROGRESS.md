@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 03 COMPLETE（2026-11-02）/ Stage 04 next。
+> Status: Stage 04 COMPLETE（2026-11-02）/ Stage 05 next。
 > Stage 01–05は連続実装を承認済み。Stage 06–07は対象外。
 > Runbook: [README.md](README.md)
 
@@ -10,7 +10,7 @@
 | 01 URL resolver + pilot | COMPLETE | 168 new + 653 affected passed; independent review PASS |
 | 02 Registration draft + naming | COMPLETE | 256 related passed; Reviewer PASS after corrections |
 | 03 Batch registration GUI | COMPLETE | 97 GUI/adjacent integration passed; native layout capture; Reviewer PASS |
-| 04 Scope editor draft integration | NOT STARTED | work-scoped 編集結果を未保存で返す、stale/overlap tests |
+| 04 Scope editor draft integration | COMPLETE | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | NOT STARTED | CAS/lock、selected-set atomic、Full confirmation、E2E |
 | 06 Site URL/metadata coverage | NOT STARTED | サイト別URL変換と非消費metadata拡張 |
 | 07 Listing preview coverage | NOT STARTED | 既存4サイト先行、残り7サイトを別Stageで段階拡張 |
@@ -103,3 +103,25 @@
   so no user operational window was controlled; Qt native capture is the evidence.
 - Docs/GUI_README and note/00_core synchronized. No live manga-site requests,
   Research or full suite this Stage (UI/local integration only). Stage 04 allowed.
+
+## Stage 04 checkpoint — 2026-11-02 JST
+
+- Extracted original Work snapshot validator and Catalog snapshot identity into
+  Qt-free helpers with compatibility GUI wrappers. Normal WorkEditor save/full
+  contract retained; draft-only child clones WorkDraft, disables add/switch/reload,
+  requires explicit scope confirmation for every key and returns validated DTOs.
+- Immutable Work proof includes member patch, revision, Work version, Catalog
+  identity, listing digest/timestamp and confirmed keys. Parent checks identities,
+  membership/ownership and patches only this Work. Cancel/edits/stale listing or
+  changed baseline cannot overwrite other Work drafts or write persisted data.
+- Existing scope/order/segments/enabled load unchanged. Added regression exposed
+  inherited segment normalization tightening an unchanged open scope on preview;
+  corrected only draft-only mode to preserve exact prior scope when selected rows
+  are equal. Explicit edits still apply. New ordered keys use WorkDraft.add.
+- 181 targeted/affected Unit/GUI + four-site listing browser tests passed, zero
+  skips. Ruff/diff check passed. Independent Reviewer PASS, then material scope
+  fix re-reviewed PASS, zero blockers. Reviewer's separate pytest was prevented
+  by its TEMP permissions; root's short isolated basetemp runs supply test evidence.
+- Docs/DISCOVERY_AND_BATCH, GUI_README and note/00_core synchronized. No site
+  adapter/live behavior changed; no new Live/Research/full run at this gate.
+  Stage 05 authorized and ready; bulk persistence remains unconnected until then.

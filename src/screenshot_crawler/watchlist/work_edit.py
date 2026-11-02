@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow
+from screenshot_crawler.management.catalog_reader import catalog_snapshot_identity
 from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.selection import SelectionPlanner
 
@@ -64,6 +65,13 @@ class WorkDraft:
     @property
     def members(self) -> tuple[WatchlistTarget, ...]:
         return tuple(target for target in self.targets if target.work_key == self.work_key)
+
+    def clone(self) -> WorkDraft:
+        copied = WorkDraft(self.targets, self.work_key)
+        copied.listings = dict(self.listings)
+        copied.new_keys = set(self.new_keys)
+        copied.configured_keys = set(self.configured_keys)
+        return copied
 
     def target(self, key: str) -> WatchlistTarget:
         return next(target for target in self.members if target.key == key)
@@ -249,3 +257,70 @@ def full_changed_keys(before: Iterable[WatchlistTarget], after: Iterable[Watchli
             order_works.add(target.work_key)
     result.update(target.key for target in after if target.work_key in order_works)
     return frozenset(result)
+
+
+@dataclass(frozen=True)
+class WorkEditPreview:
+    targets: tuple
+    revision: str
+    catalog_identity: str
+    work_key: str
+    listings: tuple
+    summary: str
+
+
+def validate_work_snapshot(draft: WorkDraft, data, revision: str) -> WorkEditPreview:
+    """Validate one Work against a caller-owned read-only Catalog snapshot."""
+    draft.validate()
+    work_by_id = {work.id: work for work in data.works}
+    items = {item.id: item for item in data.items}
+    known = {(source.site, source.external_id): source for source in data.sources}
+    target_by_key = {target.key: target for target in draft.members}
+    listing_ids = {key: {row.external_id for row in draft.listings[key].rows} for key in target_by_key}
+    for source in data.sources:
+        if work_by_id[items[source.item_id].work_id].work_key != draft.work_key:
+            continue
+        owner = target_by_key.get(source.discovery_key)
+        if source.acquisition_enabled and owner is None:
+            raise ValueError("作品に所有key不明の担当Sourceがあります。先にCatalogの所有関係を確認してください")
+        if owner is not None and owner.site != source.site:
+            raise ValueError("Sourceの所有keyとサイトが一致しません")
+        if source.acquisition_enabled and owner is not None and source.external_id not in listing_ids[owner.key]:
+            raise ValueError("担当中の既存Sourceが完全一覧にありません。欠落を確認してから再編集してください")
+    chosen = {}
+    summary = []
+    for target in draft.members:
+        rows = selected_rows(target, draft.listings[target.key])
+        selected = {row.external_id for row in rows}
+        current = [source for source in data.sources if source.site == target.site and source.discovery_key == target.key]
+        new = 0
+        for row in rows:
+            identity = target.site, row.external_id
+            if identity in chosen:
+                raise ValueError(f"同一サイトの担当が重複しています: {chosen[identity]} / {target.key}")
+            chosen[identity] = target.key
+            source = known.get(identity)
+            if source is None:
+                new += 1
+            elif (source.discovery_key != target.key
+                  or work_by_id[items[source.item_id].work_id].work_key != target.work_key):
+                raise ValueError(f"{target.key}: {row.external_id} は別key/作品のSourceです")
+        excluded = sum(source.acquisition_enabled and source.external_id not in selected for source in current)
+        retained = sum(source.acquisition_enabled and source.external_id in selected for source in current)
+        summary.append(f"{target.site} / {target.key}: 担当 {len(rows)} / 維持 {retained} / 担当外 {excluded} / Catalog未登録 {new}")
+    summary.append("\n完成後の並び（新規登録・担当範囲と番号の最終確定はFull後）")
+    position = 1
+    for block in draft.blocks():
+        rows = draft.rows_for_block(block)
+        if not rows:
+            continue
+        summary.append(f"{position:03}〜{position + len(rows) - 1:03} {block.key}: {rows[0].display_title} → {rows[-1].display_title}"
+                       + (" [新着も含む]" if block.end_external_id is None else ""))
+        position += len(rows)
+    # Existing artifact records are references only: never inspect/rename files.
+    own_item_ids = {source.item_id for source in data.sources if source.discovery_key in {target.key for target in draft.members}}
+    artifact_count = sum(artifact.kind == "archive" and artifact.item_id in own_item_ids for artifact in data.artifacts)
+    if artifact_count:
+        summary.append(f"\n既存ZIP記録 {artifact_count}件。番号変更による改名・出力先衝突は別途audit/renumberで確認してください。既存ZIPは変更しません。")
+    return WorkEditPreview(draft.targets, revision, catalog_snapshot_identity(data), draft.work_key,
+                           tuple(draft.listings.values()), "\n".join(summary))

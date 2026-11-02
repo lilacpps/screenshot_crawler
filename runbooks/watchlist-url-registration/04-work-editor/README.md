@@ -1,6 +1,6 @@
 # Stage 04 — WorkEditorをdraft-only詳細設定として再利用
 
-> Status: NOT STARTED。Stage 03の一括下書きから詳細編集を呼び出す。
+> Status: COMPLETE。実装・レビュー・検証は ../PROGRESS.md のStage 04 checkpoint。
 
 ## Objective
 

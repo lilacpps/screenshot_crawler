@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QStringListModel, Qt, QThreadPool, Signal
@@ -32,80 +32,25 @@ from PySide6.QtWidgets import (
 from screenshot_crawler.catalog.job_lock import CatalogJobLock
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader
 from screenshot_crawler.watchlist.service import WatchlistService
-from screenshot_crawler.watchlist.work_edit import WorkDraft, full_changed_keys, selected_rows
+from screenshot_crawler.watchlist.work_edit import (
+    WorkDraft,
+    WorkEditPreview,
+    full_changed_keys,
+    selected_rows,
+    validate_work_snapshot,
+)
 
-from .watchlist_editor import AddWatchlistKeyDialog, _catalog_snapshot_identity, _ListingWorker
-
-
-@dataclass(frozen=True)
-class WorkEditPreview:
-    targets: tuple
-    revision: str
-    catalog_identity: str
-    work_key: str
-    listings: tuple
-    summary: str
+from .watchlist_editor import AddWatchlistKeyDialog, _ListingWorker
 
 
 def validate_work(draft: WorkDraft, path: Path, catalog: Path, revision: str) -> WorkEditPreview:
-    """Read-only, complete-Work validation; new Catalog identities are optional."""
+    """Existing GUI wrapper; persistence and browser lifecycle remain outside."""
     draft.validate()
     preview = WatchlistService(path).preview_edit(draft.targets, expected_revision=revision)
     if not preview.ready:
         raise ValueError(" / ".join(preview.blockers))
     data = CatalogInventoryReader().read(catalog)
-    work_by_id = {work.id: work for work in data.works}
-    items = {item.id: item for item in data.items}
-    known = {(source.site, source.external_id): source for source in data.sources}
-    target_by_key = {target.key: target for target in draft.members}
-    listing_ids = {key: {row.external_id for row in draft.listings[key].rows} for key in target_by_key}
-    for source in data.sources:
-        if work_by_id[items[source.item_id].work_id].work_key != draft.work_key:
-            continue
-        owner = target_by_key.get(source.discovery_key)
-        if source.acquisition_enabled and owner is None:
-            raise ValueError("作品に所有key不明の担当Sourceがあります。先にCatalogの所有関係を確認してください")
-        if owner is not None and owner.site != source.site:
-            raise ValueError("Sourceの所有keyとサイトが一致しません")
-        if source.acquisition_enabled and owner is not None and source.external_id not in listing_ids[owner.key]:
-            raise ValueError("担当中の既存Sourceが完全一覧にありません。欠落を確認してから再編集してください")
-    chosen = {}
-    summary = []
-    for target in draft.members:
-        rows = selected_rows(target, draft.listings[target.key])
-        selected = {row.external_id for row in rows}
-        current = [source for source in data.sources if source.site == target.site and source.discovery_key == target.key]
-        new = 0
-        for row in rows:
-            identity = target.site, row.external_id
-            if identity in chosen:
-                raise ValueError(f"同一サイトの担当が重複しています: {chosen[identity]} / {target.key}")
-            chosen[identity] = target.key
-            source = known.get(identity)
-            if source is None:
-                new += 1
-            elif (source.discovery_key != target.key
-                  or work_by_id[items[source.item_id].work_id].work_key != target.work_key):
-                raise ValueError(f"{target.key}: {row.external_id} は別key/作品のSourceです")
-        excluded = sum(source.acquisition_enabled and source.external_id not in selected for source in current)
-        retained = sum(source.acquisition_enabled and source.external_id in selected for source in current)
-        summary.append(f"{target.site} / {target.key}: 担当 {len(rows)} / 維持 {retained} / 担当外 {excluded} / Catalog未登録 {new}")
-    summary.append("\n完成後の並び（新規登録・担当範囲と番号の最終確定はFull後）")
-    position = 1
-    for block in draft.blocks():
-        rows = draft.rows_for_block(block)
-        if not rows:
-            continue
-        summary.append(f"{position:03}〜{position + len(rows) - 1:03} {block.key}: {rows[0].display_title} → {rows[-1].display_title}"
-                       + (" [新着も含む]" if block.end_external_id is None else ""))
-        position += len(rows)
-    # Existing artifact records are references only: never inspect/rename files.
-    own_item_ids = {source.item_id for source in data.sources if source.discovery_key in {target.key for target in draft.members}}
-    artifact_count = sum(artifact.kind == "archive" and artifact.item_id in own_item_ids for artifact in data.artifacts)
-    if artifact_count:
-        summary.append(f"\n既存ZIP記録 {artifact_count}件。番号変更による改名・出力先衝突は別途audit/renumberで確認してください。既存ZIPは変更しません。")
-    return WorkEditPreview(draft.targets, revision, _catalog_snapshot_identity(data), draft.work_key,
-                           tuple(draft.listings.values()), "\n".join(summary))
+    return validate_work_snapshot(draft, data, revision)
 
 
 class _Signals(QObject):
@@ -193,6 +138,11 @@ class _SitePane(QWidget):
             self.last.setCurrentIndex(max(indices))
         self.oldest.setChecked(scope is None or scope.through_url is None)
         self.latest.setChecked(scope is None or scope.from_url is None)
+        if editor.draft_only:
+            confirm = QPushButton("このkeyの範囲を確認済み" if target.key in editor.draft.configured_keys
+                                  else "このkeyの範囲・担当を確認")
+            confirm.clicked.connect(lambda: editor.confirm_scope(target.key))
+            layout.addWidget(confirm)
 
     def boundary(self, first):
         indices = sorted({index.row() for index in self.table.selectedIndexes()})
@@ -231,16 +181,23 @@ class WorkEditorDialog(QDialog):
 
     fullRequested = Signal(object)  # (explicit key set, saved Watchlist revision)
     watchlistSaved = Signal()
+    draftConfirmed = Signal(object)  # (validated preview, explicitly confirmed keys)
 
-    def __init__(self, watchlist_path, catalog_path, runtime_path, *, snapshot=None, parent=None):
+    def __init__(self, watchlist_path, catalog_path, runtime_path, *, snapshot=None, parent=None,
+                 draft=None, revision=None, catalog_identity=None):
         super().__init__(parent)
         self.setWindowTitle("Watchlist：新規登録・担当範囲・部分置換")
         self.resize(1320, 900)
         self.path, self.catalog = Path(watchlist_path), Path(catalog_path)
         self.runtime_path, self.snapshot = runtime_path, snapshot
         self.service = WatchlistService(self.path)
-        self.saved = tuple(self.service.list_targets())
-        self.revision = self.service.revision()
+        self.saved, current_revision = self.service.read_snapshot()
+        self.draft_only = draft is not None
+        self.expected_catalog_identity = catalog_identity
+        self.draft_result = None
+        self.revision = current_revision if not self.draft_only else revision
+        if self.draft_only and (not revision or not catalog_identity or revision != current_revision):
+            raise ValueError("下書きの基準Watchlist/Catalogがありません、または変更されています")
         self.pool = QThreadPool(self)
         self.task = None
         self.dirty = False
@@ -248,7 +205,10 @@ class WorkEditorDialog(QDialog):
         self.active_job = False
         self.fetch_queue = []
         self.pending_replacement = None
-        self.draft = WorkDraft(self.saved, self.saved[0].work_key if self.saved else "")
+        self.draft = draft.clone() if self.draft_only else WorkDraft(self.saved, self.saved[0].work_key if self.saved else "")
+        self._initial_members = self.draft.members
+        if self.draft_only:
+            self.setWindowTitle("URL登録：このWorkの範囲・完成順（下書きのみ）")
         layout = QVBoxLayout(self)
         self.work_search = _WorkSearch()
         self.work_search.setPlaceholderText("作品を検索（作品名 / work_keyの一部）")
@@ -273,6 +233,8 @@ class WorkEditorDialog(QDialog):
                                 ("再読込", self.reload)):
             button = QPushButton(label)
             button.clicked.connect(callback)
+            if self.draft_only and label != "両サイトの全話一覧を取得":
+                button.setVisible(False)
             controls.addWidget(button)
         layout.addLayout(controls)
         self.controls = QWidget()
@@ -302,6 +264,8 @@ class WorkEditorDialog(QDialog):
         layout.addWidget(self.status)
         actions = QHBoxLayout()
         self.preview_button, self.save_button = QPushButton("変更プレビュー"), QPushButton("Watchlistに保存")
+        if self.draft_only:
+            self.save_button.setText("このWorkの下書きを確定")
         self.preview_button.clicked.connect(self.preview_edit)
         self.save_button.clicked.connect(self.save_edit)
         actions.addWidget(self.preview_button)
@@ -341,8 +305,8 @@ class WorkEditorDialog(QDialog):
     def _enabled(self):
         enabled = self.task is None and not self.active_job
         self.controls.setEnabled(enabled)
-        self.work_search.setEnabled(enabled)
-        self.work_combo.setEnabled(enabled)
+        self.work_search.setEnabled(enabled and not self.draft_only)
+        self.work_combo.setEnabled(enabled and not self.draft_only)
         self.preview_button.setEnabled(enabled)
         self.save_button.setEnabled(enabled and self.preview is not None)
 
@@ -352,6 +316,9 @@ class WorkEditorDialog(QDialog):
             QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Discard
 
     def _switch_work(self):
+        if self.draft_only:
+            self._fill_works()
+            return
         key = self.work_combo.currentData()
         if key == self.draft.work_key:
             return
@@ -363,6 +330,8 @@ class WorkEditorDialog(QDialog):
         self._render()
 
     def reload(self):
+        if self.draft_only:
+            return
         if not self._guard() or not self._discard():
             return
         key = self.draft.work_key
@@ -376,7 +345,7 @@ class WorkEditorDialog(QDialog):
 
     def accept_watchlist_update(self, targets, revision, snapshot):
         """Replace only a clean draft; never overwrite pending operator edits."""
-        if self.dirty or self.task is not None:
+        if self.draft_only or self.dirty or self.task is not None:
             raise ValueError("編集または処理中のため再読込が必要です")
         key = self.draft.work_key
         self.saved, self.revision, self.snapshot = tuple(targets), revision, snapshot
@@ -387,6 +356,8 @@ class WorkEditorDialog(QDialog):
         self.status.setPlainText("メイン画面のDiscovery設定変更を反映しました。以前のプレビューは無効です。")
 
     def add_target(self, _checked=False, *, new_work=False):
+        if self.draft_only:
+            return False
         if not self._guard():
             return False
         if new_work and not self._discard():
@@ -420,6 +391,8 @@ class WorkEditorDialog(QDialog):
             return
         try:
             result = action()
+            if self.draft_only:
+                self.draft.configured_keys.clear()
             self.dirty, self.preview = True, None
             self._render()
             counts = ""
@@ -452,6 +425,8 @@ class WorkEditorDialog(QDialog):
         if not self._guard():
             return
         self.preview = None
+        if self.draft_only:
+            self.draft.configured_keys.clear()
         self.fetch_queue = list(self.draft.members)
         self._next_listing()
 
@@ -500,8 +475,19 @@ class WorkEditorDialog(QDialog):
         if not self._guard():
             return
         try:
+            if self.draft_only and self.draft.configured_keys != {target.key for target in self.draft.members}:
+                raise ValueError("各keyの範囲・担当を確認してからプレビューしてください")
             if any(target.archive_segments is not None for target in self.draft.members):
+                prior = self.draft.members
                 self.draft.apply_blocks(self.draft.blocks())
+                if self.draft_only:
+                    # Normalizing an unchanged layout must not turn an open
+                    # saved scope into fixed boundaries merely by previewing.
+                    for old in prior:
+                        new = self.draft.target(old.key)
+                        listing = self.draft.listings[old.key]
+                        if selected_rows(old, listing) == selected_rows(new, listing):
+                            self.draft.update(replace(new, discovery_scope=old.discovery_scope))
             elif len(self.draft.members) > 1 and all(target.archive_order is None for target in self.draft.members):
                 for order, target in enumerate(self.draft.members, 1):
                     self.draft.update(replace(target, archive_order=order))
@@ -512,7 +498,34 @@ class WorkEditorDialog(QDialog):
         # Copy immutable inputs; UI cannot mutate the draft during this task.
         draft = WorkDraft(self.draft.targets, self.draft.work_key)
         draft.listings = dict(self.draft.listings)
-        self._run(lambda: validate_work(draft, self.path, self.catalog, self.revision), self._preview_ready)
+        self._run(lambda: self._validate(draft), self._preview_ready)
+
+    def _validate(self, draft):
+        result = validate_work(draft, self.path, self.catalog, self.revision)
+        if self.draft_only:
+            if result.catalog_identity != self.expected_catalog_identity:
+                raise ValueError("Catalogが変更されました。親画面の基準を確認してください")
+            original = {target.key: target for target in self._initial_members}
+            diff = []
+            for target in draft.members:
+                before = original[target.key]
+                for field in ("discovery_scope", "archive_order", "archive_segments"):
+                    if getattr(before, field) != getattr(target, field):
+                        diff.append(f"{target.key} {field}: {getattr(before, field)!r} → {getattr(target, field)!r}")
+            result = replace(result, summary="下書きのみ。Watchlistにはまだ保存しません。\n"
+                + "\n".join(diff) + "\n\n" + result.summary)
+        return result
+
+    def confirm_scope(self, key):
+        if not self._guard() or not self.draft_only:
+            return
+        try:
+            selected_rows(self.draft.target(key), self.draft.listings[key])
+            self.draft.configured_keys.add(key)
+            self.dirty, self.preview = True, None
+            self._render()
+        except (KeyError, ValueError) as exc:
+            self._failure(str(exc))
 
     def _preview_ready(self, result):
         self.task = None
@@ -528,6 +541,18 @@ class WorkEditorDialog(QDialog):
             self._failure("プレビュー後に下書きが変わりました")
             return
         before = self.saved
+        if self.draft_only:
+            if self.draft.configured_keys != {target.key for target in self.draft.members}:
+                self._failure("全keyの範囲確認が失効しました")
+                return
+            draft = self.draft.clone()
+            def confirm():
+                current = self._validate(draft)
+                if current != preview:
+                    raise ValueError("詳細プレビューが変わりました。再確認してください")
+                return current, frozenset(draft.configured_keys)
+            self._run(confirm, self._draft_confirmed)
+            return
 
         def save():
             draft = WorkDraft(preview.targets, preview.work_key)
@@ -542,6 +567,13 @@ class WorkEditorDialog(QDialog):
                     raise ValueError("保存直後にWatchlistが変更されました。設定を再読込してください")
                 return saved, revision, full_changed_keys(before, saved)
         self._run(save, self._saved)
+
+    def _draft_confirmed(self, result):
+        self.task = None
+        self.draft_result = result
+        self.dirty = False
+        self.draftConfirmed.emit(result)
+        super().accept()
 
     def _saved(self, result):
         self.task = None
@@ -661,7 +693,8 @@ class WorkEditorDialog(QDialog):
         # leave a hidden dirty draft blocking main-window Watchlist changes.
         if self.dirty:
             self.dirty, self.preview = False, None
-            self.draft = WorkDraft(self.saved, self.draft.work_key)
+            if not self.draft_only:
+                self.draft = WorkDraft(self.saved, self.draft.work_key)
             self._fill_works()
             self._render()
 

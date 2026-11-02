@@ -216,3 +216,101 @@ def test_main_window_entry_preserves_inventory_selection_and_blocks_other_action
     editor.dirty = False
     editor.close()
     window.close()
+
+
+def test_draft_only_work_editor_never_saves_or_requests_full(gui, tmp_path, monkeypatch):
+    from screenshot_crawler.gui.work_editor import WorkEditorDialog
+    from screenshot_crawler.registration.detail import accept_detail, detail_draft
+    from screenshot_crawler.watchlist.service import WatchlistService
+    from tests.unit.test_registration_detail import add, listing, setup_batch
+    dialog, _app = gui
+    batch, path, catalog = setup_batch(tmp_path)
+    a, b = add(batch, "jumpplus", "first"), add(batch, "comicdays", "second")
+    batch.assign(b, group_id=a)
+    batch.confirm(b)
+    request, draft = detail_draft(batch, a)
+    before = path.read_bytes(), catalog.path.read_bytes()
+    editor = WorkEditorDialog(path, catalog.path, dialog.runtime_path, draft=draft,
+        revision=request.revision, catalog_identity=request.catalog_identity)
+    saved, full = [], []
+    editor.watchlistSaved.connect(lambda: saved.append(True))
+    editor.fullRequested.connect(full.append)
+    def no_save(*args, **kwargs):
+        raise AssertionError("draft-only must not persist")
+    monkeypatch.setattr(WatchlistService, "apply_edit", no_save)
+    assert not editor.work_combo.isEnabled() and not editor.work_search.isEnabled()
+    assert editor.add_target(new_work=True) is False
+    for target in editor.draft.members:
+        editor.draft.set_listing(listing(target))
+    editor.preview_edit()
+    assert editor.preview is None  # Fetching alone is not scope confirmation.
+    for target in editor.draft.members:
+        editor.confirm_scope(target.key)
+    editor.preview_edit()
+    wait_for(lambda: editor.task is None)
+    assert editor.preview is not None
+    assert "archive_order" in editor.preview.summary
+    editor.save_edit()
+    wait_for(lambda: editor.task is None)
+    result, configured = editor.draft_result
+    accept_detail(batch, request, result, configured)
+    assert batch.readiness(a).status == "ready"
+    assert not saved and not full
+    assert before == (path.read_bytes(), catalog.path.read_bytes())
+    assert not draft.listings and not draft.configured_keys
+    editor.deleteLater()
+
+
+def test_cancelled_child_keeps_parent_and_other_work(gui, tmp_path, monkeypatch):
+    from screenshot_crawler.gui.work_editor import WorkEditorDialog
+    from screenshot_crawler.registration.detail import detail_draft
+    from tests.unit.test_registration_detail import add, listing, setup_batch
+    dialog, _app = gui
+    batch, path, catalog = setup_batch(tmp_path)
+    a, b = add(batch, "jumpplus", "first"), add(batch, "comicdays", "second")
+    other = batch.candidates[b]
+    request, draft = detail_draft(batch, a)
+    editor = WorkEditorDialog(path, catalog.path, dialog.runtime_path, draft=draft,
+        revision=request.revision, catalog_identity=request.catalog_identity)
+    target = editor.draft.members[0]
+    editor.draft.set_listing(listing(target))
+    editor.change(lambda: editor.draft.set_range(target.key, "2", "3"))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard)
+    editor.reject()
+    assert editor.draft_result is None
+    assert draft.target(target.key).discovery_scope is None
+    assert batch.candidates[b] == other and batch.works[a].detail is None
+    editor.deleteLater()
+
+
+def test_draft_preview_keeps_existing_open_segment_scope(gui, tmp_path):
+    from screenshot_crawler.gui.work_editor import WorkEditorDialog
+    from screenshot_crawler.registration.detail import detail_draft
+    from screenshot_crawler.watchlist.models import ArchiveSegment, WatchlistTarget
+    from screenshot_crawler.watchlist.service import WatchlistService
+    from tests.unit.test_registration_detail import URLS, add, listing, setup_batch
+    dialog, _app = gui
+    batch, path, catalog = setup_batch(tmp_path)
+    old = WatchlistTarget("old", "work", "jumpplus", URLS["jumpplus"], "既存", False,
+        archive_segments=(ArchiveSegment(1, "1", "4"),))
+    service = WatchlistService(path)
+    service.apply_edit((old,))
+    batch.base, batch.revision = service.read_snapshot()
+    row = add(batch, "comicdays", "new")
+    batch.assign(row, existing_work="work")
+    batch.confirm(row)
+    request, draft = detail_draft(batch, batch.candidates[row].group_id)
+    editor = WorkEditorDialog(path, catalog.path, dialog.runtime_path, draft=draft,
+        revision=request.revision, catalog_identity=request.catalog_identity)
+    for target in editor.draft.members:
+        editor.draft.set_listing(listing(target))
+        editor.confirm_scope(target.key)
+    editor.preview_edit()
+    wait_for(lambda: editor.task is None)
+    assert editor.preview is not None
+    assert editor.draft.target("old") == old
+    assert editor.draft.members[1].archive_segments is not None
+    assert service.list_targets() == [old]
+    editor.dirty = False
+    editor.close()
+    editor.deleteLater()

@@ -1,3 +1,28 @@
+
+## URL registration Work detail drafts (Stage 04)
+
+The URL dialog opens WorkEditorDialog in explicit draft-only mode. The child
+clones one WorkDraft, disables Work switching/add/reload, and never calls
+apply_edit or emits watchlistSaved/fullRequested. Existing WorkEditor normal
+save/Full behavior is retained. Each key requires an explicit scope/assignment
+confirmation after listing retrieval and after changes. Preview validates all
+complete listings (0..300s), exact selection/sequence, same-site overlap and
+existing Source ownership against a single read-only Catalog snapshot.
+The preview also shows explicit scope/order/segments differences; confirm returns
+only an immutable member patch with Watchlist revision, Catalog identity, Work
+version, listing digests/timestamps and confirmed key set. Parent acceptance
+checks stable fields and key membership and merges only that Work. Other Works'
+edits remain intact. Cancel discards the child only. Freshness and snapshot
+identity are rechecked both on child confirmation and later bulk preview/save.
+Only magapoke/jumpplus/zeblack/comicdays complete-list preview is supported;
+other sites needing detail are blocked. New single-source Works may skip detail.
+Draft preview preserves an unchanged open scope across segment normalization;
+new keys append to existing archive_order through WorkDraft.add.
+Existing scope/order/segments/enabled are loaded unchanged; only explicitly
+previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.
+`validate_work_snapshot` and `catalog_snapshot_identity` are Qt-free shared
+functions; the existing GUI validation and fingerprint wrappers remain compatible.
+
 ## URL registration GUI (Stage 03, 2026-11-02)
 
 MainWindow opens an application-modal URL draft dialog without changing Inventory
@@ -10,7 +35,8 @@ Rows show URL status, native identity/title evidence, group readiness and the
 source/canonical URLs. Form edits persist across rows and grouping, retry resets
 confirmation for its Work, and a generation ignores old callbacks. Work checkbox
 selection is atomic across its members. Close/reload uses Discard/Cancel.
-Stage 03 is no-write: detail/preview/save are visibly disabled. Native Windows
+The URL workflow remains no-write through Stage 04: detail is connected;
+bulk preview/save follow in Stage 05. Native Windows
 Qt capture at 980x800 verified Japanese text and controls; offscreen captures
 had missing fonts and are not considered visual proof. GUI/adjacent regression
 coverage uses isolated files, with no operational data or live site operation.
@@ -52,8 +78,8 @@ ready registration. Unknown native work identity/title remain unknown.
 Kadocomi alone converts proven same-work episode URLs to work detail; optional
 detail metadata uses the caller's Page, refuses redirects, blocks subresources,
 and never calls Discovery/reader/resource/capture or writes persisted data.
-Registration candidate/naming APIs are implemented in Stage 02; the URL paste/edit GUI is implemented in Stage 03; detail and
-persistence follow in Stages 04-05. No Catalog/schema, saved key or operational data changes. New resolver
+Registration candidate/naming APIs are implemented in Stage 02; the URL paste/edit GUI is implemented in Stage 03; draft-only detail is implemented in Stage 04;
+persistence follows in Stage 05. No Catalog/schema, saved key or operational data changes. New resolver
 Unit and artificial browser tests pass; resolver live behavior is unverified.
 
 ## Bounded non-consuming resolver preparation (2026-10-29)

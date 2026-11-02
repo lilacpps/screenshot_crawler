@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from screenshot_crawler.catalog.models import (
@@ -123,3 +125,10 @@ class CatalogInventoryReader:
             raise InventoryLoadError(
                 f"Catalogを読み込めません。既存v7・権限・破損を確認してください: {exc}"
             ) from exc
+
+
+def catalog_snapshot_identity(data) -> str:
+    """Stable identity of a consistent read-only Catalog snapshot."""
+    payload = json.dumps(asdict(data), ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

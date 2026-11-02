@@ -2639,3 +2639,25 @@ Windows CPython 3.14.6 installation and kana/kanji conversion passed; Python 3.1
 is package-supported but not separately executed here. API/license sources:
 https://pykakasi.readthedocs.io/en/latest/api.html and
 https://pypi.org/project/pykakasi/2.3.0/ (checked 2026-11-02).
+
+## URL registration Work detail drafts (Stage 04)
+
+The URL dialog opens WorkEditorDialog in explicit draft-only mode. The child
+clones one WorkDraft, disables Work switching/add/reload, and never calls
+apply_edit or emits watchlistSaved/fullRequested. Existing WorkEditor normal
+save/Full behavior is retained. Each key requires an explicit scope/assignment
+confirmation after listing retrieval and after changes. Preview validates all
+complete listings (0..300s), exact selection/sequence, same-site overlap and
+existing Source ownership against a single read-only Catalog snapshot.
+The preview also shows explicit scope/order/segments differences; confirm returns
+only an immutable member patch with Watchlist revision, Catalog identity, Work
+version, listing digests/timestamps and confirmed key set. Parent acceptance
+checks stable fields and key membership and merges only that Work. Other Works'
+edits remain intact. Cancel discards the child only. Freshness and snapshot
+identity are rechecked both on child confirmation and later bulk preview/save.
+Only magapoke/jumpplus/zeblack/comicdays complete-list preview is supported;
+other sites needing detail are blocked. New single-source Works may skip detail.
+Existing scope/order/segments/enabled are loaded unchanged; only explicitly
+previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.
+`validate_work_snapshot` and `catalog_snapshot_identity` are Qt-free shared
+functions; the existing GUI validation and fingerprint wrappers remain compatible.

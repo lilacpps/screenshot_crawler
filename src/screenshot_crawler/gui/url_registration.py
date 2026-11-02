@@ -228,8 +228,8 @@ class UrlRegistrationDialog(QDialog):
         row = self.draft.candidates.get(self._selected_id) if self.draft else None
         self.form_widget.setEnabled(enabled and row is not None)
         self.confirm_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
-        self.detail_button.setEnabled(False)
-        self.detail_button.setToolTip("Stage 04で接続します。完全一覧previewは4サイトで対応予定です。")
+        self.detail_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
+        self.detail_button.setToolTip("完全一覧preview対応4サイトで、範囲・担当と完成順を確認します。")
         self.preview_button.setEnabled(False)
         self.save_button.setEnabled(False)
         self.reload_button.setEnabled(self.task is None and not self.active_job)
@@ -443,7 +443,28 @@ class UrlRegistrationDialog(QDialog):
             self.status.setText(str(exc))
 
     def edit_detail(self):
-        self.status.setText("詳細編集はStage 04で接続します。")
+        if not self._guard() or not self._selected_id:
+            return
+        self.apply_fields()
+        from screenshot_crawler.registration.detail import accept_detail, detail_draft
+
+        from .work_editor import WorkEditorDialog
+        try:
+            row = self.draft.candidates[self._selected_id]
+            request, draft = detail_draft(self.draft, row.group_id)
+            editor = WorkEditorDialog(self.path, self.catalog, self.runtime_path,
+                draft=draft, revision=request.revision, catalog_identity=request.catalog_identity,
+                snapshot=self.snapshot, parent=self)
+            if editor.exec() == QDialog.DialogCode.Accepted and editor.draft_result:
+                result, configured = editor.draft_result
+                proof = accept_detail(self.draft, request, result, configured)
+                self.dirty, self.preview = True, None
+                self.status.setText("このWorkの詳細を下書きへ反映しました。Watchlist未保存。")
+                self.evidence.setPlainText(proof.summary)
+                self._render()
+            editor.deleteLater()
+        except ValueError as exc:
+            self.status.setText(str(exc))
 
     def preview_edit(self):
         self.status.setText("保存前プレビューはStage 05で接続します。")

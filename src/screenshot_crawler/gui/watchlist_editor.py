@@ -8,10 +8,8 @@ pending Batch or Grant-only request.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Iterable
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,7 +53,10 @@ from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow
 from screenshot_crawler.gui.model import InventoryTreeModel, StatusFilter, ViewMode
 from screenshot_crawler.gui.watchlist_comparison import WorkEpisodeModel, WorkEpisodeRow
-from screenshot_crawler.management.catalog_reader import CatalogInventoryReader
+from screenshot_crawler.management.catalog_reader import (
+    CatalogInventoryReader,
+    catalog_snapshot_identity,
+)
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.models import InventorySnapshot
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
@@ -70,10 +71,8 @@ from screenshot_crawler.watchlist.service import WatchlistEditPreview, Watchlist
 
 
 def _catalog_snapshot_identity(data: Any) -> str:
-    """Stable identity for the one transaction returned by CatalogInventoryReader."""
-
-    payload = json.dumps(asdict(data), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    """Compatibility wrapper for shared Qt-free snapshot identity."""
+    return catalog_snapshot_identity(data)
 
 
 class _ListingSignals(QObject):
