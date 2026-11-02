@@ -15,3 +15,9 @@
 - site固有parser unit + synthetic browser/response integration + preview no-write + existing Discovery/Batch regression、必要時のみ実サイトLive（日時・URL shape・根拠・未対応を明記）。
 - 動作確認できた形のみ「自動変換できます」とGUIに表示する。未実証のサイトは通常の起点URLを使えるまま維持し、改善予定を登録成功と偽らない。
 - 共通modelの変更や大規模refactorは避け、site-localな拡張にとどめる。
+
+## Stage 00後の決定: URL変換とpreviewの責務を分ける
+
+- Stage 06で扱うのはサイト別URL変換と、非消費のsite-native work identity/title metadataの拡張のみ。安全な正規URLは確定しているがmetadataが取得不能な場合は、Stage 02–05の手動登録経路を妨げない。
+- 残り7サイトのread-only完全話一覧previewとscope詳細設定は [Stage 07](../07-listing-preview-coverage/README.md) に分離する。Full DiscoveryやCatalogへの書込みでpreviewを代用しない。
+- Stage 06の完了判定では「正規URL認識」「別形式変換」「作品ID/title取得」「完全一覧preview」を別のcapabilityとして報告する。
