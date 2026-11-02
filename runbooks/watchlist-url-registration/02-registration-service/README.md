@@ -1,6 +1,6 @@
 # Stage 02 — Work候補、ローマ字ID、同一性・重複判定
 
-> Status: NOT STARTED。Stage 01のread-only resolverを前提。
+> Status: COMPLETE。実装・検証は ../PROGRESS.md のStage 02 checkpoint。
 
 ## Objective
 

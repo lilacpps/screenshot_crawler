@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01 COMPLETE（2026-11-02）/ Stage 02 next。
+> Status: Stage 02 COMPLETE（2026-11-02）/ Stage 03 next。
 > Stage 01–05は連続実装を承認済み。Stage 06–07は対象外。
 > Runbook: [README.md](README.md)
 
@@ -8,7 +8,7 @@
 |---|---|---|
 | 00 Current contract audit | COMPLETE (static audit) | [設計・証拠](00-contract/RESEARCH.md): 11site URL/title/変換matrix、Resolver hook、Work draft/atomic save/Full境界、Kadocomi pilotとStage 01ファイル/testを確定。Liveは全site未検証 |
 | 01 URL resolver + pilot | COMPLETE | 168 new + 653 affected passed; independent review PASS |
-| 02 Registration draft + naming | NOT STARTED | ローマ字候補、同一性・重複、Work/grouping、pure tests |
+| 02 Registration draft + naming | COMPLETE | 256 related passed; Reviewer PASS after corrections |
 | 03 Batch registration GUI | NOT STARTED | URL貼付、解析進捗、修正、draft保持、GUI tests |
 | 04 Scope editor draft integration | NOT STARTED | work-scoped 編集結果を未保存で返す、stale/overlap tests |
 | 05 Atomic save and E2E | NOT STARTED | CAS/lock、selected-set atomic、Full confirmation、E2E |
@@ -60,3 +60,22 @@
   ambiguity remains a metadata expansion concern for Stage 06, never save proof.
 - Docs and core/all 11 site notes synchronized. No CLI/GUI/schema or data mutation.
   Next Stage 02 permitted by tests and review.
+
+## Stage 02 checkpoint — 2026-11-02 JST
+
+- Added Qt-free BatchRegistrationDraft, explicit Work grouping/selection,
+  same-site proven identity folding, readable naming and manual confirmation.
+  Work/key collisions never merge groups; existing IDs and target dataclasses
+  (scope/order/segments/enabled included) are preserved.
+- Retry/manual edits preserve edited values but clear all confirmation evidence;
+  automatic keys follow Work/site changes while manual keys do not. Same-site
+  unknown ownership blocks; unsupported existing Source URLs require consistent
+  existing key+native Work proof or remain unresolved. No Catalog writes.
+- pykakasi 2.3.0 installed/tested on Windows Python 3.14; GUI extra >=2.3,<3.
+  GPL3+ and bundled dictionary location/API sources documented in core note.
+  ASCII titles do not require provider; absent provider leaves manual entry.
+- 256 draft/resolver/Watchlist/WorkDraft tests passed, zero skipped. Ruff and diff
+  check passed. Independent review initially found confirmation invalidation
+  and unresolved-owner blockers; corrected and re-reviewed PASS, zero blockers.
+- No browser changes, so no new Integration/Live/Research/full run in this Stage.
+  Docs/note synchronized. Stage 03 may proceed; no persistence/UI yet.

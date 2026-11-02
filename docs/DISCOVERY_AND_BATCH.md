@@ -2613,3 +2613,29 @@ Optional Kadocomi title observation handles only the exact detail document,
 reads its unique known-suffix og:title, refuses redirects before following them,
 and blocks unproven subresources. Browser Page lifecycle stays with the caller.
 No general HTTP resolver or metadata fallback to full Discovery is added.
+
+## Registration candidate drafts (Stage 02)
+
+`registration/draft.py` is Qt-free and performs no persistence. It preserves
+ordered origins, URL/evidence, labels/readings, manual keys, group selection and
+per-Work versions. Only verified same-site work identities or exact canonical
+URLs fold new input; cross-site/same-title hints never assign a Work. Existing
+matches start unselected and require an explicit additional-key choice; stable
+existing IDs remain untouched. Existing-Work selection inherits work_key,
+including legacy hyphens; only newly suggested key text is normalized.
+Human confirmation binds the current edited candidate; retry, membership, label
+or key changes invalidate confirmation and the affected Work's detail proof.
+New single-source Works need no scope. Existing-Work additions/multiple keys
+require complete-list detail; sites outside the existing four block that path.
+Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
+Final fresh ownership validation and persistence follow in Stage 05.
+Naming uses local pykakasi >=2.3,<3 from the GUI optional dependency; ASCII titles
+bypass transliteration. Machine readings/slugs are suggestions, never identity
+proof. Missing provider/unresolved characters require manual input; no hash
+fallback, network dictionary or custom kanji dictionary exists. pykakasi 2.3.0
+(GPL-3.0-or-later) bundles KAKASI/derived dictionaries in site-packages/pykakasi/data;
+conversion does not download dictionaries or write into this repository.
+Windows CPython 3.14.6 installation and kana/kanji conversion passed; Python 3.12
+is package-supported but not separately executed here. API/license sources:
+https://pykakasi.readthedocs.io/en/latest/api.html and
+https://pypi.org/project/pykakasi/2.3.0/ (checked 2026-11-02).

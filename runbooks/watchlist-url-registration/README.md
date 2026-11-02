@@ -1,9 +1,9 @@
 # Watchlist URL一括登録 — 実装Runbook
 
-> Status: Stage 01 IMPLEMENTED（2026-11-02）、Stage 02–05 implementation in progress
+> Status: Stage 01–02 IMPLEMENTED（2026-11-02）、Stage 03–05 implementation in progress
 > 対象: Windows PySide6 GUI、Watchlist、read-only URL解析、既存WorkEditor。Phase 00から順番に実施する。
 > Authority: AGENTS.md → docs/SPEC.md / docs/ARCHITECTURE.md → docs/DISCOVERY_AND_BATCH.md / docs/BOUNDED_DISCOVERY.md → docs/TEST_STRATEGY.md → docs/DECISIONS.md → code/tests。Runbookは既存契約を上書きしない。
-> Stage 01 COMPLETE。次は [Stage 02](02-registration-service/README.md)。採用されたユーザー判断は [DECISIONS.md](DECISIONS.md)、進捗は [PROGRESS.md](PROGRESS.md)。
+> Stage 02 COMPLETE。次は [Stage 03](03-gui/README.md)。採用されたユーザー判断は [DECISIONS.md](DECISIONS.md)、進捗は [PROGRESS.md](PROGRESS.md)。
 
 ## Goal / ユーザー要求
 
