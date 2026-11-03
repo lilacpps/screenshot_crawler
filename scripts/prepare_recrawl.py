@@ -78,7 +78,7 @@ SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
         fallback_extensions=frozenset({".png"}),
         # Accepted PNG positions are an archive recrawl policy, independent
         # of whether capture can identify a terminal notice/logo.
-        allowed_head_png_pages=10,
+        allowed_head_png_pages=0,
         allowed_tail_png_pages=5,
     ),
     "comicdays": ArchivePolicy(
@@ -298,7 +298,7 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                     unexpected_count=unexpected,
                     reason="archive contains no page images",
                 )
-            # BookWalker accepts head/tail PNGs when a JPEG companion exists.
+            # BookWalker accepts only tail PNGs when a JPEG companion exists.
             # Saved page numbers, not ZIP order or terminal-image recognition,
             # define accepted positions. Ambiguous/nonstandard numbering does
             # not receive an exception; PNG-only archives remain fallback.

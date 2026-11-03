@@ -87,13 +87,16 @@ def _add_completed_archive(
         ("bookwalker", ["page-0001.JPG", "page-0002.jpeg"], "PREFERRED_ONLY"),
         ("bookwalker", ["page-0001.png", "page-0002.jpg"], "PREFERRED_ONLY"),
         ("bookwalker", ["page-0002.JPEG", "page-0001.PNG"], "PREFERRED_ONLY"),
-        ("bookwalker", ["page-0001.png", "legacy.jpg"], "PREFERRED_ONLY"),
+        ("bookwalker", ["page-0001.png", "legacy.jpg"], "FALLBACK_INCLUDED"),
         ("bookwalker", ["page-0001.jpg", "page-0002.png"], "PREFERRED_ONLY"),
         ("bookwalker", ["page-0001.png", "page-0002.jpg", "page-0003.png"], "PREFERRED_ONLY"),
-        ("bookwalker", ["page-0008.PNG", "page-0001.png", "page-0004.PNG", "page-0002.JPEG", "page-0003.jpg", "page-0005.png", "page-0006.jpg", "page-0007.png"], "PREFERRED_ONLY"),
-        ("bookwalker", ["page-0001.jpg", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.jpg", "page-0007.jpg"], "PREFERRED_ONLY"),
-        ("bookwalker", [f"page-{n:04d}.{'png' if n == 10 else 'jpg'}" for n in range(1, 18)], "PREFERRED_ONLY"),
+        ("bookwalker", ["page-0008.PNG", "page-0001.png", "page-0004.PNG", "page-0002.JPEG", "page-0003.jpg", "page-0005.png", "page-0006.jpg", "page-0007.png"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["page-0001.jpg", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.jpg", "page-0007.jpg"], "FALLBACK_INCLUDED"),
+        ("bookwalker", [f"page-{n:04d}.{'png' if n == 1 else 'jpg'}" for n in range(1, 18)], "FALLBACK_INCLUDED"),
+        ("bookwalker", [f"page-{n:04d}.{'png' if n == 10 else 'jpg'}" for n in range(1, 18)], "FALLBACK_INCLUDED"),
         ("bookwalker", [f"page-{n:04d}.{'png' if n == 11 else 'jpg'}" for n in range(1, 18)], "FALLBACK_INCLUDED"),
+        ("bookwalker", [f"page-{n:04d}.{'png' if n == 12 else 'jpg'}" for n in range(1, 18)], "FALLBACK_INCLUDED"),
+        ("bookwalker", [f"page-{n:04d}.{'png' if n == 13 else 'jpg'}" for n in range(1, 18)], "PREFERRED_ONLY"),
         ("bookwalker", ["page-0001.png"], "FALLBACK_INCLUDED"),
         ("bookwalker", ["page-0001.png", "page-0001.jpg", "page-0002.jpeg"], "FALLBACK_INCLUDED"),
         ("bookwalker", ["001.png", "002.jpg"], "FALLBACK_INCLUDED"),
@@ -137,13 +140,13 @@ def test_site_archive_policies_classify_synthetic_zip(
     ("entries", "preferred", "allowed", "fallback"),
     [
         (["page-0002.jpg", "page-0001.png"], 1, 1, 0),
-        (["page-0008.png", "page-0001.png", "page-0004.PNG", "page-0002.jpeg", "page-0003.jpg", "page-0005.png", "page-0006.jpg", "page-0007.png"], 3, 5, 0),
-        (["page-0001.png", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.png", "page-0007.jpg", "page-0008.png"], 4, 4, 0),
-        ([f"page-{n:04d}.{'png' if n in {10, 11} else 'jpg'}" for n in range(1, 18)], 15, 1, 1),
-        ([f"page-{n:04d}.{'png' if n in {1, 10, 13, 17} else 'jpg'}" for n in range(1, 18)][::-1], 13, 4, 0),
+        (["page-0008.png", "page-0001.png", "page-0004.PNG", "page-0002.jpeg", "page-0003.jpg", "page-0005.png", "page-0006.jpg", "page-0007.png"], 3, 4, 1),
+        (["page-0001.png", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.png", "page-0007.jpg", "page-0008.png"], 4, 2, 2),
+        ([f"page-{n:04d}.{'png' if n in {10, 11} else 'jpg'}" for n in range(1, 18)], 15, 0, 2),
+        ([f"page-{n:04d}.{'png' if n in {1, 10, 13, 17} else 'jpg'}" for n in range(1, 18)][::-1], 13, 2, 2),
     ],
 )
-def test_bookwalker_head_and_tail_png_counts(
+def test_bookwalker_tail_only_png_counts(
     tmp_path: Path, entries: list[str], preferred: int, allowed: int, fallback: int,
 ) -> None:
     path = tmp_path / "bookwalker.zip"
@@ -167,8 +170,11 @@ def test_bookwalker_head_and_tail_png_counts(
         (["page-0001.png", "page-0002.jpg"], False),
         (["page-0001.jpg", "page-0002.png"], False),
         (["page-0001.png", "page-0002.jpg", "page-0003.png", "page-0004.png"], False),
-        (["page-0001.png", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.png", "page-0007.jpg", "page-0008.png"], False),
+        (["page-0001.png", "page-0002.png", "page-0003.jpg", "page-0004.jpg", "page-0005.jpg", "page-0006.png", "page-0007.jpg", "page-0008.png"], True),
+        ([f"page-{n:04d}.{'png' if n == 1 else 'jpg'}" for n in range(1, 18)], True),
+        ([f"page-{n:04d}.{'png' if n == 10 else 'jpg'}" for n in range(1, 18)], True),
         ([f"page-{n:04d}.{'png' if n == 11 else 'jpg'}" for n in range(1, 18)], True),
+        ([f"page-{n:04d}.{'png' if n == 13 else 'jpg'}" for n in range(1, 18)], False),
         (["page-0001.png"], True),
     ],
 )

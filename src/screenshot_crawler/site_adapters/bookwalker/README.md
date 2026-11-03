@@ -336,9 +336,9 @@ Live headed-CDP checks confirmed:
 - renderer geometry-based page split
 - final `59/59` transition where the BookWalker logo appears in the canvas while `#endOfBook` becomes visible
 
-The prepare-recrawl scanner accepts PNGs at saved-page numbers 1 through 10
-and the last five saved-page numbers when a JPEG companion exists, under the
-naming rules in `docs/BOOKWALKER_RECRAWL.md`. Other body PNGs and PNG-only archives
+The prepare-recrawl scanner accepts PNGs only at the last five saved-page
+numbers when a JPEG companion exists, under the naming rules in
+`docs/BOOKWALKER_RECRAWL.md`. Opening PNGs outside that tail and PNG-only archives
 remain `FALLBACK_INCLUDED`. This positional acceptance is independent of the
 adapter's terminal-image navigation decision.
 

@@ -346,9 +346,11 @@ The default is read-only and does not open the viewer, call Discovery, consume
 access resources, or modify Catalog/files. Only completed Items with recorded
 successful ZIP Artifacts are inspected; orphan ZIPs are not discovered.
 
-JPEG-only archives are `PREFERRED_ONLY`. As of 2026-11-02, PNGs at saved-page
-numbers 1 through 10 and the last five saved-page numbers are accepted when at
-least one JPEG companion exists. Archives containing only these allowed PNGs
+JPEG-only archives are `PREFERRED_ONLY`. As of 2026-11-04, PNGs only at the last
+five saved-page numbers are accepted when at least one JPEG companion exists.
+The first-ten and standalone-cover exceptions are disabled: opening PNGs
+outside the tail are `FALLBACK_INCLUDED` and become recrawl candidates.
+Archives containing only these allowed tail PNGs
 and JPEGs are `PREFERRED_ONLY` and excluded from recrawl/apply by default.
 Repeated `--item-id` filters individual Catalog Items, intersecting optional
 site/work scope. With explicit IDs, `--force` also includes `PREFERRED_ONLY`
@@ -359,14 +361,13 @@ ZIP 013 is Item 1880 and ZIP 019 is Item 1874. The verified read-only command is
 It reports exactly two candidates; `--apply` is a separate opt-in to backup
 those ZIPs and return those Items to pending. Other body PNGs,
 PNG-only archives, ambiguous duplicate page numbers, nonstandard PNG naming
-and unsupported formats remain problems. Head/tail ranges require all JPEG/PNG
+and unsupported formats remain problems. The tail range requires all JPEG/PNG
 members to use unique canonical saved-page names, sorted numerically regardless
 of ZIP order; they are not the viewer's original counter or the last five PNGs.
-The existing standalone cover exception independently requires a unique
-`page-0001` member and remains valid when other members use old names. The
-allowed positions count toward `allowed_fallback_count` even when another body
-PNG still requires recrawl, and overlapping head/tail positions count once.
-The head is saved-page numbers 1 through 10, not the first ten PNGs.
+There is no separate `page-0001.png` exception for legacy names. Allowed tail
+positions count toward `allowed_fallback_count` even when another body PNG
+still requires recrawl. In a short archive, an opening page that is also in
+the final five saved pages still receives the tail exception.
 This is accepted positional PNG output, independent of terminal recognition.
 
 The scanner does not inspect image provenance or prove that the named first
@@ -380,26 +381,22 @@ history. Existing owned/quota/access policy still governs subsequent Batch
 eligibility; preparation does not grant access.
 
 Implementation: `scripts/prepare_recrawl.py`; examples and scope limitations:
-`docs/BOOKWALKER_RECRAWL.md`. Verification uses the synthetic preparation-script
-Unit selection: 74 passed, 0 failed/skipped, with one existing pytest-asyncio
-deprecation warning, including the pre-existing site policies and apply workflow.
+`docs/BOOKWALKER_RECRAWL.md`. Verification uses 80 synthetic preparation-script
+Unit cases plus the existing Batch recrawl/sidecar boundary case: 81 passed,
+0 failed/skipped, with existing pytest-asyncio deprecation warnings. This includes
+the pre-existing site policies and apply workflow.
 Ruff (`scripts/prepare_recrawl.py src tests`) and diff checks passed.
-The current 11 ZIPs under the Youjitsu library folder were checked read-only.
-Format-based candidates fall from eight to zero because all PNGs are within
-the first nine or last five saved pages. Representative head PNGs are colour
-front matter (2048x1496) and title pages (694x983). This observation motivates
-the accepted position policy without asserting source provenance or complete
-visual quality. Audit details are in
-`.tmp/bw-head10-policy-audit-20261102/archive-summary.json`.
-No ZIP/Catalog changes, real-site access or operational apply was performed.
-The policy is script-local, so browser Integration/Research/full pytest were
-not rerun. Synthetic tests cover 10/11 boundaries, overlap, numbering and force.
+No real ZIP/Catalog scan or operational apply was performed for this policy
+change. The policy is script-local, so browser Integration/Research/full pytest
+were not rerun. Synthetic tests cover opening PNG recrawl/apply, the tail
+boundary, short archives, numbering, allowed/fallback counts and force.
 No real Catalog apply, browser/live recrawl, Research/Probe or full repository
 suite is required for this script-policy integration; capture code is unchanged.
-Read-only inspection of source121's current 330-image archive found PNGs at
-saved pages 1, 326 and 329. All three are allowed under the user-selected
-cover-plus-last-five rule, including the survey/contact notice at page 326.
-The archive is `PREFERRED_ONLY` with zero fallback and three allowed PNGs.
+The previously recorded 330-image source121 inventory had PNGs at saved pages
+1, 326 and 329. Under the current rule, that recorded layout would be
+`FALLBACK_INCLUDED`: page 1 is fallback, while pages 326 and 329 count as two
+allowed tail PNGs. This is a classification of the recorded layout, not a new
+inspection of its current archive.
 This policy does not classify notices by image contents or exempt end matter
 outside those positions automatically. No Catalog apply or ZIP rewrite was
 performed.
@@ -3708,7 +3705,7 @@ and full-suite runs were not needed for this terminal-local bounds change.
 
 BookWalker capture now writes bounded, sanitized adapter-local JSONL diagnostics under output/diagnostics/bookwalker (or BOOKWALKER_DIAGNOSTICS_DIR) with a fresh run UUID. Before geometry splitting, the adapter reads the complete current visible canvas and may recognize only the N-1/N notice or N/N logo using a white-flattened foreground union, aspect-preserving 32x32 normalization, calibrated 256-bit perceptual hash, pinned actual canvas identity, known initial viewer cid, and an unchanged counter/frame. If that check fails, the existing native terminal path is attempted and remains fail-closed on missing selected operation/source/target identity, full source bounds, actual connected DOM canvas identity, actual viewer cid, stable counter, source and target content versions, geometry token/version, snapshot IDs, or mismatched initial/before/after anchors. A trace ID is optional. This layout classifier does not attribute a source or JPEG and does not save a cropped subregion. Unknown, mixed, unstable, or mismatched terminal images remain content.
 
-A terminal AD transition records its source identity so a native trace reset that temporarily demotes the same page to CONTENT cannot save it as body content; retry remains bounded and END/final navigation still wins. Ordinary body JPEG successes are compacted out of the bounded sidecar after the cover/tail slots, while cover, fallback, terminal and failure records remain. `prepare_recrawl.py` accepts first-ten-saved-page and last-five-saved-page PNGs when a JPEG companion exists under the naming rules above. Other body PNGs remain fallback candidates; this positional acceptance does not depend on recognizing terminal images.
+A terminal AD transition records its source identity so a native trace reset that temporarily demotes the same page to CONTENT cannot save it as body content; retry remains bounded and END/final navigation still wins. Ordinary body JPEG successes are compacted out of the bounded sidecar after the cover/tail slots, while cover, fallback, terminal and failure records remain. `prepare_recrawl.py` accepts only last-five-saved-page PNGs when a JPEG companion exists under the naming rules above. Opening and other body PNGs outside that tail remain fallback candidates; this positional acceptance does not depend on recognizing terminal images.
 
 A bounded historical owned item124 live check returned cover original JPEG 1443x2048 from eight candidates, matched the then-recorded notice/logo native hashes, reached END, and restored the shared context from two pages to two after closing the created page; it is not a guarantee for the later batch lifecycle.
 
@@ -3764,7 +3761,7 @@ authoritative; PNG dimensions may be 722x1024 or 666x944 depending on the
 observed path, while a 1443x2048 source candidate is not a guarantee of output
 size. No upscaling, JPEG re-encoding, or candidate guessing was added.
 
-The current recrawl policy accepts first-ten-saved-page and last-five-saved-page PNGs with at
+The current recrawl policy accepts only last-five-saved-page PNGs with at
 least one JPEG companion; other body PNGs remain fallback candidates. The
 three historical isolated recrawl-check dry-run results under the former
 cover-only rule were: source125 preferred-only with one allowed

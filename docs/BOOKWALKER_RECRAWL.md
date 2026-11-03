@@ -1,12 +1,13 @@
 # BookWalker legacy PNG re-crawl
 
 Use the existing `scripts/prepare_recrawl.py` Catalog-driven scanner. BookWalker
-prefers JPEG (`.jpg` / `.jpeg`), with explicit PNG exceptions for the
-first ten saved-page numbers (`page-0001` through `page-0010`) and the last five saved pages **when at least one JPEG
-page is present**. These exceptions do not convert PNGs or modify the BookWalker
+prefers JPEG (`.jpg` / `.jpeg`), with a PNG exception only for the last five
+saved pages **when at least one JPEG page is present**. PNGs in the first ten
+saved pages are fallback candidates unless they also fall within that tail.
+This exception does not convert PNGs or modify the BookWalker
 adapter's source-preserving fallback behavior.
 
-- JPEG-only archives and archives whose PNGs occur only in the first ten/last five
+- JPEG-only archives and archives whose PNGs occur only in the last five
   saved pages are `PREFERRED_ONLY` and excluded by default. Explicit Item IDs
   with `--force` can prepare them when a visual defect requires another capture.
 - Other body PNGs, PNG-only archives, and unsupported image formats are flagged.
@@ -15,7 +16,7 @@ adapter's source-preserving fallback behavior.
 Run in the repository root (PowerShell):
 
 ```powershell
-# Read-only inspection, including accepted head/tail PNGs
+# Read-only inspection, including accepted tail PNGs
 python scripts/prepare_recrawl.py --site bookwalker --catalog catalog.sqlite --show-all
 
 # Optional: prepare only problematic completed Catalog items for re-crawl
@@ -39,8 +40,9 @@ selection; without those filters, Item IDs alone are sufficient scope. Unknown,
 non-completed or out-of-scope requested IDs reject the whole operation before
 any archive moves. Duplicate IDs are processed once. Other Items are not scanned.
 
-For the observed cover defects, ZIP prefix 013 maps to Item 1880 and prefix 019
-maps to Item 1874. Both currently pass the format policy, so use `--force`:
+In the previously inspected Catalog, ZIP prefix 013 mapped to Item 1880 and
+prefix 019 to Item 1874. To include an otherwise `PREFERRED_ONLY` archive for
+a visual defect, use explicit Item IDs with `--force`:
 
 ```powershell
 # Read-only: verify the two selected archives
@@ -64,25 +66,18 @@ Catalog reconciliation or a filesystem-based inventory. A resulting pending
 Item is not guaranteed to be currently readable: the existing BookWalker
 access policy still governs owned/quota availability.
 
-The head exception uses saved-page numbers 1 through 10, not the first ten PNGs
-or the viewer's original counter. The tail exception uses the five highest saved-page numbers
+The tail exception uses the five highest saved-page numbers
 across all JPEG/PNG members, not ZIP entry order, the last five PNGs, or the
 viewer's original page counter. All JPEG/PNG members must have unambiguous
-standard names (`page-0001`, `page-0002`, ..., `page-10000`, etc.) for these ranges
+standard names (`page-0001`, `page-0002`, ..., `page-10000`, etc.) for this
 exception; filename case is ignored. Old/nonstandard names and duplicate page
-numbers do not receive these range exceptions. The existing standalone cover
-exception remains: a unique `page-0001.png` is accepted even when other members
-use old names, provided there is a JPEG companion and no duplicate page-0001 stem.
+numbers do not receive the exception. There is no separate cover or first-ten
+exception. In short archives, an opening page can still be one of the last five
+saved pages and receive the tail exception.
 An allowed PNG is counted in
 `allowed_fallback`, rather than `fallback`, even if another body PNG still
-requires re-crawl. Head and tail may overlap without being counted twice.
+requires re-crawl.
 
 This is a user-accepted position/format policy, not a claim that the final five
 images are terminal notices, that PNG is lower quality, or that JPEG recovery
 is possible. No terminal-image recognition or live site access is required.
-
-The 2026-11-02 read-only inspection of the 11 Youjitsu ZIPs found all PNGs in
-the first nine or last five saved pages. The accepted first-ten range removes
-the eight format-based recrawl candidates in that folder; it does not validate
-visual cover quality or modify any ZIP/Catalog data. Explicit `--force` remains
-available for visual defects.
