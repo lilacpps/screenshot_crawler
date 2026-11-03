@@ -1,7 +1,7 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage 01-06 COMPLETE; Stage07 IN PROGRESS (2026-11-03). Piccoma complete-list preview/replay added; remaining sites under investigation. Prior Stage06 test evidence is distinguished below.
-> Stage 01–05に続きStage 06を承認済み。Stage 07は対象外。
+> Status: Stage01-06 COMPLETE; Stage07 PARTIAL / 3 sites BLOCKED (2026-11-03). Four extensions implemented (8/11 total), ComicFUZ/Kadocomi/MangaONE BLOCKED. Native GUI PASS; isolated full-suite union covers all6860 current nodes with complete passing phases, 0skip. No clean monolithic pass is claimed; interrupted/failed attempts are retained below. Prior Stage06 evidence is distinguished below.
+> Stage01-06に続きStage07をユーザーが承認。Stage08は未定義・対象外。
 > Runbook: [README.md](README.md)
 
 | Stage | Status | Exit evidence / next action |
@@ -13,7 +13,7 @@
 | 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
 | 06 Site URL/metadata coverage | COMPLETE (follow-up checkpoint) | 11site title hooks、追加7site live20、targeted344 pass、独立review PASS。詳細・affectedの環境制限は末尾参照 |
-| 07 Listing preview coverage | IN PROGRESS | 07A Piccoma追加:5サイト対応。残り6サイトを個別検証 |
+| 07 Listing preview coverage | PARTIAL / 3 sites BLOCKED | A `4b32c6a` Piccoma、B `35a8b72` Hanayume/Younganimal、C `eba2741` BookWalker追加。現行8/11。native GUI PASS、isolated full suite全6860nodeを再実行込みで確認/0skip、ruff PASS。通し実行の失敗・中断履歴は末尾参照 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
 
@@ -592,10 +592,11 @@
 - Independent source/test/docs review final gate PASS/no BLOCKING. Ruff/diff
   checks required before checkpoint. Notes00_core/10_hanayume/11_younganimal,
   GUI guide, Discovery/Bounded authorities and runbook coverage synchronized.
-  Full pytest and final native GUI verification remain Stage07-wide pending;
-  no new monolithic full-suite success is claimed at this checkpoint.
-- Preview coverage7/11; BookWalker/ComicFUZ/Kadocomi/MangaONE still pending.
-  Stage07 remains IN PROGRESS. Operational/user changes are protected.
+  At this B checkpoint full pytest/native GUI were pending; the later native
+  GUI result below supersedes that pending state. No monolithic full-suite
+  success is claimed by this checkpoint.
+- At the B checkpoint coverage was7/11; C subsequently adds BookWalker for8/11.
+  ComicFUZ/Kadocomi/MangaONE remain BLOCKED. Operational/user changes are protected.
 
 ## Stage07C — BookWalker single-page preview (2026-11-03)
 
@@ -636,5 +637,97 @@
   ticket/point-capable viewer; MangaONE's RSC/list GET protobuf requires native
   schema/binding/pagination proof. No inference, renumber, viewer bootstrap or
   hidden fallback was implemented. Safe single-key Stage06 registration remains.
-- Stage07 is PARTIAL, not all7extensions complete. Final isolated full suite,
-  Windows GUI and final docs/review gate follow; Stage08/main merge/push excluded.
+- Stage07 is PARTIAL, not all7extensions complete. At the C checkpoint isolated
+  full suite/native GUI/final docs review were pending; see later verification.
+  Stage08/main merge/push excluded.
+
+## Stage07 native GUI / final verification (2026-11-03)
+
+- Windows native Qt harness exercised the actual URL parser worker, WorkEditor
+  read-only listing worker/shared CDP, detail validation, atomic save and existing
+  MainWindow Full confirmation. All stores/runtime/management were isolated
+  under .tmp/w7gui2 then .tmp/w7gui3. Operational files were not used as stores.
+- Five pasted URL rows: four new sites grouped by explicit synthetic test choice,
+  plus a separate unselected Magapoke Work. This grouping is not evidence that
+  the actual four works are equivalent. Actual lists contained432/249/156/11
+  rows (Piccoma/Hanayume/Younganimal/BookWalker). One Piccoma hole plus two
+  segments and an interleaved Hanayume block survived detail confirmation and
+  final YAML exactly. All four keys were explicitly confirmed. No intermediate
+  save; isolated Watchlist/Catalog bytes were unchanged until atomic bulk save.
+- Final preview showed actual YAML for all4sites, excluded_external_ids and
+  archive_segments. Bulk save wrote exactly4targets; retained unselected Work
+  stayed identical through both detail and save. Existing Full confirmation
+  appeared once; No left status saved/Full not run/Catalog unsynchronized.
+  Catalog and operational watchlist/crawler hashes stayed unchanged. No site
+  ticket/point/purchase/grant/Capture or actual normal Full was executed.
+- Native layouts1320x940 and980x800 have readable labels and reachable lower
+  actions. Four site panes need horizontal scrolling, especially at980width;
+  an extra capture at scroll maximum892 reaches the rightmost BookWalker pane
+  and its controls. This is a known UX limitation, not a hidden/disabled action.
+  Root visually inspected detail, far-right, YAML and Full-confirm captures;
+  independent native evidence review PASS/no BLOCKING.
+- Initial harness clicked Analyze before initial read completed (0rows, no
+  store writes). Adding the normal initial-worker wait fixed the harness; both
+  complete E2E runs passed without production changes.
+- Evidence (ignored): stage07-native-result.json, stage07-native.log and
+  stage07-{detail-1320-native,detail-980-native,detail-right-native,
+  detail-preview-native,yaml-preview-native,full-confirm-native,
+  registration-ready-native,saved-native}.png under .tmp/watchlist-registration.
+- Full suite ran in isolated .tmp/w7f using tracked default config and an exact
+  source/test overlay. Per-case240s watchdog and phase JSONL expose failures and
+  incomplete teardown. Final union covers all6860 unique collected current
+  nodes, each with passing setup/call/teardown; 0remaining/0unknown/0skip.
+  This is partitioned/re-execution evidence, not a clean monolithic full pass.
+  The initial ComicDAYS failure and two teardown watchdog exits remain recorded.
+- Initial full attempt reached513nodes with passing call+teardown, then its
+  per-case240s watchdog exited during ComicFUZ other_episode_route teardown
+  (call passed, teardown unconfirmed). The exact node passed separately with
+  complete teardown/exit0 (1passed). Do not count the interrupted phase as pass.
+  ComicDAYS dummy_front_double_prefix[False-True] passed alone and again in the
+  continuation; its original failure detail was unavailable before watchdog
+  termination, so the original cause is unconfirmed, not asserted as a timing
+  diagnosis. No Capture implementation or assertion was changed.
+- First continuation completed89nodes with passing call+teardown before the
+  verification plugin's relative report path failed when an existing GUI test
+  temporarily changed cwd (pytest90passed then INTERNALERROR). Report paths now
+  resolve absolutely; the unrecorded GUI case was included in the next manifest.
+  This is a diagnostic harness error, not an application failure or a passed run.
+- Existing unsupported-listing/no-CDP fixture used BookWalker, now supported.
+  Only that fixture was changed to still-unsupported Kadocomi with a valid
+  canonical Work URL; called==[]/does-not-support assertions are unchanged.
+  Entire GUI-watchlist file33passed/0skip on current source, followed by another
+  complete33node call+teardown witness run. Independent fixture review PASS.
+  Final coverage excludes ALL old-version witnesses for that file and uses only
+  stage07-gui-current-report.jsonl with its recorded current test hash. Production
+  source hashes are unchanged; the original source/test manifest has exactly
+  this one known test-file delta. Collected nodeids remain6860. Current logs,
+  manifests and coverage JSON are under .tmp/watchlist-registration/stage07-*.
+- Second continuation completed1589nodes with passing call+teardown and no
+  additional assertion failures before Younganimal episode_429 teardown hung.
+  Its call passed but teardown was not counted. Explicit watchdog stack points
+  into pytest_asyncio fixture finalization / Windows event-loop polling, without
+  an application failure frame. Exact-node isolated rerun1passed/0skip completed
+  teardown and exited0. No production code, fixture timeout or assertion changed.
+- Final continuation4634passed/0skip, exit0 (492.80s). Its6726 warnings include
+  existing Pillow getdata deprecation and a deliberate duplicate ZIP-member test;
+  warnings were retained. Per-run complete witnesses: initial513, continuation1
+  89, continuation2 1589, final4634, ComicFUZ isolated1, Younganimal isolated1,
+  current GUI33. Their exact nodeid union is6860 with no duplicate accepted
+  witnesses. No call-only/interrupted phase is accepted.
+- Final audit stage07-final-audit.json independently reconstructs every node's
+  accepted report, requires setup/call/teardown pass, and verifies current root
+  and isolated snapshot against the361-file source/test manifest. Old-to-current
+  delta is exactly the reviewed GUI fixture file; its33current nodes and hash
+  are recorded, and all old witnesses for that file are excluded. Every failed
+  or incomplete node has a separate complete passing witness. No clean one-run
+  result is inferred from this union. Ruff check src tests and scoped diff check
+  pass. Final independent audit/doc gate PASS for the implemented8/11 scope,
+  no BLOCKING; reviewer explicitly retains Stage07 PARTIAL/three blocked sites.
+- Stage07 remains PARTIAL: implemented four extensions are usable/reviewed;
+  ComicFUZ/Kadocomi/MangaONE require the specific evidence/contracts in Stage07
+  README before implementation can resume. Native GUI does not prove arbitrary
+  works/accounts/rights, BookWalker pagination, or those three missing previews.
+  Live actual normal Full/Capture/ticket/point/grant/purchase was not executed;
+  Full integration used synthetic tests and the native confirmation answered No.
+  Stage08 is undefined and was not started; no main merge/push. Existing user
+  operational/unrelated changes remain outside the checkpoint.

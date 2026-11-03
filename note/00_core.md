@@ -28,6 +28,17 @@ ComicFUZ/Kadocomi/MangaONE remain visibly unsupported: safe complete-list proof
 or the current position contract is unresolved. Stage07 is partial, not complete.
 Evidence/tests/independent review are in the registration PROGRESS.md.
 
+Native Windows GUI verified actual four-site listing workers (432/249/156/11),
+draft-only hole/segment ordering, readable saved-YAML preview, isolated atomic
+save and one existing Full confirmation answered No. Unselected Work, isolated
+Catalog and operational files were unchanged. At980/1320width the four panes
+need horizontal scrolling; the far-right BookWalker controls are reachable.
+Native evidence review passed. Isolated full-suite union covers all6860 current
+nodes with passing setup/call/teardown, 0skip; interrupted/failed runs required
+separate reruns, so this is not a clean monolithic pass. Source/test hash audit
+and detailed results/limits are in PROGRESS.md, independently of the three blocked
+site extensions. Ruff passed; operational stores were not test stores.
+
 
 ## URL registration Work detail drafts (Stage 04)
 

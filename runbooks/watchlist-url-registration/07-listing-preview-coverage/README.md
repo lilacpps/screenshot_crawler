@@ -1,6 +1,6 @@
 # Stage 07 — read-only完全一覧previewのサイト別拡張
 
-> Status: IN PROGRESS (2026-11-03). User authorized Stage07 after Stage06 follow-up `12ce30f`. Existing operational/unrelated changes are protected on feature/watchlist-url-registration.
+> Status: PARTIAL / 3 sites BLOCKED (2026-11-03). Four extensions implemented and independently reviewed; Windows native GUI verified. Final regression evidence is tracked in PROGRESS.md. User authorized Stage07 after Stage06 follow-up `12ce30f`. Existing operational/unrelated changes are protected on feature/watchlist-url-registration.
 
 ## Execution contract (2026-11-03)
 
