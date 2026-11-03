@@ -731,3 +731,39 @@
   Full integration used synthetic tests and the native confirmation answered No.
   Stage08 is undefined and was not started; no main merge/push. Existing user
   operational/unrelated changes remain outside the checkpoint.
+
+## Kadocomi108-onward scope investigation (2026-11-03)
+
+- User requested consideration of discovery_scope for KC_002911_S from visible
+  第108話 onward. Existing URL-bound YAML scope is already supported independently
+  of Stage07 GUI complete-list preview. No production change is required for
+  this specific boundary selection; Stage07 capability remains8/11/partial.
+- Guarded shared-CDP static Work metadata, stable across two parser reads:
+  109native entries,4active, native positions1..122 with13gaps. Visible 第108話
+  maps to internal121 / KC_0029110010900011_E; 第109話 maps to122. Identity-only
+  existing _select_native_scope with through_url pointing to the canonical108
+  episode selected2entries, both active. This is not a live Full/Capture result
+  or proof of access classification/reader compatibility for those episodes.
+- Example fragment for the existing Watchlist target (preserve key/work_key):
+
+  ```yaml
+  discovery_scope:
+    through_url: https://comic-walker.com/detail/KC_002911_S/episodes/KC_0029110010900011_E
+  ```
+
+  Canonical order is latest-first. Omitting from_url leaves the newest end open;
+  through_url includes108 and future newer episodes, while from_url alone would
+  select108and older. Saving scope must be followed by ordinary Discovery to
+  reflect acquisition flags before Batch. Existing ZIP/history is not deleted.
+- Isolated example YAML loaded successfully through WatchlistService. Existing
+  selector tests (from-only/through-only/both/singleton)4passed/0skip.
+  Warnings: existing asyncio policy deprecation and pytest cache write denial;
+  neither affected test outcome. No source/test edit, Integration/full suite
+  rerun or actual Discovery/Capture was needed for this investigation.
+- SharedCDP was initially stopped (ECONNREFUSED); after starting standard shared
+  Chrome/profile/port with a hidden window, the guarded read succeeded. Caller
+  Page closed; shared browser left available. No general HTTP client, script/
+  viewer bootstrap, episode navigation, ticket/point/grant/purchase, Catalog or
+  operational Watchlist write. Evidence ignored under .tmp/watchlist-registration:
+  kadocomi_108_probe.py/json. Notes synchronized; this does not resolve the
+  Stage07 multi-key GUI native-gap completeness blocker.

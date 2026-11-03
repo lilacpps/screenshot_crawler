@@ -11,6 +11,19 @@ positions, access, ordinary legacy path and single-key registration are unchange
 No expand/reader/Capture/resource/store operation was performed in this probe.
 Details and follow-up acceptance are in the Stage07 runbook/PROGRESS.
 
+The Stage07 GUI preview limitation does not disable existing URL-bound YAML
+scopes. Read-only verification of KC_002911_S on2026-11-03 found109 native
+entries,4active, with internal positions1..122 and13gaps. Visible 第108話 is
+position121 and episodeKC_0029110010900011_E; 第109話 is position122. The existing
+latest-first selector with only through_url set to the canonical 第108話 URL
+selects those two entries inclusively. Future newer entries remain within that
+one-sided scope. Never use visible chapter108 as internal position108 or infer
+an episode URL from its label. This probe read the guarded Work document twice
+and exercised identity-only selection; it did not execute DiscoveryService,
+Capture, reader navigation, store writes or access classification. Existing
+from-only/through-only/both/singleton selector tests4passed/0skip. GUI preview
+still needs the separate native-gap contract above.
+
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
 Work entry and same-prefix episode→work / supported query removal preserve
