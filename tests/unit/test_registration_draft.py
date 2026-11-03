@@ -118,7 +118,7 @@ def test_registered_match_is_unselected_and_requires_explicit_additional_key():
     batch.assign(row, existing_work="work")
     batch.confirm(row, additional=True)
     group = batch.candidates[row].group_id
-    assert batch.readiness(group).status == "blocked"  # Kadocomi preview not supported.
+    assert batch.readiness(group).status == "needs_scope"  # Supported; explicit detail proof is still required.
 
 
 @pytest.mark.parametrize("url", [A, B])

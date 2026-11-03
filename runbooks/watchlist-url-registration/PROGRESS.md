@@ -1,6 +1,6 @@
 # Watchlist URL Registration — Progress
 
-> Status: Stage01-06 COMPLETE; Stage07 PARTIAL / 3 sites BLOCKED (2026-11-03). Four extensions implemented (8/11 total), ComicFUZ/Kadocomi/MangaONE BLOCKED. Native GUI PASS; isolated full-suite union covers all6860 current nodes with complete passing phases, 0skip. No clean monolithic pass is claimed; interrupted/failed attempts are retained below. Prior Stage06 evidence is distinguished below.
+> Status: Stage01-06 COMPLETE; Stage07 PARTIAL / 2 sites BLOCKED (2026-11-03). Five extensions implemented (9/11 total), Kadocomi boundary-only. ComicFUZ/MangaONE BLOCKED. Kadocomi native GUI PASS; current isolated full-suite/regression results are recorded separately from the prior6860-node A/B/C union below.
 > Stage01-06に続きStage07をユーザーが承認。Stage08は未定義・対象外。
 > Runbook: [README.md](README.md)
 
@@ -13,7 +13,7 @@
 | 04 Scope editor draft integration | COMPLETE (`a7ec838`) | 181 related Unit/GUI/browser passed; independent review + follow-up PASS |
 | 05 Atomic save and E2E | COMPLETE (this checkpoint) | Atomic/CAS/ownership/E2E and independent review PASS; full 6524 passed / 3 unrelated timing failures / 0 skipped |
 | 06 Site URL/metadata coverage | COMPLETE (follow-up checkpoint) | 11site title hooks、追加7site live20、targeted344 pass、独立review PASS。詳細・affectedの環境制限は末尾参照 |
-| 07 Listing preview coverage | PARTIAL / 3 sites BLOCKED | A `4b32c6a` Piccoma、B `35a8b72` Hanayume/Younganimal、C `eba2741` BookWalker追加。現行8/11。native GUI PASS、isolated full suite全6860nodeを再実行込みで確認/0skip、ruff PASS。通し実行の失敗・中断履歴は末尾参照 |
+| 07 Listing preview coverage | PARTIAL / 2 sites BLOCKED | A `4b32c6a` Piccoma、B `35a8b72` Hanayume/Younganimal、C `eba2741` BookWalker、D Kadocomi境界編集。現行9/11。Dのnative GUI PASS・回帰結果は末尾。A/B/Cの6860node unionと失敗・中断履歴は区別して記録 |
 
 ## Stage 00 checkpoint — 2026-11-02 JST
 
@@ -641,7 +641,10 @@
   full suite/native GUI/final docs review were pending; see later verification.
   Stage08/main merge/push excluded.
 
-## Stage07 native GUI / final verification (2026-11-03)
+## Stage07A/B/C native GUI / final verification — historical checkpoint (2026-11-03)
+
+This section records the pre-Kadocomi8/11 checkpoint. Stage07D below supersedes
+its capability/blocker status; its historical source/test evidence is retained.
 
 - Windows native Qt harness exercised the actual URL parser worker, WorkEditor
   read-only listing worker/shared CDP, detail validation, atomic save and existing
@@ -732,7 +735,10 @@
   Stage08 is undefined and was not started; no main merge/push. Existing user
   operational/unrelated changes remain outside the checkpoint.
 
-## Kadocomi108-onward scope investigation (2026-11-03)
+## Kadocomi108-onward scope investigation — before GUI implementation (2026-11-03)
+
+This was the read-only investigation before Stage07D implementation. Its earlier
+8/11 capability and GUI-blocker statements are historical, superseded by D below.
 
 - User requested consideration of discovery_scope for KC_002911_S from visible
   第108話 onward. Existing URL-bound YAML scope is already supported independently
@@ -767,3 +773,81 @@
   operational Watchlist write. Evidence ignored under .tmp/watchlist-registration:
   kadocomi_108_probe.py/json. Notes synchronized; this does not resolve the
   Stage07 multi-key GUI native-gap completeness blocker.
+
+## Stage07D — Kadocomi boundary-only GUI scope (2026-11-03)
+
+- User explicitly requested GUI implementation after the108-onward investigation.
+  Added complete read-only native preview and registration capability. The strict
+  parser validates Work/UUID/episode identity, equal declared count, ordered native
+  ordinals and exact reverse first/latest arrays; the guarded canonical Work JSON
+  is read twice unchanged. One inert document GET, no expand/bootstrap/reader.
+  Active access remains unknown; inactive rows display公開終了. Native gaps keep
+  their exact values, with no generated rows or renumbering.
+- Frozen NativeListingProof(declared_count, complete ordered ID/position projection)
+  opts into sparse positions. Its fields and supports_exclusions=False are bound
+  into the digest. Shared validation requires exact count/projection/digest and
+  positive unique strictly descending positions. Old default contiguous guards
+  and existing digests are unchanged. Discovery exclusion preflight is unchanged:
+  Kadocomi replay remains false, rejecting holes before any page/Catalog work.
+- Both SelectionPlanner and WorkDraft reject individual holes and empty assignment
+  for this boundary-only capability. Continuous endpoints and open ends support
+  GUI108onward as through_url-only, including future newer rows. WorkEditor and
+  legacy key editor retain explicit open boundaries; URL registration detail
+  remains draft-only until the parent's atomic save. Key/work_key, unrelated
+  Work, native positions and Source ownership remain unchanged. GUI list button
+  now says作品内の全話一覧を取得 for any site count.
+- Initial targeted58passed/0skip. Wider120 run exposed3regressions from applying
+  open-end preservation to existing checkbox sites (117passed/3failed). Fixed
+  by opt-in preserve_open_boundaries=False default, enabled only for boundary-only
+  editing; legacy GUI/listing rerun60passed/0skip. No existing assertions weakened.
+- New normal/draft-only/legacy GUI tests3passed/0skip. Initial3failures in these
+  new tests were harness errors: post-save listing reset, draft_result tuple shape,
+  and an artificial same-URL/different-Work ownership conflict. Fixed only fixtures
+  and assertion timing, retaining production ownership checks. Final targeted and
+  affected GUI/native/registration/site Unit+Browser181passed/0skip (64.90s).
+  Native parser/normal Discovery regressions are included; warnings are existing
+  asyncio-policy deprecations. Ruff src/tests and scoped diff check passed.
+- Native Windows actual parser/listing workers/shared CDP/detail/YAML/atomic-save/
+  MainWindow Full-No ran twice on isolated .tmp/k7native1 and k7native2.109rows,
+  105公開終了; visible108(native121) through109(native122) selected with new arrivals
+  open. Final YAML contains only through_url for the108canonical episode. Hole
+  attempt rejected without draft mutation; no intermediate save. Exactly1target
+  saved and1Full confirmation answeredNo. Catalog and operational watchlist/crawler
+  hashes unchanged; no Full/Capture/ticket/point/grant/purchase. Root inspected
+  final screenshot labels/controls/公開終了 prefix/YAML. Evidence ignored:
+  kadocomi-native-result.json, kadocomi-native2.log, kadocomi-{detail-native,
+  detail-preview-native,yaml-native,full-confirm-native}.png.
+- Independent code/native visual review PASS for boundary-only contract. Reviewer
+  found stale8/11/blocked descriptions in docs: corrected current sections to9/11,
+  and explicitly marked A/B/C verification and the pre-implementation108 probe
+  historical/superseded. Revised docs review PASS/no BLOCKING. Final independent
+  full-audit/current-assertion/docs gate PASS for the implemented boundary-only
+  scope; no BLOCKING, checkpoint approved. Stage07 remains9/11/partial.
+- Fresh full collection6884 unique nodes, isolated .tmp/k7full with tracked
+  default config and exact source/test overlay.41Integration subprocesses passed
+  all2317cases, exit0. Final Unit/other group4566passed/1failed (360.54s): the
+  pre-existing registration-draft assertion still expected Kadocomi to be
+  unsupported/blocked. Corrected that single assertion to needs_scope, preserving
+  explicit additional-key confirmation and required detail proof. Entire updated
+  test_registration_draft.py18passed/0skip, exit0 (0.72s). No production change
+  was made after the full snapshot; this is exactly one test-file version delta.
+- Final k7-final-audit.json verifies all6884 current nodeids with passing setup/
+  call/teardown,0remaining/0unknown/0skip. Every old witness for the changed test
+  file is excluded, replacing all18 with current witnesses. Current root and
+  snapshot match the363-file current manifest; original manifest differs only
+  in that reviewed assertion file. Accepted counts:2317Integration +4549other
+  unchanged Unit/other nodes +18current draft tests =6884. Failed old assertion
+  and Unit process exit1 remain in the historical process results. No clean
+  monolithic or all42initial-process pass is claimed; this is partitioned full
+  coverage plus the updated-file rerun. No teardown watchdog fired on this run.
+- Per-case240s watchdog, absolute phase-log paths and short temporary paths were
+  used. Integration process isolation avoided prior cross-module async teardown
+  hangs. Existing asyncio/Pillow/duplicate-ZIP warnings were retained in logs.
+  Current evidence under .tmp/watchlist-registration: k7-full-collect.log,
+  k7-full-runs.json, k7-{full,current}-source-manifest.json, k7f-*.log/jsonl,
+  k7-final-audit.json. No old6860-node witnesses were reused. Final ruff src/tests
+  passed; scoped diff check passed.
+- Current capability9/11: Kadocomi continuous boundaries only, BookWalker restricted
+  single-page latest-release order; ComicFUZ/MangaONE remain BLOCKED. No Stage08,
+  main merge/push or operational data edit. Native actual Full/access-classified
+  preview/reader/Capture remains unverified and is not implied by GUI save.

@@ -1,15 +1,25 @@
 ## Stage07 complete-list investigation (2026-11-03)
 
-Preview/detail remains unsupported. Static WorkKC_004915_S native first/latest
-arrays validate123unique lifetime episodes,25active, with explicit episodeNo
-1..127 excluding15/17/96/102. These native gaps must not be compressed or filled.
-Current ListingPreview/SelectionPlanner/exclusion gates require contiguous
-positions; native-gap completeness and safe access-classified replay therefore
-need an explicit common contract before preview can be enabled. The collapsed
-active DOM is not a complete lifetime list. Existing opt-in native Discovery,
-positions, access, ordinary legacy path and single-key registration are unchanged.
-No expand/reader/Capture/resource/store operation was performed in this probe.
-Details and follow-up acceptance are in the Stage07 runbook/PROGRESS.
+Preview/detail now supports continuous URL-bound ranges and open oldest/newest
+ends. Static Work native first/latest arrays must have equal exact declared
+counts, unique work-bound IDs/UUIDs, strictly ordered explicit episodeNo and
+exact reverse projection; a stable second read and canonical Work are required.
+An immutable NativeListingProof binds declared count and the whole ID/position
+projection into the GUI digest. Existing default contiguous proofs remain strict.
+Native gaps are retained, never compressed/filled. Preview uses one guarded Work
+document GET with inline/external scripts disabled; no expand/reader/access
+classification/store. Public rows show unknown access; inactive native rows show
+公開終了. SelectionPlanner/WorkDraft reject holes, empty assignments and disjoint
+selections that need exclusions. Exclusion replay remains unsupported and is
+rejected before Catalog or page activity. Ordinary native/legacy Discovery,
+positions, classification and capture are unchanged. Freshness, ownership,
+Watchlist CAS and Catalog snapshot checks remain mandatory for GUI save.
+KC_004915_S has123rows/25active/native1..127 gaps15/17/96/102; the collapsed
+active DOM alone is not the complete site-provided inventory. Current native
+GUI and regression evidence/limits are in the Stage07 PROGRESS:181related passes,
+native GUI twice, full6884 current passing witnesses/0skip via partitioned runs
+and an18-test rerun of the corrected capability expectation. No live Full/Capture
+or access-classified preview is implied; individual exclusions remain unsupported.
 
 The Stage07 GUI preview limitation does not disable existing URL-bound YAML
 scopes. Read-only verification of KC_002911_S on2026-11-03 found109 native
@@ -21,8 +31,10 @@ one-sided scope. Never use visible chapter108 as internal position108 or infer
 an episode URL from its label. This probe read the guarded Work document twice
 and exercised identity-only selection; it did not execute DiscoveryService,
 Capture, reader navigation, store writes or access classification. Existing
-from-only/through-only/both/singleton selector tests4passed/0skip. GUI preview
-still needs the separate native-gap contract above.
+from-only/through-only/both/singleton selector tests4passed/0skip. The subsequent
+GUI follow-up uses this native proof to edit/save the same boundary. In the Work
+editor choose開始=第108話, uncheck最古から, keep新着も含める checked, then担当範囲を設定.
+URL registration detail remains draft-only until the parent's atomic save.
 
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 

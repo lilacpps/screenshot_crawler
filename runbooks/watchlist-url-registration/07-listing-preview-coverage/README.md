@@ -1,6 +1,6 @@
 # Stage 07 — read-only完全一覧previewのサイト別拡張
 
-> Status: PARTIAL / 3 sites BLOCKED (2026-11-03). Four extensions implemented and independently reviewed; Windows native GUI verified. Final regression evidence is tracked in PROGRESS.md. User authorized Stage07 after Stage06 follow-up `12ce30f`. Existing operational/unrelated changes are protected on feature/watchlist-url-registration.
+> Status: PARTIAL / 2 sites BLOCKED (2026-11-03). Five extensions implemented, Kadocomi limited to continuous ranges/open ends. Windows native GUI verified; current regression/review evidence is tracked in PROGRESS.md. Existing operational/unrelated changes are protected on feature/watchlist-url-registration.
 
 ## Execution contract (2026-11-03)
 
@@ -13,7 +13,7 @@
 
 ## Objective / scope
 
-- 現行preview対応8サイト: magapoke, jumpplus, zeblack, comicdays, piccoma, hanayume, younganimal, bookwalker。Stage07A/B/Cで4サイトを追加。残り3サイト: comicfuz, kadocomi, mangaone。
+- 現行preview対応9サイト: magapoke, jumpplus, zeblack, comicdays, piccoma, hanayume, younganimal, bookwalker, kadocomi。Stage07A/B/C/Dで5サイトを追加。残り2サイト: comicfuz, mangaone。カドコミは連続範囲・開いた境界のみ対応し、個別除外・空担当は不可。
 - 既存Full Discoveryのcomplete inventoryと、GUIのread-only complete listing previewを混同しない。各siteのpreview_complete_listingでsite-native identity、行ID/順序/position、完全性、境界と除外を検証する。
 - siteごとの安全なread-only一覧だけを用い、通常FullによるCatalog write、viewer/reader、チケット/point/購入/権利消費は用いない。過去全件が観測できないなら完全な一覧として扱わない。
 - 1サイトずつ既存ListingPreviewService・WorkDraft・SelectionPlannerと連携し、複数keyのscope/archive_order/archive_segmentsをプレビュー・draft-only編集できるようにする。
@@ -35,7 +35,7 @@
 | Hanayume | Implemented | Every declared static public range; live249rows; legacy seed requires two matching native identity GETs |
 | Younganimal | Implemented | Every public range; live156rows; account-history skeletons excluded only from public preview |
 | BookWalker | Implemented, restricted | Single complete page, two count markers, latest-release sort; live11products; exclusion Full validates selected static product metadata before yield |
-| Kadocomi | BLOCKED | Proven native123rows have episodeNo gaps15/17/96/102 (range1..127). Current preview/planner/exclusion validator requires contiguous positions. Do not compress native ordinals or claim a partial active DOM is complete. Needs an explicit shared native-gap proof contract plus safe access-classified replay. |
+| Kadocomi | Implemented, boundary-only | Strict complete first/latest arrays/counts/reverse projection and stable reread. NativeListingProof binds count and complete ID/position projection in digest; preserves native gaps. Guarded static Work only. Continuous/open ranges supported; holes/empty assignments/replay unsupported. Live native GUI109rows with108onward saved through_url-only. Normal Discovery unchanged. |
 | ComicFUZ | BLOCKED | SSR native34chapters/4groups but no chapter DOM under script denial. The work frontend references WEB_MANGA_VIEWER with useTicket/consumePoint. Do not enable viewer bootstrap to obtain a listing; complete public-list count/terminal/access proof remains unverified. |
 | MANGA ONE | BLOCKED | Current SSR is RSC, without legacy chapterList. Public frontend defines read-only GET viewer/chapter_list protobuf; exact request binding/schema/complete pagination/order have not been verified. Do not infer completeness or initialize viewer/server actions. |
 

@@ -89,7 +89,8 @@ bound through preview/save, per [PROOF_CONTRACT](PROOF_CONTRACT.md). Links alone
 are insufficient. Hanayume's ten exposed public rows do not prove its complete
 inventory or native Work binding, so no series conversion was enabled. Stage07
 separately validates every declared public range for preview without enabling
-series conversion. Stage07 is partial: full-list WorkEditor supports8sites
-(magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker);
-BookWalker requires a complete single page in latest-release order. ComicFUZ,
-Kadocomi and MangaONE remain blocked for detail; see the Stage07 runbook.
+series conversion. Stage07 is partial: full-list WorkEditor supports9sites
+(magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker/kadocomi);
+BookWalker requires a complete single page in latest-release order. Kadocomi
+supports continuous ranges/open ends only, no individual exclusions. ComicFUZ
+and MangaONE remain blocked for detail; see the Stage07 runbook.

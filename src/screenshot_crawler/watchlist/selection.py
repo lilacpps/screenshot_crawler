@@ -11,7 +11,12 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
+from screenshot_crawler.discovery.listing import (
+    ListingPreview,
+    ListingRow,
+    NativeListingProof,
+    listing_digest,
+)
 from screenshot_crawler.watchlist.models import DiscoveryScope
 
 
@@ -185,6 +190,7 @@ class SelectionPlanner:
         checked_external_ids: Iterable[str],
         *,
         existing_scope: DiscoveryScope | None = None,
+        preserve_open_boundaries: bool = False,
     ) -> ScopeSelectionPlan:
         blockers: list[str] = []
         warnings: list[str] = []
@@ -237,6 +243,12 @@ class SelectionPlanner:
                     through_url=last.url,
                     excluded_external_ids=tuple(sorted(excluded)),
                 )
+                if preserve_open_boundaries and existing_scope is not None:
+                    scope = replace(scope,
+                        from_url=None if first_index == 0 and existing_scope.from_url is None else scope.from_url,
+                        through_url=None if last_index == len(rows) - 1 and existing_scope.through_url is None else scope.through_url)
+                if excluded and not listing.supports_exclusions:
+                    blockers.append("このサイトは連続範囲のみ対応しています。途中の話を飛ばす除外指定は未対応です")
                 if len(selected) == 1:
                     warnings.append("A single selected episode becomes an inclusive one-episode range")
         else:
@@ -292,6 +304,7 @@ class SelectionPlanner:
             listing,
             checked_external_ids,
             existing_scope=current_target.discovery_scope,
+            preserve_open_boundaries=not listing.supports_exclusions,
         )
         blockers.extend(plan.blockers)
         warnings = list(plan.warnings)
@@ -726,13 +739,24 @@ class SelectionPlanner:
             urls.append(row.url)
         if len(ids) != len(set(ids)):
             blockers.append("Complete listing contains duplicate episode IDs")
-        if len(positions) != len(set(positions)) or any(position < 1 for position in positions):
+        valid_positions = all(type(position) is int and position > 0 for position in positions)
+        if not valid_positions or len(positions) != len(set(positions)):
             blockers.append("Complete listing positions are missing or ambiguous")
         if len(urls) != len(set(urls)):
             blockers.append("Complete listing URLs are duplicated")
-        if positions and (
+        native_order = listing.native_order
+        if native_order is not None and (not isinstance(native_order, NativeListingProof)
+                    or type(native_order.declared_count) is not int
+                    or native_order.declared_count != len(listing.rows)
+                    or native_order.declared_count < 1
+                    or not isinstance(native_order.ordered_positions, tuple)
+                    or any(not isinstance(pair, tuple) or len(pair) != 2
+                        or type(pair[1]) is not int for pair in native_order.ordered_positions)
+                    or native_order.ordered_positions != tuple(zip(ids, positions, strict=True))):
+            blockers.append("Site-declared complete native order does not match listing rows")
+        if valid_positions and positions and (
             positions != sorted(positions, reverse=True)
-            or any(left - right != 1 for left, right in pairwise(positions))
+            or (native_order is None and any(left - right != 1 for left, right in pairwise(positions)))
         ):
             blockers.append(
                 "Complete listing order is not a contiguous site-native newest-first sequence"
@@ -740,6 +764,8 @@ class SelectionPlanner:
         if (
             listing.listing_identity
             and all(isinstance(row, ListingRow) for row in listing.rows)
-            and listing.digest != listing_digest(listing.listing_identity, tuple(listing.rows))
+            and (native_order is None or isinstance(native_order, NativeListingProof))
+            and listing.digest != listing_digest(listing.listing_identity, tuple(listing.rows),
+                native_order=native_order, supports_exclusions=listing.supports_exclusions)
         ):
             blockers.append("Complete listing digest does not match its rows")

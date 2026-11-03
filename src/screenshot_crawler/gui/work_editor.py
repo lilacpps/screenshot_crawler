@@ -109,9 +109,11 @@ class _SitePane(QWidget):
         listing = editor.draft.listings.get(target.key)
         self.rows = tuple(reversed(listing.rows)) if listing else ()
         if listing is None:
-            layout.addWidget(QLabel("完全一覧未取得。「両サイトの全話一覧を取得」を押してください。"))
+            layout.addWidget(QLabel("完全一覧未取得。「作品内の全話一覧を取得」を押してください。"))
             self.setEnabled(False)
             return
+        if not listing.supports_exclusions:
+            layout.addWidget(QLabel("連続範囲のみ対応（個別除外は未対応）。公開終了の話も順序確認用に表示します。"))
         selected = {row.external_id for row in selected_rows(target, listing)}
         snapshot = editor.snapshot
         sources = {(source.site, source.discovery_key, source.external_id): source
@@ -126,6 +128,8 @@ class _SitePane(QWidget):
             status = {"pending": "未取得", "completed": "取得済み", "skipped": "スキップ", "external": "外部取得"}
             values = (row.display_title or "話名未確認", status.get(item.status, item.status) if item else "Catalog未登録",
                       ("担当" if source.acquisition_enabled else "対象外") if source else "—", "担当" if row.external_id in selected else "対象外")
+            if row.access_observation == "unavailable":
+                values = (values[0], "公開終了 / " + values[1], *values[2:])
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value))
                 cell.setToolTip(f"{row.external_id}\n{row.url}")
@@ -229,11 +233,11 @@ class WorkEditorDialog(QDialog):
         controls.addWidget(self.work_combo, 1)
         for label, callback in (("新しい作品", lambda: self.add_target(new_work=True)),
                                 ("既存作品へサイト追加", self.add_target),
-                                ("両サイトの全話一覧を取得", self.fetch_listings),
+                                ("作品内の全話一覧を取得", self.fetch_listings),
                                 ("再読込", self.reload)):
             button = QPushButton(label)
             button.clicked.connect(callback)
-            if self.draft_only and label != "両サイトの全話一覧を取得":
+            if self.draft_only and label != "作品内の全話一覧を取得":
                 button.setVisible(False)
             controls.addWidget(button)
         layout.addLayout(controls)

@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import pairwise
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID
@@ -20,6 +20,12 @@ from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import (
+    ListingPreview,
+    ListingRow,
+    NativeListingProof,
+    listing_digest,
+)
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -769,6 +775,42 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
     allow_inferred_display_positions = False
+
+    async def preview_complete_listing(self, page: Page, target: WatchlistTarget) -> ListingPreview:
+        """Read only inert complete native arrays; never expand or enter a reader."""
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            registration_document,
+            require_canonical,
+        )
+
+        work = parse_kadocomi_work_url(target.url)
+        if target.site != "kadocomi" or work is None:
+            raise DiscoveryIncompleteError("Kadocomi preview requires a strict Work target")
+        url = canonical_kadocomi_work_url(target.url)
+        try:
+            async with registration_document(page, url):
+                await require_canonical(page, url)
+                listing = await self._read_native_listing(page, work_id=work.work_id)
+                again = await self._read_native_listing(page, work_id=work.work_id)
+                if listing != again:
+                    raise DiscoveryIncompleteError("Kadocomi native history changed during preview")
+                await require_canonical(page, url)
+        except ObservationUnavailable as exc:
+            raise DiscoveryIncompleteError("Kadocomi preview document could not be verified") from exc
+        identity = f"kadocomi-native-work:{work.work_id}"
+        episodes = tuple(reversed(listing.episodes))
+        rows = tuple(ListingRow(episode.external_id,
+            f"{url}/episodes/{episode.episode_id}", episode.episode_no, episode.title,
+            "unknown" if episode.is_active else "unavailable", identity) for episode in episodes)
+        # The parser has independently validated both declared totals and the
+        # exact reverse arrays. GUI row selection must retain this projection.
+        proof = NativeListingProof(len(episodes),
+            tuple((episode.external_id, episode.episode_no) for episode in episodes))
+        return ListingPreview(target.site, target.key, target.url, identity, rows,
+            True, datetime.now(UTC), listing_digest(identity, rows,
+                native_order=proof, supports_exclusions=False),
+            native_order=proof, supports_exclusions=False)
 
     async def iter_records(
         self,

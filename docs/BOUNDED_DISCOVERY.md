@@ -229,6 +229,21 @@ gaps; missing numbers have no observed episode identity and must never be
 fabricated as Sources or ordinal reservations. Leading or all-inactive
 placeholder patterns not established by current evidence also fail closed.
 Any existing Catalog Source missing from the proof blocks scope synchronization.
+
+Kadocomi read-only GUI preview also validates the two complete native arrays,
+their equal declared counts and reverse ID/position projection, then rereads for
+stability under the static document guard. `ListingPreview.native_order` carries
+an immutable `NativeListingProof` (declared count and full ordered ID/position
+projection), bound into the preview digest. Only that explicit proof permits
+positive, unique, strictly newest-first positions with native gaps; the default
+contiguous validation and digests for existing sites are unchanged. Missing
+ordinals never create rows or inferred Sources. Active rows have unknown access
+until ordinary Discovery; inactive rows are displayed as unavailable.
+Kadocomi GUI supports inclusive continuous boundaries and open oldest/newest
+ends, including `through_url` alone for108onward. It does not support individual
+exclusions or an empty assignment: both planner and WorkDraft reject those
+selections. No exclusion replay capability is enabled; Discovery rejects hole
+scopes before page/store activity. Normal bounded/unbounded Discovery is unchanged.
 The inventory position writer preserves that Source's prior position and
 history; ordinary Full Discovery availability reconciliation keeps its normal
 site behavior.

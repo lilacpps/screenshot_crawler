@@ -366,7 +366,7 @@ def test_unsupported_listing_never_connects_to_browser(qt_app, tmp_path, monkeyp
         raise AssertionError("Unsupported listing must not connect")
 
     monkeypatch.setattr(BrowserSession, "connect", forbidden)
-    target = WatchlistTarget("unsupported", "work", "kadocomi", "https://comic-walker.com/detail/KC_004915_S", "Unsupported")
+    target = WatchlistTarget("unsupported", "work", "comicfuz", "https://comic-fuz.com/manga/1970", "Unsupported")
     worker = _ListingWorker(target)
     errors = []
     worker.signals.failed.connect(errors.append)

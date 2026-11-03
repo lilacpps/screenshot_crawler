@@ -24,8 +24,17 @@ all selected static product metadata is validated by the existing account/contro
 parser before any record yield. Unknown access fails closed; normal Discovery
 keeps its prior streaming/navigation/access behavior. No product is fetched for
 the GUI preview itself. GUI tooltips no longer contain a fixed site count.
-ComicFUZ/Kadocomi/MangaONE remain visibly unsupported: safe complete-list proof
-or the current position contract is unresolved. Stage07 is partial, not complete.
+Kadocomi adds continuous ranges/open ends using strict complete native arrays
+and a stable reread under the static document guard. ListingPreview.native_order
+holds a frozen declared-count/full ID-position projection; the digest binds it
+and supports_exclusions=False. SelectionPlanner permits native gaps only with
+that exact proof; default contiguous guards/digests are unchanged. Missing
+ordinals do not become rows. WorkDraft and planner reject holes/empty assignments;
+no exclusion replay is enabled, so Discovery rejects those scopes before writes.
+Boundary-only key editing preserves explicit open ends. Normal Discovery is
+unchanged; preview access is unknown/unavailable, never a capture permission.
+ComicFUZ/MangaONE remain visibly unsupported: safe complete-list proof is
+unresolved. Stage07 is partial, not complete (9/11 preview sites).
 Evidence/tests/independent review are in the registration PROGRESS.md.
 
 Native Windows GUI verified actual four-site listing workers (432/249/156/11),
@@ -33,11 +42,15 @@ draft-only hole/segment ordering, readable saved-YAML preview, isolated atomic
 save and one existing Full confirmation answered No. Unselected Work, isolated
 Catalog and operational files were unchanged. At980/1320width the four panes
 need horizontal scrolling; the far-right BookWalker controls are reachable.
-Native evidence review passed. Isolated full-suite union covers all6860 current
+At the prior A/B/C checkpoint native evidence review passed. Its isolated full-suite union covers all6860
 nodes with passing setup/call/teardown, 0skip; interrupted/failed runs required
 separate reruns, so this is not a clean monolithic pass. Source/test hash audit
-and detailed results/limits are in PROGRESS.md, independently of the three blocked
-site extensions. Ruff passed; operational stores were not test stores.
+and detailed results/limits are in PROGRESS.md. Kadocomi follow-up adds the native
+109-row GUI boundary/save/Full-No check,181related passes and fresh full collection
+6884current passing node witnesses/0skip. That full coverage is partitioned plus
+an18-test rerun after correcting an outdated unsupported-site assertion; original
+failed attempt is retained, not a monolithic pass. Operational stores were not
+test stores. Details/source hashes/review are recorded separately in PROGRESS.
 
 
 ## URL registration Work detail drafts (Stage 04)
@@ -55,8 +68,10 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker complete-list preview is supported;
-other sites needing detail are blocked. New single-source Works may skip detail.
+Complete-list preview supports magapoke/jumpplus/zeblack/comicdays/piccoma/
+hanayume/younganimal/bookwalker/kadocomi. Kadocomi is boundary-only, without
+individual exclusions/empty assignments. Other sites needing detail are blocked.
+New single-source Works may skip detail.
 Draft preview preserves an unchanged open scope across segment normalization;
 new keys append to existing archive_order through WorkDraft.add.
 Existing scope/order/segments/enabled are loaded unchanged; only explicitly

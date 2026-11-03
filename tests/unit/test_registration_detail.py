@@ -19,6 +19,7 @@ from screenshot_crawler.watchlist.service import WatchlistService
 from screenshot_crawler.watchlist.work_edit import validate_work_snapshot
 
 URLS = {
+    "kadocomi": "https://comic-walker.com/detail/KC_002911_S",
     "bookwalker": "https://bookwalker.jp/series/123/list/",
     "jumpplus": "https://shonenjumpplus.com/episode/4",
     "comicdays": "https://comic-days.com/episode/4",

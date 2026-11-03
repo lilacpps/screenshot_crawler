@@ -1,6 +1,8 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
 from screenshot_crawler.discovery import (
     DiscoveryAdapter,
@@ -11,6 +13,7 @@ from screenshot_crawler.discovery import (
     ListingRow,
     listing_digest,
 )
+from screenshot_crawler.discovery.listing import NativeListingProof
 from screenshot_crawler.watchlist import (
     ArchiveArtifactFact,
     ArchiveFactsSnapshot,
@@ -202,6 +205,48 @@ def test_selection_planner_rejects_shuffled_or_gapped_site_positions() -> None:
     plan = SelectionPlanner().plan(listing, {"episode-1"})
     assert plan.ready is False
     assert any("contiguous" in blocker for blocker in plan.blockers)
+
+
+def sparse_listing():
+    original = _listing()
+    rows = tuple(replace(row, site_position=position) for row, position in zip(
+        original.rows, (122, 121, 3, 1), strict=True))
+    proof = NativeListingProof(4, tuple((row.external_id, row.site_position) for row in rows))
+    return replace(original, rows=rows, native_order=proof, supports_exclusions=False,
+        digest=listing_digest("fixture", rows, native_order=proof, supports_exclusions=False))
+
+
+def test_native_sparse_range_preserves_positions_and_open_newest_boundary():
+    listing = sparse_listing()
+    plan = SelectionPlanner().plan(listing, ("episode-4", "episode-3"),
+        existing_scope=DiscoveryScope(through_url=listing.rows[1].url), preserve_open_boundaries=True)
+    assert plan.ready and plan.discovery_scope == DiscoveryScope(through_url=listing.rows[1].url)
+    assert [row.site_position for row in listing.rows] == [122, 121, 3, 1]
+    assert SelectionPlanner().plan(listing, ("episode-4", "episode-2")).ready is False
+
+
+@pytest.mark.parametrize("fault", ["count", "projection", "proof_missing", "proof_type", "digest", "restriction", "reverse", "bool", "duplicate"])
+def test_native_sparse_proof_cannot_authorize_incomplete_or_substituted_rows(fault):
+    listing = sparse_listing()
+    if fault == "count":
+        listing = replace(listing, native_order=replace(listing.native_order, declared_count=3))
+    elif fault == "projection":
+        listing = replace(listing, rows=listing.rows[:-1])
+    elif fault == "proof_missing":
+        listing = replace(listing, native_order=None)
+    elif fault == "proof_type":
+        listing = replace(listing, native_order=object())
+    elif fault == "digest":
+        listing = replace(listing, digest=listing_digest("fixture", listing.rows))
+    elif fault == "restriction":
+        listing = replace(listing, supports_exclusions=True)
+    else:
+        rows = tuple(reversed(listing.rows)) if fault == "reverse" else (
+            replace(listing.rows[0], site_position=True if fault == "bool" else 121), *listing.rows[1:])
+        proof = NativeListingProof(len(rows), tuple((row.external_id, row.site_position) for row in rows))
+        listing = replace(listing, rows=rows, native_order=proof,
+            digest=listing_digest("fixture", rows, native_order=proof, supports_exclusions=False))
+    assert not SelectionPlanner().plan(listing, ("episode-4", "episode-3")).ready
 
 
 def test_scope_edit_preview_joins_catalog_rows_and_binds_snapshot_token() -> None:

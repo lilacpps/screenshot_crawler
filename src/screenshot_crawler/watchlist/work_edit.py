@@ -150,10 +150,14 @@ class WorkDraft:
     def _scope(self, key: str, selected: set[str], open_oldest: bool, open_latest: bool) -> DiscoveryScope | None:
         rows = tuple(reversed(self.listings[key].rows))
         if not selected:
+            if not self.listings[key].supports_exclusions:
+                raise ValueError("このサイトは連続範囲のみ対応しています。全話除外は未対応です")
             return DiscoveryScope(rows[-1].url, rows[0].url, tuple(sorted(row.external_id for row in rows)))
         indices = [index for index, row in enumerate(rows) if row.external_id in selected]
         first, last = min(indices), max(indices)
         holes = tuple(sorted(row.external_id for row in rows[first:last + 1] if row.external_id not in selected))
+        if holes and not self.listings[key].supports_exclusions:
+            raise ValueError("このサイトは連続範囲のみ対応しています。途中の話を飛ばす除外指定は未対応です")
         scope = DiscoveryScope(None if open_latest else rows[last].url,
                                None if open_oldest else rows[first].url, holes)
         return None if scope.from_url is None and scope.through_url is None and not holes else scope
@@ -240,6 +244,12 @@ class WorkDraft:
                 raise ValueError("完成順の話が重複しています")
             assigned[block.key].update(ids)
         for target in self.members:
+            listing = self.listings[target.key]
+            if not listing.supports_exclusions:
+                plan = SelectionPlanner().plan(listing,
+                    (row.external_id for row in selected_rows(target, listing)))
+                if not plan.ready:
+                    raise ValueError(" / ".join(plan.blockers))
             if assigned[target.key] != {row.external_id for row in selected_rows(target, self.listings[target.key])}:
                 raise ValueError(f"{target.key}: 担当範囲と完成順が一致しません")
 

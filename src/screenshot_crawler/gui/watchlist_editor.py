@@ -1183,7 +1183,9 @@ class WatchlistEditorPage(QWidget):
                     raise ValueError("Saved scope boundaries are absent from the complete listing")
                 checked_ids = set(self._checked_for_target(selected))
             self._draft_checked_ids = frozenset(checked_ids)
-            plan = SelectionPlanner().plan(self._listing, checked_ids)
+            plan = SelectionPlanner().plan(self._listing, checked_ids,
+                existing_scope=DiscoveryScope(from_url=from_url or None, through_url=through_url or None),
+                preserve_open_boundaries=not self._listing.supports_exclusions)
             if not plan.ready:
                 raise ValueError("Scope checkbox selection is blocked: " + "; ".join(plan.blockers))
             scope = plan.discovery_scope

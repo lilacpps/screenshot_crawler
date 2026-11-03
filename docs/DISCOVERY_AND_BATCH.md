@@ -2647,9 +2647,13 @@ including legacy hyphens; only newly suggested key text is normalized.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
-require complete-list detail; sites outside the supported eight (Magapoke,
-Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal, BookWalker) block that path.
+require complete-list detail; sites outside the supported nine (Magapoke,
+Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal, BookWalker, Kadocomi) block that path.
 BookWalker requires a complete single page in native latest-release order.
+Kadocomi supports continuous ranges/open ends only, with its complete native
+ID/position proof preserving gaps; individual exclusions and empty assignments
+remain blocked. Preview reads inert Work JSON without access classification or
+reader/bootstrap; normal Discovery remains responsible for current availability.
 Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
 Final fresh ownership validation and persistence are performed by
 `registration/service.py` as described below.
@@ -2679,8 +2683,10 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker complete-list preview is supported;
-other sites needing detail are blocked. New single-source Works may skip detail.
+Complete-list preview supports magapoke/jumpplus/zeblack/comicdays/piccoma/
+hanayume/younganimal/bookwalker/kadocomi. Kadocomi is boundary-only, without
+individual exclusions/empty assignments. Other sites needing detail are blocked.
+New single-source Works may skip detail.
 Existing scope/order/segments/enabled are loaded unchanged; only explicitly
 previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.
 `validate_work_snapshot` and `catalog_snapshot_identity` are Qt-free shared
@@ -2726,6 +2732,6 @@ The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
 Yes/No/failure and Windows GUI flow use isolated synthetic data. Kadocomi
 exact-detail metadata and the four Stage 06A paths have bounded one-work live
 checks at that Stage05/06A checkpoint. Current bounded metadata and Stage07
-listing evidence, eight supported preview sites and three unresolved sites are
+listing evidence, nine supported preview sites and two unresolved sites are
 recorded in runbooks/watchlist-url-registration/PROGRESS.md. Do not generalize
 one-Work checks to all Works/accounts or mix metadata with complete-list proof.
