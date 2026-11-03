@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 from io import BytesIO
@@ -299,6 +300,7 @@ class _FakePage:
         self.geometry_cleared = False
         self.native_cleared = False
         self.materialize_count = 0
+        self.last_handle: _FakeHandle | None = None
 
     async def evaluate(self, expression: str, *_args: object) -> object:
         if "__bookwalkerNativeDrawCalls" in expression and ".filter" in expression:
@@ -322,8 +324,44 @@ class _FakePage:
             self.geometry_cleared = True
         return None
 
+    async def evaluate_handle(self, _expression: str, payload: object) -> _FakeHandle:
+        self.materialize_count += 1
+        items = payload if isinstance(payload, list) else []
+        self.last_handle = _FakeHandle([
+            {
+                "dataUrl": "data:image/png;base64," + base64.b64encode(PNG_1X1).decode(),
+                "error": None,
+                "fullSourceSnapshotId": item.get("fullSourceSnapshotId") if isinstance(item, dict) else None,
+                "targetSnapshotId": item.get("targetSnapshotId") if isinstance(item, dict) else None,
+            }
+            for item in items
+        ])
+        return self.last_handle
+
     def locator(self, _selector: str) -> _FakeLocator:
         return _FakeLocator()
+
+
+class _FakeHandle:
+    def __init__(self, value: object) -> None:
+        self.value = value
+        self.disposed = False
+
+    async def get_property(self, name: str) -> _FakeHandle | None:
+        if isinstance(self.value, list):
+            try:
+                return _FakeHandle(self.value[int(name)])
+            except (IndexError, ValueError):
+                return None
+        if isinstance(self.value, dict):
+            return _FakeHandle(self.value.get(name))
+        return None
+
+    async def evaluate(self, _expression: str) -> object:
+        return self.value
+
+    async def dispose(self) -> None:
+        self.disposed = True
 
 
 class _TestBookWalkerAdapter(BookWalkerAdapter):
@@ -465,6 +503,60 @@ async def test_native_source_png_is_materialized_only_for_selected_calls() -> No
 
     assert result is not None
     assert page.materialize_count == 1
+
+
+async def test_terminal_materialization_does_not_pin_auxiliary_handles() -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    result = await adapter._materialize_native_source_crops(
+        page, [_native_call_fixture()], pin_auxiliary=False
+    )
+    assert result and result[0]["sourceCropPng"]
+    assert adapter._capture_snapshot_handles == []
+
+
+async def test_snapshot_handle_cleanup_releases_all_and_preserves_cancellation() -> None:
+    class CancelOnDispose:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        async def dispose(self) -> None:
+            self.disposed = True
+            raise asyncio.CancelledError
+
+    class NormalDispose:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        async def dispose(self) -> None:
+            self.disposed = True
+
+    cancelled = CancelOnDispose()
+    normal = NormalDispose()
+    adapter = _TestBookWalkerAdapter()
+    adapter._capture_snapshot_handles = [cancelled, normal]
+    with pytest.raises(asyncio.CancelledError):
+        await adapter._dispose_capture_snapshot_handles()
+    assert cancelled.disposed is True
+    assert normal.disposed is True
+    assert adapter._capture_snapshot_handles == []
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, RuntimeError])
+async def test_capture_cleanup_releases_handles_when_native_cleanup_raises(
+    error_type: type[BaseException],
+) -> None:
+    class CleanupRaisingAdapter(_TestBookWalkerAdapter):
+        async def _clear_native_capture(self, _page: _FakePage) -> None:
+            raise error_type("injected native cleanup failure")
+
+    page = _FakePage([_native_call_fixture()])
+    adapter = CleanupRaisingAdapter()
+    with pytest.raises(error_type, match="injected native cleanup failure"):
+        await adapter.capture_page(page)  # type: ignore[arg-type]
+    assert page.last_handle is not None
+    assert page.last_handle.disposed is True
+    assert adapter._capture_snapshot_handles == []
 
 
 async def test_direct_cover_path_respects_original_jpeg_capture_flag() -> None:
@@ -1843,6 +1935,16 @@ async def test_cropped_one_hop_evaluation_requires_all_three_intrinsic_gates(
             if "__bookwalkerMaterializeNativeSourceCrop" in expression:
                 return {"dataUrl": "data:image/png;base64,source-a", "error": None}
             return dict(EMPTY_COMPACT_PAYLOAD)
+
+        async def evaluate_handle(self, _expression: str, _snapshot_id: object) -> object:
+            class Handle:
+                async def evaluate(self, _expression: str) -> bool:
+                    return True
+
+                async def dispose(self) -> None:
+                    return None
+
+            return Handle()
 
     mapping = PurchasedMapping(
         mapping=({

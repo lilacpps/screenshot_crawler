@@ -3318,20 +3318,24 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
             await adapter.capture_page(browser_page)
         assert adapter._w2_initial_joins == 2
         assert adapter._w2_compare_calls == 2  # Initial recovery consumed the one retry.
+        assert adapter._capture_snapshot_handles == []
         return
     if mutation == "redraw_twice":
         with pytest.raises(adapter_module.UnknownPageStateError):
             await adapter.capture_page(browser_page)
         assert adapter._w2_compare_calls == 4
+        assert adapter._capture_snapshot_handles == []
         return
     if mutation not in {"none", "redraw", "initial_redraw", "initial_overlay"} or (
         mutation == "initial_overlay" and clear_mode == "executed"
     ):
         with pytest.raises(adapter_module.UnknownPageStateError):
             await adapter.capture_page(browser_page)
+        assert adapter._capture_snapshot_handles == []
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None
+    assert adapter._capture_snapshot_handles == []
     if mutation in {"initial_redraw", "initial_overlay"}:
         assert adapter._w2_initial_joins == 2
         retry = adapter._capture_debug["bookwalker_capture"]["batch_initial_anchor_retry"]

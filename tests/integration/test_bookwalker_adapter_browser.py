@@ -471,6 +471,179 @@ async def test_cropped_one_hop_replay_matches_intermediate_and_final_roi(
     assert comparison["intermediate"]["differing_pixel_count"] == 0
     assert comparison["final"]["differing_pixel_count"] == 0
 
+    snapshot_handles = await browser_page.evaluate_handle(
+        """
+        async urls => {
+          async function canvasFor(url) {
+            const response = await fetch(url);
+            const bitmap = await createImageBitmap(await response.blob());
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmap.width; canvas.height = bitmap.height;
+            canvas.getContext('2d').drawImage(bitmap, 0, 0);
+            bitmap.close();
+            return canvas;
+          }
+          return {
+            source: await canvasFor(urls.source),
+            full: await canvasFor(urls.intermediate),
+            target: await canvasFor(urls.finalTarget),
+          };
+        }
+        """,
+        {
+            "source": reconstructed,
+            "intermediate": artifacts["intermediate"],
+            "finalTarget": artifacts["finalTarget"],
+        },
+    )
+    source_handle = await snapshot_handles.get_property("source")
+    handle_comparison = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            "reconstructed": reconstructed,
+            "sourceSnapshot": None,
+            "sourceSnapshotHandle": source_handle,
+            "intermediate": None,
+            "finalTarget": None,
+            "snapshotHandles": snapshot_handles,
+            "copySourceRect": {"x": 0, "y": 0, "width": 37, "height": 36},
+            "copyDestination": {"x": 0, "y": 0, "width": 18, "height": 18},
+            "finalSourceRect": {"x": 0, "y": 0, "width": 17.5, "height": 18},
+            "finalDestination": {"x": 2, "y": 1, "width": 10, "height": 10},
+            "finalCanvasDimensions": {"width": 14, "height": 12},
+            "intermediateDimensions": {"width": 18, "height": 18},
+            "copySmoothingEnabled": True,
+            "copySmoothingQuality": "high",
+            "finalSmoothingEnabled": True,
+            "finalSmoothingQuality": "high",
+        },
+    )
+    assert handle_comparison == comparison
+    await source_handle.dispose()
+    await snapshot_handles.dispose()
+
+
+async def test_native_auxiliary_snapshots_pin_without_eager_png_roundtrip(
+    browser_page: Page,
+) -> None:
+    adapter = BookWalkerAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto("data:text/html,<html></html>")
+    await browser_page.evaluate(
+        """
+        async () => {
+          const sourceCanvas = document.createElement('canvas');
+          sourceCanvas.width = 4; sourceCanvas.height = 4;
+          const sourceContext = sourceCanvas.getContext('2d');
+          sourceContext.fillStyle = 'rgb(10, 20, 30)';
+          sourceContext.fillRect(0, 0, 4, 4);
+          window.__bookwalkerTestSourceCanvas = sourceCanvas;
+          const source = await createImageBitmap(sourceCanvas);
+          const full = document.createElement('canvas');
+          full.width = 4; full.height = 4;
+          full.getContext('2d').fillStyle = 'rgb(40, 50, 60)';
+          full.getContext('2d').fillRect(0, 0, 4, 4);
+          const target = document.createElement('canvas');
+          target.width = 2; target.height = 2;
+          target.getContext('2d').fillStyle = 'rgb(70, 80, 90)';
+          target.getContext('2d').fillRect(0, 0, 2, 2);
+          window.__bookwalkerNativeSourceObjects.set('test-source', source);
+          window.__bookwalkerNativeSnapshots.set('test-full', full);
+          window.__bookwalkerNativeSnapshots.set('test-target', target);
+          window.__bookwalkerTestToDataUrlCount = 0;
+          const original = HTMLCanvasElement.prototype.toDataURL;
+          window.__bookwalkerTestOriginalToDataURL = original;
+          HTMLCanvasElement.prototype.toDataURL = function(...args) {
+            window.__bookwalkerTestToDataUrlCount += 1;
+            return original.apply(this, args);
+          };
+        }
+        """
+    )
+    selected = [{
+        "sourceId": "test-source", "snapshotId": None,
+        "fullSourceSnapshotId": "test-full", "targetSnapshotId": "test-target",
+        "sourceConstructor": "ImageBitmap",
+        "sourceRect": {"x": 0, "y": 0, "width": 4, "height": 4},
+        "source": {"constructor": "ImageBitmap", "width": 4, "height": 4},
+    }]
+    old_measurement = await browser_page.evaluate(
+        """
+        items => items.map(item => {
+          const source = window.__bookwalkerMaterializeNativeSourceCrop?.(item);
+          const full = item.fullSourceSnapshotId == null ? null
+            : window.__bookwalkerMaterializeNativeSourceCrop?.({
+                ...item, sourceConstructor: 'HTMLCanvasElement',
+                snapshotId: item.fullSourceSnapshotId,
+              });
+          const target = item.targetSnapshotId == null ? null
+            : window.__bookwalkerMaterializeNativeSourceCrop?.({
+                ...item, sourceConstructor: 'HTMLCanvasElement',
+                snapshotId: item.targetSnapshotId,
+              });
+          return {
+            source: source?.dataUrl || null,
+            full: full?.dataUrl || null,
+            target: target?.dataUrl || null,
+          };
+        })
+        """,
+        selected,
+    )
+    assert len(old_measurement) == 1
+    old_urls = old_measurement[0]
+    assert all(isinstance(old_urls[key], str) for key in ("source", "full", "target"))
+    old_transfer = sum(len(old_urls[key]) for key in ("source", "full", "target"))
+    assert await browser_page.evaluate("window.__bookwalkerTestToDataUrlCount") == 3
+    await browser_page.evaluate("window.__bookwalkerTestToDataUrlCount = 0")
+    materialized = await adapter._materialize_native_source_crops(browser_page, selected)
+    assert await browser_page.evaluate("window.__bookwalkerTestToDataUrlCount") == 1
+    assert materialized[0]["sourceCropPng"].startswith("data:image/png")
+    assert materialized[0]["fullSourcePng"] is None
+    assert materialized[0]["targetCropPng"] is None
+    assert len(adapter._capture_snapshot_handles) == 1
+    new_transfer = len(materialized[0]["sourceCropPng"])
+    assert new_transfer < old_transfer
+    snapshot_handle = materialized[0]["_bookwalker_aux_snapshot_handle"]
+    before = await browser_page.evaluate(
+        """
+        ({snapshots, index}) => ({
+          full: snapshots[index].full.toDataURL('image/png'),
+          target: snapshots[index].target.toDataURL('image/png'),
+        })
+        """,
+        {"snapshots": snapshot_handle, "index": materialized[0]["_bookwalker_aux_snapshot_index"]},
+    )
+    assert before["full"].startswith("data:image/png")
+    assert before["target"].startswith("data:image/png")
+    await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerNativeSnapshots.clear();
+          const context = window.__bookwalkerTestSourceCanvas.getContext('2d');
+          context.fillStyle = 'rgb(0, 0, 0)';
+          context.fillRect(0, 0, 4, 4);
+        }
+        """
+    )
+    after = await browser_page.evaluate(
+        """
+        ({snapshots, index}) => ({
+          full: snapshots[index].full.toDataURL('image/png'),
+          target: snapshots[index].target.toDataURL('image/png'),
+        })
+        """,
+        {"snapshots": snapshot_handle, "index": materialized[0]["_bookwalker_aux_snapshot_index"]},
+    )
+    assert after["full"] == before["full"]
+    assert after["target"] == before["target"]
+    assert await browser_page.evaluate("window.__bookwalkerTestToDataUrlCount") == 5
+    await adapter._dispose_capture_snapshot_handles()
+    assert adapter._capture_snapshot_handles == []
+    await browser_page.evaluate(
+        "() => { HTMLCanvasElement.prototype.toDataURL = window.__bookwalkerTestOriginalToDataURL; }"
+    )
+
 
 async def test_cropped_one_hop_pixel_gate_rejects_each_bad_stage(
     browser_page: Page,
@@ -503,18 +676,168 @@ async def test_cropped_one_hop_pixel_gate_rejects_each_bad_stage(
             {**common, "intermediate": intermediate, "finalTarget": final_target},
         )
 
+    async def compare_with_handles(
+        reconstructed: str,
+        source_snapshot: str,
+        intermediate: str,
+        final_target: str,
+    ) -> dict[str, object]:
+        handles = await browser_page.evaluate_handle(
+            """
+            async urls => {
+              async function canvasFor(url) {
+                const response = await fetch(url);
+                const bitmap = await createImageBitmap(await response.blob());
+                const canvas = document.createElement('canvas');
+                canvas.width = bitmap.width; canvas.height = bitmap.height;
+                canvas.getContext('2d').drawImage(bitmap, 0, 0);
+                bitmap.close();
+                return canvas;
+              }
+              return {
+                source: await canvasFor(urls.source),
+                full: await canvasFor(urls.intermediate),
+                target: await canvasFor(urls.finalTarget),
+              };
+            }
+            """,
+            {
+                "source": source_snapshot,
+                "intermediate": intermediate,
+                "finalTarget": final_target,
+            },
+        )
+        source_handle = await handles.get_property("source")
+        try:
+            return await browser_page.evaluate(
+                _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+                {
+                    **common,
+                    "reconstructed": reconstructed,
+                    "sourceSnapshot": None,
+                    "sourceSnapshotHandle": source_handle,
+                    "intermediate": None,
+                    "finalTarget": None,
+                    "snapshotHandles": handles,
+                },
+            )
+        finally:
+            await source_handle.dispose()
+            await handles.dispose()
+
     exact = await compare(data_url((20, 40, 60)), data_url((20, 40, 60)))
     assert exact["available"] is True
     assert exact["dimensions_equal"] is True
     assert exact["exact"] is True
 
+    alpha_buffer = io.BytesIO()
+    Image.new("RGBA", (1, 1), (20, 40, 60, 128)).save(alpha_buffer, format="PNG")
+    alpha_url = "data:image/png;base64," + base64.b64encode(alpha_buffer.getvalue()).decode("ascii")
+    alpha_old = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **common,
+            "reconstructed": alpha_url,
+            "sourceSnapshot": alpha_url,
+            "intermediate": alpha_url,
+            "finalTarget": alpha_url,
+        },
+    )
+    handles = await browser_page.evaluate_handle(
+        """
+        async url => {
+          const response = await fetch(url);
+          const bitmap = await createImageBitmap(await response.blob());
+          const makeCanvas = () => {
+            const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+            canvas.getContext('2d').drawImage(bitmap, 0, 0); return canvas;
+          };
+          const source = makeCanvas(); const full = makeCanvas(); const target = makeCanvas();
+          bitmap.close();
+          return {source, full, target};
+        }
+        """,
+        alpha_url,
+    )
+    source_handle = await handles.get_property("source")
+    alpha_new = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **common,
+            "reconstructed": alpha_url,
+            "sourceSnapshot": None,
+            "sourceSnapshotHandle": source_handle,
+            "intermediate": None,
+            "finalTarget": None,
+            "snapshotHandles": handles,
+        },
+    )
+    assert alpha_new == alpha_old
+    await source_handle.dispose()
+    await handles.dispose()
+
+    transparent_buffer = io.BytesIO()
+    Image.new("RGBA", (1, 1), (20, 40, 60, 0)).save(transparent_buffer, format="PNG")
+    transparent_url = "data:image/png;base64," + base64.b64encode(transparent_buffer.getvalue()).decode("ascii")
+    transparent_old = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **common,
+            "reconstructed": transparent_url,
+            "sourceSnapshot": transparent_url,
+            "intermediate": transparent_url,
+            "finalTarget": transparent_url,
+        },
+    )
+    transparent_handles = await browser_page.evaluate_handle(
+        """
+        async url => {
+          const response = await fetch(url);
+          const bitmap = await createImageBitmap(await response.blob());
+          const makeCanvas = () => {
+            const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+            canvas.getContext('2d').drawImage(bitmap, 0, 0); return canvas;
+          };
+          const source = makeCanvas(); const full = makeCanvas(); const target = makeCanvas();
+          bitmap.close(); return {source, full, target};
+        }
+        """,
+        transparent_url,
+    )
+    transparent_source = await transparent_handles.get_property("source")
+    transparent_new = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **common,
+            "reconstructed": transparent_url,
+            "sourceSnapshot": None,
+            "sourceSnapshotHandle": transparent_source,
+            "intermediate": None,
+            "finalTarget": None,
+            "snapshotHandles": transparent_handles,
+        },
+    )
+    assert transparent_new == transparent_old
+    await transparent_source.dispose()
+    await transparent_handles.dispose()
+
     intermediate_mismatch = await compare(data_url((21, 40, 60)), data_url((20, 40, 60)))
+    intermediate_mismatch_new = await compare_with_handles(
+        common["reconstructed"], common["sourceSnapshot"],
+        data_url((21, 40, 60)), data_url((20, 40, 60)),
+    )
+    assert intermediate_mismatch_new == intermediate_mismatch
     assert intermediate_mismatch["available"] is True
     assert intermediate_mismatch["dimensions_equal"] is True
     assert intermediate_mismatch["exact"] is False
     assert intermediate_mismatch["final"]["available"] is False
 
     final_mismatch = await compare(data_url((20, 40, 60)), data_url((20, 41, 60)))
+    final_mismatch_new = await compare_with_handles(
+        common["reconstructed"], common["sourceSnapshot"],
+        data_url((20, 40, 60)), data_url((20, 41, 60)),
+    )
+    assert final_mismatch_new == final_mismatch
     assert final_mismatch["available"] is True
     assert final_mismatch["dimensions_equal"] is True
     assert final_mismatch["exact"] is False
@@ -530,6 +853,11 @@ async def test_cropped_one_hop_pixel_gate_rejects_each_bad_stage(
             "finalTarget": data_url((21, 40, 60)),
         },
     )
+    source_mismatch_new = await compare_with_handles(
+        data_url((21, 40, 60)), data_url((20, 40, 60)),
+        data_url((21, 40, 60)), data_url((21, 40, 60)),
+    )
+    assert source_mismatch_new == source_mismatch
     assert source_mismatch["available"] is True
     assert source_mismatch["exact"] is False
     assert source_mismatch["source"]["exact"] is False

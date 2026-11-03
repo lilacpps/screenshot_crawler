@@ -2779,17 +2779,20 @@ _MATERIALIZE_NATIVE_SOURCE_SCRIPT = """
 items => items.map(item => {
   try {
     const copy = window.__bookwalkerMaterializeNativeSourceCrop?.(item);
-    const full = item.fullSourceSnapshotId == null ? null
-      : window.__bookwalkerMaterializeNativeSourceCrop?.({...item, snapshotId: item.fullSourceSnapshotId});
-    const target = item.targetSnapshotId == null ? null
-      : window.__bookwalkerMaterializeNativeSourceCrop?.({...item, snapshotId: item.targetSnapshotId});
+    const fullSnapshot = item.fullSourceSnapshotId == null ? null
+      : window.__bookwalkerNativeSnapshots?.get(String(item.fullSourceSnapshotId)) || null;
+    const targetSnapshot = item.targetSnapshotId == null ? null
+      : window.__bookwalkerNativeSnapshots?.get(String(item.targetSnapshotId)) || null;
     return {
       dataUrl: copy?.dataUrl || null,
       error: copy ? copy.error : 'native source crop unavailable',
-      fullSourceDataUrl: full?.dataUrl || null,
-      fullSourceError: full ? full.error : null,
-      targetDataUrl: target?.dataUrl || null,
-      targetError: target ? target.error : null,
+      // These snapshots are pinned as JSHandles by Python at this same
+      // capture point.  They are intentionally not PNG-encoded or sent over
+      // the protocol until a cropped proof actually needs them.
+      fullSourceSnapshotId: item.fullSourceSnapshotId ?? null,
+      targetSnapshotId: item.targetSnapshotId ?? null,
+      full: fullSnapshot,
+      target: targetSnapshot,
     };
   } catch (error) {
     return {dataUrl: null, error: String(error)};
@@ -3054,10 +3057,10 @@ async ({candidate, sourceSnapshot, intermediate, sourceB, targetSnapshot, curren
 
 
 _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT = """
-async ({reconstructed, intermediate, finalTarget, copySourceRect, copyDestination,
+async ({reconstructed, intermediate, finalTarget, snapshotHandles, snapshotHandleIndex,
+        sourceSnapshot, sourceSnapshotHandle, copySourceRect, copyDestination,
         finalSourceRect, finalDestination, intermediateDimensions,
         finalCanvasDimensions,
-        sourceSnapshot,
         copySmoothingEnabled, copySmoothingQuality, finalSmoothingEnabled,
         finalSmoothingQuality}) => {
   async function load(dataUrl) {
@@ -3065,14 +3068,13 @@ async ({reconstructed, intermediate, finalTarget, copySourceRect, copyDestinatio
     const response = await fetch(dataUrl);
     return await createImageBitmap(await response.blob());
   }
-  const left = await load(reconstructed);
-  const expectedSource = await load(sourceSnapshot);
-  const expectedIntermediate = await load(intermediate);
-  const expectedFinal = await load(finalTarget);
-  if (!left || !expectedSource || !expectedIntermediate || !expectedFinal) {
-    left?.close(); expectedSource?.close(); expectedIntermediate?.close(); expectedFinal?.close();
-    return {available: false, exact: false, reason: 'immutable chain snapshot unavailable'};
+  async function loadSnapshot(canvas, fallback) {
+    if (canvas) {
+      return await load(canvas.toDataURL('image/png'));
+    }
+    return await load(fallback);
   }
+  let left = null, expectedSource = null, expectedIntermediate = null, expectedFinal = null;
   const compare = (actual, expected, width, height, actualX = 0, actualY = 0) => {
     if (expected.width !== width || expected.height !== height) {
       return {available: true, dimensions_equal: false, exact: false};
@@ -3104,6 +3106,16 @@ async ({reconstructed, intermediate, finalTarget, copySourceRect, copyDestinatio
       differing_pixel_count: differing, max_channel_difference: maxDifference};
   };
   try {
+    left = await load(reconstructed);
+    expectedSource = await loadSnapshot(sourceSnapshotHandle, sourceSnapshot);
+    const selectedSnapshots = Number.isInteger(snapshotHandleIndex)
+      ? snapshotHandles?.[snapshotHandleIndex]
+      : snapshotHandles;
+    expectedIntermediate = await loadSnapshot(selectedSnapshots?.full, intermediate);
+    expectedFinal = await loadSnapshot(selectedSnapshots?.target, finalTarget);
+    if (!left || !expectedSource || !expectedIntermediate || !expectedFinal) {
+      return {available: false, exact: false, reason: 'immutable chain snapshot unavailable'};
+    }
     if (typeof copySmoothingEnabled !== 'boolean' || typeof finalSmoothingEnabled !== 'boolean'
         || !['low', 'medium', 'high'].includes(copySmoothingQuality)
         || !['low', 'medium', 'high'].includes(finalSmoothingQuality)) {
@@ -3180,7 +3192,7 @@ async ({reconstructed, intermediate, finalTarget, copySourceRect, copyDestinatio
       exact: Boolean(sourceComparison.exact && intermediateComparison.exact && finalComparison.exact),
       source: sourceComparison, intermediate: intermediateComparison, final: finalComparison};
   } finally {
-    left.close(); expectedSource.close(); expectedIntermediate.close(); expectedFinal.close();
+    left?.close(); expectedSource?.close(); expectedIntermediate?.close(); expectedFinal?.close();
   }
 }
 """
@@ -3808,6 +3820,10 @@ class BookWalkerAdapter(SiteAdapter):
         # diagnostic flag remains available for isolated proof fixtures.
         self._diagnostic_p4b_atomic_proof = False
         self._p4b_atomic_proof_active = False
+        # JSHandles to fixed auxiliary snapshot canvases are capture-local.
+        # They are populated only when native materialization selects a call
+        # and disposed from capture_page's finally block.
+        self._capture_snapshot_handles: list[Any] = []
         self._p4b_redraw_attempted = False
         self._p4b_redraw_native_captures: tuple[CaptureResult, ...] | None = None
         self._p4b_redraw_selected_draw_calls: list[dict[str, Any]] | None = None
@@ -4172,7 +4188,9 @@ class BookWalkerAdapter(SiteAdapter):
                     source_rect=(source_x, source_y, source_rect_width, source_rect_height),
                 )
                 return None
-            materialized = await self._materialize_native_source_crops(page, selected)
+            materialized = await self._materialize_native_source_crops(
+                page, selected, pin_auxiliary=False
+            )
             if len(materialized) != 1:
                 reject("materialize", "native source materialization was not unique", count=len(materialized))
                 return None
@@ -6606,6 +6624,36 @@ class BookWalkerAdapter(SiteAdapter):
         data_url = result.get("dataUrl")
         return data_url if isinstance(data_url, str) and data_url else None
 
+    async def _pin_canvas_snapshot_handle(
+        self, page: Page, snapshot_id: str | None
+    ) -> Any | None:
+        if not snapshot_id:
+            return None
+        try:
+            handle = await page.evaluate_handle(
+                "snapshotId => window.__bookwalkerNativeSnapshots?.get(String(snapshotId)) || null",
+                snapshot_id,
+            )
+            self._capture_snapshot_handles.append(handle)
+            present = await handle.evaluate("value => Boolean(value)")
+            if present is not True:
+                await handle.dispose()
+                self._capture_snapshot_handles.remove(handle)
+                return None
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            if "handle" in locals():
+                try:
+                    await handle.dispose()
+                except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                    pass
+                else:
+                    try:
+                        self._capture_snapshot_handles.remove(handle)
+                    except ValueError:
+                        pass
+            return None
+        return handle
+
     async def _browser_cropped_one_hop_pixel_exact(
         self,
         page: Page,
@@ -6619,12 +6667,21 @@ class BookWalkerAdapter(SiteAdapter):
 
         intermediate = selected_call.get("fullSourcePng")
         final_target = selected_call.get("targetCropPng")
+        snapshot_handles = selected_call.get("_bookwalker_aux_snapshot_handle")
+        snapshot_handle_index = selected_call.get("_bookwalker_aux_snapshot_index")
+        if (
+            (not isinstance(intermediate, str) or not isinstance(final_target, str))
+            and snapshot_handles is None
+        ):
+            return {"available": False, "exact": False, "reason": "immutable chain snapshot unavailable"}
         final_source_rect = selected_call.get("sourceRect")
         final_destination = selected_call.get("destination")
         if (
             not isinstance(source_snapshot, str)
-            or not isinstance(intermediate, str)
-            or not isinstance(final_target, str)
+            and selected_call.get("_bookwalker_source_snapshot_handle") is None
+        ) or (
+            snapshot_handles is None
+            and (not isinstance(intermediate, str) or not isinstance(final_target, str))
         ):
             return {"available": False, "exact": False, "reason": "immutable chain snapshot unavailable"}
         if not isinstance(final_source_rect, dict) or not isinstance(final_destination, dict):
@@ -6659,8 +6716,13 @@ class BookWalkerAdapter(SiteAdapter):
                 {
                     "reconstructed": f"data:image/jpeg;base64,{encoded}",
                     "sourceSnapshot": source_snapshot,
+                    "sourceSnapshotHandle": selected_call.get(
+                        "_bookwalker_source_snapshot_handle"
+                    ),
                     "intermediate": intermediate,
                     "finalTarget": final_target,
+                    "snapshotHandles": snapshot_handles,
+                    "snapshotHandleIndex": snapshot_handle_index,
                     "copySourceRect": provenance_candidate.source_rect,
                     "copyDestination": provenance_candidate.destination,
                     "finalSourceRect": final_source_rect,
@@ -8114,11 +8176,17 @@ class BookWalkerAdapter(SiteAdapter):
                         == "scaled_canvas_source_1hop"
                         and cropped_coded_frame
                     ):
-                        source_snapshot = await self._materialize_canvas_snapshot(
+                        source_snapshot_handle = await self._pin_canvas_snapshot_handle(
                             page, mapping.source_snapshot_id
                         )
+                        draw_call["_bookwalker_source_snapshot_handle"] = (
+                            source_snapshot_handle
+                        )
+                        source_snapshot = None
                         part["source_snapshot_id"] = mapping.source_snapshot_id
-                        part["source_snapshot_available"] = source_snapshot is not None
+                        part["source_snapshot_available"] = (
+                            source_snapshot is not None or source_snapshot_handle is not None
+                        )
                         comparison = await self._browser_cropped_one_hop_pixel_exact(
                             page,
                             result.data,
@@ -8559,6 +8627,9 @@ class BookWalkerAdapter(SiteAdapter):
                 raise CaptureUnavailableError("redraw trace epoch changed")
             if not _native_call_is_safe(new_call):
                 raise CaptureUnavailableError("redraw native safety gate failed")
+            # The failed proof's pinned handles are no longer evidence for the
+            # fresh redraw. Release them before retaining the new lineage.
+            await self._dispose_capture_snapshot_handles()
             materialized = await self._materialize_native_source_crops(page, current)
             if len(materialized) != 1:
                 raise CaptureUnavailableError("redraw materialization was not unique")
@@ -8735,6 +8806,9 @@ class BookWalkerAdapter(SiteAdapter):
                     raise CaptureUnavailableError("batch redraw trace epoch changed")
                 if not _native_call_is_safe(new_call):
                     raise CaptureUnavailableError("batch redraw native safety gate failed")
+            # Do not retain handles from the rejected batch lineage while
+            # acquiring the fresh redraw evidence.
+            await self._dispose_capture_snapshot_handles()
             materialized = await self._materialize_native_source_crops(page, current)
             if len(materialized) != 2:
                 raise CaptureUnavailableError("batch redraw materialization was incomplete")
@@ -8881,13 +8955,15 @@ class BookWalkerAdapter(SiteAdapter):
         self,
         page: Page,
         selected: list[dict[str, Any]],
+        *,
+        pin_auxiliary: bool = True,
     ) -> list[dict[str, Any]]:
         payload = [
             {
                 "sourceId": call.get("sourceId"),
                 "snapshotId": call.get("snapshotId"),
-                "fullSourceSnapshotId": call.get("fullSourceSnapshotId"),
-                "targetSnapshotId": call.get("targetSnapshotId"),
+                "fullSourceSnapshotId": call.get("fullSourceSnapshotId") if pin_auxiliary else None,
+                "targetSnapshotId": call.get("targetSnapshotId") if pin_auxiliary else None,
                 "sourceConstructor": (
                     call.get("source", {}).get("constructor")
                     if isinstance(call.get("source"), dict)
@@ -8897,16 +8973,49 @@ class BookWalkerAdapter(SiteAdapter):
             }
             for call in selected
         ]
-        results = await page.evaluate(
-            _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
-            payload,
-        )
-        if not isinstance(results, list) or len(results) != len(selected):
+        results: list[dict[str, Any]] = []
+        if pin_auxiliary:
+            results_handle = await page.evaluate_handle(
+                _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
+                payload,
+            )
+        else:
+            results_handle = None
+            plain_results = await page.evaluate(
+                _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
+                payload,
+            )
+            if isinstance(plain_results, list):
+                results = plain_results
+        if results_handle is not None:
+            self._capture_snapshot_handles.append(results_handle)
+            metadata = await results_handle.evaluate(
+                """
+                items => items.map(item => {
+                  const result = {
+                    dataUrl: item.dataUrl,
+                    error: item.error,
+                    fullSourceSnapshotId: item.fullSourceSnapshotId,
+                    targetSnapshotId: item.targetSnapshotId,
+                  };
+                  // The source PNG has already crossed the protocol boundary;
+                  // do not retain a duplicate data URL in the pinned object.
+                  item.dataUrl = null;
+                  return result;
+                })
+                """
+            )
+            if not isinstance(metadata, list):
+                raise CaptureUnavailableError(
+                    "BookWalker native source crop result is invalid"
+                )
+            results = metadata
+        if len(results) != len(selected):
             raise CaptureUnavailableError(
                 "BookWalker native source crop materialization failed"
             )
         materialized: list[dict[str, Any]] = []
-        for call, result in zip(selected, results, strict=True):
+        for index, (call, result) in enumerate(zip(selected, results, strict=True)):
             if not isinstance(result, dict):
                 raise CaptureUnavailableError(
                     "BookWalker native source crop result is invalid"
@@ -8914,12 +9023,34 @@ class BookWalkerAdapter(SiteAdapter):
             enriched = dict(call)
             enriched["sourceCropPng"] = result.get("dataUrl")
             enriched["sourceCropPngError"] = result.get("error")
-            enriched["fullSourcePng"] = result.get("fullSourceDataUrl")
-            enriched["fullSourcePngError"] = result.get("fullSourceError")
-            enriched["targetCropPng"] = result.get("targetDataUrl")
-            enriched["targetCropPngError"] = result.get("targetError")
+            enriched["fullSourcePng"] = None
+            enriched["fullSourcePngError"] = None
+            enriched["targetCropPng"] = None
+            enriched["targetCropPngError"] = None
+            if results_handle is not None:
+                enriched["_bookwalker_aux_snapshot_handle"] = results_handle
+                enriched["_bookwalker_aux_snapshot_index"] = index
             materialized.append(enriched)
         return materialized
+
+    async def _dispose_capture_snapshot_handles(self) -> None:
+        handles, self._capture_snapshot_handles = self._capture_snapshot_handles, []
+        cancellation: asyncio.CancelledError | None = None
+        for handle in reversed(handles):
+            try:
+                await handle.dispose()
+            except asyncio.CancelledError as exc:
+                # Finish releasing every owned handle, then preserve the
+                # cancellation for the caller instead of swallowing it.
+                cancellation = cancellation or exc
+            except (
+                PlaywrightError,
+                PlaywrightTimeoutError,
+                TimeoutError,
+            ):
+                pass
+        if cancellation is not None:
+            raise cancellation
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         """Prefer native source crops and return None for the legacy fallback."""
@@ -8930,6 +9061,7 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         self._reset_capture_debug()
         capture_started = time.perf_counter()
+        await self._dispose_capture_snapshot_handles()
         selected_draw_calls: list[dict[str, Any]] = []
         self._p4b_atomic_proof_active = self._diagnostic_p4b_atomic_proof
         self._p4b_redraw_attempted = False
@@ -9494,13 +9626,16 @@ class BookWalkerAdapter(SiteAdapter):
                 raise UnknownPageStateError("BookWalker initial batch retry capture failed") from exc
             return None
         finally:
-            if retry_roi_baseline is not None:
-                try:
-                    await retry_roi_baseline.dispose()
-                except PlaywrightError:
-                    pass
-            await self._refresh_cover_renderer_diagnostics(page)
-            await self._clear_native_capture(page)
+            try:
+                if retry_roi_baseline is not None:
+                    try:
+                        await retry_roi_baseline.dispose()
+                    except PlaywrightError:
+                        pass
+                await self._refresh_cover_renderer_diagnostics(page)
+                await self._clear_native_capture(page)
+            finally:
+                await self._dispose_capture_snapshot_handles()
             capture_timing = self._capture_debug["bookwalker_capture"]["timing_ms"]
             capture_timing["capture_total_ms"] = _elapsed_ms(capture_started)
             capture_timing["capture_unaccounted_ms"] = round(

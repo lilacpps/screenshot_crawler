@@ -3813,3 +3813,63 @@ reached. The restored P1/P1b/P2/P3/P4
 bounded proof paths and R2 approximate terminal policy remain current; they do
 not guarantee universal cover JPEG recovery or full-resolution PNG output.
 Earlier planning paragraphs are retained only as dated historical context.
+## Capture auxiliary PNG deferral and browser-local one-hop comparison (2026-11-03)
+
+Native capture still fixes the source crop and all proof snapshots at draw time.
+`sourceCropPng` is encoded and transferred immediately because native output and
+original-JPEG matching consume it. `fullSourcePng` and `targetCropPng` are no
+longer encoded or transferred during ordinary selected materialization. Their
+fixed Canvas objects are pinned as capture-local JSHandles in the same browser
+task that encodes `sourceCropPng`; terminal inspection explicitly does not pin
+auxiliary handles. Handles are disposed on success, PNG fallback, exception,
+retry, and capture cleanup. Missing or failed pinning remains unavailable and
+does not reread a mutable Canvas or reuse an older page.
+Selected calls share one capture-local result handle plus an index, and the
+already-transferred source data URL is removed from that browser-side result
+object; no per-item handle or unbounded cache is retained.
+
+For the cropped one-hop proof, Python sends the reconstructed JPEG, IDs/geometry,
+and capture-local handles to Chromium. The pinned source/intermediate/target
+snapshots retain the existing PNG `toDataURL` -> fetch/blob ->
+`createImageBitmap` comparison inside Chromium; Python receives only the
+existing comparison metrics. The
+three exact pixel stages, smoothing settings, current-frame ROI proof, output
+priority, and fail-closed conditions are unchanged. Synthetic Chromium tests
+cover right/bottom and fractional crops, non-zero geometry, RGB and
+transparent/alpha pixels, each stage's one-pixel mismatch, unavailable and
+dimension failures, snapshot eviction after pinning, mutable source changes,
+and handle cleanup. No real-site verification was run for this optimization;
+no approved isolated LN target was supplied.
+
+The production-fixture benchmark used the same fixed 960x1280 ordinary JPEG
+inputs (text and colour) and the same cropped one-hop inputs from encoded
+1448x2048 sources to 1443x2048 artifacts, with
+one warmup and three measured captures per case on Windows 11 / Chromium
+151.0.7922.34 (working adapter source SHA-256 was recorded in the benchmark
+summary). Median capture totals were ordinary text 197.942 ms -> 163.400 ms
+and colour 379.951 ms -> 295.860 ms; cropped text 856.481 ms -> 732.591 ms
+and colour 2312.684 ms -> 1842.906 ms (old -> new). Native materialization
+phase medians for those four cases were respectively 56.224 -> 22.557 ms,
+107.031 -> 37.166 ms, 52.282 -> 17.156 ms, and 309.907 -> 77.855 ms.
+The cropped comparison phase was 217.624 -> 173.932 ms (text) and
+683.629 -> 448.221 ms (colour); the old source-PNG fetch phase measured
+32.591/59.361 ms and is absent from the new path because the fixed source
+handle is pinned directly (source pinning itself remains part of the new
+capture). Ordinary auxiliary PNG encoding changed from 2 -> 0 and Python
+transfer from 1,202,480 -> 0 characters (text), and 2,421,928 -> 0 (colour).
+Cropped auxiliary PNG encoding
+remained 3 -> 3 and browser PNG decoding 3 -> 3, deliberately preserving the
+proof; Python transfer changed from 2,253,682 -> 0 (text) and 7,841,518 -> 0
+(colour), while the old browser return/re-send amount was the same as its
+Python transfer. All old/new artifacts and decoded pixel hashes matched;
+cropped source/intermediate/final stages were available, dimensions equal,
+exact, with zero differing pixels and zero maximum channel difference. Both
+paths closed all 7/7 capture-created bitmaps in cropped runs and the final
+capture-local handle count returned to zero.
+
+The final validation selection was 255 Unit tests plus 182 tests from the two
+BookWalker browser integration files: 437 passed, 0 skipped. Independent
+review completed with no BLOCKING findings; Ruff, compilation, and diff checks
+passed. Research/Probe and the full repository suite were not run because this
+was site-local and did not change PoC or shared Core; no approved isolated live
+target was identified, so live verification was not run.
