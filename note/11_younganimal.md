@@ -1,3 +1,21 @@
+## Stage07 complete-list preview / exclusion replay (2026-11-03)
+
+Read-only preview covers every declared public numbered range with the existing
+3s pacing, exact Work/range/row/total validation and a stable second row snapshot.
+Only the unique public epList root under the unique main is inventory; account
+history loading, skeletons or malformed history copies do not contaminate this
+public-only path. Ordinary Discovery keeps its previous account/history checks.
+Scripts, resources, redirects and POSTs are denied; no reader/normal Full/job or
+store write is used. Public badges alone never create account grants.
+Latest-first native positions are N..1. Exclusion preflight buffers these records
+for one-shot exact-Page/full-target/30s replay; missing/stale/substituted proof
+fails before IO/writes. Scope/order/segments and stable IDs are not rewritten.
+2026-11-03 live series7103c2c1e9f08 returned156unique rows156..1 and a valid
+one-hole plan; no save/Full/ticket/purchase/Capture occurred. Synthetic browser
+tests include unresolved account skeletons, incomplete ranges and same-proof
+isolated Catalog replay; test/review details are in registration PROGRESS.md.
+Other Works/account states are not live-proven.
+
 ## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Series entry; series identity.
@@ -10,7 +28,7 @@ observed `<work> - <author> | ヤングアニマルWeb` shape. Redirects, subres
 and POSTs are blocked. Episode-to-series conversion remains unsupported.
 Shared-CDP live check for series 7103c2c1e9f08 returned 藍より青し on
 2026-11-03 05:54 JST; no episode/reader, resource, Discovery or data write occurred.
-Complete-list preview capability is unchanged (see the site behavior below).
+Complete-list preview now follows the separate Stage07 contract above.
 The registration Page is dedicated and its restrictive route remains through
 caller cleanup until Page close, including error/delayed-script paths. It is
 never reused for reading or Discovery; shared browser/context routing is untouched.

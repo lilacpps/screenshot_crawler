@@ -103,7 +103,7 @@ Watchlist保存では、追加項目を対象keyの末尾、区切りの空行�
 未Discoveryのkeyも「未Discover / 一覧未取得」の行として残します。
 
 「作品内の話名・全話一覧を一時取得（読取専用）」は共通Crawler Chromeへ接続し、Adapterの完全一覧
-機能だけを呼び出します。対応サイトはMagapoke・Comic DAYS・ゼブラック・少年ジャンプ＋です。未対応サイトは接続前に停止し、
+機能だけを呼び出します。対応サイトはMagapoke・Comic DAYS・ゼブラック・少年ジャンプ＋・Piccoma・はなゆめ・ヤングアニマルです。未対応サイトは接続前に停止し、
 Catalogの参照一覧を表示します。URL・scope・archive_orderの変更保存には、対応する完全一覧と
 Catalogに結び付いたプレビューが必要です。label・enabledだけの編集は一覧非対応でも可能です。
 作品内のkeyを順番に読み取り、一時取得した話名をtitle列に表示します。取得した一覧はウィンドウ内だけで
@@ -363,7 +363,7 @@ Reproduce the synthetic captures with:
 編集・一覧再取得で確認は失効します。「変更プレビュー」で差分を確認し、
 「このWorkの下書きを確定」で親画面へ戻します。この操作では保存されません。
 キャンセルはその子画面の変更のみ破棄します。
-完全一覧previewはmagapoke/jumpplus/zeblack/comicdays/piccomaが対応し、他サイトを含む
+完全一覧previewはmagapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimalが対応し、他サイトを含む
 複数keyの詳細設定は未対応の理由を表示します。
 
 「保存前プレビュー」で選択したWork全体の追加・既存設定・範囲・完成順・残作業を確認し、

@@ -1,13 +1,22 @@
 ## Stage07 complete-list preview coverage (2026-11-03)
 
-Piccoma now joins Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
-preview and registration Work detail. Its static listing validates canonical,
+Piccoma/Hanayume/Younganimal now join Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
+preview and registration Work detail. Piccoma's static listing validates canonical,
 exact count, native row identity/status/order and target membership; returns
 latest-first positions and digest. No normal Discovery job or store write is
 used for preview. Exclusion Discovery preflight prepares the same records for
 one-shot replay, bound to Page/full target/30s TTL; stale/missing proof fails
 without rereading. Existing four sites and ordinary Discovery remain unchanged.
-Other six sites remain under investigation, visibly unsupported until their
+Hanayume/Younganimal read every declared static public range, check unchanged
+Work/range/row identity, exact totals and stable row order, then return native
+positions without opening a reader. Public-only Younganimal preview ignores
+account-history loading/skeletons; normal Discovery retains its account checks.
+The small opt-in listing_replay helper projects these two sites' native records
+and consumes Page/full-target/30s proof once for exclusion Discovery. It performs
+no IO and changes no other adapter. Hanayume legacy seed aliases require both
+fixed episode metadata GETs to agree on Work/native ID/index and list membership;
+the stored URL/key/work_key are retained. Present seeds make no API request.
+Other four sites remain under investigation, visibly unsupported until their
 complete identity/order proof and safe exclusion behavior are implemented.
 Evidence/tests/independent review are in the registration PROGRESS.md.
 
@@ -27,7 +36,7 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays complete-list preview is supported;
+Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal complete-list preview is supported;
 other sites needing detail are blocked. New single-source Works may skip detail.
 Draft preview preserves an unchanged open scope across segment normalization;
 new keys append to existing archive_order through WorkDraft.add.

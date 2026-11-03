@@ -1,3 +1,25 @@
+## Stage07 complete-list preview / exclusion replay (2026-11-03)
+
+Read-only preview now covers every declared numbered public range with the
+existing 2.5s pacing, exact Work/range/total/row checks and a second stable row
+projection. Scripts, subresources, redirects and POSTs remain denied. No viewer,
+account grant observation, normal Full job or store write builds the preview.
+Latest-first positions are N..1. One-shot exclusion replay uses the exact same
+records, Page and full target with a30s TTL; absent/stale/substituted proof fails
+before reread or writes. Ordinary Discovery retains its authentication, history
+and access logic. Public `今なら無料` without authenticated evidence stays unknown.
+
+A legacy seed absent from the complete list may be resolved only by two fixed
+GET /api/episodes/<13hex> observations: legacy and native responses must agree on
+the same Work, native episode ID, access episode ID and positive indexId; the
+unique native ID must belong to that list. A seed already present adds no GET.
+This membership proof retains stored URL/key/work_key, not an identity migration.
+Live a41bc4b15117c maps to1edba4755a65b, index616524, Work21a029642f10f.
+2026-11-03 live preview returned249unique rows249..1 and a valid one-hole plan.
+No save/Full/ticket/purchase/Capture was performed. Synthetic browser/replay,
+alias rejection, existing Discovery and independent review results are recorded
+in registration PROGRESS.md. Other Works/account states are not live-proven.
+
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
 Registration additionally normalizes `/episodes/<13hex>/<positive page>`

@@ -18,6 +18,11 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing_replay import (
+    PreparedListingReplay,
+    record_listing_preview,
+    take_exclusion_replay,
+)
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -1003,19 +1008,20 @@ async def _read_range_entries(page: Page) -> list[dict[str, object]]:
 
 
 async def _read_range_rows(
-    page: Page, *, work_id: str, first_position: int
+    page: Page, *, work_id: str, first_position: int, public_only: bool = False
 ) -> list[YounganimalListingRow]:
     # Account rows mount asynchronously, after the public list is ready.
     try:
-        await page.wait_for_function(
-            """() => [...document.querySelectorAll('.series-eplist[data-e2e="epListUser"]')]
-              .every(root => !root.classList.contains('mode-loading'))""",
-            timeout=DOM_TIMEOUT_MS,
-        )
+        if not public_only:
+            await page.wait_for_function(
+                """() => [...document.querySelectorAll('.series-eplist[data-e2e="epListUser"]')]
+                  .every(root => !root.classList.contains('mode-loading'))""",
+                timeout=DOM_TIMEOUT_MS,
+            )
     except (PlaywrightError, TimeoutError) as exc:
         raise DiscoveryIncompleteError("Younganimal user listing did not settle") from exc
     observed_at = datetime.now(JST)
-    script = r"""() => {
+    script = r"""(publicOnly) => {
       const mains = [...document.querySelectorAll('.series-eplist-main')];
       const main = mains.length === 1 ? mains[0] : null;
       const roots = main ? [...main.querySelectorAll('.series-eplist')] : [];
@@ -1028,10 +1034,13 @@ async def _read_range_rows(
       const allRows = [...document.querySelectorAll('.series-eplist-item')];
       const knownRows = allRows.length === publicRows.length + userRows.length &&
         allRows.every(row => publicRows.some(item => item === row) || userRows.some(item => item === row));
-      const structureReady = mains.length === 1 && roots.length > 0 && pub.length === 1 &&
+      const publicReady = mains.length === 1 && pub.length === 1 &&
+        publicRoot.parentElement === main &&
+        document.querySelectorAll('.series-eplist[data-e2e="epList"]').length === 1;
+      const structureReady = publicOnly ? publicReady : mains.length === 1 && roots.length > 0 && pub.length === 1 &&
         publicRoot.parentElement === main && user.length <= 1 && roots.length === pub.length + user.length &&
         allRoots.length === roots.length && user.every(node => node.parentElement === main && node.classList.contains('mode-user')) &&
-        knownRows && user.every(root => !root.classList.contains('mode-loading'));
+        knownRows && (publicOnly || user.every(root => !root.classList.contains('mode-loading')));
       const readRow = row => {
         const links = [...row.querySelectorAll('a[href*="/episodes/"]')];
         const titles = [...row.querySelectorAll('.series-eplist-item-h-text')];
@@ -1044,11 +1053,11 @@ async def _read_range_rows(
           labels: labels.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
         };
       };
-      return {structureReady, historyRowCount: userRows.length,
-        rows: publicRows.map(readRow), userRows: userRows.map(readRow)};
+      return {structureReady, historyRowCount: publicOnly ? 0 : userRows.length,
+        rows: publicRows.map(readRow), userRows: publicOnly ? [] : userRows.map(readRow)};
     }"""
     try:
-        snapshot = await asyncio.wait_for(page.evaluate(script), timeout=OBSERVATION_TIMEOUT_SECONDS)
+        snapshot = await asyncio.wait_for(page.evaluate(script, public_only), timeout=OBSERVATION_TIMEOUT_SECONDS)
     except (PlaywrightError, TimeoutError) as exc:
         raise DiscoveryIncompleteError("Younganimal public episode rows could not be read") from exc
     if not isinstance(snapshot, dict):
@@ -1192,6 +1201,59 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
         return resolved_url(url, f"https://younganimal.com/series/{parts}", f"younganimal-series:{parts}")
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+
+    async def preview_complete_listing(self, page, target):
+        self._prepared_listing_replay = None
+        preview, _records = await self._read_preview_records(page, target)
+        return preview
+
+    async def prepare_exclusion_preview(self, page, target):
+        self._prepared_listing_replay = None
+        preview, records = await self._read_preview_records(page, target)
+        self._prepared_listing_replay = PreparedListingReplay.create(page, target, preview, records)
+        return preview
+
+    async def _read_preview_records(self, page, target):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            registration_document,
+            require_canonical,
+        )
+        work_id = parse_younganimal_work_url(target.url)
+        if target.site != 'younganimal' or work_id is None:
+            raise DiscoveryIncompleteError('Younganimal preview requires a strict Work target')
+        url = f'https://younganimal.com/series/{work_id}'
+        try:
+            async with registration_document(page, url):
+                await require_canonical(page, url)
+                title = await _read_series_title(page)
+                ranges = _parse_range_links(await _read_range_entries(page), work_id=work_id)
+            all_rows = []
+            for episode_range in ranges:
+                await page.wait_for_timeout(RANGE_PACING_MS)
+                async with registration_document(page, episode_range.url):
+                    if await _read_series_title(page) != title:
+                        raise DiscoveryIncompleteError('Younganimal preview range changed Work title')
+                    _validate_page_ranges(await _read_range_entries(page), work_id=work_id,
+                        ranges=ranges, selected=episode_range)
+                    rows = await _read_range_rows(page, work_id=work_id,
+                        first_position=episode_range.start_position, public_only=True)
+                    if len(rows) != episode_range.end_position - episode_range.start_position + 1:
+                        raise DiscoveryIncompleteError('Younganimal preview range is incomplete')
+                    again = await _read_range_rows(page, work_id=work_id,
+                        first_position=episode_range.start_position, public_only=True)
+                    if [(r.identity, r.title, r.global_position, r.access.raw_labels) for r in rows] != [
+                            (r.identity, r.title, r.global_position, r.access.raw_labels) for r in again]:
+                        raise DiscoveryIncompleteError('Younganimal preview range changed while reading')
+                    all_rows.extend(rows)
+            if len(all_rows) != ranges[-1].end_position:
+                raise DiscoveryIncompleteError('Younganimal preview did not cover the declared total')
+            records = _records_from_rows(rows_oldest_first=all_rows, work_title=title, scope=None)
+        except ObservationUnavailable as exc:
+            raise DiscoveryIncompleteError('Younganimal preview document could not be verified') from exc
+        return record_listing_preview(target, f'younganimal-work:{work_id}', records), records
 
     async def observe_registration_metadata(self, page, resolution):
         from screenshot_crawler.registration.observation import (
@@ -1230,6 +1292,11 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
         self, page: Page, target: WatchlistTarget, mode: DiscoveryMode
     ) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        replay = take_exclusion_replay(self, page, target, mode)
+        if replay is not None:
+            for record in replay:
+                yield record
+            return
         work_id = parse_younganimal_work_url(target.url)
         work_url = f"https://younganimal.com/series/{work_id}" if work_id else None
         if target.site != "younganimal" or work_url is None or target.url != work_url:

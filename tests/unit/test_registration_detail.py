@@ -24,6 +24,8 @@ URLS = {
     "magapoke": "https://pocket.shonenmagazine.com/title/123/episode/4",
     "zeblack": "https://zebrack-comic.shueisha.co.jp/title/123/chapter/list",
     "piccoma": "https://piccoma.com/web/viewer/123/4",
+    "hanayume": "https://hanayume.com/episodes/abcdef1234567",
+    "younganimal": "https://younganimal.com/series/abcdef1234567",
 }
 
 

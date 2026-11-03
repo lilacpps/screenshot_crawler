@@ -557,3 +557,42 @@
   now returns RSC without legacy chapterList. These are evidence/contract issues,
   not permission to fabricate completeness or silently change normal Discovery.
 - Stage07 remains IN PROGRESS; no Stage08/main merge/push.
+
+## Stage07B — Hanayume / Younganimal complete-list preview (2026-11-03)
+
+- Both sites now expose every declared static public range to WorkEditor and
+  registration detail. Exact Work/range set, row counts, total, unique IDs,
+  stable ordered row snapshots and native N..1 positions are required. Existing
+  pacing remains2.5s/3s. Scripts/resources/POSTs/redirects are denied; no viewer,
+  normal Full/job or Catalog is used to produce the preview.
+- Small opt-in listing_replay helper validates projections and binds one-shot
+  exclusion proof to the Page, entire frozen target and30s TTL. Invalid proof
+  fails before reread/writes. Existing four adapters and Piccoma are unchanged.
+  Synthetic isolated Full exclusion integration checks31of32rows, inventories
+  and exact preflight GET counts for both new adapters.
+- Hanayume legacy seed absent from the list requires two fixed metadata GETs
+  agreeing on Work/native ID/access ID/positive index plus membership. Existing
+  seed adds no API call. Neither stored URL nor stable key/work_key is changed.
+  Younganimal public-only preview ignores unresolved history skeletons; normal
+  Discovery retains its previous account/history/access checks. Public badges
+  alone never grant account access or authorize a ticket operation.
+- Final targeted166 passed/0skip (50.81s): projection/replay, alias failures,
+  synthetic browser ranges/skeleton/identity/no-write, registration draft/detail/
+  atomic save and normal/draft GUI WorkEditor contracts. Normal H/Y regression:
+  334 passed/1 failed/0skip (445.79s). The sole failure was the existing delayed
+  auth-marker test (artificial450ms deadline/220ms timer) returning unknown. No
+  production auth logic changed. Isolated rerun of all4auth states plus14alias
+  cases passed18/0skip; independent review accepted this as nonblocking timing
+  evidence. Do not describe the wider335-case run as all-green.
+- Production live on shared CDP dedicated pages: Hana Work21a029642f10f249rows
+  (legacy a41bc4b15117c→native1edba4755a65b,index616524), Younganimal
+  Work7103c2c1e9f08156rows. Both returned complete digest/positions and valid
+  pure one-hole plans. Evidence ignored: stage07_ranges_live.json. No save,
+  Full/ticket/purchase/Capture. These two Works do not prove all accounts/Works.
+- Independent source/test/docs review final gate PASS/no BLOCKING. Ruff/diff
+  checks required before checkpoint. Notes00_core/10_hanayume/11_younganimal,
+  GUI guide, Discovery/Bounded authorities and runbook coverage synchronized.
+  Full pytest and final native GUI verification remain Stage07-wide pending;
+  no new monolithic full-suite success is claimed at this checkpoint.
+- Preview coverage7/11; BookWalker/ComicFUZ/Kadocomi/MangaONE still pending.
+  Stage07 remains IN PROGRESS. Operational/user changes are protected.

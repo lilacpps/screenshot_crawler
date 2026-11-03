@@ -2270,9 +2270,9 @@ exclusion-bearing Discovery run must first prove the complete listing, target
 identity, canonical positions, boundaries, and every excluded ID before it
 creates a Work or upserts a Catalog Source. The proof and the subsequent
 iterator are one adapter-bound observation; unsupported adapters and unknown,
-out-of-range, stale, or malformed IDs fail closed. Magapoke, Zeblack, Jump+ and
-Comic DAYS support exclusion-only scope and one-shot replay. Zeblack, Jump+ and
-Comic DAYS reject
+out-of-range, stale, or malformed IDs fail closed. Magapoke, Zeblack, Jump+,
+Comic DAYS, Piccoma, Hanayume and Younganimal support exclusion-only scope and
+one-shot replay. Zeblack, Jump+, Comic DAYS, Piccoma, Hanayume and Younganimal reject
 an expired, missing or mismatched exclusion cache rather than silently reread
 after preflight.
 
@@ -2647,7 +2647,8 @@ including legacy hyphens; only newly suggested key text is normalized.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
-require complete-list detail; sites outside the existing four block that path.
+require complete-list detail; sites outside the supported seven (Magapoke,
+Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal) block that path.
 Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
 Final fresh ownership validation and persistence are performed by
 `registration/service.py` as described below.
@@ -2677,7 +2678,7 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays complete-list preview is supported;
+Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal complete-list preview is supported;
 other sites needing detail are blocked. New single-source Works may skip detail.
 Existing scope/order/segments/enabled are loaded unchanged; only explicitly
 previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.

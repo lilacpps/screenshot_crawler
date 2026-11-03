@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -16,6 +17,11 @@ from playwright.async_api import Page, Request, Response
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing_replay import (
+    PreparedListingReplay,
+    record_listing_preview,
+    take_exclusion_replay,
+)
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -1358,6 +1364,50 @@ async def _read_range_rows(
     return parsed_rows
 
 
+async def _listing_seed_identity(page, *, seed_id: str, work_id: str, rows) -> str:
+    """Prove a legacy URL alias against both native endpoints and the full list."""
+    if re.fullmatch(r'[0-9a-f]{13}', seed_id) is None or re.fullmatch(r'[0-9a-f]{13}', work_id) is None:
+        raise DiscoveryIncompleteError('Hanayume seed identity URL cannot be constructed safely')
+    ids = [row.identity.episode_id for row in rows]
+    if len(ids) != len(set(ids)):
+        raise DiscoveryIncompleteError('Hanayume listing contains duplicate episode IDs')
+    if seed_id in ids:
+        return seed_id
+
+    async def read_identity(episode_id):
+        url = f'https://hanayume.com/api/episodes/{episode_id}'
+        response = None
+        try:
+            response = await page.request.get(url, max_redirects=0, timeout=10_000)
+            if response.status != 200 or response.url != url:
+                raise DiscoveryIncompleteError('Hanayume seed identity endpoint changed or failed')
+            if response.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
+                raise DiscoveryIncompleteError('Hanayume seed identity response is not JSON')
+            length = response.headers.get('content-length')
+            if length is not None and (not length.isdecimal() or int(length) > 2_000_000):
+                raise DiscoveryIncompleteError('Hanayume seed identity response exceeds its bound')
+            body = await response.body()
+            if len(body) > 2_000_000:
+                raise DiscoveryIncompleteError('Hanayume seed identity response exceeds its bound')
+            identity = parse_hanayume_episode_api_identity(json.loads(body), expected_work_id=work_id)
+            if identity is None:
+                raise DiscoveryIncompleteError('Hanayume seed identity fields disagree')
+            return identity
+        except (PlaywrightError, ValueError):
+            raise DiscoveryIncompleteError('Hanayume seed identity could not be verified') from None
+        finally:
+            if response is not None:
+                await response.dispose()
+
+    native_id, index_id = await read_identity(seed_id)
+    if native_id not in ids or native_id == seed_id:
+        raise DiscoveryIncompleteError('Hanayume seed alias is not present in the complete listing')
+    await asyncio.sleep(0.15)
+    if await read_identity(native_id) != (native_id, index_id):
+        raise DiscoveryIncompleteError('Hanayume seed alias disagrees with its canonical native identity')
+    return native_id
+
+
 def _records_from_rows(
     *,
     rows_oldest_first: Sequence[HanayumeListingRow],
@@ -1474,6 +1524,66 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
             return observation_failure(resolution, exc)
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+
+    async def preview_complete_listing(self, page, target):
+        self._prepared_listing_replay = None
+        preview, _records = await self._read_preview_records(page, target)
+        return preview
+
+    async def prepare_exclusion_preview(self, page, target):
+        self._prepared_listing_replay = None
+        preview, records = await self._read_preview_records(page, target)
+        self._prepared_listing_replay = PreparedListingReplay.create(page, target, preview, records)
+        return preview
+
+    async def _read_preview_records(self, page, target):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            registration_document,
+            require_canonical,
+        )
+        seed = parse_hanayume_episode_url(target.url)
+        if target.site != 'hanayume' or seed is None:
+            raise DiscoveryIncompleteError('Hanayume preview requires a strict episode target')
+        url = canonical_hanayume_episode_url(target.url)
+        try:
+            async with registration_document(page, url):
+                await require_canonical(page, url)
+                work_id, title, work_url = await _read_work_identity(page)
+                entries = await _read_range_links(page)
+                _validate_initial_latest_marker(entries, seed_id=seed.episode_id)
+                ranges = _parse_range_links(entries, seed_id=seed.episode_id)
+            all_rows = []
+            for index, episode_range in enumerate(ranges):
+                if index:
+                    await page.wait_for_timeout(RANGE_PACING_MS)
+                async with registration_document(page, episode_range.url):
+                    if await _read_work_identity(page) != (work_id, title, work_url):
+                        raise DiscoveryIncompleteError('Hanayume preview range changed Work identity')
+                    entries = await _read_range_links(page)
+                    _validate_range_navigation(entries, seed_id=seed.episode_id, ranges=ranges,
+                        selected=episode_range, actual_page_url=page.url)
+                    rows = await _read_range_rows(page, work_id=work_id,
+                        first_position=episode_range.start_position, listing_authenticated=False)
+                    if len(rows) != episode_range.end_position - episode_range.start_position + 1:
+                        raise DiscoveryIncompleteError('Hanayume preview range is incomplete')
+                    again = await _read_range_rows(page, work_id=work_id,
+                        first_position=episode_range.start_position, listing_authenticated=False)
+                    if [(r.identity, r.title, r.global_position, r.access.raw_labels) for r in rows] != [
+                            (r.identity, r.title, r.global_position, r.access.raw_labels) for r in again]:
+                        raise DiscoveryIncompleteError('Hanayume preview range changed while reading')
+                    all_rows.extend(rows)
+            if len(all_rows) != ranges[-1].end_position:
+                raise DiscoveryIncompleteError('Hanayume preview did not cover the declared total')
+            native_seed = await _listing_seed_identity(page, seed_id=seed.episode_id,
+                work_id=work_id, rows=all_rows)
+            records = _records_from_rows(rows_oldest_first=all_rows, work_title=title,
+                seed_episode_id=native_seed, scope=None)
+        except ObservationUnavailable as exc:
+            raise DiscoveryIncompleteError('Hanayume preview document could not be verified') from exc
+        return record_listing_preview(target, f'hanayume-work:{work_id}', records), records
 
     async def resolve_identity_changes(
         self,
@@ -1709,6 +1819,11 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        replay = take_exclusion_replay(self, page, target, mode)
+        if replay is not None:
+            for record in replay:
+                yield record
+            return
         target_identity = parse_hanayume_episode_url(target.url)
         if target_identity is None:
             raise DiscoveryIncompleteError(
@@ -1838,10 +1953,12 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                 ),
                 listing_authenticated=listing_authenticated,
             )
+            native_seed = await _listing_seed_identity(page, seed_id=target_identity.episode_id,
+                work_id=work_id, rows=rows_oldest_first)
             all_records = _records_from_rows(
                 rows_oldest_first=rows_oldest_first,
                 work_title=work_title,
-                seed_episode_id=target_identity.episode_id,
+                seed_episode_id=native_seed,
                 scope=None,
             )
             records = (

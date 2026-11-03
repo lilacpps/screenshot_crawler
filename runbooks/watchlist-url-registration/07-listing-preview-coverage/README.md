@@ -13,7 +13,7 @@
 
 ## Objective / scope
 
-- 現行preview対応5サイト: magapoke, jumpplus, zeblack, comicdays, piccoma。Stage07AでPiccomaを追加。残り6サイト: bookwalker, comicfuz, hanayume, kadocomi, mangaone, younganimal。
+- 現行preview対応7サイト: magapoke, jumpplus, zeblack, comicdays, piccoma, hanayume, younganimal。Stage07A/Bで3サイトを追加。残り4サイト: bookwalker, comicfuz, kadocomi, mangaone。
 - 既存Full Discoveryのcomplete inventoryと、GUIのread-only complete listing previewを混同しない。各siteのpreview_complete_listingでsite-native identity、行ID/順序/position、完全性、境界と除外を検証する。
 - siteごとの安全なread-only一覧だけを用い、通常FullによるCatalog write、viewer/reader、チケット/point/購入/権利消費は用いない。過去全件が観測できないなら完全な一覧として扱わない。
 - 1サイトずつ既存ListingPreviewService・WorkDraft・SelectionPlannerと連携し、複数keyのscope/archive_order/archive_segmentsをプレビュー・draft-only編集できるようにする。
