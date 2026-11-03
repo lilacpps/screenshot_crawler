@@ -596,3 +596,45 @@
   no new monolithic full-suite success is claimed at this checkpoint.
 - Preview coverage7/11; BookWalker/ComicFUZ/Kadocomi/MangaONE still pending.
   Stage07 remains IN PROGRESS. Operational/user changes are protected.
+
+## Stage07C — BookWalker single-page preview (2026-11-03)
+
+- Strict canonical series lists now support complete single-page latest-release
+  inventory. Two scoped count markers must agree on1..N/totalN and card count;
+  native sort, visible unique cards, stable second read and no pagination are
+  mandatory. Same-card canonical image/title links collapse; cross-card IDs,
+  hidden cards, multiple products, unsafe URL/query/fragment/credentials/port,
+  unknown sort and partial counts fail closed. Explicit ?sample=1 trial controls
+  are ignored, never opened. Preview itself reads no product and access stays
+  unknown. Native DOM order, not parsed volume numbers, gives positionsN..1.
+- Site-local immutable exclusion cache binds Page/full target/identity/digest/
+  30sTTL and consumes once. Selected static product metadata uses the existing
+  account/URL/control settle/access parser under the document guard. All selected
+  observations buffer before first yield/inventory. Unknown access or product
+  failure leaves no Sources or complete inventory. Normal navigation/streaming/
+  pagination/access behavior remains unchanged.
+- New browser+site unit+normal Discovery134 passed/0skip (95.99s). Final stricter
+  two-count-marker fix plus new browser/registration/save/draft/normal GUI138
+  passed/0skip (57.43s); includes one_count rejection and failure on the second
+  selected product proving no early yield. Initial new test26passed/1failed
+  exposed the title-only unknown-control case; the fail-closed rule above fixes
+  it. A mistyped nonexistent test filename caused one collection error/no tests,
+  then the correct suites above completed. No production guard was weakened.
+- Live series317089:11rows11..1, complete digest and pure hole plan. Two static
+  selected product pages confirmed existing paid/owned parser behavior. An
+  initial noncanonical-link rejection identified same-card ?sample=1 controls;
+  only that exact observed trial form is ignored. No trial/reader/API grant,
+  purchase/Capture, save or normal Full occurred. Evidence ignored:
+  stage07_bookwalker_live.json. One series/two products are not universal proof.
+- Independent design/material/final source review PASS/no BLOCKING. Reviewer
+  requested exactly two count markers; fixed and tested before enabling the
+  eighth capability. GUI tooltip no longer embeds a stale four-site count.
+  Core/BookWalker notes, GUI/Discovery/Bounded authorities and runbook synchronized.
+- Remaining3sites are BLOCKED in the per-site runbook/notes: Kadocomi's verified
+  native ordinal gaps conflict with current contiguous preview gates; ComicFUZ
+  lacks safe static complete public DOM proof and work bootstrap references a
+  ticket/point-capable viewer; MangaONE's RSC/list GET protobuf requires native
+  schema/binding/pagination proof. No inference, renumber, viewer bootstrap or
+  hidden fallback was implemented. Safe single-key Stage06 registration remains.
+- Stage07 is PARTIAL, not all7extensions complete. Final isolated full suite,
+  Windows GUI and final docs/review gate follow; Stage08/main merge/push excluded.

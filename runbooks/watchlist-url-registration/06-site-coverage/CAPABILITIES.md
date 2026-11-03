@@ -87,5 +87,9 @@ metadata is unknown. Cross-site same-Work decisions always require humans.
 Dynamic work→seed conversion requires input/document/seed/native-identity evidence
 bound through preview/save, per [PROOF_CONTRACT](PROOF_CONTRACT.md). Links alone
 are insufficient. Hanayume's ten exposed public rows do not prove its complete
-inventory or native Work binding, so no series conversion was enabled. Stage 07
-is not started; full-list WorkEditor remains the existing four sites only.
+inventory or native Work binding, so no series conversion was enabled. Stage07
+separately validates every declared public range for preview without enabling
+series conversion. Stage07 is partial: full-list WorkEditor supports8sites
+(magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker);
+BookWalker requires a complete single page in latest-release order. ComicFUZ,
+Kadocomi and MangaONE remain blocked for detail; see the Stage07 runbook.

@@ -254,7 +254,7 @@ class UrlRegistrationDialog(QDialog):
         self.form_widget.setEnabled(enabled and row is not None)
         self.confirm_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
         self.detail_button.setEnabled(enabled and row is not None and row.resolution.status != "blocked")
-        self.detail_button.setToolTip("完全一覧preview対応4サイトで、範囲・担当と完成順を確認します。")
+        self.detail_button.setToolTip("対応サイトの完全一覧previewで、範囲・担当と完成順を確認します。未対応条件は理由を表示します。")
         self.preview_button.setEnabled(enabled and bool(self.draft.candidates))
         self.save_button.setEnabled(enabled and self.preview is not None and not self._form_dirty)
         self.refresh_button.setEnabled(enabled)

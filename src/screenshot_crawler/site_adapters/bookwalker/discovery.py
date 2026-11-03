@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
+from time import monotonic
 from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Error as PlaywrightError
@@ -13,6 +15,7 @@ from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -77,6 +80,17 @@ class BookWalkerListedProduct:
     url: str
     title: str | None = None
     special: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSeriesListing:
+    page_id: int
+    target: WatchlistTarget
+    expires_at: float
+    products: tuple[BookWalkerListedProduct, ...]
+    title: str
+    listing_identity: str
+    digest: str
 
 
 BookWalkerProductParts = BookWalkerListedProduct
@@ -367,6 +381,107 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         return resolved_url(url, f"https://bookwalker.jp/series/{parts.series_id}/list/", f"bookwalker-series:{parts.series_id}")
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+
+    async def preview_complete_listing(self, page, target):
+        self._prepared_series_listing = None
+        preview, _products, _title = await self._read_preview_listing(page, target)
+        return preview
+
+    async def prepare_exclusion_preview(self, page, target):
+        self._prepared_series_listing = None
+        preview, products, title = await self._read_preview_listing(page, target)
+        self._prepared_series_listing = _PreparedSeriesListing(
+            id(page), target, monotonic() + 30, tuple(products), title,
+            preview.listing_identity, preview.digest)
+        return preview
+
+    async def _read_preview_listing(self, page, target):
+        from screenshot_crawler.registration.observation import (
+            ObservationUnavailable,
+            registration_document,
+            require_canonical,
+        )
+        parts = parse_bookwalker_series_url(target.url)
+        if (target.site != 'bookwalker' or parts is None
+                or target.url != f'https://bookwalker.jp/series/{parts.series_id}/list/'):
+            raise DiscoveryIncompleteError('BookWalker preview requires a canonical series-list URL')
+        try:
+            async with registration_document(page, target.url):
+                await require_canonical(page, target.url)
+                listing = await self._series_list(page)
+                headings = await page.locator('h1').all_text_contents()
+                title = re.fullmatch(r'『(.+)』の電子書籍一覧', ' '.join(headings[0].split())) if len(headings) == 1 else None
+                if title is None:
+                    raise DiscoveryIncompleteError('BookWalker series heading is missing or ambiguous')
+                sort = page.locator('#sortDropdownBox')
+                if await sort.count() != 1 or await sort.input_value() != 'release':
+                    raise DiscoveryIncompleteError('BookWalker preview requires the native latest-release order')
+                section = listing.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," o-contents-section ")][1]')
+                if await section.count() != 1:
+                    raise DiscoveryIncompleteError('BookWalker series count scope is ambiguous')
+                counts = await section.locator('.o-contents-section__search_count').all_text_contents()
+                parsed = [re.fullmatch(r'\s*([0-9]+)\s*[～〜~]\s*([0-9]+)\s*件目\s*/\s*全\s*([0-9]+)\s*件\s*', c) for c in counts]
+                if len(parsed) != 2 or any(m is None for m in parsed):
+                    raise DiscoveryIncompleteError('BookWalker complete-list count is missing')
+                values = {tuple(int(v) for v in m.groups()) for m in parsed}
+                if len(values) != 1:
+                    raise DiscoveryIncompleteError('BookWalker series counts disagree')
+                first, last, total = values.pop()
+                if first != 1 or last != total or not 0 < total <= MAX_PRODUCTS:
+                    raise DiscoveryIncompleteError('BookWalker preview supports only a complete single-page series')
+                if await self._pagination_control(section) is not None:
+                    raise DiscoveryIncompleteError('BookWalker preview cannot prove paginated series completeness')
+                products = await self._preview_products(listing, page.url)
+                if len(products) != total:
+                    raise DiscoveryIncompleteError('BookWalker product count does not match the declared total')
+                if products != await self._preview_products(listing, page.url):
+                    raise DiscoveryIncompleteError('BookWalker product rows changed during preview')
+        except ObservationUnavailable as exc:
+            raise DiscoveryIncompleteError('BookWalker preview document could not be verified') from exc
+        identity = f'bookwalker-series:{parts.series_id}'
+        rows = tuple(ListingRow(p.external_id, p.url, total - i, p.title or '', 'unknown', identity)
+            for i, p in enumerate(products))
+        preview = ListingPreview(target.site, target.key, target.url, identity, rows,
+            True, datetime.now(UTC), listing_digest(identity, rows))
+        return preview, products, title.group(1)
+
+    async def _preview_products(self, listing, page_url):
+        cards = listing.locator(PRODUCT_CARD_SELECTOR)
+        count = await cards.count()
+        if not 0 < count <= MAX_PRODUCTS:
+            raise DiscoveryIncompleteError('BookWalker product card count is invalid')
+        products, seen = [], set()
+        for index in range(count):
+            card = cards.nth(index)
+            if not await card.is_visible():
+                raise DiscoveryIncompleteError('BookWalker preview contains a hidden product card')
+            anchors = card.locator('a[href]')
+            candidates = {}
+            for href in await anchors.evaluate_all('els => els.map(e => e.getAttribute("href"))'):
+                resolved = urljoin(page_url, href or '')
+                product = parse_bookwalker_product_url(resolved)
+                if product is not None:
+                    # A separate trial-reader control is not a product-list link.
+                    # Never follow it; the same card must supply a canonical link.
+                    if resolved == product.url + '?sample=1':
+                        continue
+                    if resolved != product.url:
+                        raise DiscoveryIncompleteError('BookWalker product link is not canonical')
+                    candidates[product.external_id] = product
+            if len(candidates) != 1:
+                raise DiscoveryIncompleteError('BookWalker card does not identify exactly one product')
+            product = next(iter(candidates.values()))
+            if product.external_id in seen:
+                raise DiscoveryIncompleteError('BookWalker product appears in multiple cards')
+            title = await self._card_title(card, anchors)
+            if not title:
+                raise DiscoveryIncompleteError('BookWalker product card title is missing')
+            seen.add(product.external_id)
+            products.append(BookWalkerListedProduct(product.external_id, product.url, title,
+                await self._card_is_special(card, title)))
+        return products
 
     async def observe_registration_metadata(self, page, resolution):
         from screenshot_crawler.registration.observation import (
@@ -397,14 +512,29 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        cached = getattr(self, '_prepared_series_listing', None)
+        self._prepared_series_listing = None
         series_identity = parse_bookwalker_series_url(target.url)
         if series_identity is None:
             raise DiscoveryIncompleteError(
                 "Watchlist target must be a BookWalker /series/<id>/list/ URL"
             )
-
+        exclusion_replay = bool(target.discovery_scope and target.discovery_scope.excluded_external_ids)
+        if exclusion_replay and (not isinstance(cached, _PreparedSeriesListing)
+                or cached.page_id != id(page) or cached.target != target
+                or monotonic() >= cached.expires_at):
+            raise DiscoveryIncompleteError('BookWalker exclusions require a fresh same-Page complete listing replay')
+        if exclusion_replay:
+            rows = tuple(ListingRow(p.external_id, p.url, len(cached.products) - i,
+                p.title or '', 'unknown', cached.listing_identity) for i, p in enumerate(cached.products))
+            if (cached.listing_identity != f'bookwalker-series:{series_identity.series_id}'
+                    or listing_digest(cached.listing_identity, rows) != cached.digest):
+                raise DiscoveryIncompleteError('BookWalker exclusion replay listing proof changed')
         try:
-            products, series_title = await self._collect_series_products(page, target.url)
+            if exclusion_replay:
+                products, series_title = list(cached.products), cached.title
+            else:
+                products, series_title = await self._collect_series_products(page, target.url)
         except (PlaywrightError, TimeoutError) as exc:
             raise DiscoveryIncompleteError(
                 "BookWalker series listing did not load or advance"
@@ -418,12 +548,21 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
             series_title,
         )
         selected_products = products
-        if target.discovery_scope is not None:
+        if target.discovery_scope is not None and (
+                target.discovery_scope.from_url or target.discovery_scope.through_url):
             selected_products = self._apply_discovery_scope(
                 products,
                 target.discovery_scope,
             )
-        if mode == "full":
+        if exclusion_replay:
+            excluded = set(target.discovery_scope.excluded_external_ids)
+            if not excluded.issubset({p.external_id for p in selected_products}):
+                raise DiscoveryIncompleteError('BookWalker excluded products are absent from the selected range')
+            selected_products = [p for p in selected_products if p.external_id not in excluded]
+        elif target.discovery_scope is not None and not (
+                target.discovery_scope.from_url or target.discovery_scope.through_url):
+            raise DiscoveryIncompleteError('BookWalker bounded Discovery scope has no boundary')
+        if mode == "full" and not exclusion_replay:
             self.capture_listing_identity_inventory(
                 target=target,
                 external_ids=[product.external_id for product in products],
@@ -438,9 +577,21 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
             for index, product in enumerate(products)
         }
 
+        buffered = []
         for product in selected_products:
             try:
-                product_data = await self._observe_product(page, product)
+                if exclusion_replay:
+                    from screenshot_crawler.registration.observation import (
+                        ObservationUnavailable,
+                        registration_document,
+                    )
+                    try:
+                        async with registration_document(page, product.url):
+                            product_data = await self._observe_product(page, product, navigation_already_guarded=True)
+                    except ObservationUnavailable as exc:
+                        raise DiscoveryIncompleteError('BookWalker product metadata document could not be verified') from exc
+                else:
+                    product_data = await self._observe_product(page, product)
             except (PlaywrightError, TimeoutError) as exc:
                 raise DiscoveryIncompleteError(
                     f"BookWalker product page did not load: {product.external_id}"
@@ -460,7 +611,9 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                 product_data["controls"], current_product_id=product.external_id,
                 special=special,
             )
-            yield DiscoveredRecord(
+            if exclusion_replay and access_mode == 'unknown':
+                raise DiscoveryIncompleteError('BookWalker selected product access metadata is unconfirmed')
+            record = DiscoveredRecord(
                 item=DiscoveredItem(
                     canonical_title=canonical_title,
                     author=clean_bookwalker_author(product_data["author"]),
@@ -481,6 +634,19 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                     ),
                 ),
             )
+            if exclusion_replay:
+                buffered.append(record)
+            else:
+                yield record
+        if exclusion_replay:
+            if mode == 'full':
+                self.capture_listing_identity_inventory(target=target,
+                    external_ids=[p.external_id for p in products],
+                    selected_external_ids={p.external_id for p in selected_products},
+                    positions=list(range(len(products), 0, -1)),
+                    listing_identity=cached.listing_identity)
+            for record in buffered:
+                yield record
 
     @staticmethod
     def _apply_discovery_scope(
@@ -737,8 +903,11 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         self,
         page: Page,
         product: BookWalkerListedProduct,
+        *,
+        navigation_already_guarded: bool = False,
     ) -> dict[str, object]:
-        await page.goto(product.url, wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS)
+        if not navigation_already_guarded:
+            await page.goto(product.url, wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS)
         final_product = parse_bookwalker_product_url(page.url)
         if final_product is None or final_product.external_id != product.external_id:
             raise DiscoveryIncompleteError(

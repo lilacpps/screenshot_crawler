@@ -1,6 +1,6 @@
 # Watchlist URL一括登録 — Stage 00後の採用決定（2026-11-02）
 
-> Status: ADOPTED DESIGN / Stage 01-06 IMPLEMENTED (2026-11-03). Stage 07 not started. Higher authorities prevail. Stage 00 audit: [RESEARCH.md](00-contract/RESEARCH.md); execution evidence and limits: [PROGRESS.md](PROGRESS.md).
+> Status: ADOPTED DESIGN / Stage 01-06 IMPLEMENTED (2026-11-03). Stage07 partial: four additional previews implemented, three unresolved. Higher authorities prevail. Stage 00 audit: [RESEARCH.md](00-contract/RESEARCH.md); execution evidence and limits: [PROGRESS.md](PROGRESS.md).
 
 ## Decision A — 正規URLが安全なら、ID/title未取得でも手動登録可能
 
@@ -12,9 +12,9 @@
 
 ## Decision B — 完全一覧previewは4サイトで先行完成
 
-- 現行のread-only preview対応: magapoke, jumpplus, zeblack, comicdays。これはFullのcomplete inventoryとは別のcapability。
+- Stage04/05当初のread-only preview対応はmagapoke, jumpplus, zeblack, comicdays。Stage07でpiccoma, hanayume, younganimal, bookwalkerを追加（BookWalkerは全巻1ページ・最新刊順のみ）。これはFullのcomplete inventoryとは別のcapability。
 - Stage 04/05の複数key・scope/order/segments詳細設定はこの4サイトで先行完成。未対応7siteの完全一覧が必要ならWorkごと理由付きblocked。新規単一keyなら正規URL/手動確認/所有チェックで登録可能。
-- 残り7site: bookwalker, comicfuz, hanayume, kadocomi, mangaone, piccoma, younganimal。後続Stage 07でサイトごとにread-only previewを実装・検証する。
+- 残り3site: comicfuz, kadocomi, mangaone。全件証拠とnative position契約が未解決であり、当該siteを含む詳細設定は理由付きblockedを維持する。
 - Stage 06はURL形式変換と作品metadataに限定する。Stage 05は11siteの自動metadata取得や7siteの詳細編集まで完了したことを意味しない。
 
 ## 受け入れmatrix

@@ -2271,8 +2271,8 @@ identity, canonical positions, boundaries, and every excluded ID before it
 creates a Work or upserts a Catalog Source. The proof and the subsequent
 iterator are one adapter-bound observation; unsupported adapters and unknown,
 out-of-range, stale, or malformed IDs fail closed. Magapoke, Zeblack, Jump+,
-Comic DAYS, Piccoma, Hanayume and Younganimal support exclusion-only scope and
-one-shot replay. Zeblack, Jump+, Comic DAYS, Piccoma, Hanayume and Younganimal reject
+Comic DAYS, Piccoma, Hanayume, Younganimal and BookWalker support exclusion-only scope and
+one-shot replay. Zeblack, Jump+, Comic DAYS, Piccoma, Hanayume, Younganimal and BookWalker reject
 an expired, missing or mismatched exclusion cache rather than silently reread
 after preflight.
 
@@ -2647,8 +2647,9 @@ including legacy hyphens; only newly suggested key text is normalized.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
-require complete-list detail; sites outside the supported seven (Magapoke,
-Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal) block that path.
+require complete-list detail; sites outside the supported eight (Magapoke,
+Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal, BookWalker) block that path.
+BookWalker requires a complete single page in native latest-release order.
 Read-only Catalog ownership snapshots can reject ambiguous/cross-Work sources.
 Final fresh ownership validation and persistence are performed by
 `registration/service.py` as described below.
@@ -2678,7 +2679,7 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal complete-list preview is supported;
+Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker complete-list preview is supported;
 other sites needing detail are blocked. New single-source Works may skip detail.
 Existing scope/order/segments/enabled are loaded unchanged; only explicitly
 previewed scope/layout edits are allowed. No Source, Item, Artifact or ZIP moves.
@@ -2724,5 +2725,7 @@ ownership, confirmation, validation or persistence rules.
 The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
 Yes/No/failure and Windows GUI flow use isolated synthetic data. Kadocomi
 exact-detail metadata and the four Stage 06A paths have bounded one-work live
-checks. Other resolver metadata and seven unsupported complete-list capabilities
-are not live-certified.
+checks at that Stage05/06A checkpoint. Current bounded metadata and Stage07
+listing evidence, eight supported preview sites and three unresolved sites are
+recorded in runbooks/watchlist-url-registration/PROGRESS.md. Do not generalize
+one-Work checks to all Works/accounts or mix metadata with complete-list proof.

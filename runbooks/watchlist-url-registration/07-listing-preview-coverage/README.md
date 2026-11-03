@@ -13,7 +13,7 @@
 
 ## Objective / scope
 
-- 現行preview対応7サイト: magapoke, jumpplus, zeblack, comicdays, piccoma, hanayume, younganimal。Stage07A/Bで3サイトを追加。残り4サイト: bookwalker, comicfuz, kadocomi, mangaone。
+- 現行preview対応8サイト: magapoke, jumpplus, zeblack, comicdays, piccoma, hanayume, younganimal, bookwalker。Stage07A/B/Cで4サイトを追加。残り3サイト: comicfuz, kadocomi, mangaone。
 - 既存Full Discoveryのcomplete inventoryと、GUIのread-only complete listing previewを混同しない。各siteのpreview_complete_listingでsite-native identity、行ID/順序/position、完全性、境界と除外を検証する。
 - siteごとの安全なread-only一覧だけを用い、通常FullによるCatalog write、viewer/reader、チケット/point/購入/権利消費は用いない。過去全件が観測できないなら完全な一覧として扱わない。
 - 1サイトずつ既存ListingPreviewService・WorkDraft・SelectionPlannerと連携し、複数keyのscope/archive_order/archive_segmentsをプレビュー・draft-only編集できるようにする。
@@ -26,3 +26,20 @@
 - site別Unit＋人工DOM/response Browser Integration＋既存Discovery/WorkEditor/Batch取得担当回帰。必要なら限定Live観測、サイト著作物をテストに保存しない。
 - 未対応siteを含む複数key Workは引き続きblocked。安全な正規URLの単一key手動登録はStage 05の条件に従い継続。
 - サイトごとにdocs、site note、PROGRESSの実装済み/未確認を更新。全7サイト完了をStage 05の完了条件にしない。
+
+## Current coverage / unresolved contracts
+
+| Site | Stage07 result | Evidence / boundary |
+|---|---|---|
+| Piccoma | Implemented | Static declared complete count/order/identity; live432rows; one-shot exclusion replay |
+| Hanayume | Implemented | Every declared static public range; live249rows; legacy seed requires two matching native identity GETs |
+| Younganimal | Implemented | Every public range; live156rows; account-history skeletons excluded only from public preview |
+| BookWalker | Implemented, restricted | Single complete page, two count markers, latest-release sort; live11products; exclusion Full validates selected static product metadata before yield |
+| Kadocomi | BLOCKED | Proven native123rows have episodeNo gaps15/17/96/102 (range1..127). Current preview/planner/exclusion validator requires contiguous positions. Do not compress native ordinals or claim a partial active DOM is complete. Needs an explicit shared native-gap proof contract plus safe access-classified replay. |
+| ComicFUZ | BLOCKED | SSR native34chapters/4groups but no chapter DOM under script denial. The work frontend references WEB_MANGA_VIEWER with useTicket/consumePoint. Do not enable viewer bootstrap to obtain a listing; complete public-list count/terminal/access proof remains unverified. |
+| MANGA ONE | BLOCKED | Current SSR is RSC, without legacy chapterList. Public frontend defines read-only GET viewer/chapter_list protobuf; exact request binding/schema/complete pagination/order have not been verified. Do not infer completeness or initialize viewer/server actions. |
+
+BLOCKED sites keep the existing safe single-key registration path. Their URL/title
+Stage06 support does not imply complete-list/detail support. These observations
+do not change ordinary Discovery or assert that normal acquisition is broken.
+Full suite/native GUI verification is tracked separately in PROGRESS.md.

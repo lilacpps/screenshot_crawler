@@ -1,3 +1,16 @@
+## Stage07 complete-list investigation (2026-11-03)
+
+Preview/detail remains unsupported. Static Work1970 has34native chapter rows
+in4groups but no chapter DOM while scripts/resources are denied. Matching native
+and visible public inventory, count/terminal and access evidence remain unproven.
+The current work frontend references WEB_MANGA_VIEWER with useTicket/consumePoint
+arguments; enabling this bootstrap just to obtain a listing is not authorized
+by the read-only preview contract. No viewer/API/ticket/point/purchase/Capture or
+store operation was attempted. This does not assert normal acquisition failure:
+ordinary Discovery is unchanged. Safe single-key URL/title registration remains.
+Follow-up must establish a list-only complete public path before enabling detail.
+See Stage07 runbook/PROGRESS for evidence boundaries.
+
 ## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Work entry and exact position=thumbnail hint; work identity.

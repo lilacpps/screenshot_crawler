@@ -1,3 +1,16 @@
+## Stage07 complete-list investigation (2026-11-03)
+
+Preview/detail remains unsupported. Static WorkKC_004915_S native first/latest
+arrays validate123unique lifetime episodes,25active, with explicit episodeNo
+1..127 excluding15/17/96/102. These native gaps must not be compressed or filled.
+Current ListingPreview/SelectionPlanner/exclusion gates require contiguous
+positions; native-gap completeness and safe access-classified replay therefore
+need an explicit common contract before preview can be enabled. The collapsed
+active DOM is not a complete lifetime list. Existing opt-in native Discovery,
+positions, access, ordinary legacy path and single-key registration are unchanged.
+No expand/reader/Capture/resource/store operation was performed in this probe.
+Details and follow-up acceptance are in the Stage07 runbook/PROGRESS.
+
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
 Work entry and same-prefix episode→work / supported query removal preserve

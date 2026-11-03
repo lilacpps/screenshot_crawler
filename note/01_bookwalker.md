@@ -1,3 +1,31 @@
+## Stage07 complete-list preview / exclusion replay (2026-11-03)
+
+GUI Work detail now supports strict canonical series-list URLs for a complete
+single page only. Two native count markers in the same list section must agree
+on1..N/totalN and equal the visible card count (max5000); latest-release sort,
+unique heading/canonical, no next-page control and a second stable product read
+are required. One product GUID per visible card; repeated image/title links
+within that card collapse, cross-card duplicates and unsafe/ambiguous links
+block. The explicit same-product ?sample=1 control is ignored, never followed.
+Scripts/resources/POSTs/redirects are denied. Preview fetches no products and
+reports access unknown; latest-first DOM order supplies positionsN..1, never
+title-number guesses. Multi-page/filter/unknown-sort forms remain unsupported.
+
+Exclusion preflight binds immutable products/title/identity/digest to the exact
+Page/full target with30s TTL and consumes the cache once without listing reread.
+Only selected canonical product documents are then read under the same static
+guard. The existing URL/account/control-settle/access parser still runs; all
+selected metadata buffers before first yield/inventory. Unknown access or any
+missing/redirected product fails closed. Normal unscoped/bounded Discovery keeps
+its prior navigation, streaming, metadata and access semantics unchanged.
+No reader, grants, purchase, Capture or data write occurs during GUI preview.
+
+Live2026-11-03 series317089:11unique products11..1 and valid pure hole plan.
+Two static product observations exercised paid and owned with existing parser;
+no reader control was clicked. This does not prove all products/accounts/sorts.
+Synthetic duplicate/count/sort/URL/cache/failure tests, normal Discovery and
+registration/GUI regression plus independent review are in PROGRESS.md.
+
 ## Watchlist URL registration hook (Stage 06A, 2026-11-03)
 
 Series-list entry; series identity.
@@ -10,7 +38,7 @@ document, requires its unique matching canonical and the observed unique
 subresources and POSTs are blocked. Product-to-series conversion is unsupported.
 One-work shared-CDP live verification passed for series 317089 at 05:54 JST on
 2026-11-03; no product/reader was opened and no data/resource action occurred.
-Complete-list preview capability is unchanged (see the site behavior below).
+Complete-list preview now follows the separate Stage07 contract above.
 The registration Page is dedicated and its restrictive route remains through
 caller cleanup until Page close, including error/delayed-script paths. It is
 never reused for reading or Discovery; shared browser/context routing is untouched.

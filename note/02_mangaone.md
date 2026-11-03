@@ -1,3 +1,15 @@
+## Stage07 complete-list investigation (2026-11-03)
+
+Preview/detail remains unsupported, not silently emulated by normal Full.
+Bounded static chapter2084/191459 returns RSC without legacy chapterList.
+Public frontend code defines GET viewer/chapter_list with a protobuf decoder;
+native request identity/schema, pagination terminal proof and order have not
+been verified. No such API call, server action, viewer initialization, rights
+operation or store write was attempted. Existing Discovery is unchanged; this
+observation does not prove normal acquisition failure. Safe single-key URL/title
+registration remains available. Follow-up needs a list-only schema/binding/
+complete-page proof before capability is enabled; see Stage07 runbook.
+
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
 Chapter entry preserves its URL-derived Work identity. Optional metadata reads

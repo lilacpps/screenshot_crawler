@@ -1,6 +1,6 @@
 # Watchlist URL一括登録 — 実装Runbook
 
-> Status: Stage 01-06 COMPLETE, including the seven-site title follow-up (2026-11-03). Earlier full-suite partition evidence and current follow-up results are distinguished in PROGRESS. Stage07 in progress: Piccoma/Hanayume/Younganimal preview/replay added.
+> Status: Stage 01-06 COMPLETE, including the seven-site title follow-up (2026-11-03). Earlier full-suite partition evidence and current follow-up results are distinguished in PROGRESS. Stage07 partial: Piccoma/Hanayume/Younganimal/BookWalker preview/replay added; ComicFUZ/Kadocomi/MangaONE unresolved (see Stage07 contract and PROGRESS).
 > 対象: Windows PySide6 GUI、Watchlist、read-only URL解析、既存WorkEditor。Phase 00から順番に実施する。
 > Authority: AGENTS.md → docs/SPEC.md / docs/ARCHITECTURE.md → docs/DISCOVERY_AND_BATCH.md / docs/BOUNDED_DISCOVERY.md → docs/TEST_STRATEGY.md → docs/DECISIONS.md → code/tests。Runbookは既存契約を上書きしない。
 > Stage 06 seven-site title follow-up completed under the 2026-11-03 request. Stage07 authorized by the subsequent user request. Adopted decisions: [DECISIONS.md](DECISIONS.md); evidence and limits: [PROGRESS.md](PROGRESS.md).
@@ -88,6 +88,6 @@
 ## Stage 00後の決定（2026-11-02）
 
 - 手動登録: **安全な正規Discovery URLは確定済み**なら、作品IDまたは作品名が未取得でも、ユーザーによる作品名・Work・key/work_keyの明示確認と保存前の所有競合チェックを経て登録可能。native identity不明はunknownのまま保持し、手動確認をsite identityの証拠としない。
-- 詳細編集: 完全一覧previewは現行4サイト（magapoke、jumpplus、zeblack、comicdays）で先行。残り7サイトで必要なscope詳細は理由付きblocked。Stage 07で順次拡張。
+- 詳細編集: Stage04/05は初期4サイト（magapoke、jumpplus、zeblack、comicdays）で先行。Stage07でpiccoma、hanayume、younganimal、bookwalkerを追加し現行8サイト対応（BookWalkerは全巻1ページ・最新刊順のみ）。残りcomicfuz、kadocomi、mangaoneのscope詳細は理由付きblocked。
 - Stage 01は11サイトの現行起点URL検証とKadocomiのURL変換pilot、identity/titleの証拠状態を返すところまで。手動確認UIと保存は後続Stage。
 - 詳細は [DECISIONS.md](DECISIONS.md)。Stage 05の完成は全11サイトの作品名自動取得や全サイトscope編集の完成を意味しない。

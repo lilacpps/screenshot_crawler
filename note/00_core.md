@@ -1,6 +1,6 @@
 ## Stage07 complete-list preview coverage (2026-11-03)
 
-Piccoma/Hanayume/Younganimal now join Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
+BookWalker/Piccoma/Hanayume/Younganimal now join Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
 preview and registration Work detail. Piccoma's static listing validates canonical,
 exact count, native row identity/status/order and target membership; returns
 latest-first positions and digest. No normal Discovery job or store write is
@@ -16,8 +16,16 @@ and consumes Page/full-target/30s proof once for exclusion Discovery. It perform
 no IO and changes no other adapter. Hanayume legacy seed aliases require both
 fixed episode metadata GETs to agree on Work/native ID/index and list membership;
 the stored URL/key/work_key are retained. Present seeds make no API request.
-Other four sites remain under investigation, visibly unsupported until their
-complete identity/order proof and safe exclusion behavior are implemented.
+BookWalker supports only a single page with two matching native total/range
+counts, latest-release sort, canonical unique visible product cards and stable
+DOM order. Same-card image/title links collapse; trial links are never opened.
+Its site-local one-shot Page/target/30s/digest cache replays product identities;
+all selected static product metadata is validated by the existing account/control
+parser before any record yield. Unknown access fails closed; normal Discovery
+keeps its prior streaming/navigation/access behavior. No product is fetched for
+the GUI preview itself. GUI tooltips no longer contain a fixed site count.
+ComicFUZ/Kadocomi/MangaONE remain visibly unsupported: safe complete-list proof
+or the current position contract is unresolved. Stage07 is partial, not complete.
 Evidence/tests/independent review are in the registration PROGRESS.md.
 
 
@@ -36,7 +44,7 @@ version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
 edits remain intact. Cancel discards the child only. Freshness and snapshot
 identity are rechecked both on child confirmation and later bulk preview/save.
-Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal complete-list preview is supported;
+Only magapoke/jumpplus/zeblack/comicdays/piccoma/hanayume/younganimal/bookwalker complete-list preview is supported;
 other sites needing detail are blocked. New single-source Works may skip detail.
 Draft preview preserves an unchanged open scope across segment normalization;
 new keys append to existing archive_order through WorkDraft.add.
@@ -131,7 +139,8 @@ Live20 URL observations (14 supplied +6 distinct Watchlist URL/label samples)
 verified titles and pure save validation. Samples are authorized read-only
 ground truth; no operational writes or lookup fallback. Official subtitles and
 full-width spelling are preserved. Test/review evidence is in PROGRESS.md.
-Complete-list capabilities remain the existing four sites; Stage07 not started.
+Stage06 metadata does not prove complete listings; current Stage07 capabilities
+and remaining blockers are described at the top of this note.
 
 Stage 06B adds optional Piccoma `/web/product/<id>/episodes` to canonical seed
 conversion. Pure parsing stays blocked, with only a safe observation URL; the
@@ -223,7 +232,9 @@ Verified save emits changed keys/revision once to the existing Full confirmation
 No means saved/Full not run/Catalog unsynchronized; Yes queues the independent
 existing Full job. No automatic Batch, scope-sync, renumber or Capture runs.
 No new CLI/config/schema is added; GUI extra supplies PySide6 and local pykakasi.
-Complete-list detail remains limited to magapoke/jumpplus/zeblack/comicdays.
+At the Stage05 checkpoint complete-list detail was limited to
+magapoke/jumpplus/zeblack/comicdays; current8site support and restrictions are
+described in the Stage07 section at the top of this note.
 
 Windows native Qt screenshots cover entry, candidates, Work detail, ready rows,
 final preview, Full confirmation and saved inventory using isolated synthetic
