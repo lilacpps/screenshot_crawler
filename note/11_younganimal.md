@@ -104,7 +104,92 @@ behavior for those historical runs, not current Batch eligibility or a current
 operational procedure. Current verification must use an explicit matching
 Watchlist; scope-sync is optional maintenance.
 
-## Current verification snapshot (2026-10-26)
+## Current verification snapshot (2026-11-04)
+
+### Capture versus offscreen prefetch: Item/Source 35445
+
+The normal direct Batch on episode `64f1700ff1ea6`, work `2021bfca96ab9`,
+saved 13 native pages and then rejected slots 14/15 at seek 11 with
+`native_reader_layout_changed`. The complete two-record mutation journal in
+`output/batch/younganimal/item-35445-source-35445-20261104T204229764732+0900-de7b8423110b4613a5c6524e6e9c4e99/diagnostics/metadata.json`
+shows body wrapper 18 removing `mode-loading` and adding `mode-loaded` while
+Python encoded the selected spread. Global DOM generation advanced 750 -> 752
+and capture generation 732 -> 734. Route, seek, viewport, physical mapping,
+viewer/wrapper/canvas identities, dimensions, exact rectangles, ready/visible
+state, generation/write counts, source replay and selected RGBA all matched.
+This is an in-flight prefetch completion competing with the strict global
+capture epoch; the diagnostic shows no selected-page pixel or layout change.
+
+`YounganimalAdapter._capture_page_selected` now checks the parsed body wrappers
+before selecting either a native proof or a rendered capture. If an inactive
+body has `mode-loading` or `mode-req-render`, `_wait_for_prefetch` waits within
+`PREFETCH_READY_TIMEOUT_MS=5000`, using the existing 100 ms observation polling.
+It requires the same seek, active/ready slots, viewport, frozen role/range
+mapping, every wrapper identity and active canvas identity/dimensions/generation.
+Once no body prefetch is pending, the existing stable-observation helper
+requires matching active pixel/epoch signatures on two consecutive polls.
+Untouched/unrequested base wrappers are not required to load, and no request,
+seek, redraw, reload or entry action is added by this wait. A timeout becomes
+`UnknownPageStateError` so Core cannot interpret it as permission for locator
+fallback. Failure/cancellation still releases the bounded candidate/proof window.
+
+No mutation is exempted from the capture epoch. All native source/replay,
+selection/post-encoding, rendered atomic PNG, contiguous-coverage, END,
+max-pages and same-content guards remain. A new load completion after selection
+still fails closed. There is no retry, new CLI/config option, access-resource
+change, Core change or episode-specific production branch.
+Top-level `prefetch_wait` debug/manifest metadata records `status`
+(`not_started`, `not_needed`, `waiting`, `settled`, `timeout`), initial physical
+`slots`, and `seek_value` for the current capture attempt.
+
+Synthetic browser regression covers a delayed offscreen load in the same
+19-body layout, complete native and rendered capture through END/ZIP with
+decoded pixel equality, timeout, wrapper replacement, and seek drift before
+selection. The existing post-encoding rejection matrix also covers a new
+offscreen loading-to-loaded transition after selection, which must save no
+artifact and retain no proof or candidate.
+
+An isolated shared-CDP direct Runner verification completed all 19 pages as
+native WebP through END and ZIP on 2026-11-04. All manifest SHA-256 values,
+decoded dimensions and ZIP CRC/count checks passed. The archive SHA-256 is
+`6f93bc42baba119a3882a86ea3add1c437a66a6e097bc53f471f4d699c7a0fac`.
+The first 13 decoded pages also exactly match the original failed run's saved
+RGBA, and the corrected run includes the remaining six pages.
+Evidence: `.tmp/ya35445-fix/live-2/report.json`. Every live capture reported
+`prefetch_wait.status=not_needed`, so this verifies full episode compatibility;
+the deliberately delayed live path is recorded separately below.
+No independent live draw-time source-RGBA comparison is claimed. The probe
+used one owned Page, direct identity configuration and dedicated output/library,
+with no Catalog writes, ticket operation or normal-library replacement.
+Its page route aborted 37 non-read POST requests; this is not an audit of all
+site-side effects. An initial harness invocation stopped before navigation
+because it lacked the Batch target identity; only the corrected second run
+is the live Capture/END/ZIP evidence.
+
+A second isolated same-episode direct run delayed each of four naturally
+requested body-image paths (suffixes 16..19) by three seconds, once per path,
+before continuing the ordinary request. No extra image/API request was issued.
+It exercised the new readiness wait at seek 13 with pending physical slots
+16/17, and at the original failure seek 11 with pending slots 18/19.
+Both waits reported `settled`; all 19 pages remained `native_source_canvas`
+WebP and reached END/ZIP. Every decoded page matched the undelayed run's RGBA,
+and all SHA/dimension/ZIP checks passed. The delayed archive SHA-256 is
+`3e6090ca1fe9ed852c70333bfa6fb90903f5ed8bfa48ac75f0a54b9c6069180b`;
+evidence is `.tmp/ya35445-fix/live-delayed/report.json`. This was instrumented
+network latency, not a claim about naturally reproducing the exact original
+timing. The same direct/no-Catalog/no-ticket constraints applied and 37 POSTs
+were aborted. Timeout and drift rejection remain synthetic verification.
+
+Validation: `tests/unit/test_younganimal_capture.py` (478 cases) plus
+`tests/integration/test_younganimal_adapter_browser.py` (406 cases) passed:
+884 passed, zero skipped, five existing Python 3.14/pytest-asyncio event-loop
+deprecation warnings, 780.48 seconds. The final six-case prefetch/post-selection
+subset also passed after making fixture completion scheduling independent of
+initialization speed; it overlaps the 884 cases and is not counted again.
+`ruff check src tests` and scoped `git diff --check` passed. Repository-wide
+pytest, Research/Probe and separate Discovery/Policy suites were not run:
+the change is confined to this site's capture readiness, with no Core, data
+model, Discovery, access-policy or resource behavior change.
 
 ### Initial blank, odd body and one trailing PR: Item/Source 36917
 
@@ -2479,6 +2564,13 @@ max=N, body pairs through seek 7, CI/PR at 5 (CI+PR), PR/Good at 3 (PR) and
 Last alone at 1 (Last-only). Both profiles require body 0/1 after rewind and
 use the same strict roles/source/CI-geometry proofs. Live Item 36105 and
 synthetic B=6/12 coverage are detailed above; shorter shapes remain unsupported.
+
+Before capture selection, the adapter drains already-pending inactive body
+loads within five seconds while preserving the route, frozen layout, seek,
+viewport and selected canvas identity. It then requires two matching stable
+pixel observations. Unrequested wrappers need not load. Timeout fails closed;
+`prefetch_wait` exposes the initial pending slots and result. This wait applies
+to both capture paths and does not exempt any post-selection epoch change.
 
 The adapter prefers verified C source-native pixels when every active half has a
 supported full-frame draw candidate. The observer copies the source canvas into a

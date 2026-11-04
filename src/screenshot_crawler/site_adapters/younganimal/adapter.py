@@ -87,6 +87,7 @@ INITIAL_QUIET_DEADLINE_MS = 5_000
 INITIAL_QUIET_POLL_MS = 100
 PAGE_CHANGE_TIMEOUT_MS = 12_000
 PAGE_CHANGE_POLL_MS = 100
+PREFETCH_READY_TIMEOUT_MS = 5_000
 MAX_CAPTURE_TOTAL_BYTES = 16_000_000
 EXTERNAL_ID_PATTERN = re.compile(r"^(?P<work>[0-9a-f]{13}):(?P<episode>[0-9a-f]{13})$")
 _NATIVE_VERIFY_REASONS = frozenset(
@@ -450,6 +451,7 @@ class YounganimalAdapter(SiteAdapter):
         self._capture_diagnostics: dict[str, Any] = {"mode": "not_started"}
         self._initial_canvas_quiet: dict[str, object] | None = None
         self._initial_native_redraw: dict[str, object] | None = None
+        self._prefetch_wait: dict[str, object] = {"status": "not_started"}
         self._access_stop: dict[str, object] | None = None
         self._response_listener = None
         self._access_strategy: AccessStrategy = "auto"
@@ -612,6 +614,7 @@ class YounganimalAdapter(SiteAdapter):
         self._capture_diagnostics = {"mode": "not_started"}
         self._initial_canvas_quiet = None
         self._initial_native_redraw = None
+        self._prefetch_wait = {"status": "not_started"}
         if self._access_strategy == "quota":
             await self._initialize_work_ticket_entry(page, entry_only=False)
         await self._verify_episode_entry(page)
@@ -1540,12 +1543,62 @@ class YounganimalAdapter(SiteAdapter):
                 clear_all=not completed,
             )
 
+    @staticmethod
+    def _pending_prefetch_slots(observation: ViewerObservation) -> tuple[int, ...]:
+        return tuple(
+            slot for slot in observation.body_slots
+            if slot not in observation.active_slots
+            and {"mode-loading", "mode-req-render"}.intersection(
+                observation.raw["slots"][slot]["classes"]
+            )
+        )
+
+    async def _wait_for_prefetch(
+        self, page: Page, observation: ViewerObservation
+    ) -> ViewerObservation:
+        pending = self._pending_prefetch_slots(observation)
+        self._prefetch_wait = {
+            "status": "waiting" if pending else "not_needed",
+            "slots": list(pending), "seek_value": observation.seek_value,
+        }
+        if not pending:
+            return observation
+        # Offscreen load completion still changes the capture epoch. Drain it
+        # before selecting a proof; never waive an epoch change after selection.
+        layout = self._layout_signature(observation)
+        identity = self._canvas_identity_signature(observation, observation.active_slots)
+        try:
+            settled = await self._wait_for_observation(
+                page,
+                lambda row: (
+                    row.page_state == "content"
+                    and row.seek_value == observation.seek_value
+                    and row.active_slots == observation.active_slots
+                    and row.ready_slots == observation.active_slots
+                    and row.raw["viewport"] == observation.raw["viewport"]
+                    and self._layout_signature(row) == layout
+                    and self._canvas_identity_signature(row, row.active_slots) == identity
+                    and not self._pending_prefetch_slots(row)
+                ),
+                reason="Younganimal offscreen body prefetch did not settle before capture",
+                timeout_ms=PREFETCH_READY_TIMEOUT_MS,
+                include_pixels=True,
+            )
+        except PageChangeTimeoutError as exc:
+            self._prefetch_wait["status"] = "timeout"
+            # Core treats PageChangeTimeoutError from capture as a request for
+            # locator fallback, which this adapter deliberately does not support.
+            raise UnknownPageStateError(str(exc)) from exc
+        self._prefetch_wait["status"] = "settled"
+        return settled
+
     async def _capture_page_selected(
         self, page: Page
     ) -> tuple[CaptureResult, ...] | None:
         observation = await self._observe(page)
         if observation.page_state != "content" or observation.ready_slots != observation.active_slots:
             raise UnknownPageStateError("Younganimal spread is not ready for atomic capture")
+        observation = await self._wait_for_prefetch(page, observation)
         expected = observation.active_slots
         if not expected:
             raise UnknownPageStateError("Younganimal capture has no positively identified body canvas")
@@ -1856,6 +1909,7 @@ class YounganimalAdapter(SiteAdapter):
         del page
         return {
             "capture": dict(self._capture_diagnostics),
+            "prefetch_wait": dict(self._prefetch_wait),
             "episode_id": self._episode_id,
             "work_id": self._work_id,
             "target_position": self._target_position,

@@ -7,6 +7,22 @@ manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates, active manual grants, and coin-only paid episodes from naturally
 emitted listing responses; it does not click or consume tickets.
 
+Before capture selection, an already-loading offscreen body prefetch is drained
+within five seconds. The same route, seek, frozen roles, wrapper/canvas identities,
+dimensions, viewport and ready active spread must remain valid; two matching
+pixel observations are required after loading settles. Timeout fails closed with
+no locator fallback. `prefetch_wait` records the initial pending slots, seek and
+status in debug/manifest metadata. Both native and rendered capture retain their
+existing epoch proofs, so a mutation after selection still stops the run.
+This avoids the Item/Source 35445 race where physical slot 18 completed loading
+during native encoding of slots 14/15. A 2026-11-04 isolated direct Runner run
+completed all 19 native pages through END/ZIP. That live run needed no prefetch
+wait. A second same-episode live run delayed four natural image requests by
+three seconds, exercised waits at seek 13 (pending 16/17) and seek 11
+(pending 18/19), and completed the same 19 native pages through END/ZIP with
+identical decoded RGBA. Synthetic browser tests cover timeout and drift rejection.
+Normal Catalog/library were not changed, and no CLI/config option was added.
+
 The `standard_odd_body` native observer accepts incoming draws before their CSS
 centers settle, including a rewind to the first body. Structural capabilities,
 roles, seek and active-slot proof remain mandatory; selection/postproof still

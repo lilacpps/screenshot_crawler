@@ -2502,6 +2502,103 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
     assert not list(tmp_path.glob("*.zip"))
 
 
+@pytest.mark.parametrize("outcome", ["native", "rendered", "timeout", "wrapper_replaced", "seek_changed"])
+async def test_younganimal_drains_offscreen_prefetch_before_selecting_capture(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: str
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page, odd_body_count=19,
+        native_source_slots=() if outcome == "rendered" else tuple(range(1, 20)),
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    successful = outcome in {"native", "rendered"}
+    monkeypatch.setattr(
+        younganimal_adapter_module, "PREFETCH_READY_TIMEOUT_MS", 2_000 if successful else 750
+    )
+    selections: list[bool] = []
+    original_evaluate = browser_page.evaluate
+
+    async def audit_selection(expression, *args, **kwargs):
+        if expression == younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT:
+            pending = await original_evaluate("""() =>
+              document.querySelector('#xCVPages').children[18].classList.contains('mode-loading')""")
+            selections.append(pending)
+            assert pending is False, "capture selected while offscreen prefetch was still loading"
+        return await original_evaluate(expression, *args, **kwargs)
+
+    monkeypatch.setattr(browser_page, "evaluate", audit_selection)
+
+    class PrefetchAdapter(YounganimalAdapter):
+        async def initialize(self, page) -> None:
+            await super().initialize(page)
+            await page.evaluate("""() => {
+              document.querySelector('#xCVPages').children[18].className = '-cv-page mode-loading';
+            }""")
+
+        async def _wait_for_prefetch(self, page, observation):
+            if self._prefetch_wait["status"] != "not_started" or outcome == "timeout":
+                return await super()._wait_for_prefetch(page, observation)
+            # Start completion only after the capture readiness snapshot; test
+            # scheduling must not depend on the host's initialization speed.
+            await page.evaluate("""outcome => {
+              const pages = document.querySelector('#xCVPages');
+              const wrapper = pages.children[18];
+              setTimeout(() => {
+                wrapper.classList.remove('mode-loading');
+                wrapper.classList.add('mode-loaded');
+                if (outcome === 'wrapper_replaced') wrapper.replaceWith(wrapper.cloneNode(true));
+                if (outcome === 'seek_changed') {
+                  const seek = document.querySelector('#xCVSeekBar');
+                  seek.value = String(Number(seek.value) - 2);
+                  seek.dispatchEvent(new Event('input', {bubbles: true}));
+                }
+              }, 300);
+            }""", outcome)
+            return await super()._wait_for_prefetch(page, observation)
+
+    adapter = PrefetchAdapter(preflight_work_url=WORK_URL)
+    output_dir = tmp_path / "prefetch-crawl"
+    runner = CrawlerRunner(RunConfig(
+        site="younganimal", source_url=EPISODE_URL, output_dir=output_dir,
+        diagnostics_dir=tmp_path / "diagnostics", page_turn_delay_ms=0,
+        max_pages=20, page_change_timeout_ms=3_000,
+    ))
+    if not successful:
+        with pytest.raises(UnknownPageStateError, match="offscreen body prefetch did not settle"):
+            await runner.run(browser_page, adapter)
+        assert selections == []
+        assert not list(output_dir.glob("page-*.*"))
+        assert adapter._prefetch_wait["status"] == "timeout"
+        assert await browser_page.evaluate("() => window.__younganimalNativeCapture.status()") == {
+            "candidateCount": 0, "proofCount": 0, "integrity": True,
+        }
+        return
+
+    result = await runner.run(browser_page, adapter)
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 19
+    assert selections == [False] * 10
+    assert requested == [f"/episodes/{EPISODE_ID}"]
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["pages"][0]["metadata"]["prefetch_wait"] == {
+        "status": "settled", "slots": [18], "seek_value": 25,
+    }
+    assert manifest["pages"][0]["metadata"]["capture"]["mode"] == (
+        "native_source_canvas" if outcome == "native" else "rendered_canvas_png"
+    )
+    for slot, item in enumerate(result.pages, start=1):
+        with Image.open(output_dir / item.file) as decoded:
+            rgba = decoded.convert("RGBA")
+            assert rgba.getextrema() == (((slot * 13) % 255,) * 2, (40, 40), (90, 90), (255, 255))
+    package = package_crawl_output(output_dir, adapter.get_output_metadata(), library_dir=tmp_path / "library")
+    with zipfile.ZipFile(package.archive_path) as archive:
+        assert archive.testzip() is None
+        assert len(archive.namelist()) == 19
+
+
 @pytest.mark.parametrize(
     ("odd_body_count", "standard_body_count", "top_empty_no_ci_body_count", "pr_tail_body_count", "force_rendered_fallback", "no_top_pr", "tail_pr_count"),
     [
@@ -3368,6 +3465,7 @@ async def test_younganimal_invalid_odd_profile_ci_scroll_is_capture_mutation(
         "ci_id_noop",
         "selected_wrapper_noop",
         "nonselected_wrapper_noop",
+        "offscreen_load_completed",
         "replacement_standard15_body",
         "layout_translation_standard15_body",
         "root_class_noop_standard15_body",
@@ -3519,6 +3617,9 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
           };""",
         "root_class_noop": """const viewer = document.querySelector('#comici-viewer');
           viewer.setAttribute('class', viewer.getAttribute('class'));""",
+        "offscreen_load_completed": """const wrapper = document.querySelector('#xCVPages').children[14];
+          wrapper.className = '-cv-page mode-loading';
+          wrapper.classList.remove('mode-loading'); wrapper.classList.add('mode-loaded');""",
         "transient_selected_class": """const wrapper = document.querySelector('#xCVPages').children[1];
           wrapper.classList.add('mode-loading'); wrapper.classList.remove('mode-loading');""",
         "transient_structure": """const viewer = document.querySelector('#comici-viewer');
@@ -3830,6 +3931,7 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
         "ci_id_noop": "native_reader_layout_changed",
         "selected_wrapper_noop": "native_reader_layout_changed",
         "nonselected_wrapper_noop": "native_reader_layout_changed",
+        "offscreen_load_completed": "native_reader_layout_changed",
         "public_seek_last": "native_reader_layout_changed",
         "public_seek_last_hidden_marker": "native_reader_layout_changed",
         "public_seek_last_missing_marker": "native_reader_layout_changed",
