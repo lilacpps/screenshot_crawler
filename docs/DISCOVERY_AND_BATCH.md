@@ -2644,6 +2644,10 @@ URLs fold new input; cross-site/same-title hints never assign a Work. Existing
 matches start unselected and require an explicit additional-key choice; stable
 existing IDs remain untouched. Existing-Work selection inherits work_key,
 including legacy hyphens; only newly suggested key text is normalized.
+New registration work_key/key values accept lowercase ASCII alphanumeric words
+separated by single hyphens or underscores. Suggestions use hyphens for words,
+the site suffix and collision suffixes (e.g. `hello-world-piccoma-2`). Existing
+and manually entered IDs retain their exact spelling; no IDs are migrated.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys

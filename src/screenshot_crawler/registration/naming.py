@@ -10,11 +10,11 @@ def slug(value: str) -> str:
     # Do not silently drop unresolved Japanese characters from a title.
     if any(ord(char) > 127 for char in value):
         return ""
-    return re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return re.sub(r"[^a-z0-9]+", "-", value).strip("-")
 
 
 def valid_slug(value: str) -> bool:
-    return bool(re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", value))
+    return bool(re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", value))
 
 
 def available_name(base: str, reserved) -> str:
@@ -23,7 +23,7 @@ def available_name(base: str, reserved) -> str:
     result, index = base, 1
     while result in reserved:
         index += 1
-        result = f"{base}_{index}"
+        result = f"{base}-{index}"
     return result
 
 

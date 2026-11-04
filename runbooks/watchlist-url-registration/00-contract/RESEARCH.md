@@ -107,9 +107,9 @@ pilotでもKadocomiの完全一覧preview capabilityは新設しない。単一k
 - 入力の改行を分割し空行/文字列一致重複を整理するが、raw入力と元行位置は残す。同site + **確定native work identity**の新候補は同一候補へまとめ、最初の有効seedと全入力を保持する。別episodeを勝手にtargetへ選び直さない。
 - 既存Watchlistの同identityが1keyなら「登録済み」と表示し追加対象から外す。既存複数key（分担があり得る）なら一覧提示し明示選択。URL同値/作品identity同値とlabel同値は区別する。既存URLが新しい厳格入口に不適合なら既存データを自動修正せず照合未確定として扱う。
 - Watchlistとread-only CatalogのWork候補を示し、異siteの同名作品は候補提示だけ。利用者が紐付けを決定し既存work_keyを継承/編集不可にする。Catalog-only Work/Source所有も調べ、stable key/work_key/siteのrename・Source移動を提案へ紛れ込ませない。
-- 新規slugはNFKCを**命名文字列だけ**へ適用し、ASCII英字はlower、英数字を維持、単語区切りをunderscore、連続/端underscoreを整理し`[a-z0-9]+(?:_[a-z0-9]+)*`を満たす候補にする。URL/既存IDにはこの正規化を適用しない。
-- titleがASCII英語ならかな変換を通さない。日本語は一次readingがあれば優先し、機械readingはsuggestion。固有名詞・当て字・長音・助詞・分かち方に正解を保証しない。`kusuriya_no_hitorigoto`は例でありライブラリの必然出力ではない。readingとslugの手編集/明示確定を可能にする。
-- work_key候補と`work_key + '_' + canonical_site`のkey候補を作る。新work_key衝突は既存所属か別作品かを必ず選択。同site追加key又は別Workのslug重複には`_2`, `_3`を提示し、使用済みnamespace全体と選択/未選択draftの予約も検査。suffixの提案だけで自動確定しない。
+- 新規slugはNFKCを**命名文字列だけ**へ適用し、ASCII英字はlower、英数字を維持、単語区切りをhyphen、連続/端区切りを整理する。2026-11-05のユーザー指示により従来Watchlistのhyphen形式を候補の標準とする。手入力IDは`[a-z0-9]+(?:[-_][a-z0-9]+)*`を許容し、hyphen/underscoreのどちらもそのまま保持する。URL/既存IDには正規化を適用しない。
+- titleがASCII英語ならかな変換を通さない。日本語は一次readingがあれば優先し、機械readingはsuggestion。固有名詞・当て字・長音・助詞・分かち方に正解を保証しない。`kusuriya-no-hitorigoto`は例でありライブラリの必然出力ではない。readingとslugの手編集/明示確定を可能にする。
+- work_key候補と`work_key候補 + '-' + canonical_site`のkey候補を作る。新work_key衝突は既存所属か別作品かを必ず選択。同site追加key又は別Workのslug重複には`-2`, `-3`を提示し、使用済みnamespace全体と選択/未選択draftの予約も検査。suffixの提案だけで自動確定しない。
 - work_key変更へ追従するのは未手編集のkeyだけ。既存keyは変更しない。新規key衝突はglobal、work_key共有は明示group内だけ許す。保存時は実snapshotと選択集合でも再検査。空/未確定/残存非ASCIIのslugはblocked。乱数/hash fallbackで保存しない。
 
 ### ライブラリ判断

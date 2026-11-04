@@ -44,10 +44,10 @@ def test_selected_set_single_apply_preserves_unselected_drafts_catalog_zip_and_c
     original = catalog.path.read_bytes(), archive.read_bytes()
     service = RegistrationService(path, catalog.path)
     preview = service.preview(batch)
-    assert "UNKNOWN" in preview.summary and "first_jumpplus" in preview.summary
-    assert "second_comicdays" not in preview.summary
+    assert "UNKNOWN" in preview.summary and "first-jumpplus" in preview.summary
+    assert "second-comicdays" not in preview.summary
     planned = yaml_section(preview, "追加する項目")
-    assert planned == [{"key": "first_jumpplus", "work_key": "first", "site": "jumpplus",
+    assert planned == [{"key": "first-jumpplus", "work_key": "first", "site": "jumpplus",
         "url": URLS["jumpplus"], "enabled": True, "label": "人工作品"}]
     assert "追加 1件 / 更新 0件 / 既存のまま 1件" in preview.summary
     calls = []
@@ -58,10 +58,10 @@ def test_selected_set_single_apply_preserves_unselected_drafts_catalog_zip_and_c
     monkeypatch.setattr(service.watchlist, "apply_edit", count)
     result = service.save(batch, preview)
     assert result.verified and calls == [True]
-    assert {target.key for target in WatchlistService(path).list_targets()} == {"legacy", "first_jumpplus"}
+    assert {target.key for target in WatchlistService(path).list_targets()} == {"legacy", "first-jumpplus"}
     assert path.read_text(encoding="utf-8").startswith("# 人の注釈\n")
     actual = yaml.safe_load(path.read_text(encoding="utf-8"))["targets"]
-    assert planned == [target for target in actual if target["key"] == "first_jumpplus"]
+    assert planned == [target for target in actual if target["key"] == "first-jumpplus"]
     assert original == (catalog.path.read_bytes(), archive.read_bytes())
     retain_unsaved(batch, result)
     assert batch.candidates[b] == kept and b in batch.works
@@ -109,7 +109,7 @@ def test_race_or_post_preview_edit_is_all_or_nothing(tmp_path, change):
 
 @pytest.mark.parametrize("url,owner,work_key", [(URLS["jumpplus"], "owner", "other"),
     (URLS["jumpplus"], None, "other"), ("https://legacy.invalid/unknown", "removed", "other"),
-    ("https://shonenjumpplus.com/episode/999", "first_jumpplus", "other")])
+    ("https://shonenjumpplus.com/episode/999", "first-jumpplus", "other")])
 def test_real_catalog_source_target_ownership_guard(tmp_path, url, owner, work_key):
     batch, path, catalog = setup_batch(tmp_path)
     add(batch, "jumpplus", "first")
@@ -235,7 +235,7 @@ def test_readback_error_is_committed_unverified_not_rollback(tmp_path, monkeypat
     result = service.save(batch, preview)
     assert not result.verified and result.revision is None
     assert "保存済み" in result.message
-    assert WatchlistService(path).get("first_jumpplus")
+    assert WatchlistService(path).get("first-jumpplus")
     with pytest.raises(ValueError):
         retain_unsaved(batch, result)
 

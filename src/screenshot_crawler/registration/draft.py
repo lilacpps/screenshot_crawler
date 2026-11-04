@@ -121,7 +121,7 @@ class BatchRegistrationDraft:
             row.key for row in self.candidates.values() if row.id != exclude}
         if self.catalog_snapshot is not None:
             used.update(source.discovery_key for source in self.catalog_snapshot.sources if source.discovery_key)
-        return available_name(f"{slug(work_key)}_{site}" if slug(work_key) and site else "", used)
+        return available_name(f"{slug(work_key)}-{site}" if slug(work_key) and site else "", used)
 
     def edit_candidate(self, candidate_id: str, *, label=None, reading=None, key=None) -> None:
         old = self.candidates[candidate_id]

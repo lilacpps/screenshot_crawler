@@ -30,12 +30,21 @@ def ready(batch, row_id, name="test_work"):
     batch.confirm(row_id)
 
 
-def test_unknown_identity_and_title_can_be_explicitly_confirmed():
+@pytest.mark.parametrize("work_key,key", [
+    ("test-work", "test-work-jumpplus"),
+    ("test_work", "test_work_jumpplus"),
+    ("test-work_2", "test-work_2-jumpplus"),
+])
+def test_unknown_identity_and_title_can_be_explicitly_confirmed(work_key, key):
     batch = draft()
     row = add(batch, A)
     assert batch.readiness(row).status == "needs_manual_confirmation"
-    ready(batch, row)
+    ready(batch, row, work_key)
+    batch.edit_candidate(row, key=key)
+    batch.confirm(row)
     assert batch.readiness(row).status == "ready"
+    assert batch.targets_for(row)[0].work_key == work_key
+    assert batch.targets_for(row)[0].key == key
     assert batch.candidates[row].resolution.site_work_identity is None
     assert batch.candidates[row].resolution.title is None
     assert batch.targets_for(row)[0].discovery_scope is None
@@ -66,7 +75,7 @@ def test_unknown_identity_does_not_dedupe_episodes_or_cross_site_titles():
     a, b, c = add(batch, A, "Same"), add(batch, A[:-3] + "456", "Same"), add(batch, B, "Same")
     assert len({a, b, c}) == 3
     assert len(batch.works) == 3
-    assert {work.work_key for work in batch.works.values()} == {"same", "same_2", "same_3"}
+    assert {work.work_key for work in batch.works.values()} == {"same", "same-2", "same-3"}
     batch.assign(c, group_id=a)
     assert batch.candidates[c].group_id == a
     assert batch.candidates[b].group_id == b
@@ -80,7 +89,7 @@ def test_manual_key_survives_work_rename_and_retry():
     batch.assign(b, group_id=a)
     batch.name_work(a, "renamed")
     assert batch.candidates[a].key == "custom_key"
-    assert batch.candidates[b].key == "renamed_comicdays"
+    assert batch.candidates[b].key == "renamed-comicdays"
     batch.confirm(a)
     batch.works[a].detail = object()
     batch.retry(a, batch.resolver.resolve(A))
@@ -103,6 +112,7 @@ def test_existing_work_inherits_stable_id_and_preserves_all_fields():
         batch.name_work(group_id, "renamed")
     batch.confirm(row)
     assert batch.targets_for(group_id)[0] == old
+    assert batch.candidates[row].key == "legacy-work-comicdays"
     assert batch.readiness(group_id).status == "needs_scope"
     assert batch.base == (old,)
 
@@ -147,15 +157,32 @@ def test_new_group_slug_collision_is_not_merge():
 
 
 def test_names_are_suggestions_with_no_hash_fallback():
-    assert slug(" Foo　BAR! 12 ") == "foo_bar_12"
+    assert slug(" Foo　BAR! 12 ") == "foo-bar-12"
+    assert slug("--Foo__BAR--12--") == "foo-bar-12"
     assert slug("漢字ABC") == ""
-    assert suggest_name("Hello World").work_key == "hello_world"
+    assert suggest_name("Hello World").work_key == "hello-world"
+    assert available_name("work-jumpplus", {"work-jumpplus", "work-jumpplus-2"}) == "work-jumpplus-3"
     pytest.importorskip("pykakasi")
     suggestion = suggest_name("かな漢字")
-    assert suggestion.work_key == "kana_kanji"
+    assert suggestion.work_key == "kana-kanji"
     assert suggestion.reading == "かなかんじ"
     assert "human confirmation" in suggestion.evidence
-    assert available_name("work_jumpplus", {"work_jumpplus", "work_jumpplus_2"}) == "work_jumpplus_3"
+
+
+@pytest.mark.parametrize("field", ["work_key", "key"])
+@pytest.mark.parametrize("value", ["", "-work", "work-", "work--key", "work__key", "Work", "work key", "作品"])
+def test_invalid_id_stays_unready_after_confirmation(field, value):
+    batch = draft()
+    row = add(batch, A)
+    ready(batch, row, "valid-work")
+    batch.edit_candidate(row, key="valid-key")
+    if field == "work_key":
+        batch.name_work(row, value)
+    else:
+        batch.edit_candidate(row, key=value)
+    batch.confirm(row)
+    assert batch.candidates[row].confirmed
+    assert batch.readiness(row).status == "needs_manual_confirmation"
 
 
 @pytest.mark.parametrize("change", ["retry", "edit", "rename", "assign"])
@@ -166,7 +193,7 @@ def test_all_confirmation_evidence_invalidates(change):
     assert batch.candidates[row].additional
     if change == "retry":
         batch.retry(row, batch.resolver.resolve(B))
-        assert batch.candidates[row].key == "work_comicdays"
+        assert batch.candidates[row].key == "work-comicdays"
     elif change == "edit":
         batch.edit_candidate(row, label="Changed")
     elif change == "rename":

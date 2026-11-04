@@ -448,7 +448,8 @@ def preview_and_save(dialog):
 
 
 @pytest.mark.parametrize("outcome", ["no", "yes", "failure"])
-def test_url_to_atomic_save_main_reload_and_single_full_confirmation(gui, tmp_path, monkeypatch, outcome):
+@pytest.mark.parametrize("separator", ["-", "_"])
+def test_url_to_atomic_save_main_reload_and_single_full_confirmation(gui, tmp_path, monkeypatch, outcome, separator):
     import asyncio
 
     from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
@@ -473,12 +474,17 @@ def test_url_to_atomic_save_main_reload_and_single_full_confirmation(gui, tmp_pa
     monkeypatch.setattr(window, "_start_execution", requests.append)
     before = dialog.catalog.read_bytes()
     populate(dialog, A)
-    confirm(dialog)
+    work_key = f"test{separator}work"
+    key = f"{work_key}{separator}jumpplus"
+    dialog.key_edit.setText(key)
+    confirm(dialog, work=work_key)
+    assert dialog.draft.readiness("1").status == "ready"
     preview_and_save(dialog)
     wait_for(lambda: bool(questions))
     assert len(questions) == len(full_signals) == 1
     assert window.model.selected_keys == set()
-    target = WatchlistService(dialog.path).get("test_work_jumpplus")
+    target = WatchlistService(dialog.path).get(key)
+    assert target.work_key == work_key
     saved = dialog.path.read_bytes()
     assert dialog.catalog.read_bytes() == before
     assert len(requests) == (0 if outcome == "no" else 1)
@@ -607,7 +613,7 @@ def test_saved_unverified_freezes_resave_and_does_not_emit_full(gui, monkeypatch
     assert dialog._save_frozen and "保存済み" in dialog.status.text()
     assert not dialog.save_button.isEnabled() and not dialog.preview_button.isEnabled()
     assert not full
-    assert WatchlistService(dialog.path).get("test_work_jumpplus")
+    assert WatchlistService(dialog.path).get("test-work-jumpplus")
 
 
 def test_catalog_refresh_preserves_manual_candidate_and_invalidates_detail(gui):
@@ -647,6 +653,6 @@ def test_real_final_preview_modal_is_scrollable_and_can_return_before_save(gui, 
     before = dialog.path.read_bytes()
     dialog.preview_edit()
     wait_for(lambda: dialog.task is None)
-    assert len(shown) == 1 and "test_work_jumpplus" in shown[0]
+    assert len(shown) == 1 and "test-work-jumpplus" in shown[0]
     assert "UNKNOWN" in shown[0]
     assert dialog.path.read_bytes() == before and dialog.save_button.isEnabled()

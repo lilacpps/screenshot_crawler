@@ -9,7 +9,7 @@
 
 - 1件・複数件のURLを同じGUIに貼り付け、サイトと作品を解析してWatchlistへ登録する。サイト別のDiscovery起点URLをユーザーに覚えさせない。
 - 入力URLを厳格に検証し、サイト固有の確認済み規則でDiscovery用URLへ安全に変換する。正規Discovery URLそのものが不正・未対応・未確定ならブロック。安全な正規URLは確定しているが作品ID/titleが未取得の場合は、手動確認の候補として残す。
-- 作品名(label)をサイトから取得し、読み・ローマ字化により人間が理解できるwork_key候補、work_key + "_" + siteのkey候補を生成する。最終確定前に編集可能にする。
+- 作品名(label)をサイトから取得し、読み・ローマ字化により人間が理解できるwork_key候補、work_key + "-" + siteのkey候補を生成する。最終確定前に編集可能にする。
 - 既存Watchlistの同一作品/同一サイト登録を照合する。異サイトの同一作品はタイトル等から候補を提示しても、ユーザーが最終的にグループ化・既存Work紐付けを決定する。サイト横断で自動mergeしない。
 - 新規の単一取得元Workは、scopeなし（全話対象）を標準に簡単登録可能。複数key/サイトの同一Work、または既存複数key Workへの追加は既存の話一覧比較・discovery_scope・archive_order/archives_segments編集を必須にする。単一取得元でも任意で詳細編集可能。
 - URL解析 → 候補編集 → 複数Workの必要な詳細設定 → 最終プレビュー → 明示的一括保存。途中でWatchlist/Catalog/ZIPを変更しない。保存後に、変更keyのFull Discoveryの確認ダイアログへ既存導線で接続する。Fullは独立ジョブであり、保存成功とDiscovery成功を混同しない。
@@ -44,9 +44,9 @@
 
 ## ID policy
 
-- 新規work_key例: kusuriya_no_hitorigoto。日本語読みからローマ字候補を作り、a-z / 0-9 / underscoreの安全なslugに正規化。英字既存タイトルは過剰変換しない。連続underscoreと先頭/末尾underscoreは整理する。
-- 新規key例: kusuriya_no_hitorigoto_magapoke。サイト名はDiscovery registryのcanonical keyを使う。標準はwork_key + "_" + site、同一Work/同一siteに追加keyが必要なら明示的に _2, _3 等の衝突回避候補を提示。
-- 新規work_keyの衝突は別Workか既存Workへの所属かを明示確認。勝手に同じWorkへmergeしない。異なる新規Workの同一slugには _2 の候補を提示できる。
+- 新規work_key例: kusuriya-no-hitorigoto。日本語読みからローマ字候補を作り、a-z / 0-9 / hyphenの安全なslugに正規化。英字既存タイトルは過剰変換しない。候補の連続区切りと先頭/末尾区切りは整理する。手入力ではhyphenとunderscoreの両方を許容し、`[a-z0-9]+(?:[-_][a-z0-9]+)*`を満たすIDをそのまま保持する。
+- 新規key例: kusuriya-no-hitorigoto-magapoke。サイト名はDiscovery registryのcanonical keyを使う。標準はwork_key候補 + "-" + site、同一Work/同一siteに追加keyが必要なら明示的に -2, -3 等の衝突回避候補を提示。
+- 新規work_keyの衝突は別Workか既存Workへの所属かを明示確認。勝手に同じWorkへmergeしない。異なる新規Workの同一slugには -2 の候補を提示できる。
 - work_key編集時は、ユーザーが未編集のkey候補だけ連動。手動編集済みkeyは自動上書きしない。既存Workに紐付けたときは既存work_keyを編集不可・継承。
 - 読み仮名の一次証拠がなければ機械変換はsuggestionにとどめる。未確定・空・不正/衝突したIDでは保存不可。IDはCLIやYAMLから読める形式であり、乱数やhashのみをユーザー向けkeyにしない。
 

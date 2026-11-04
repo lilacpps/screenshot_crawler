@@ -142,6 +142,19 @@ URLs fold new input; cross-site/same-title hints never assign a Work. Existing
 matches start unselected and require an explicit additional-key choice; stable
 existing IDs remain untouched. Existing-Work selection inherits work_key,
 including legacy hyphens; only newly suggested key text is normalized.
+New registration work_key/key values accept lowercase ASCII alphanumeric words
+separated by single hyphens or underscores (`[a-z0-9]+(?:[-_][a-z0-9]+)*`).
+Suggestions use hyphens for word boundaries, the canonical site suffix and
+collision suffixes: `hello-world`, `hello-world-piccoma`, `hello-world-piccoma-2`.
+Manual IDs and existing IDs keep their exact spelling, including underscores;
+no stored IDs are migrated. These naming rules are local to URL registration
+and add no CLI/config option or site request. Registration draft/service and
+synthetic Qt save/Full tests cover acceptance, suggestions, collisions, manual
+ID preservation and persistence. This naming change requires no real-site check.
+Validation on 2026-11-05: 415 related registration/Watchlist/Qt tests passed,
+zero skipped; `ruff check src tests` passed. Qt ran offscreen with isolated
+stores. Browser Integration, Research/Live and the full suite were not run for
+this local naming change; browser, Discovery and Catalog behavior is unchanged.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
