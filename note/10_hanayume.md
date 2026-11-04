@@ -128,6 +128,51 @@ apply, preserving Item/Source history and invalidating listing proof. No
 schema version change or alias table is used; historical CrawlRun snapshots
 already retain the old external ID.
 
+When `_wait_for_native_ticket_state` reaches its existing deadline without an
+exact selected-episode access row, its `PageChangeTimeoutError` now retains the
+original English cause and appends the operator guidance:
+`Catalogの話IDが古い可能性があります。対象作品 (work_key='…')のFull Discovery (discover --mode full)
+を再実行してください。` The possibility wording is deliberate: missing API
+evidence can have other causes. No timeout, request, click, retry, identity
+acceptance, Catalog or grant behavior changes. The exception text propagates
+through the existing Grant-only candidate error, metrics and job monitor.
+Configured Batch includes its actual opaque `work_key` in this original
+timeout text. The outer normal/grant-only candidate error also includes the
+Source's actual Watchlist `key`, Catalog `work_key`, and current matching
+Watchlist `label`. The shared display lookup requires exact Source key/site/Work
+ownership; otherwise it marks the Catalog title `[Catalog名]`. Thus the reported
+case identifies `key='fruits-basket', work_key='fruits-basket',
+label='フルーツバスケット'`, without mistaking a Work key for a Discovery key.
+No key is invented when the Source lacks Discovery ownership. These are display
+fields; the adapter still checks the same exact episode and access state.
+The work-key guidance and shared label/key error-context follow-up passed the
+288-case affected Unit/display selection, with zero skips; details are in
+`note/00_core.md`. No additional live ticket operation or Discovery was performed.
+
+The 2026-11-05 `fruits-basket` Item/Source 29601 grant-only failure has
+`click_attempted=false`, unconfirmed consumption and zero fallback reads.
+Its 05:43 metrics show no checkout request. The selected URL/API ID was
+`376f7d49f5a1d` in work `322e0e262f919`, while the natural current-episode API
+used `df63aca517926` and both five-row series-access responses omitted the old
+ID. One owned shared-CDP Page, with all non-read requests blocked and no clicks,
+confirmed that the old exact API returns HTTP 200 without redirect but reports
+`episode.id=access.episodeId=df63aca517926` in the same work. This explains
+why exact old-ID evidence never arrived. The probe is not the complete
+two-endpoint identity-maintenance proof or a body-equivalence proof; Batch does
+not adopt the returned ID. Sanitized evidence: `.tmp/h29601/probe.json`.
+No ticket was used and the operational Catalog/Watchlist/archives were not changed.
+The requested change is the actionable Full Discovery hint, rather than automatic
+identity maintenance during grant-only.
+
+Validation: `tests/unit/test_hanayume_adapter.py` passed 105 cases, zero skipped
+(289 existing Python 3.14/pytest-asyncio deprecation warnings). The new missing
+native-state case uses a fake clock and a Page without click/navigation methods
+to check bounded read-only failure, preserved unconfirmed consumption, and the
+Full Discovery guidance. `ruff check src tests` and scoped `git diff --check`
+passed. Browser Integration, Research and full repository pytest were not run
+because only the timeout wording changed; the live check was read-only and did
+not repeat grant-only or any ticket action.
+
 Copy-only live validation for `ng-life` confirmed the old/new API identity
 relation above. An exhausted Full run retained the completed old Item/Source,
 removed only the empty donor, preserved every CrawlRun/Artifact/quota row,

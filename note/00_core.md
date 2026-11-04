@@ -1,3 +1,31 @@
+## Candidate failure Discovery context (2026-11-05)
+
+Normal and grant-only `CandidateExecutionError` text includes the Item/Source
+IDs plus the Source's actual Discovery `key`, Catalog `work_key`, and display
+`label`. The latest Watchlist label is used only when key, site and Work key
+all match the selected Source/Work. Missing or mismatched bindings use Work.title
+marked `[Catalog名]`, consistently with grant reporting. Values use quoted repr
+so embedded line breaks cannot create extra log lines. Error-context lookup is
+read-only and best-effort: unavailable Watchlist/Catalog reads cannot mask the
+original failure, exception cause or confirmed-consumption state. No Source
+key is invented for legacy unowned records. Error type, safety-stop/skip
+classification, timing, execution scope, Catalog persistence and output metadata
+are unchanged; no CLI/config option was added.
+
+Hanayume's missing exact-native-access timeout separately includes the configured
+`work_key` in its Full Discovery guidance, so original-cause metrics retain a
+usable Work identifier even when they omit the outer Batch wrapper. Its site
+note records the wording and site-specific verification limits.
+
+Validation: the Batch Executor, validation-reuse, deferred-grant and Hanayume
+Adapter Unit files passed 270 tests; CLI job-event and result-presenter Unit
+files passed 18 more (288 total, zero skipped). Existing failure tests verify
+context on both normal and grant-only errors while preserving quota/consumption
+state; label cases cover matching, absent, wrong-site, wrong-Work and unreadable
+Watchlist bindings. `ruff check src tests` and scoped `git diff --check` passed.
+Browser Integration, Live, Research and repository-wide pytest were not run
+for this display-only change; execution, identity and browser behavior are unchanged.
+
 ## Stage07 complete-list preview coverage (2026-11-03)
 
 BookWalker/Piccoma/Hanayume/Younganimal now join Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list

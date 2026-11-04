@@ -208,6 +208,30 @@ class BatchExecutor:
         self._naming_prefixes: dict[int, str | None] = {}
         self._naming_collisions: set[int] = set()
 
+    def _candidate_error_context(self, candidate: BatchCandidate) -> str:
+        """Add operator-facing Discovery identity without masking the failure."""
+        fields = [f"item={candidate.item_id}", f"source={candidate.source_id}"]
+        try:
+            source = self.catalog.get_source(candidate.source_id)
+            work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
+            if source.discovery_key is not None:
+                fields.append(f"key={source.discovery_key!r}")
+            fields.append(f"work_key={work.work_key!r}")
+            label = f"{work.title} [Catalog名]"
+            fields.append(f"label={label!r}")
+            if self.watchlist is not None:
+                target = next((
+                    row for row in self.watchlist.list_targets()
+                    if row.key == source.discovery_key
+                    and row.site == candidate.site == source.site
+                    and row.work_key == work.work_key
+                ), None)
+                if target is not None:
+                    fields[-1] = f"label={target.label!r}"
+        except Exception:  # noqa: BLE001 - display lookup must not replace the original error
+            return ", ".join(fields)
+        return ", ".join(fields)
+
     @_catalog_job_locked
     async def execute_candidate(
         self,
@@ -412,8 +436,7 @@ class BatchExecutor:
             if isinstance(exc, AccessResourceUnavailableError):
                 raise
             raise CandidateExecutionError(
-                f"Batch candidate failed (item={candidate.item_id}, "
-                f"source={candidate.source_id}): {exc}",
+                f"Batch candidate failed ({self._candidate_error_context(candidate)}): {exc}",
                 resource_consumed=resource_consumed,
             ) from exc
 
@@ -855,8 +878,7 @@ class BatchExecutor:
             if isinstance(exc, AccessResourceUnavailableError):
                 raise
             raise CandidateExecutionError(
-                f"Grant-only candidate failed (item={candidate.item_id}, "
-                f"source={candidate.source_id}): {exc}",
+                f"Grant-only candidate failed ({self._candidate_error_context(candidate)}): {exc}",
                 resource_consumed=resource_consumed,
             ) from exc
 

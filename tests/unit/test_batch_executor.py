@@ -1229,15 +1229,46 @@ async def test_active_grant_direct_candidate_does_not_change_quota_state(
     assert source.access_granted_until == "2026-09-17T16:00:00+09:00"
 
 
+@pytest.mark.parametrize("binding", ["matching", "missing", "wrong_site", "wrong_work", "unreadable"])
+def test_candidate_error_context_uses_owned_watchlist_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding: str,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    executor = make_executor(service, fail_crawl=True)
+    source = service.get_source(candidate.source_id)
+    work = service.get_work(service.get_item(candidate.item_id).work_id)
+    target = executor.watchlist.list_targets()[0]
+    target = replace(target, label="Watchlist表示名")
+    if binding == "wrong_site":
+        target = replace(target, site="other")
+    elif binding == "wrong_work":
+        target = replace(target, work_key="other-work")
+
+    def targets():
+        if binding == "unreadable":
+            raise OSError("synthetic Watchlist read failure")
+        return [] if binding == "missing" else [target]
+
+    monkeypatch.setattr(executor.watchlist, "list_targets", targets)
+    context = executor._candidate_error_context(candidate)
+    assert f"key={source.discovery_key!r}" in context
+    assert f"work_key={work.work_key!r}" in context
+    expected_label = "Watchlist表示名" if binding == "matching" else f"{work.title} [Catalog名]"
+    assert f"label={expected_label!r}" in context
+
+
 async def test_quota_state_remains_when_crawl_fails(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
     executor = make_executor(service, fail_crawl=True)
 
-    with pytest.raises(BatchExecutionError, match="crawler failed"):
+    with pytest.raises(BatchExecutionError, match="crawler failed") as failure:
         await executor.execute_candidate(object(), candidate, now=NOW)
 
     source = service.get_source(candidate.source_id)
+    assert f"key={source.discovery_key!r}" in str(failure.value)
+    assert "label='Test Work 1'" in str(failure.value)
     assert source.quota_started_at == NOW.isoformat()
     assert source.access_granted_until == "2026-09-18T15:00:00+09:00"
     assert service.get_item(candidate.item_id).status == "pending"
@@ -2097,6 +2128,8 @@ async def test_grant_only_consumption_survives_later_failure(
     assert failure.value.resource_consumed is True
 
     source = service.get_source(candidate.source_id)
+    assert f"key={source.discovery_key!r}" in str(failure.value)
+    assert "label='Test Work 1'" in str(failure.value)
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
     state = service.get_quota_resource_state(

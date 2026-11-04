@@ -116,6 +116,22 @@ API payloads, or browser storage are added to these fields. `adapter_debug.ticke
 entry-only mode, whether the click was attempted, confirmed consumption, and fallback-read count.
 No new CLI option is needed. These diagnostics do not change ticket actions, waits, or retries.
 
+When exact native ticket access never arrives before the existing deadline, the
+error now advises: `Catalogの話IDが古い可能性があります。対象作品 (work_key='…')のFull Discovery
+(discover --mode full) を再実行してください。` Missing access alone does not prove
+an ID replacement; the wording is a recovery hint. Batch keeps its exact ID
+checks and never substitutes another episode or clicks on this timeout.
+The 2026-11-05 Item/Source 29601 failure stopped before the ticket click: the
+old episode URL stayed reachable, while the natural API used a different ID and
+the series-access rows omitted the selected old ID. Read-only verification also
+found the old exact API returning that different ID. Full Discovery remains the
+place for strict identity reconciliation; this message adds no request or Catalog write.
+The configured work key is included in the original timeout so metrics can
+identify the Work. The outer normal/grant-only Batch failure also includes the
+Source's Discovery `key`, `work_key`, and current matching Watchlist `label`;
+missing/mismatched Watchlist entries use the Work title marked `[Catalog名]`.
+For the reported case these fields identify `fruits-basket` / `フルーツバスケット`.
+
 The 2026-10-18 user grant-only failure for Item/Source 28587 saved a later HTML state
 with counter 1/21, 21 wrappers, and the top-empty flag. A subsequent failure on Item/Source
 28987 preserved the exact rejected 1/17 counter, 17 wrappers, and top-empty flag. A bounded

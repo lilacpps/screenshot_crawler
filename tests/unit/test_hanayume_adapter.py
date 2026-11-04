@@ -188,6 +188,48 @@ async def _observe_current_access(
 
 
 @pytest.mark.asyncio
+async def test_hanayume_missing_native_ticket_state_guides_full_discovery_without_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", "fruits-basket")
+    adapter._target_url = f"https://hanayume.com/episodes/{EPISODE_ID}"
+    current = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    pending_waits: list[float] = []
+
+    async def wait_for_pending(timeout: float) -> bool:
+        pending_waits.append(timeout)
+        return True
+
+    adapter._ticket_observer = SimpleNamespace(
+        overflow=False, snapshots=(), wait_for_pending=wait_for_pending,
+    )
+    adapter._current_ticket_observer = current
+    clock = 0.0
+
+    async def sleep(seconds: float) -> None:
+        nonlocal clock
+        clock += seconds
+
+    monkeypatch.setattr(hanayume_adapter.time, "monotonic", lambda: clock)
+    monkeypatch.setattr(hanayume_adapter.asyncio, "sleep", sleep)
+    # This Page has no click/evaluate/navigation methods: the failure must stay
+    # read-only and bounded rather than trying another episode or ticket action.
+    page = SimpleNamespace(url=adapter._target_url)
+    with pytest.raises(PageChangeTimeoutError) as error:
+        await adapter._wait_for_native_ticket_state(page, deadline=0.2)
+
+    assert "exact native access state did not arrive within its bound" in str(error.value)
+    assert "Catalogの話IDが古い可能性" in str(error.value)
+    assert "work_key='fruits-basket'" in str(error.value)
+    assert "Full Discovery (discover --mode full) を再実行" in str(error.value)
+    assert 0.2 <= clock < 0.2 + hanayume_adapter.TICKET_POLL_INTERVAL_SECONDS
+    assert pending_waits
+    assert adapter._ticket_click_attempted is False
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kwargs", "status"),
     [

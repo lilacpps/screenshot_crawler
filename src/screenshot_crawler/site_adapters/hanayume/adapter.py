@@ -1741,7 +1741,12 @@ class HanayumeAdapter(SiteAdapter):
             if row is not None:
                 return row
             await asyncio.sleep(TICKET_POLL_INTERVAL_SECONDS)
-        raise PageChangeTimeoutError("Hanayume exact native access state did not arrive within its bound")
+        work_context = f" (work_key={self._opaque_work_key!r})" if self._opaque_work_key else ""
+        raise PageChangeTimeoutError(
+            "Hanayume exact native access state did not arrive within its bound. "
+            f"Catalogの話IDが古い可能性があります。対象作品{work_context}のFull Discovery "
+            "(discover --mode full) を再実行してください。"
+        )
 
     @staticmethod
     def _ticket_account_row_state(state: dict[str, object]) -> str:
