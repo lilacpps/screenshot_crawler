@@ -213,7 +213,7 @@ targets:
     work_key: youjitsu
     site: bookwalker
     url: https://bookwalker.jp/series/44784/list/
-    enabled: false
+    enabled: true
     label: ようこそ実力至上主義の教室へ
 
   - key: koakuma-teiri-to-kyuuseishu
@@ -1009,7 +1009,7 @@ targets:
     work_key: karada-sagashi-kai
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13932016480029260549
-    enabled: true
+    enabled: false
     label: "カラダ探し 解"
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/10834108156638129203
@@ -1029,7 +1029,7 @@ targets:
     work_key: futsuu-no-keionbu
     site: jumpplus
     url: https://shonenjumpplus.com/episode/16457717013869519536
-    enabled: true
+    enabled: false
     label: "ふつうの軽音部"
     # 範囲: ～第30話
     discovery_scope:
@@ -1067,7 +1067,7 @@ targets:
     work_key: youchien-wars
     site: jumpplus
     url: https://shonenjumpplus.com/episode/4855956445109234830
-    enabled: true
+    enabled: false
     label: "幼稚園WARS"
     # 範囲: ～第21話
     discovery_scope:
@@ -1252,7 +1252,7 @@ targets:
     label: "SPY×FAMILY"
     # 範囲: ～SHORT MISSION：3（10P）
     discovery_scope:
-      from_url: https://zebrack-comic.shueisha.co.jp/title/3790/chapter/65475/viewer
+      from_url: https://zebrack-comic.shueisha.co.jp/title/3790/chapter/1009417/viewer
     archive_order: 1
 
   - key: spy-family-jumpplus
@@ -1283,7 +1283,7 @@ targets:
     work_key: oshi-no-ko
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13933686331661632099
-    enabled: true
+    enabled: false
     label: "〖推しの子〗"
     # 範囲: 第121話～最新話
     discovery_scope:
@@ -1380,7 +1380,7 @@ targets:
     work_key: genshiken
     site: comicdays
     url: https://comic-days.com/episode/13932016480030171954
-    enabled: true
+    enabled: false
     label: "げんしけん"
 
   - key: berserk
@@ -1415,7 +1415,7 @@ targets:
     work_key: gakkou-gurashi
     site: piccoma
     url: https://piccoma.com/web/viewer/15876/1222985
-    enabled: true
+    enabled: false
     label: "がっこうぐらし！"
 
   - key: akatsuki-no-yona
@@ -1443,7 +1443,7 @@ targets:
     work_key: akatsuki-no-yona
     site: hanayume
     url: https://hanayume.com/episodes/98310df5b64a5
-    enabled: true
+    enabled: false
     label: "暁のヨナ"
 
   - key: colette-wa-shinu-koto-ni-shita
@@ -1611,7 +1611,7 @@ targets:
     work_key: shitsuji-kuroboshi-wa-kashizukanai
     site: hanayume
     url: https://hanayume.com/episodes/6361fcfe6ffb3
-    enabled: true
+    enabled: false
     label: "執事・黒星は傅かない"
 
   - key: spica
@@ -1844,3 +1844,27 @@ targets:
     url: https://comic-walker.com/detail/KC_007220_S?episodeType=first
     enabled: true
     label: "アフタヌーンティーはいかがですか？ 私と先輩の、不純で一途なふたり暮らし"
+  - key: cooking-papa
+    work_key: cooking-papa
+    site: comicdays
+    url: https://comic-days.com/episode/13932016480031248230
+    enabled: false
+    label: クッキングパパ
+  - key: kofuku_kissa_3chome_hanayume
+    work_key: kofuku_kissa_3chome
+    site: hanayume
+    url: https://hanayume.com/episodes/a41bc4b15117c
+    enabled: true
+    label: 幸福喫茶３丁目
+  - key: dr-koto-shinryoujo-piccoma
+    work_key: dr-koto-shinryoujo
+    site: piccoma
+    url: https://piccoma.com/web/viewer/1902/93115
+    enabled: true
+    label: Dr.コトー診療所
+  - key: bokudakega-inaimachi-piccoma
+    work_key: bokudakega-inaimachi
+    site: piccoma
+    url: https://piccoma.com/web/viewer/3312/158600
+    enabled: true
+    label: 僕だけがいない街
