@@ -133,6 +133,17 @@ and AD/END use the existing leading-area-tail rules; no front-link is clicked.
 This corrected item 22405's normalization timeout: read-only shared-Chrome
 verification reached all 22 body areas and END without consuming a resource or
 writing images/Catalog/ZIP. See `note/08_comicdays.md` for the evidence bounds.
+The `dummy-two-front-single` mode covers the observed combination of an empty
+dummy, two exact full front links, an even contiguous body run and the same
+half-back/ad/Colophon leading tail. It requires exact area/slider counts and
+validated prefix, body shells and half-back structure. One validated forward
+action moves from slider 1 to slider 2 and requires the first single body canvas
+at structural area 3 to be ready. Later spreads and terminal handling use the
+existing leading-tail rules. This fixes item 19316's normalization timeout;
+shared-CDP metadata-only verification initialized in 1.15 seconds, observed all
+22 body areas (3..24) in order, and reached END. No timeout increase, new
+configuration, front-link click or access-resource consumption is involved.
+Actual Batch capture/packaging for this episode has not been rerun.
   A spread is ready only when every logically expected
 body area is visible and has exactly one render-ready canvas; a missing or
 hidden second area stays `LOADING`.

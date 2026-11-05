@@ -34,6 +34,58 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Comic DAYS
 
+## Dummy/two-front prefix with a half-back-only tail (2026-11-05)
+
+Item/source `19316`, episode `10834108156628525038` (宇宙兄弟 #130), failed
+before saving any body page in metrics run
+`a837345bcf2746e890d75c5aaf4fefbc`. Candidate elapsed time was 12.05 seconds,
+with zero retries and no HTTP 403/429/5xx. Failure HTML and a shared-CDP direct
+probe confirmed an empty dummy at area 0, full front links at 1/2, body shells
+3..24, half back-link 25, ad 26 and standard Colophon 27; sliderLast was 27.
+The old hook selected `leading-area-tail` but exposed no front-prefix mode at
+slider 1, waiting for body area 3 while the front links were displayed. The
+existing `dummy-single` handling only exposed that prefix with the separate
+full-back/half-back tail. The old production initialization reproduced its
+10-second normalization timeout. A validated normal forward action reached
+slider 2 / ready body area 3, establishing the missing transition.
+
+`dummy-two-front-single` now requires that observed empty dummy and exactly two
+validated full front links, an even contiguous body-shell run, strict half-back,
+known ad/Colophon, `sliderLast == Colophon index`, and `area count == last+1`.
+At slider 1 the hook reports `front_link_prefix`; initialization uses the
+existing safety-checked forward control once and requires slider 2 with one
+render-ready body canvas. The structural first body index is 3 independently of
+lazy canvas unmount. Ordinary spreads and final single body use the existing
+leading-area rules. The separate nonbody observer continues to use the same
+leading-tail layout; its AD/END checks need no change. Malformed prefix/body/
+half-back/count states do not qualify and cannot trigger this prefix advance.
+There is no timeout increase, new CLI/configuration, access rule, capture
+provenance or output change. Shared Core, Discovery, Policy and Batch are
+unchanged.
+
+Post-fix production direct initialization completed in 1.153 seconds. Bounded
+metadata-only traversal observed body areas 3..24 exactly once in order at
+sliders 2,4,..24, then existing `END` detection at slider 26 with the Colophon
+visible. `resource_consumed=false`; no ticket/purchase or front-link anchor
+was clicked. Dedicated Pages were closed and shared Chrome remained open.
+Redacted metadata evidence is in `.tmp/comicdays-19316-20261105/before-fix.json`
+and `report.json`. No image capture, packaging, operational Catalog/Watchlist
+write or ZIP change was performed; actual Batch download remains unverified.
+
+Artificial browser coverage extends the existing prefix-to-END traversal for
+both full/half-back and half-back-only tails, and checks late-slider rewind,
+lazy body shells, malformed dummy/front/body/half-back structure and mismatched
+slider count. The regression subset failed for the new layout before the fix
+(2 failed, 6 passed) and passed afterward (8 passed, zero skips).
+Affected Comic DAYS native-capture/live-access/Batch/policy/Discovery Unit tests
+and all three artificial-browser Integration files passed **364 cases in 106.03
+seconds**, with zero skips. `ruff check src tests --no-cache` and
+`git diff --check` passed. Full pytest was not run because this is a site-local
+layout/normalization fix; Research tests were not rerun because no PoC/probe
+production contract changed. Live verification covered initialization and all
+body transitions through END; actual Batch image capture/packaging and other
+episodes with this exact prefix/tail combination remain unverified.
+
 ## Free-period expiration and stale free-feed membership (2026-11-02)
 
 Discovery no longer aborts the entire work when a free-feed entry has current

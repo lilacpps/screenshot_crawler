@@ -126,9 +126,15 @@ COMICDAYS_CAPTURE_HOOK = r"""
       (last-4)%2===0&&isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&isFrontArea(areas[1])&&
       areas.slice(2,last-2).every(isBodyAreaShell)&&pageChild(areas[last-2],isBackHalfPage)&&
       isAdArea(areas[last-1])&&isColophonArea(areas[last]);
-    const frontPrefixMode=dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':dummyFrontDoublePrefix?'dummy-front-double':null;
+    // Observed dummy + two front links with a half-back-only leading tail.
+    // Keep body identity structural even when earlier canvases are unmounted.
+    const dummyTwoFrontSinglePrefix=Number.isInteger(last)&&last>=7&&last===colophon&&areas.length===last+1&&
+      (last-5)%2===0&&isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&
+      isFrontArea(areas[1])&&isFrontArea(areas[2])&&areas.slice(3,last-2).every(isBodyAreaShell)&&
+      pageChild(areas[last-2],isBackHalfPage)&&isAdArea(areas[last-1])&&isColophonArea(areas[last]);
+    const frontPrefixMode=dummyTwoFrontSinglePrefix?'dummy-two-front-single':dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':dummyFrontDoublePrefix?'dummy-front-double':null;
     const frontPrefix=frontPrefixMode!==null;
-    const firstBody=frontPrefixMode==='dummy-single'?3:(frontPrefixMode==='two-front-double'||frontPrefixMode==='dummy-front-double')?2:canvasFirst;
+    const firstBody=(frontPrefixMode==='dummy-single'||frontPrefixMode==='dummy-two-front-single')?3:(frontPrefixMode==='two-front-double'||frontPrefixMode==='dummy-front-double')?2:canvasFirst;
     const layouts=Number.isFinite(last)?[
       {name:'legacy-tail',body:last-4,back:last-3,ad:last-2,colophon:last-1},
       {name:'leading-area-tail',body:last-3,back:last-2,ad:last-1,colophon:last},
@@ -150,6 +156,8 @@ COMICDAYS_CAPTURE_HOOK = r"""
     if(!layout)reason='unknown_body_layout';
     else if(!Number.isFinite(now)||!Number.isFinite(last)||now<1||now>last)reason='invalid_slider';
     else if(layout.name==='leading-area-tail'&&frontPrefixMode==='dummy-front-double'&&now===1){reason='front_link_prefix';}
+    else if(layout.name==='leading-area-tail'&&frontPrefixMode==='dummy-two-front-single'&&now===1){reason='front_link_prefix';}
+    else if(layout.name==='leading-area-tail'&&frontPrefixMode==='dummy-two-front-single'&&now===2){expected=[firstBody];}
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='dummy-single'&&now===1){reason='front_link_prefix';}
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='dummy-single'&&now===2){expected=[firstBody];}
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'&&now===1){reason='front_link_prefix';}
@@ -165,7 +173,7 @@ COMICDAYS_CAPTURE_HOOK = r"""
     if(!reason&&(!expected.every(i=>bodyIndices.includes(i))||new Set(visibleBody).size!==new Set(expected).size||visibleBody.some(i=>!expected.includes(i))))reason='expected_body_area_not_visible_or_extra';
     const rows=[];
     if(!reason){for(const ai of expected){const cs=areas[ai].querySelectorAll('canvas.page-image.js-page-image');if(cs.length!==1){reason=cs.length===0?'body_canvas_missing':'body_canvas_count';break}const value=row(cs[0],areas);if(!value){reason='body_canvas_invisible_or_unsafe';break}value.canvasIndex=allCanvases.indexOf(cs[0]);rows.push(value)}}
-    const prefixLayout=layout?.name==='front-prefix-tail'||(layout?.name==='leading-area-tail'&&frontPrefixMode==='dummy-front-double');
+    const prefixLayout=layout?.name==='front-prefix-tail'||(layout?.name==='leading-area-tail'&&(frontPrefixMode==='dummy-front-double'||frontPrefixMode==='dummy-two-front-single'));
     const base={sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!areas[colophon]&&visible(areas[colophon]),complete:false,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,layoutVariant:layout?.name||null,frontPrefix:prefixLayout,frontPrefixMode:prefixLayout?frontPrefixMode:null};
     const complete=!reason&&expected.length>0&&expected.length<=${MAX_ROWS}&&rows.length===expected.length;
     if(!complete)return {rows:[],...base,reason:reason||'body_area_count'};

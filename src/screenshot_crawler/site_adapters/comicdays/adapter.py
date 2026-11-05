@@ -728,7 +728,10 @@ class ComicDaysAdapter(SiteAdapter):
         state = await self._active_until(page, deadline)
         slider = self._valid_slider_state(state)
         front_prefix_mode = state.get("frontPrefixMode")
-        target_slider = {"dummy-single": 2, "two-front-double": 3, "dummy-front-double": 2}.get(front_prefix_mode)
+        target_slider = {
+            "dummy-single": 2, "two-front-double": 3,
+            "dummy-front-double": 2, "dummy-two-front-single": 2,
+        }.get(front_prefix_mode)
         if (
             slider is None
             or slider[0] != 1
@@ -787,7 +790,7 @@ class ComicDaysAdapter(SiteAdapter):
                     for row in after.get("rows", [])
                     if isinstance(row, dict) and isinstance(row.get("areaIndex"), int)
                 )
-                expected_count = 1 if front_prefix_mode == "dummy-single" else 2
+                expected_count = 1 if front_prefix_mode in {"dummy-single", "dummy-two-front-single"} else 2
                 if not row_indices or len(row_indices) != expected_count or row_indices != list(
                     range(row_indices[0], row_indices[0] + expected_count)
                 ):
@@ -830,7 +833,7 @@ class ComicDaysAdapter(SiteAdapter):
                 if not isinstance(current, int) or not isinstance(last, int) or not 1 <= current <= last:
                     raise PageChangeTimeoutError("Comic DAYS first spread exposed an invalid slider")
                 if current == 1 or (
-                    state.get("frontPrefixMode") == "dummy-single"
+                    state.get("frontPrefixMode") in {"dummy-single", "dummy-two-front-single"}
                     and current == 2
                     and front_prefix_advanced
                 ) or (
