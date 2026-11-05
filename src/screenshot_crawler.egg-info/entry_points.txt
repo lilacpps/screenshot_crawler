@@ -1,3 +1,0 @@
-[console_scripts]
-screenshot-crawler = screenshot_crawler.cli:main
-screenshot-crawler-gui = screenshot_crawler.gui.main:main

@@ -6,13 +6,19 @@ __pycache__/
 .tmp/
 .venv/
 venv/
+*.egg-info/
 
 # Runtime output
 output/
 diagnostics/
 state/
 catalog.sqlite
+catalog.sqlite-wal
+catalog.sqlite-shm
+catalog.sqlite-journal
 catalog-export.csv
+.*.job.lock
+/debug.log
 
 # Browser profiles / secrets
 browser-data/

@@ -2489,6 +2489,25 @@ Browser Session共通化で現在確認しているもの:
 loginは既存tabを再利用せず専用new Pageを使い、Pageだけをcloseしてremote Chromeを維持する。
 両siteのcapture・navigation・END behaviorに回帰はない。
 
+## Git管理とローカル生成物
+
+`src/screenshot_crawler.egg-info/` はsetuptoolsによる生成物であり、Gitでは
+追跡せず `*.egg-info/` でignoreする。依存関係とentry pointの定義は
+`pyproject.toml`、再現用の依存versionは追跡対象の `uv.lock` を正とする。
+ローカルのegg-infoは保持し、必要ならインストール時に再生成する。
+
+Catalog/Watchlistの隣に生成される `.<filename>.job.lock` は `.*.job.lock`
+でignoreする。ロックファイルはプロセス間排他のため意図的に残るので、
+Git整理のために削除しない。`catalog.sqlite` のWAL/SHM/journalと
+ルートの `debug.log` もローカル生成物としてignoreする。
+`crawler.yaml` と `watchlist.yaml` は引き続き追跡し、運用設定の差分は
+生成物の整理と分けてレビューする。
+
+この整理はGit追跡方針のみの変更で、CLI、出力形式、実サイト動作に変更はない。
+確認はGitのignore判定、追跡一覧、差分の空白検査と
+`uv lock --check --offline` を使用する。Unit/Integration/Research/Liveおよび
+full suiteは実行対象としない。
+
 ## 21. Known maintenance items
 
 - `BrowserSession`の不要Page helper再発防止
@@ -2497,7 +2516,6 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 - config.yaml整理
 - identity/fingerprint dedupe再検討
 - GitHub CI
-- tracked `.egg-info` 整理
 
 これらを変更した場合は、このnoteを必ず更新する。
 
