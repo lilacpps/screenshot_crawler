@@ -1765,6 +1765,14 @@ class HanayumeAdapter(SiteAdapter):
             ["mode-current", "mode-store-item-start", "series-eplist-item"],
         ):
             return "blank" if not rental_stats else "unknown"
+        # The observed read marker records history independently of current access.
+        # Without a rental marker this exact shape is ungranted, subject to
+        # the separate native denial and actionable Work Ticket control checks.
+        if (
+            classes == ["mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"]
+            and not rental_stats
+        ):
+            return "blank"
         if (
             classes
             in (

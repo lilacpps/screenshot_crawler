@@ -58,6 +58,47 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Hanayume current implementation
 
+
+## Previously read target without a current rental (2026-11-06)
+
+The exact account target classes `mode-current mode-read mode-store-item-blank
+series-eplist-item` with no `eliRentStat` are now recognized as the ungranted
+account-row shape (`blank`). `mode-read` alone is reading history, not proof of
+an active grant. Native `waitAndFree/hasAccess=false` with null or zero remaining
+seconds and the existing exact actionable `待つと無料で読む` control remain
+required before a single ticket action. Native positive access without rental
+proof still fails closed; one valid rental marker keeps this same class shape
+on the existing active-grant path. Unknown rental text, extra classes and the
+unobserved read/store-start shape without rental proof remain unknown. This is
+a site-local predicate correction: no Core, Catalog, CLI, retry, consumption
+confirmation or Discovery contract changes.
+
+User Item/Source 43407 (`45918a7ecfcc9`, Work `807c6d6a5a90c`) failed twice
+before action, including metrics run `d6c0950bde78462ebe0c61a9f5d944c4` at
+2026-11-06 06:05 JST. Both saved HTML snapshots show this history-only shape;
+metadata reports `click_attempted=false`, `consumption_confirmed=false`, zero
+fallback reads and zero saved pages. A bounded read-only shared-CDP probe
+reproduced it: exact current endpoint IDs match the selected episode/work,
+`hasAccess=false`, `accessType=waitAndFree`, remaining seconds null; the natural
+series row also reports `read=true` and `hasAccess=false`. The scoped control
+is visible/enabled with the exact free-reading label. All non-read requests
+were blocked, no click occurred and only the owned Page was closed. Sanitized
+metadata evidence: `.tmp/h43407/probe.json`; post-fix offline classification of
+that exact snapshot is `ungranted` (`.tmp/h43407/classification.json`). No normal
+Catalog, Watchlist, quota state or archive was changed. A consuming live ticket
+attempt has not been rerun; normal/grant-only transitions are tested with
+synthetic browser routes.
+
+Validation: the complete `tests/unit/test_hanayume_adapter.py` and
+`tests/integration/test_hanayume_adapter_browser.py` run passed 247 tests,
+zero failures/skips/deselections (293 existing asyncio deprecation warnings;
+87.08 seconds), report `.tmp/h43407/affected.xml`. The history-only regression
+failed before the fix, then passed with normal/grant-only one-click confirmation
+and native-positive/no-rental rejection coverage. `ruff check src tests` and
+`git diff --check` passed. Full repository pytest and Research helper suites
+were not run for this site-local predicate correction; consuming live grant
+verification remains unperformed.
+
 Current capture correction (2026-10-19): finite fractional destination dimensions are supported
 only when truncation yields the exact target bitmap size. Source rectangles remain complete,
 origins zero, and exact observed-rectangle pixel replay plus post-encoding proof remain required.
@@ -787,7 +828,7 @@ R2 independent local review passed BLOCKING 0 (109 tests, 0 skipped; Ruff/diff P
 
 ## Batch policy and execution
 
-`HanayumeSitePolicy` admits available `free` sources as direct, available `quota` sources with a future `access_granted_until` as non-consuming direct, and other eligible `quota` sources as one `work_ticket` candidate scoped to `work` with `quota_limit=1` and `after_observed_consumption`. It declares the same resource for grant-only. The local work-ticket recovery check is at least 23 hours; caller configuration may lengthen it but cannot shorten it. Batch uses only the selected Catalog episode URL and validates the exact work/episode, target-local hydrated `epListUser` root, native eligibility, and unique enabled free-reading control under the observed central charge ancestry. Preview rows require unique canonical episode links and exactly one title each; WF/IF icon counts remain diagnostic only and are not identity or access evidence. Read-only observations showed non-target rows without either icon, a target blank row with both, and a target read row with neither account-row icon while the public copy had both. Target identity, target-specific classes/rental state, native identity/access, and the scoped control remain independently validated. After the isolated 9a failure-before-click exposed the unsupported icon requirement, the icon-only predicate was removed; focused synthetic verification passed 77 adapter Unit cases, 22 ticket-selected Adapter browser cases (87 intentionally deselected), and 48 ticket-selected Discovery/Batch browser cases (41 intentionally deselected), all with zero skips. Three supplementary absent-preview denial cases passed with zero skips. Independent review passed; no live click was performed for this correction. Ordinarily the target account-preview row is present and must show a known blank/read state. The exact observed ungranted account classes `mode-current mode-store-item-blank` and `mode-current mode-store-item-start` are both accepted only with zero rental markers; the `store-item-start` class alone does not prove an active grant. A false `waitAndFree` current row may have `timeRemainingInSeconds=null`; a strict positive integer is required only for active-grant proof. A read-only probe of 1d107 confirmed this exact row shape, and the two-class predicate passed independent review at checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`. If both unique, nonempty public and account previews are structurally valid but omit the selected episode, the same-page exact `/api/episodes/<episode-id>` response must match `episode.id`, `episode.series.id`, and `episode.access.episodeId` to the selected Catalog work/episode, with strictly typed `hasAccess`, `accessType`, and bounded `timeRemainingInSeconds`. This exact current-episode proof is required to establish an ungranted prestate in both the initial and final pre-click snapshots when the target is absent; a series-level false row alone cannot authorize a click. Duplicate/malformed rows, another `mode-current` row, and any present contradiction still fail closed. The exact visible/enabled free-reading control remains mandatory before one click.
+`HanayumeSitePolicy` admits available `free` sources as direct, available `quota` sources with a future `access_granted_until` as non-consuming direct, and other eligible `quota` sources as one `work_ticket` candidate scoped to `work` with `quota_limit=1` and `after_observed_consumption`. It declares the same resource for grant-only. The local work-ticket recovery check is at least 23 hours; caller configuration may lengthen it but cannot shorten it. Batch uses only the selected Catalog episode URL and validates the exact work/episode, target-local hydrated `epListUser` root, native eligibility, and unique enabled free-reading control under the observed central charge ancestry. Preview rows require unique canonical episode links and exactly one title each; WF/IF icon counts remain diagnostic only and are not identity or access evidence. Read-only observations showed non-target rows without either icon, a target blank row with both, and a target read row with neither account-row icon while the public copy had both. Target identity, target-specific classes/rental state, native identity/access, and the scoped control remain independently validated. After the isolated 9a failure-before-click exposed the unsupported icon requirement, the icon-only predicate was removed; focused synthetic verification passed 77 adapter Unit cases, 22 ticket-selected Adapter browser cases (87 intentionally deselected), and 48 ticket-selected Discovery/Batch browser cases (41 intentionally deselected), all with zero skips. Three supplementary absent-preview denial cases passed with zero skips. Independent review passed; no live click was performed for this correction. Ordinarily the target account-preview row is present and must show a known blank/read state. The exact observed ungranted account classes `mode-current mode-store-item-blank` and `mode-current mode-store-item-start` are both accepted only with zero rental markers; the `store-item-start` class alone does not prove an active grant. A false `waitAndFree` current row may have `timeRemainingInSeconds=null`; a strict positive integer is required only for active-grant proof. A read-only probe of 1d107 confirmed this exact row shape, and the two-class predicate passed independent review at checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`. The exact history-only `mode-current mode-read mode-store-item-blank series-eplist-item` row without a rental marker is also ungranted; `mode-read` alone does not prove current access. If both unique, nonempty public and account previews are structurally valid but omit the selected episode, the same-page exact `/api/episodes/<episode-id>` response must match `episode.id`, `episode.series.id`, and `episode.access.episodeId` to the selected Catalog work/episode, with strictly typed `hasAccess`, `accessType`, and bounded `timeRemainingInSeconds`. This exact current-episode proof is required to establish an ungranted prestate in both the initial and final pre-click snapshots when the target is absent; a series-level false row alone cannot authorize a click. Duplicate/malformed rows, another `mode-current` row, and any present contradiction still fail closed. The exact visible/enabled free-reading control remains mandatory before one click.
 
 The CLI prints the policy-owned next check time for both normal quota and grant-only local cooldown SKIPs when `grant_only_retry_at()` supplies one. If the hook is absent or returns `None`, the output remains reason-only; metrics still record the local skip reason without a retry timestamp. These Catalog-only skips do not open a Page or wait.
 

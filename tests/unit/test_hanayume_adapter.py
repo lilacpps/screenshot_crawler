@@ -152,6 +152,31 @@ def test_hanayume_latest_series_target_reports_newer_foreign_work_collision() ->
         (["mode-current", "mode-store-item-blank", "series-eplist-item"], [], "blank"),
         (["mode-current", "mode-store-item-start", "series-eplist-item"], [], "blank"),
         (
+            ["mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"],
+            [],
+            "blank",
+        ),
+        (
+            ["mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"],
+            ["unknown rental marker"],
+            "unknown",
+        ),
+        (
+            ["mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"],
+            ["レンタル中 閲覧期限 2日+23時間"],
+            "read",
+        ),
+        (
+            ["extra", "mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"],
+            [],
+            "unknown",
+        ),
+        (
+            ["mode-current", "mode-read", "mode-store-item-start", "series-eplist-item"],
+            [],
+            "unknown",
+        ),
+        (
             ["mode-current", "mode-store-item-start", "series-eplist-item", "extra"],
             [],
             "unknown",
@@ -162,7 +187,11 @@ def test_hanayume_latest_series_target_reports_newer_foreign_work_collision() ->
             "unknown",
         ),
     ],
-    ids=("blank", "unrented-store-start", "extra-class", "store-start-rental"),
+    ids=(
+        "blank", "unrented-store-start", "read-history-only", "history-unknown-rental",
+        "active-blank-rental", "history-extra-class",
+        "unobserved-read-store-start", "extra-class", "store-start-rental",
+    ),
 )
 def test_hanayume_ticket_account_row_accepts_only_observed_unrented_blank_shapes(
     classes: list[str], rental_stats: list[str], expected: str,

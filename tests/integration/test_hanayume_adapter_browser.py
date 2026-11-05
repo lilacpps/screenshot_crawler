@@ -442,10 +442,12 @@ async def _initialized(page: Page, *, adapter: HanayumeAdapter | None = None) ->
 def _ticket_row(
     episode_id: str, *, account: bool, target: bool = False, duplicate_link: bool = False,
     other_current: bool = False, icons: bool = False, read: bool = False,
-    store_start: bool = False,
+    store_start: bool = False, history_only: bool = False,
 ) -> str:
     classes = "series-eplist-item"
-    if account and target and read:
+    if account and target and history_only:
+        classes = "mode-read mode-current mode-store-item-blank series-eplist-item"
+    elif account and target and read:
         classes = "mode-read mode-current mode-store-item-start series-eplist-item"
     elif target and store_start:
         classes = "mode-current mode-store-item-start series-eplist-item"
@@ -488,7 +490,7 @@ async def _install_work_ticket_site(
     if preview in {"absent", "other-current"}:
         public_ids = [other_id]
         account_ids = [other_id]
-    elif preview in {"present", "duplicate-link", "read", "start"}:
+    elif preview in {"present", "duplicate-link", "read", "start", "history"}:
         public_ids = [EPISODE_ID]
         account_ids = [EPISODE_ID]
     elif preview == "duplicate-row":
@@ -523,6 +525,7 @@ async def _install_work_ticket_site(
                 icons=episode_id == EPISODE_ID and preview != "read",
                 read=preview == "read" and episode_id == EPISODE_ID,
                 store_start=preview == "start" and episode_id == EPISODE_ID,
+                history_only=preview == "history" and episode_id == EPISODE_ID,
             ),
             1,
         )
@@ -594,7 +597,9 @@ async def _install_work_ticket_site(
                         "episodeId": access_episode_id,
                         "accessType": access_type,
                         "hasAccess": has_access,
-                        "timeRemainingInSeconds": (250000 if has_access else 0),
+                        "timeRemainingInSeconds": (
+                            250000 if has_access else None if preview == "history" else 0
+                        ),
                     },
                 }
             }
@@ -654,10 +659,11 @@ async def test_hanayume_ticket_entry_latches_exact_current_api_proof_before_post
 
 @pytest.mark.asyncio(loop_scope="module")
 @pytest.mark.parametrize("entry_only", [False, True], ids=("normal", "grant-only"))
+@pytest.mark.parametrize("preview", ["start", "history"])
 async def test_hanayume_ticket_entry_accepts_observed_unrented_store_start_row(
-    browser_page: Page, entry_only: bool,
+    browser_page: Page, entry_only: bool, preview: str,
 ) -> None:
-    state = await _install_work_ticket_site(browser_page, preview="start")
+    state = await _install_work_ticket_site(browser_page, preview=preview)
     adapter = await _ticket_adapter(browser_page, entry_only=entry_only)
 
     assert adapter.get_access_consumption().consumed is True
@@ -670,11 +676,12 @@ async def test_hanayume_ticket_entry_accepts_observed_unrented_store_start_row(
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("preview", ["start", "history"])
 async def test_hanayume_ticket_does_not_treat_store_start_row_as_granted_without_rental_proof(
-    browser_page: Page,
+    browser_page: Page, preview: str,
 ) -> None:
     await _install_work_ticket_site(
-        browser_page, preview="start", initial_has_access=True
+        browser_page, preview=preview, initial_has_access=True
     )
     adapter = HanayumeAdapter()
     await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
