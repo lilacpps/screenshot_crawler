@@ -34,6 +34,60 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Comic DAYS
 
+## Quota-to-free transition before free-feed inclusion (2026-11-06)
+
+Discovery accepts a currently coherent, non-rented free readable-product row
+even if the free-only Atom has not included it. `can_read=true`, `is_free=true`,
+no ownership/unavailability, no ticket rental or ticket eligibility, null
+purchase price/expiry, and the existing plain-free or zero-price integer
+72-hour ticket-support metadata checks all remain mandatory. An active rental
+alone never becomes unconditional free. Listing identity/count/order validation,
+paid/quota classification and malformed-state rejection are preserved.
+
+Read-only shared-CDP observation for golden-drop found 149 full entries and 26
+free-feed entries. Episodes `14079602755536172113` (#29) and
+`14079602755589037702` (#30) were outside that free feed, while current API state
+reported `can_read=true`, `is_free=true`, no ticket rental or eligibility,
+`is_support_ticket=true`, `rental_price=0`, `rental_term=72`, and null price/expiry.
+Both previously classified as unknown solely because the free feed omitted them.
+This proves a disagreement between current access state and feed membership,
+not the site's caching mechanism or when its feed will update.
+
+Full Discovery refreshes these Sources to free; existing Policy/Planner then
+selects pending Items as direct without requiring or consuming quota. Existing
+completed Items, timestamps and artifacts stay completed. Refresh existing rows
+with `discover --key golden-drop --mode full`; there is no new CLI/configuration.
+The ticket-null direct-entry branch retains its additional free-feed requirement;
+the verified target-local Ticket/DOM entry for this Work does not depend on it.
+
+Access metadata and isolated verification outputs are under
+`.tmp/comicdays-free-transition-20261106/`. Operational Catalog/Watchlist and
+archive files are not modified by the verification scripts. No image capture,
+packaging, ticket or purchase operation is part of this verification.
+
+Live verification seeded both target Sources as pending quota in an isolated
+Catalog and ran production Full Discovery: 149 observed, 147 new, 2 known,
+complete/exhausted with no warnings. Both retained their original Source/Item
+identities and became free/direct candidates with `consumes_quota=false` and
+no resource. Policy also accepted each as direct with zero quota availability.
+Separate shared-CDP Pages then ran production direct initialization for both
+episodes and reached CONTENT with `resource_consumed=false` and no ticket click.
+Dedicated Pages were closed; shared Chrome remained open. Actual Batch image
+capture/END traversal/packaging was not exercised for these two episodes.
+
+Validation extends existing classifier, Full-refresh/Batch and artificial
+browser preview/replay tests with delayed free-feed inclusion. Before the fix,
+the focused regression subset failed four cases and passed four; afterward the
+expanded targeted subset passed 30 cases. Final affected Comic DAYS Discovery,
+live-access, policy, Batch, native-capture Unit tests, shared Discovery tests,
+and all three artificial-browser Integration files passed **443 tests in 147.78
+seconds**, with zero skips. `ruff check src tests --no-cache` and
+`git diff --check` passed. A preliminary run used an overly long Windows
+temporary directory and could not persist one existing grant-entry trace; the
+same test passed in the final run under the shorter `.tmp/cdfree-final` root.
+Full pytest and Research were not run for this site-local classifier change;
+no shared Core/schema/Policy implementation, capture algorithm or PoC changed.
+
 ## Dummy/two-front prefix with a half-back-only tail (2026-11-05)
 
 Item/source `19316`, episode `10834108156628525038` (宇宙兄弟 #130), failed
@@ -408,7 +462,8 @@ observed latest-first order only after all invariants pass. Sources are mapped
 from first-party state to `free`, Work Ticket candidate `quota`, active Work
 Ticket grant `quota` with native `access_granted_until`, `paid`, or safe
 `unknown`. The Atom `updated` value is not copied to `published_at`.
-The free Atom membership is authoritative only with coherent free state:
+The current readable-product row establishes free access, including before
+free Atom inclusion, only with coherent, non-rented free state:
 `can_read=true`, `is_free=true`, no ownership/unavailability, no ticket
 rental, and no expiry. The live Work5 listing also emits two free rows with
 `is_support_ticket=true`, numeric zero `rental_price`, and integer

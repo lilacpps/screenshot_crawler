@@ -8,9 +8,10 @@ first-party state: `free`, a positively eligible Work Ticket candidate
 (`quota`), an active Work Ticket grant (`quota` plus the native
 `rental_end_at`), `paid`, or fail-closed `unknown`. All identities, counts,
 orders, and access rows are validated before the first record is yielded.
-The official free-feed membership is authoritative for a coherent free row:
+Current readable-product state identifies a coherent, non-rented free row even
+before its addition to the official free feed:
 `can_read=true`, `is_free=true`, no ticket rental, no ownership, no
-unavailability, and no expiry. Comic DAYS currently also emits two such free
+unavailability, and no expiry. Comic DAYS also emits such free
 rows with `is_support_ticket=true`, numeric `rental_price=0`, and integer
 `rental_term=72`; this metadata is supporting evidence and remains `free`,
 never `quota`. If the free feed retains an episode whose current access flags

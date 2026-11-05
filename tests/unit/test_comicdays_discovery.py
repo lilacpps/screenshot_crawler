@@ -116,11 +116,12 @@ def test_access_observation_excludes_unsupported_locked_ticket_contract(term: ob
     ) == ("unknown", None, False)
 
 
-def test_access_observation_accepts_free_feed_ticket_support_metadata_without_quota() -> None:
+@pytest.mark.parametrize("free_feed", [False, True])
+def test_access_observation_accepts_coherent_free_ticket_support_without_quota(free_feed) -> None:
     row = _row("6", free=True)
     row["status"].update(is_support_ticket=True, rental_price=0, rental_term=72)
     assert comicdays_access_observation(
-        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+        row, free=free_feed, now=datetime(2026, 10, 3, tzinfo=UTC)
     ) == ("free", None, True)
 
 
@@ -142,15 +143,18 @@ def test_access_observation_free_feed_with_unproven_price_is_unknown(price) -> N
     ) == ("unknown", None, False)
 
 
-@pytest.mark.parametrize("state", ["can_read", "is_free", "rental_metadata"])
-def test_access_observation_free_feed_conflict_never_grants_access(state) -> None:
+@pytest.mark.parametrize("free_feed,state", [
+    (True, "can_read"), (True, "is_free"), (True, "rental_metadata"),
+    (False, "can_read"), (False, "is_free"),
+])
+def test_access_observation_free_feed_conflict_never_grants_access(state, free_feed) -> None:
     row = _row("6", paid=True)
     if state in {"can_read", "is_free"}:
         row["purchase_info"][state] = True
     else:
         row["status"].update(rental_price=0, rental_term=72)
     assert comicdays_access_observation(
-        row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+        row, free=free_feed, now=datetime(2026, 10, 3, tzinfo=UTC)
     ) == ("unknown", None, False)
 
 
@@ -175,15 +179,18 @@ def test_access_observation_free_feed_does_not_override_native_ticket_state(acti
         lambda row: row["status"].update(rental_term=71),
         lambda row: row["status"].update(buy_price=80),
         lambda row: row["status"].update(is_support_ticket=False),
+        lambda row: row["purchase_info"].update(rentable_via_ticket=True),
+        lambda row: row["status"].update(rental_end_at="2099-01-01T00:00:00Z"),
     ],
 )
-def test_access_observation_rejects_malformed_free_ticket_support_metadata(mutate) -> None:
+@pytest.mark.parametrize("free_feed", [False, True])
+def test_access_observation_rejects_malformed_free_ticket_support_metadata(mutate, free_feed) -> None:
     row = _row("6", free=True)
     row["status"].update(is_support_ticket=True, rental_price=0, rental_term=72)
     mutate(row)
     with pytest.raises(DiscoveryIncompleteError):
         comicdays_access_observation(
-            row, free=True, now=datetime(2026, 10, 3, tzinfo=UTC)
+            row, free=free_feed, now=datetime(2026, 10, 3, tzinfo=UTC)
         )
 
 
@@ -872,8 +879,9 @@ async def test_discovery_rejects_late_access_contradiction_before_yield(monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expired_mode", ["paid", "unknown", "quota"])
+@pytest.mark.parametrize("restored_in_free_feed", [False, True])
 async def test_full_refresh_after_free_period_preserves_completed_and_updates_batch(
-    tmp_path, monkeypatch, comicdays_listing, expired_mode
+    tmp_path, monkeypatch, comicdays_listing, expired_mode, restored_in_free_feed
 ) -> None:
     _, target = comicdays_listing
     watchlist = WatchlistService(tmp_path / "watchlist.yaml")
@@ -931,11 +939,28 @@ async def test_full_refresh_after_free_period_preserves_completed_and_updates_ba
 
     # Returning to a coherent free state restores pending eligibility only.
     async def free_rows(*_args, **_kwargs):
-        return [_row("3", paid=True), _row("2", free=True), _row("1", free=True)]
+        pending_free = _row("2", free=True)
+        pending_free["status"].update(is_support_ticket=True, rental_price=0, rental_term=72)
+        return [_row("3", paid=True), pending_free, _row("1", free=True)]
+
+    if not restored_in_free_feed:
+        async def delayed_free_feed(_page, _series, *, free_only):
+            entries = [{"episode_id": str(i), "url": f"https://comic-days.com/episode/{i}", "title": f"第{i}話"}
+                       for i in (3, 2, 1)]
+            return entries[2:] if free_only else entries
+
+        monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", delayed_free_feed)
 
     monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", free_rows)
     assert (await service.discover(_FakePage(), target, "full")).complete is True
-    assert [candidate.source_id for candidate in planner.plan(site="comicdays").candidates] == [sources["2"].id]
+    restored = catalog.get_source(sources["2"].id)
+    assert restored.access_mode == "free"
+    candidates = planner.plan(site="comicdays").candidates
+    assert [candidate.source_id for candidate in candidates] == [sources["2"].id]
+    assert candidates[0].access_strategy == "direct"
+    assert ComicDaysSitePolicy().evaluate(
+        restored, now=datetime.now(UTC), quota_available=0,
+    ).consumes_quota is False
     assert catalog.get_item(completed.id).status == "completed"
     assert catalog.get_artifact(artifact.id) == artifact
 

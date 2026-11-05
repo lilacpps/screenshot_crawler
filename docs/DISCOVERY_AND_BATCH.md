@@ -1263,6 +1263,11 @@ readable-productチケット判定を適用する。閲覧不可・未レンタ�
 その他の無料／閲覧可否の不一致で分類を確定できない場合は`unknown`として継続する。
 必須flagの欠落・型不正、ownership/unavailable状態、無料flagが揃った行の不正metadata、
 一覧identity・件数・順序の不整合は引き続きincompleteとする。
+逆に無料Atomへの追加前でも、現在のAPIが`can_read=true`・`is_free=true`、
+未購入・未レンタル・チケット利用不要・利用不可ではない状態と、既存の無料metadata
+検証（購入価格・期限NULL、通常無料または価格0・整数72時間のticket対応metadata）を
+満たす場合は`free`へ更新する。Atomへの掲載を無料化反映の必須条件にはしない。
+有効なticket rentalだけを根拠に無期限の`free`へ変更しない。
 Full Discoveryは通常のexternal state更新を行い、取得済みItemのstatus・履歴・Artifactは維持する。
 
 カドコミの検証済み形式の公開WEB話一覧では、アクセス制限表示がなく配信期限もない行を、作品IDによらず `free + free_until=NULL` とする。将来の配信期限がある行は `free + free_until`、期限切れ（現在時刻と同時を含む）は `unknown` とする。有料・購入・ログイン・チケット等の制限表示、期限の不正形式、一覧構造や話の識別が不明な場合は従来どおりfail-closedとする。これはカドコミDiscoveryの分類規則であり、一般の `unknown` SourceをBatchで無料扱いする規則ではない。既存の過去話へ反映する際は `full` Discoveryを使う。

@@ -37,6 +37,7 @@ class _BrowserPage:
 
 @pytest.mark.parametrize("incomplete,expired_mode", [
     (False, None), (True, None), (False, "paid"), (False, "unknown"), (False, "quota"),
+    (False, "restored_free"),
 ])
 async def test_comicdays_preview_validates_dom_feeds_and_replays_without_http(browser_page, incomplete, expired_mode):
     requests = []
@@ -56,12 +57,19 @@ async def test_comicdays_preview_validates_dom_feeds_and_replays_without_http(br
             body = '<html data-giga_series="42"><h1 class="series-header-title">Synthetic work</h1></html>'
         elif path == "/atom/series/42":
             content_type, body = "application/atom+xml; charset=utf-8", feed
+            if expired_mode == "restored_free" and "free_only=1" in route.request.url:
+                body = body.replace(
+                    '<entry><id>tag:fixture:episode:1</id><title>第1話</title>'
+                    '<link href="https://comic-days.com/episode/1"/></entry>', "",
+                )
         elif path == "/api/viewer/readable_product_pagination_information":
             content_type, body = "application/json", json.dumps({"total_count": 4})
         elif path == "/api/viewer/pagination_readable_products":
             content_type = "application/json"
             access_rows = [_row(i, free=True) for i in (ids[:-1] if incomplete else ids)]
-            if expired_mode and not incomplete:
+            if expired_mode == "restored_free" and not incomplete:
+                access_rows[-1]["status"].update(is_support_ticket=True, rental_price=0, rental_term=72)
+            elif expired_mode and not incomplete:
                 access_rows[-1] = _row("1", paid=expired_mode != "quota", ticket=expired_mode == "quota")
                 if expired_mode == "unknown":
                     access_rows[-1]["status"]["buy_price"] = None
@@ -87,12 +95,13 @@ async def test_comicdays_preview_validates_dom_feeds_and_replays_without_http(br
     assert [row.external_id for row in preview.rows] == ids
     assert [row.site_position for row in preview.rows] == [4, 3, 2, 1]
     assert preview.listing_identity == "comicdays-series:42"
-    assert preview.rows[-1].access_observation == (expired_mode or "free")
+    expected_mode = "free" if expired_mode == "restored_free" else expired_mode or "free"
+    assert preview.rows[-1].access_observation == expected_mode
     assert adapter.complete_listing_inventory is None
     await adapter.prepare_exclusion_preview(page, target)
     before = list(requests)
     rows = [record async for record in adapter.iter_records(page, target, "full")]
     assert requests == before
     assert [record.source.external_id for record in rows] == ["4", "1"]
-    assert [record.source.access_mode for record in rows] == ["free", expired_mode or "free"]
+    assert [record.source.access_mode for record in rows] == ["free", expected_mode]
     assert [position.in_scope for position in adapter.complete_listing_inventory.positions] == [True, False, False, True]

@@ -241,7 +241,11 @@ def comicdays_access_observation(
         raise DiscoveryIncompleteError("Comic DAYS listing row had a malformed access flag")
     # A stale free-feed entry must not hide an explicit non-free ticket state.
     # Let the existing native ticket/grant checks below validate that state.
-    if free and not (is_free is False and is_support_ticket is True):
+    # The free Atom can lag a newly free readable-product row. Accept the
+    # same strictly validated, non-rented free shape even before feed inclusion;
+    # active ticket rentals must still use their own grant classification.
+    current_free = can_read is True and is_free is True and has_rented is False
+    if (free or current_free) and not (is_free is False and is_support_ticket is True):
         if can_read is False or is_free is False:
             # The free Atom feed can retain entries after public access ends.
             # Only the observed, fully locked paid shape overrides membership;
