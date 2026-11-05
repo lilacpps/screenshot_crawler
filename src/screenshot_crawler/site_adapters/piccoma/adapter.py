@@ -38,7 +38,7 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
     OVERSCAN_DISPLAY_SIZE,
     OVERSCAN_NATIVE_SIZE,
     SCALED_DISPLAY_PROFILES,
-    SCALED_NATIVE_ONLY_SIZE,
+    SCALED_NATIVE_ONLY_SIZES,
     SCALED_NATIVE_SIZES,
     NativeCaptureUnavailable,
     capture_native_tile_replay,
@@ -978,7 +978,7 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma fallback target is not the expected body page")
         row = self._page_row(snapshot, self._expected_page_id)
         canvas = row.get("canvas")
-        if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == SCALED_NATIVE_ONLY_SIZE:
+        if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) in SCALED_NATIVE_ONLY_SIZES:
             self._validate_canvas_geometry(snapshot, row)
             raise UnknownPageStateError("Piccoma scaled page requires verified native capture")
         if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == OVERSCAN_NATIVE_SIZE:
@@ -1015,7 +1015,7 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         expected_size = self._validate_canvas_geometry(before, row)
         overscan = self._overscan_geometry_is_valid(before, row)
-        native_only_scaled = expected_size == SCALED_NATIVE_ONLY_SIZE
+        native_only_scaled = expected_size in SCALED_NATIVE_ONLY_SIZES
         requires_native = overscan or native_only_scaled or is_additional_ordinary_size(*expected_size)
         native_profile = "overscan" if overscan else "scaled" if native_only_scaled else "ordinary-width"
         if (

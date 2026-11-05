@@ -1,3 +1,113 @@
+## 1128x1600 scaled canvas support (2026-11-05)
+
+Item/Source 41123 (`3312:158685`, Re:片桐愛梨 (2)) failed before p1 with
+zero saved pages. Metrics `c223b05590f841548a55f57979723f5f` and retained
+wait-time samples show backing 1128x1600, display 845.2916870117188x1199,
+frame [529.5, 0, 845, 1200], top offset +0.5, supported 1904x1200 viewport
+and DPR 1.0000000298023224. There were no HTTP 403/429/challenge events.
+The existing 1125x1600 profile has a different backing and 843px frame;
+the reported error was the missing 1128x1600 profile, not a viewport change.
+
+Current capture enumerates 1128x1600 with exactly 23x32 tiles / 736 draws
+plus the existing three setup events (739 total). Its measured display,
+845x1200 frame, +0.5 top offset and discrete left offsets 0/-1/3 must match
+within 0.01 CSS px. Full fractional source/destination grids, baseline JPEG,
+unique response/source/load generation, four-node scaled paint roles/styles,
+raw geometry continuity and exact RGBA lossless round-trip remain required.
+Neighboring sizes are unsupported. Native proof is mandatory, including
+when Core requests fallback after capture unavailability or timeout. Extra
+paint, missing/ambiguous source or exhausted budget fails before a display
+screenshot. Native WebP encoding failure keeps the same verified pixels as PNG.
+Existing profiles and all event/JSON/source/time/episode budgets are unchanged.
+
+Shared-CDP probing verified all 17 pages' complete tile/source/paint proof,
+both measured left offsets and explicit END. Source bytes total 16,647,291.
+p1/p9/p17 native captures succeeded. The normal production CLI then saved
+all 17 pages through END and standard ZIP packaging in isolated output.
+ZIP CRC, exact member order, 17 unique hashes, lossless VP8L and native
+1128x1600 dimensions passed; p1/p9/p17 bytes equal the diagnostic outputs.
+Scripts/evidence are ignored under `work/piccoma/41123-geometry-20261105/`.
+This verification covers the reported episode; other unobserved layouts
+still stop. No normal Catalog, Watchlist or library write was performed.
+
+There is no new CLI/config, access, pacing, Core, Batch or schema behavior;
+use the usual Piccoma Batch command. This site-local change updates only
+native capture, its existing Unit/browser cases, README and this note;
+`note/00_core.md` needs no update.
+
+Validation: all 1204 native-capture Unit cases passed. The affected browser
+selection covered 95 cases: 78 existing-profile transition/capture/fallback
+cases passed, and all 17 new-profile cases passed on targeted rerun after a
+fixture correction. Initial new-profile failures were a synthetic CSS layout
+artifact: requesting 845.2916870117188px in headless Chromium yields
+845.28125px, outside the existing 0.01px band. The fixture now requests the
+nearest representable width inside that band (845.296875px); production
+geometry tolerance is unchanged. New cases include independent RGBA equality,
+left-offset/paint/generation changes, missing/ambiguous source, extra paint,
+budget exhaustion, native PNG encoding fallback, delayed/permanent off-frame
+transition, and unavailable/timeout Core fallback refusal. There were 0 skips.
+`ruff check src tests` and scoped `git diff --check` passed. Full repository
+pytest, unrelated adapter entry/Discovery browser cases and standalone Research
+suites were not rerun for this bounded native-profile addition; live probing
+and normal production CLI verification are recorded above.
+
+## 1884x2819 scaled canvas / JPEG path support (2026-11-05)
+
+Item/Source 40846 (`1902:93391`, KARTE.277) failed before p1 with zero
+saved pages. Metrics `c843b32aa4ba4e4eaeeedc0d8f56fb25` and the retained
+wait samples show a stable 1884x2819 backing, display 801.3125x1199,
+frame [551.5, 0, 801, 1200], top offset +0.5 and left offset -1/3.
+The viewport was the supported 1904x1200 / DPR 1.0000000298023224;
+HTTP 403/429/challenge counts were zero. The missing scaled profile caused
+the reported viewport error. Live probing also found 2169 trace events,
+above the former 1192 limit, and first-party source paths ending in `.jpeg`,
+which the former `.jpg`-only path gate rejected.
+
+Current capture explicitly supports this backing with a 38x57 grid
+(2166 draws plus context creation and two dimension resets). Display/frame,
+top offset and existing discrete left offsets 0/-1/3 must match within
+0.01 CSS px. Full source/destination coverage, fractional draw arguments,
+source/load/response identity, baseline JPEG validation, four-node scaled
+paint roles/styles and raw geometry/generation continuity remain mandatory.
+The bounded target-event limit is 2169 in both Python and JavaScript;
+32768 total events, 16 retained canvases, JSON/node/source/replay budgets
+and the 128 MB scaled-episode byte budget are unchanged. JPEG paths admit
+only `.jpg` or `.jpeg` under the existing exact HTTPS host/path contract;
+extension alone never proves the source. Adjacent backing sizes are unsupported.
+
+Like 1441x2048, this profile requires verified native capture. Missing proof,
+extra paint, budget exhaustion or Core timeout fallback stops before a
+display screenshot. Output preserves the full 1884x2819 RGBA pixels in
+lossless WebP (verified native PNG on encoder failure). No capture resize,
+access, pacing, CLI, config, Core, Batch or schema change is included.
+Run the usual Piccoma Batch command; no new CLI option or configuration is needed.
+Normal Catalog/Watchlist/library state was not changed during verification.
+`note/00_core.md` needs no update because this is entirely site-local.
+
+Shared-CDP live probing verified all 22 pages' trace, source JPEG and paint
+proof, both measured left offsets and explicit END. Total source bytes were
+67,515,989, within the existing scaled budget. Diagnostic captures of
+p1/p11/p22 succeeded. The production CLI without diagnostic patches then saved all 22 pages
+through END and normal ZIP packaging in an isolated library. ZIP CRC, exact
+member order, 22 unique hashes, lossless VP8L and all dimensions passed;
+p1/p11/p22 bytes equal the diagnostic captures. Evidence/scripts are ignored
+under `work/piccoma/40846-geometry-20261105/`. This verifies the reported
+episode, not every future display variant or neighboring episode.
+
+Validation: 1167 Piccoma native-capture/Discovery/Policy Unit tests and all
+204 Piccoma adapter/Discovery/listing-preview browser Integration tests passed,
+0 skipped. The new-profile subset also passed 15 cases, including independent
+RGBA equality, `.jpeg` source capture, encoder PNG fallback, unknown geometry,
+paint/generation changes, missing/ambiguous source, budget exhaustion and Core
+timeout fallback refusal. The comparison-only viewport now fits the full
+1884px canvas plus its margin so fixed fixture controls cannot overlap it.
+The earlier 1441px extra-paint case still fails closed by exact operation count
+instead of the former target overflow. Initial default pytest temp-directory
+permission errors were resolved using isolated workspace `--basetemp` paths.
+`ruff check src tests` and scoped `git diff --check` passed. Full repository
+pytest and standalone Research suites were not run for this site-local change;
+the bounded live probe and normal production CLI verification are recorded above.
+
 ## Watchlist URL registration hook (Stage 06A/B, 2026-11-03)
 
 Viewer-shaped entry; product identity. Registration never navigates the viewer.
@@ -215,16 +325,17 @@ show a stable 1441x2048 backing, display 844.3333740234375x1200, frame
 the two earlier scaled profiles. Its complete 1192-event trace also exceeds
 the former 1152-event per-target limit.
 
-Current scaled capture enumerates a third exact backing/grid pair:
+Scaled capture includes the exact backing/grid pair:
 1441x2048, 29x41 (1189 draws plus context creation and two backing resets).
 It requires display 844+1/3 by 1200 within 0.01 CSS px, frame 844x1200, top
 offset 0 and the existing discrete left offsets 0 or -1/3. The 1125x1600 and
 1350x1920 profiles retain their previous 843.046875x1199 presentation,
 843x1200 frame and +0.5 top offset. Neighboring backing sizes and other
-presentation variants remain unsupported. Per-target trace capacity is now
-1192 in Python and JavaScript; the global/retained/transport/traversal/source
-and timeout budgets are unchanged. Overflow still discards heavy proof and
-fails closed, including a single extra paint operation on the new profile.
+presentation variants remain unsupported. This profile introduced a 1192-event
+target budget; current capacity is 2169 for the separately verified 1884x2819
+profile above. Global/retained/transport/traversal/source and timeout budgets
+are unchanged. Overflow still discards heavy proof and fails closed. A single
+extra paint operation fails the exact operation-count proof on this profile.
 
 The new profile requires the existing four-node scaled paint roles/styles
 with 844px ancestors. Its observed roughly 1/3 CSS-pixel right overhang is
@@ -799,7 +910,8 @@ and baseline JPEG validators in a bounded diagnostic. Total source bytes were
 path validates for every page. The diagnostic reached explicit END.
 
 Current native replay enumerates 1125x1600 (23x32 grid), 1350x1920
-(27x39 grid), and 1441x2048 (29x41 grid, described above). The first two
+(27x39 grid), 1128x1600 (23x32), 1441x2048 (29x41), and 1884x2819
+(38x57), with the additional display profiles described above. The first two
 use the same observed
 843.046875x1199 display profile within the existing 0.01 tolerance, left
 offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
@@ -1059,8 +1171,8 @@ the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
 unique first-party baseline JPEG response, exact context/draw arguments and
 complete unique source/destination grids remain mandatory. Current scaled
 native support enumerates this 1350x1920 grid and the separately verified
-1125x1600 and 1441x2048 grids described above; nearby/unknown sizes are not inferred.
-Per-target trace capacity is 1192 events; the bounded simultaneous event total
+1125x1600, 1128x1600, 1441x2048 and 1884x2819 grids described above; nearby/unknown sizes are not inferred.
+Per-target trace capacity is 2169 events; the bounded simultaneous event total
 is 32768 and retired traces release their capacity. Retained canvases (16), active
 traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte
 per-source budget and replay-time limits remain unchanged. Current episode
@@ -1255,7 +1367,7 @@ Before navigation, the owned Page viewport is set to 1904x1200, the observed sup
 
 Phase 07 Stage B serializes the same full trace at all six existing fresh snapshot checkpoints and restores it as a dict for the existing validators/signatures. Browser-side preflight rejects unsupported values before JSON can omit/coerce them; Python rejects malformed JSON, duplicate keys, invalid root schema/types, negative zero, and payloads beyond the fail-closed 8 MiB / 131,072-node budget. Intentional nulls survive. A transport/schema error means target continuity is unknown and becomes `UnknownPageStateError`, including at the internal post-replay/post-encode, Adapter outer, and final-current checkpoints. It cannot trigger a Core fallback without proof. Call timing/count, encode-after freshness, source/provenance gates, output pixels/codec, and DPR checks remain unchanged. Independent Stage B review passed. Stage C's four-run manual comparison, 24-page Batch END/ZIP/Catalog checks, and fresh per-page manifest audit passed; the final Stage C Reviewer review passed with BLOCKING 0. Evidence and exact scope are linked in the Phase 07 research reports.
 
-Live canvas `getImageData` raised `SecurityError`, so direct canvas readback remains unavailable. The 1:1 native horizontal rendering profiles use backing widths 764, 842, or 844 and height 1200 (the separate 1125x1600, 1350x1920 and 1441x2048 scaled RGBA profiles are described above), and require one loaded HTML image bound to one unique exact first-party JPEG response and stable load generation. Width 764 uses the observed 16-column / 24-row grid with 384 draws; widths 842/844 retain the 17-column / 24-row grid with 408 draws. Each accepted trace requires exactly three setup events plus that grid's draw count, complete unique source and destination grids, and the unchanged source/context/generation checks. Replay output must report the validated trace's exact draw count. Other stable canvas sizes can reach the Core PNG fallback but are not native-replay supported. The adapter records complete draw arguments and supported 2D context state without changing the page renderer. It replays the exact fractional source/destination rectangles and state into a detached canvas using the browser's normal image decoder, then composites the transparent replay over a separately validated solid-white paint ancestor. The 1200px-high profiles encode these verified RGB pixels as lossless WebP; the enumerated scaled profiles preserve RGBA in lossless WebP without white compositing. Acceptance requires one simple VP8L chunk, the expected decoded dimensions, and exact equality of every RGB byte. It does not save tiled JPEG bytes as a page or change canvas security/backing settings. If WebP encoding or proof fails, the already verified native result remains PNG with a sanitized encoding-fallback reason. If native attribution/replay proof is unavailable before materialization, Core canvas/Locator capture remains PNG and requires an unchanged target generation.
+Live canvas `getImageData` raised `SecurityError`, so direct canvas readback remains unavailable. The 1:1 native horizontal rendering profiles use backing widths 764, 842, or 844 and height 1200 (the separate 1125x1600, 1128x1600, 1350x1920, 1441x2048 and 1884x2819 scaled RGBA profiles are described above), and require one loaded HTML image bound to one unique exact first-party JPEG response and stable load generation. Width 764 uses the observed 16-column / 24-row grid with 384 draws; widths 842/844 retain the 17-column / 24-row grid with 408 draws. Each accepted trace requires exactly three setup events plus that grid's draw count, complete unique source and destination grids, and the unchanged source/context/generation checks. Replay output must report the validated trace's exact draw count. Other stable canvas sizes can reach the Core PNG fallback but are not native-replay supported. The adapter records complete draw arguments and supported 2D context state without changing the page renderer. It replays the exact fractional source/destination rectangles and state into a detached canvas using the browser's normal image decoder, then composites the transparent replay over a separately validated solid-white paint ancestor. The 1200px-high profiles encode these verified RGB pixels as lossless WebP; the enumerated scaled profiles preserve RGBA in lossless WebP without white compositing. Acceptance requires one simple VP8L chunk, the expected decoded dimensions, and exact equality of every RGB byte. It does not save tiled JPEG bytes as a page or change canvas security/backing settings. If WebP encoding or proof fails, the already verified native result remains PNG with a sanitized encoding-fallback reason. If native attribution/replay proof is unavailable before materialization, Core canvas/Locator capture remains PNG and requires an unchanged target generation.
 
 ### 764px native support and remaining PNG fallback limit (2026-10-10)
 

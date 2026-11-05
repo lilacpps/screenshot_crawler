@@ -22,10 +22,43 @@ Phases 03 and 04 passed independent review with BLOCKING 0. Phase 05 independent
 
 The Phase 06-B/Tester PNG checkpoints are historical. Phase 06-D code review and independent live Tester verification passed with BLOCKING 0. The standard Batch-to-ZIP route produced 24 and 15 lossless WebP pages for the two selected products, with exact VP8L validation and no fallback. See the current live evidence and limits below and [runbook progress](../../../../runbooks/piccoma-free/PROGRESS.md).
 
-The scaled native profiles explicitly support 1125x1600 (736 draws),
-1350x1920 (1053 draws), and 1441x2048 (1189 draws), preserving full RGBA pixels in lossless WebP at the
+The scaled native profiles explicitly support 1125x1600 / 1128x1600 (736 draws each),
+1350x1920 (1053 draws), 1441x2048 (1189 draws), and 1884x2819 (2166 draws), preserving full RGBA pixels in lossless WebP at the
 backing dimensions. They require the observed scaled display/frame/paint path
 and unchanged source, generation, output and geometry proof described below.
+
+The 1884x2819 profile was verified on `1902:93391` (Item/Source 40846),
+which previously failed before p1 with the supported-viewport error. Its
+display is 801.3125x1199, frame 801x1200, top offset +0.5 and the existing
+left offsets 0/-1/3 at 1904x1200 / near-1 DPR. Complete 38x57 tile proof,
+scaled paint, JPEG response and target continuity are mandatory. The target
+trace limit is 2169 events; total/transport/source budgets are unchanged.
+Source paths now allow the observed `.jpeg` as well as `.jpg`, retaining all
+host, path, response, MIME, body and source-object checks. Both this profile
+and 1441x2048, as well as 1128x1600 below, require native proof, including when Core requests timeout
+fallback. They never save a display screenshot without proof.
+The normal production CLI saved all 22 pages through explicit END and ZIP;
+CRC, member order, lossless encoding, native dimensions and selected probe
+byte equality passed in isolated output without Catalog writes. Details and
+remaining limits are in [the current note](../../../../note/09_piccoma.md#1884x2819-scaled-canvas--jpeg-path-support-2026-11-05).
+Validation passed 1167 related Unit and 204 Piccoma browser Integration tests
+with 0 skipped, plus `ruff check src tests`. Full repository/standalone Research
+suites were not required for this site-local change; live verification is above.
+
+The 1128x1600 profile was verified on `3312:158685` (Item/Source 41123),
+which failed before p1 with the same supported-viewport error. It requires
+the measured 845.2916870117188x1199 display, 845x1200 frame, +0.5 top offset
+and discrete left offsets 0/-1/3 within 0.01 CSS px. It has the same complete
+23x32 / 739-event tile protocol as 1125x1600 but a separate display/paint
+profile. Source, paint, generation and lossless RGBA proof remain mandatory;
+there is no unproven screenshot fallback, neighboring-size inference or
+budget increase. The normal CLI saved all 17 pages at native dimensions
+through END and ZIP; CRC, member order, lossless format and selected-probe
+byte equality passed. See [the current note](../../../../note/09_piccoma.md#1128x1600-scaled-canvas-support-2026-11-05).
+Validation passed 1204 native-capture Unit cases, 78 existing-profile browser
+cases and all 17 new-profile browser cases after fixing CSS rounding in the
+synthetic fixture. There were 0 skips; Ruff passed. Other entry/Discovery,
+standalone Research and full-repository suites were not rerun for this addition.
 
 ## Runtime pacing
 
@@ -48,16 +81,17 @@ show a stable 1441x2048 backing, display 844.3333740234375x1200, frame
 the two earlier scaled profiles. Its complete 1192-event trace also exceeds
 the former 1152-event per-target limit.
 
-Current scaled capture enumerates a third exact backing/grid pair:
+Scaled capture includes the exact backing/grid pair:
 1441x2048, 29x41 (1189 draws plus context creation and two backing resets).
 It requires display 844+1/3 by 1200 within 0.01 CSS px, frame 844x1200, top
 offset 0 and the existing discrete left offsets 0 or -1/3. The 1125x1600 and
 1350x1920 profiles retain their previous 843.046875x1199 presentation,
 843x1200 frame and +0.5 top offset. Neighboring backing sizes and other
-presentation variants remain unsupported. Per-target trace capacity is now
-1192 in Python and JavaScript; the global/retained/transport/traversal/source
-and timeout budgets are unchanged. Overflow still discards heavy proof and
-fails closed, including a single extra paint operation on the new profile.
+presentation variants remain unsupported. This profile introduced a 1192-event
+target budget; current capacity is 2169 for the separately verified 1884x2819
+profile above. Global/retained/transport/traversal/source and timeout budgets
+are unchanged. Overflow still discards heavy proof and fails closed. A single
+extra paint operation fails the exact operation-count proof on this profile.
 
 The new profile requires the existing four-node scaled paint roles/styles
 with 844px ancestors. Its observed roughly 1/3 CSS-pixel right overhang is
@@ -583,7 +617,8 @@ and baseline JPEG validators in a bounded diagnostic. Total source bytes were
 path validates for every page. The diagnostic reached explicit END.
 
 Current native replay enumerates 1125x1600 (23x32 grid), 1350x1920
-(27x39 grid), and 1441x2048 (29x41 grid, described above). The first two
+(27x39 grid), 1128x1600 (23x32), 1441x2048 (29x41), and 1884x2819
+(38x57), with the additional display profiles described above. The first two
 use the same observed
 843.046875x1199 display profile within the existing 0.01 tolerance, left
 offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
@@ -843,8 +878,8 @@ the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
 unique first-party baseline JPEG response, exact context/draw arguments and
 complete unique source/destination grids remain mandatory. Current scaled
 native support enumerates this 1350x1920 grid and the separately verified
-1125x1600 and 1441x2048 grids described above; nearby/unknown sizes are not inferred.
-Per-target trace capacity is 1192 events; the bounded simultaneous event total
+1125x1600, 1128x1600, 1441x2048 and 1884x2819 grids described above; nearby/unknown sizes are not inferred.
+Per-target trace capacity is 2169 events; the bounded simultaneous event total
 is 32768 and retired traces release their capacity. Retained canvases (16), active
 traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte
 per-source budget and replay-time limits remain unchanged. Current episode

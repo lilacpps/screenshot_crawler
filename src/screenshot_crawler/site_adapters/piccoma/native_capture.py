@@ -18,26 +18,28 @@ from playwright.async_api import Page, Response
 
 from screenshot_crawler.core.capture import CaptureResult
 
-# 1441x2048 uses exactly three setup events plus a 29x41 draw grid.
-MAX_TARGET_EVENTS = 1192
+# 1884x2819 uses exactly three setup events plus a 38x57 draw grid.
+MAX_TARGET_EVENTS = 2169
 MAX_RETAINED_CANVASES = 16
 # Bound simultaneously retained events, including prefetch; retired pages release
 # their budget. A lifetime counter would disable native capture on long episodes.
 MAX_TRACE_EVENTS = 32_768
 MAX_SOURCE_BYTES = 8_000_000
 # Keep the existing transport/traversal ceilings independent of the larger
-# observed 1192-event trace. Neither ceiling truncates a snapshot.
+# observed 2169-event trace. Neither ceiling truncates a snapshot.
 MAX_NATIVE_SNAPSHOT_BYTES = 8 * 1024 * 1024
 MAX_NATIVE_SNAPSHOT_NODES = 131_072
 MAX_REPLAY_MS = 10_000
 RESPONSE_WAIT_SECONDS = 1.5
 _SOURCE_HOST = "pcm.kakaocdn.net"
-_SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
+_SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpe?g$")
 # Exact live-observed profiles retain their existing geometry/paint contracts.
 _OBSERVED_TILE_GRIDS = {(763, 1200): (16, 24), (764, 1200): (16, 24),
                         (773, 1200): (16, 24), (777, 1200): (16, 24), (842, 1200): (17, 24),
                         (844, 1200): (17, 24), (1350, 1920): (27, 39),
-                        (1125, 1600): (23, 32), (1441, 2048): (29, 41)}
+                        (1125, 1600): (23, 32), (1128, 1600): (23, 32),
+                        (1441, 2048): (29, 41),
+                        (1884, 2819): (38, 57)}
 # Ordinary 1200px pages use the same observed 50px tile protocol across this
 # live-measured width envelope. Size only selects the candidate grid; complete
 # trace/source/paint/generation proof still determines capture eligibility.
@@ -51,11 +53,13 @@ class ScaledDisplayProfile:
     top_offset: float
 
 
-SCALED_NATIVE_ONLY_SIZE = (1441, 2048)
+SCALED_NATIVE_ONLY_SIZES = frozenset({(1128, 1600), (1441, 2048), (1884, 2819)})
 SCALED_DISPLAY_PROFILES = {
     (1350, 1920): ScaledDisplayProfile((843.046875, 1199), 843, 0.5),
     (1125, 1600): ScaledDisplayProfile((843.046875, 1199), 843, 0.5),
-    SCALED_NATIVE_ONLY_SIZE: ScaledDisplayProfile((844 + 1 / 3, 1200), 844, 0),
+    (1128, 1600): ScaledDisplayProfile((845.2916870117188, 1199), 845, 0.5),
+    (1441, 2048): ScaledDisplayProfile((844 + 1 / 3, 1200), 844, 0),
+    (1884, 2819): ScaledDisplayProfile((801.3125, 1199), 801, 0.5),
 }
 SCALED_NATIVE_SIZES = frozenset(SCALED_DISPLAY_PROFILES)
 OVERSCAN_NATIVE_SIZE = (763, 1200)
