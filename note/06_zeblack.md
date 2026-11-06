@@ -1,3 +1,43 @@
+## Transient chapter-list navigation failure (2026-11-06; user reports recovery)
+
+Current status: after the bounded check below, the user reported that direct
+navigation had recovered and the issue appeared temporary. Recovery was not
+independently re-probed, to avoid additional site load. Production retains its
+existing direct-navigation behavior; this observation does not establish a
+permanent requirement to enter through the work page or justify a code change.
+
+A bounded metadata-only check in a new shared Crawler Chrome/CDP Page reproduced
+the reported difference for title `4558` (`【推しの子】`):
+
+- Direct navigation to `/title/4558/chapter/list` returned HTTP 200 HTML, but
+  after five seconds the body was empty, there were zero chapter rows, and the
+  document title remained `ゼブラック｜総合電子書店`. No title-chapter-list API
+  response was observed during this phase, including the additional eight-second
+  pause before navigating away.
+- Navigation to `/title/4558/` displayed the work page and five chapter rows.
+  Its unique visible `/title/4558/chapter/list` link was labelled
+  `すべての話を表示`.
+- Clicking that native link displayed `【推しの子】の全話リスト`, with 166
+  chapter rows. The observed `/api/v3/title_chapter_list` response was HTTP 200,
+  `application/protobuf`; no new main-document response was observed for this
+  transition. This supports client-side navigation as the working path.
+
+The current production `discovery.py::_load_complete_listing` and
+`live_access.py::observe_zeblack_chapter_list` still use direct `page.goto()` to
+the list URL and could fail while the observed condition persisted. Merely
+converting a registration URL to the canonical list URL does not fix navigation.
+No production navigation, URL contract, CLI, access handling or tests were changed.
+The precise frontend cause, whether a preceding work-page load followed by
+`goto(list)` also works, and behavior on other titles remain unverified; this
+single-title observation does not establish a general referrer/session rule.
+
+Evidence: `output/zeblack_navigation_check_20261106/report.json` (local metadata
+artifact, not a fixture). The check used two explicit document navigations and
+one native list-link click, with pauses and no retries, viewer entry, ticket or
+purchase operation, or Catalog/Watchlist write. The dedicated Page was closed
+and the existing Chrome was left running. Unit/Integration/Research/full-suite
+tests were not run because this was observation only; live navigation was checked.
+
 ## Watchlist URL registration hook (Stage 06 follow-up, 2026-11-03)
 
 Numeric `/title/<id>` now converts purely to `/title/<id>/chapter/list`.
