@@ -1868,3 +1868,9 @@ targets:
     url: https://piccoma.com/web/viewer/3312/158600
     enabled: true
     label: 僕だけがいない街
+  - key: kaioki-magapoke
+    work_key: kaioki
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00610/episode/227523
+    enabled: true
+    label: 海皇紀
