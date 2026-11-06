@@ -85,3 +85,8 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 
 - [ヤンマガWeb 通常無料のみ Site Adapter](yanmaga-free/README.md) —
   初回無料・黄色の無料/チケット・ポイントを対象外にした、Discovery → direct Batch → Viewer → ZIP/E2E の実装契約（planned）。
+
+- [ebookjapan 購入済み限定 Site Adapter](ebookjapan-owned/README.md) —
+  作品URLから購入済みの巻のみFull Discovery、owned-only direct Batch、
+  原画像A/B/Cの実測・不成立理由を必須とするsource-native Capture研究、
+  2作品のE2Eと後工程の明示renumber（planned）。
