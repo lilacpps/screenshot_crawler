@@ -28,6 +28,8 @@ from screenshot_crawler.discovery.models import (
     DiscoveredSource,
     DiscoveryResult,
 )
+from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.watchlist.models import WatchlistTarget
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 
@@ -888,6 +890,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "bookwalker",
         "comicdays",
         "comicfuz",
+        "ebookjapan",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -2915,6 +2918,18 @@ class FakeDiscoveryService:
         )
 
 
+class FakeDiscoveryAdapter:
+    supports_incremental_discovery = True
+    supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+
+
+class FakeDiscoveryAdapterRegistry:
+    def create(self, _site: str) -> FakeDiscoveryAdapter:
+        return FakeDiscoveryAdapter()
+
+
 def _write_discover_watchlist(path: Path, targets: str) -> None:
     lines: list[str] = []
     for line in targets.splitlines():
@@ -2987,7 +3002,7 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     )
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
     monkeypatch.setattr(
         cli,
         "resolve_cdp_endpoint",
@@ -3044,7 +3059,7 @@ async def test_discover_site_uses_enabled_matching_targets_in_file_order(
     FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
     monkeypatch.setattr(
         cli,
         "resolve_cdp_endpoint",
@@ -3088,7 +3103,7 @@ async def test_discover_site_continues_after_failure_and_exits_as_failure(
     FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
 
     args = _parser().parse_args(
         ["discover", "--site", "mangaone", "--mode", "incremental", "--watchlist", str(watchlist)]
@@ -3153,7 +3168,7 @@ async def test_discover_all_continues_after_failure_and_exits_as_failure(
     FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
 
     args = _parser().parse_args(
         ["discover", "--all", "--mode", "incremental", "--watchlist", str(watchlist)]
@@ -3202,7 +3217,7 @@ async def test_discover_all_treats_incomplete_result_as_failure_and_continues(
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(FakeDiscoveryService, "incomplete_error", error_detail)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
 
     args = _parser().parse_args(
         ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist),
@@ -3283,7 +3298,7 @@ async def test_discover_key_still_runs_one_target(
     FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
 
     args = _parser().parse_args(
         ["discover", "--key", "A", "--mode", "incremental", "--watchlist", str(watchlist)]
@@ -3308,7 +3323,7 @@ async def test_discover_key_keep_open_waits_before_closing_session(
     FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
-    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
     monkeypatch.setattr(
         builtins,
         "input",
@@ -3399,3 +3414,87 @@ async def test_login_always_uses_and_closes_a_new_page(
     assert adapter.page is session.page
     assert session.closed_pages == [session.page]
     assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_incremental_capability_rejects_before_cdp_or_catalog_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
+
+    class FullOnlyAdapter:
+        supports_incremental_discovery = False
+
+    registry = DiscoveryAdapterRegistry()
+    registry.register("ebookjapan", FullOnlyAdapter)
+    target = WatchlistTarget(
+        key="example_ebookjapan",
+        work_key="example",
+        site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/134336/",
+        label="Example",
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    monkeypatch.setattr(
+        cli,
+        "resolve_cdp_endpoint",
+        lambda **_kwargs: pytest.fail("CDP endpoint was resolved for rejected incremental"),
+    )
+
+    with pytest.raises(DiscoveryIncompleteError, match="does not support incremental discovery"):
+        await cli._discover_target(
+            target=target,
+            mode="incremental",
+            catalog=catalog,
+            registry=registry,
+            values={},
+            cli_endpoint=None,
+        )
+    assert catalog.list_works() == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_ebookjapan_key_skips_incremental_preflight_and_catalog_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    _write_discover_watchlist(
+        watchlist,
+        "  - key: disabled_ebook\n"
+        "    site: ebookjapan\n"
+        "    url: https://ebookjapan.yahoo.co.jp/books/all/134336/\n"
+        "    enabled: false\n",
+    )
+    catalog_path = tmp_path / "unused-catalog.sqlite"
+    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "resolve_cdp_endpoint",
+        lambda **_kwargs: pytest.fail("disabled target resolved a CDP endpoint"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "BrowserSession",
+        type("UnexpectedSession", (), {"connect": classmethod(lambda *_args: pytest.fail("connected"))}),
+    )
+
+    args = _parser().parse_args(
+        [
+            "discover",
+            "--key",
+            "disabled_ebook",
+            "--mode",
+            "incremental",
+            "--catalog",
+            str(catalog_path),
+            "--watchlist",
+            str(watchlist),
+        ]
+    )
+    await cli._run_discover(args)
+
+    assert "stopped_reason: disabled" in capsys.readouterr().out
+    assert not catalog_path.exists()
+    assert not catalog_path.with_suffix(catalog_path.suffix + ".job.lock").exists()

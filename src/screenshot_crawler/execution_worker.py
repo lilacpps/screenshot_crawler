@@ -24,6 +24,7 @@ from screenshot_crawler.cli import (
     _discover_target,
     _discovery_registry,
 )
+from screenshot_crawler.discovery.validation import discovery_capability_error
 from screenshot_crawler.management.execution import ExecutionPlanService, _effective_request_paths
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.jobs import sanitize_text
@@ -335,6 +336,16 @@ async def _run(
             env_path = Path(str(request.get("env_file") or ".env"))
             values = read_env_file(env_path) if env_path.is_file() else {}
             registry = _discovery_registry()
+            capability_blockers: list[str] = []
+            for target in selected:
+                assert target is not None
+                if not target.enabled:
+                    continue
+                error = discovery_capability_error(registry.create(target.site), target, mode)
+                if error is not None:
+                    capability_blockers.append(f"{target.key}: {error}")
+            if capability_blockers:
+                raise RuntimeError("Discovery preflight failed: " + "; ".join(capability_blockers))
             for site, site_keys in sorted(keys_by_site.items()):
                 checkpoint()
                 emit("task_started", phase=f"discover:{mode}", payload={"site": site})

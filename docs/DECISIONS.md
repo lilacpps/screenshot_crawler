@@ -92,13 +92,22 @@ Crawlerが実サイトごとにChromiumをlaunchして認証状態を個別管�
 
 ---
 
-## D-010 保存dedupeはcapture fingerprintをauthorityとする
+## D-010 Save dedupe uses capture fingerprint as authority (SUPERSEDED)
 
-### 決定
-現行RunnerではSHA-256 capture fingerprintを保存重複判定に使う。ContentIdentityはchange detectionと記録に利用する。
+### Decision
 
-### 理由
-実サイトで動作していたBookWalker/Manga ONEの遷移挙動を維持する。identity優先へ変更する場合は実viewerの連続spread等を先に確認する。
+SUPERSEDED by the existing implementation adopted in commit `17e9115908582ad7627beef3742ea5c97e705a5b`. The current capture-part duplicate key is:
+
+```text
+(ContentIdentity(page_id, page_number, source_id, identity.fingerprint),
+ part_count, part_index, capture_bytes_SHA-256)
+```
+
+The prior fingerprint-only rule remains here as history only. When every identity field is unavailable, the all-`None` fallback remains. Repeated full keys still use the existing `max_same_content` guard. Adapters must prove frame identity because an incorrect changed identity could admit stale bytes as a new page.
+
+### Rationale
+
+The earlier decision preserved then-verified BookWalker/MANGA ONE navigation behavior. The later generic Core change distinguishes logical pages and spread parts that share encoded bytes without changing end detection, page limits, or the repeated-content guard.
 
 ---
 

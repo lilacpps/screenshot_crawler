@@ -383,13 +383,24 @@ resultまたはcapture targetを読書順で返してよい。
 
 ## 12. ContentIdentity / fingerprint
 
-`ContentIdentity` はAdapterが取得できるpage id / page number / source id等を保持し、ページ変更待ちや記録に利用する。
+`ContentIdentity` stores the page ID, page number, and source ID available from the Adapter, and supports page-change detection and recording.
 
-現行Runnerの**保存重複判定authorityはcapture bytesのSHA-256 fingerprint**である。同一fingerprintは、identityが異なっていても重複captureとして保存しない。
+The runner deduplicates each captured part using the complete key:
 
-これは既存BookWalker/Manga ONEで確認済みの挙動を維持するためのv1系仕様であり、identity優先dedupeへの変更は実サイト遷移を確認してから別途行う。
+```text
+(ContentIdentity(page_id, page_number, source_id, identity.fingerprint),
+ part_count, part_index, capture_bytes_SHA-256)
+```
 
-fingerprintだけを終了条件にはしない。
+Capture fingerprints are artifact evidence, not global logical-page identity.
+Different logical identities with equal bytes and different parts of the same
+spread are saved separately. When every identity field is unavailable, the
+existing all-`None` identity fallback remains. A repeated full key remains
+subject to the existing `max_same_content` guard. This behavior is implemented
+in commit `17e9115908582ad7627beef3742ea5c97e705a5b`; adapters still need to
+prove frame identity so stale bytes are not admitted as a different page.
+
+The fingerprint alone is not an end condition.
 
 ## 13. ContentContext
 

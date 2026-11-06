@@ -387,7 +387,7 @@ loop:
         optional adapter direct capture
         if unavailable, get one or more capture targets
         capture
-        SHA-256 fingerprint dedupe
+        full capture-key duplicate guard
         save image artifact + manifest/progress
         go_next + bounded wait
 
@@ -430,11 +430,22 @@ Site Adapterが必要なsite固有button/entry操作だけを担当する。
 
 Manga ONEのquota entryはCSR mount後に現れるため、Adapter内で最大2秒、100ms間隔のbounded waitを行う。候補数1件かつvisibleのbuttonだけをクリックし、曖昧な状態ではfirst要素を選択しない。
 
-## 10. Duplicateの考え方
+## 10. Duplicate handling
 
-現行Runnerはcapture fingerprintを保存重複判定authorityにする。ContentIdentityはAdapterのchange detection、manifest、debug情報として重要だが、保存dedupeをidentity優先へ変更しない。
+The runner deduplicates each captured part using the complete key:
 
-この判断はBookWalker/Manga ONEの既知挙動維持を優先したもの。変更する場合はreal viewerの連続spread/遷移を先に観測する。
+```text
+(ContentIdentity(page_id, page_number, source_id, identity.fingerprint),
+ part_count, part_index, capture_bytes_SHA-256)
+```
+
+Capture fingerprints are artifact evidence, not global logical-page identity.
+Different logical identities with equal bytes and different parts of the same
+spread are saved separately. When every identity field is unavailable, the
+existing all-`None` identity fallback remains. A repeated full key remains
+subject to the existing `max_same_content` guard. This behavior is implemented
+in commit `17e9115908582ad7627beef3742ea5c97e705a5b`; adapters still need to
+prove frame identity so stale bytes are not admitted as a different page.
 
 Discovery側のcross-site duplicateは別問題として扱う。別siteの類似itemはwarningを出しても、自動mergeしない。
 

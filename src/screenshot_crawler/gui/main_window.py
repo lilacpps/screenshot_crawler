@@ -1172,6 +1172,27 @@ class MainWindow(QMainWindow):
         mode = None
         if action == "discover":
             mode = "full" if force_full else self.discover_mode_combo.currentData()
+            try:
+                from screenshot_crawler.cli import _discovery_registry
+                from screenshot_crawler.discovery.validation import discovery_capability_error
+
+                registry = _discovery_registry()
+                for identity in sorted(selected_identities):
+                    key = key_map.get(identity)
+                    if key is None or key.target is None:
+                        continue
+                    if key.target.enabled is not True:
+                        continue
+                    capability_error = discovery_capability_error(
+                        registry.create(key.site), key.target, str(mode)
+                    )
+                    if capability_error is not None:
+                        blockers.append(f"{identity}: {capability_error}")
+            except (KeyError, ValueError) as exc:
+                blockers.append(f"Discovery capability is unavailable: {exc}")
+            if blockers:
+                self.error_label.setText("; ".join(blockers))
+                return
         request = JobExecutionRequest(
             action=action,
             selected_keys=selected_identities,

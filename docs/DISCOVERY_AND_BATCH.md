@@ -1247,7 +1247,20 @@ Discovery Adapterは、Watchlist targetのsite固有listing pageを読み、Disc
 - Screenshot Crawler実行
 - local artifact state更新
 
-### 7.2 Access mode
+### 7.2 Mode capability preflight
+
+Discovery adapters expose `supports_incremental_discovery`, which defaults to
+`True` for compatibility. An adapter that implements only complete-list
+reconciliation opts out with `False`. The service rejects an unsupported
+incremental request with `DiscoveryIncompleteError` before acquiring the
+Catalog job lock or mutating Catalog state. The CLI performs the same
+capability check before resolving or connecting to CDP. GUI registration uses
+the existing Full Discovery flow; incremental requests are rejected before
+queueing, and a worker rejects an entire mixed selection before opening any
+site session. A rejected mode is never silently changed to Full. Existing
+bounded-scope capability checks keep their prior result semantics.
+
+### 7.3 Access mode
 
 共通の最小分類:
 

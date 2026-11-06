@@ -16,6 +16,7 @@ from screenshot_crawler.management.execution import JobExecutionRequest
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.job_controller import JobController
 from screenshot_crawler.management.jobs import JobStore
+from screenshot_crawler.watchlist.service import WatchlistService
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from tools.gui_sample import create_sample
@@ -212,6 +213,73 @@ def test_watchlist_full_no_does_not_queue(tmp_path, qt_app, monkeypatch):
     )
     window._show_execution_preview("discover", force_full=True, after_watchlist_save=True)
     assert captured == []
+    window.close()
+
+
+def test_gui_rejects_mixed_incremental_before_queue_and_keeps_full_flow(
+    tmp_path, qt_app, monkeypatch
+):
+    window = _window(tmp_path, qt_app)
+    original = window.model.snapshot
+    assert original is not None
+    WatchlistService(original.watchlist_path).add(
+        key="example_ebookjapan",
+        work_key="example",
+        site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/134336/",
+        label="Example series",
+    )
+    WatchlistService(original.watchlist_path).add(
+        key="disabled_ebookjapan",
+        work_key="disabled-example",
+        site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/115888/",
+        label="Disabled example",
+        enabled=False,
+    )
+    WatchlistService(original.watchlist_path).add(
+        key="mangaone_example",
+        work_key="mangaone-example",
+        site="mangaone",
+        url="https://manga-one.com/manga/1/chapter/2",
+        label="Manga example",
+    )
+    snapshot = InventoryService().load(
+        original.catalog_path,
+        original.watchlist_path,
+        runtime_path=window.runtime_path,
+    )
+    window.set_snapshot(snapshot)
+    ebook_key = next(key for key in snapshot.keys if key.site == "ebookjapan")
+    disabled_ebook_key = next(
+        key for key in snapshot.keys
+        if key.target is not None and key.target.key == "disabled_ebookjapan"
+    )
+    supported_key = next(
+        key for key in snapshot.keys if key.site == "mangaone" and key.target is not None
+    )
+    window.model.set_checked_keys({ebook_key.identity, supported_key.identity})
+    incremental = window.discover_mode_combo.findData("incremental")
+    assert incremental >= 0
+    window.discover_mode_combo.setCurrentIndex(incremental)
+    queued = []
+    monkeypatch.setattr(window, "_start_execution", queued.append)
+
+    window._show_execution_preview("discover")
+
+    assert queued == []
+    assert "incremental discovery" in window.error_label.text()
+    window.model.set_checked_keys({disabled_ebook_key.identity, supported_key.identity})
+    window._show_execution_preview("discover")
+    assert len(queued) == 1 and queued[0].mode == "incremental"
+    assert set(queued[0].selected_keys) == {
+        disabled_ebook_key.identity,
+        supported_key.identity,
+    }
+    window.model.set_checked_keys({ebook_key.identity, supported_key.identity})
+    window._show_execution_preview("discover", force_full=True)
+    assert len(queued) == 2 and queued[1].mode == "full"
+    assert set(queued[1].selected_keys) == {ebook_key.identity, supported_key.identity}
     window.close()
 
 

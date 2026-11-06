@@ -2256,19 +2256,14 @@ applies to all adapter calls.
 
 ## 9. Identity / fingerprint / duplicate
 
-`ContentIdentity` はpage id / page number / source id等を保持し、主に:
+`ContentIdentity` stores page ID, page number, and source ID when available. The runner deduplicates each captured part using the complete key:
 
-- Adapter change detection
-- manifest
-- debug / progress
+```text
+(ContentIdentity(page_id, page_number, source_id, identity.fingerprint),
+ part_count, part_index, capture_bytes_SHA-256)
+```
 
-へ使う。
-
-**保存duplicateのauthorityはcapture bytesのSHA-256 fingerprint。**
-
-identityが異なっていてもfingerprintが同一ならduplicate扱い。
-
-これは既存BookWalker / Manga ONEの動作互換を優先した現行仕様。
+Capture fingerprints are artifact evidence, not global logical-page identity. Different logical identities with equal bytes and different parts of the same spread are saved separately. When every identity field is unavailable, the existing all-`None` identity fallback remains. A repeated full key remains subject to the existing `max_same_content` guard. This behavior is implemented in commit `17e9115908582ad7627beef3742ea5c97e705a5b`; adapters still need to prove frame identity so stale bytes are not admitted as a different page.
 
 ## 10. same-content guard
 
@@ -3093,6 +3088,7 @@ and per-artifact capture fingerprint.
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
 - scopeなしtargetの既存load / rewrite互換: **IMPLEMENTED**。scopeなしtargetは従来どおりunboundedとして扱い、scope専用CLI optionは追加していない
 - common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblack / Piccoma / Hanayume / Younganimal / ComicFUZ / Kadocomi / Comic DAYSはopt-in済み。未対応Adapterはdefault `False`のまま
+- Full-only mode capability: **IMPLEMENTED**. `DiscoveryAdapter.supports_incremental_discovery` defaults to `True`; a Full-only adapter opts out. Generic preflight rejects incremental before the service lock/Catalog writes, before CLI CDP resolution, before GUI queueing, and before a worker opens any target in a mixed selection. Unsupported mode is not converted to Full; existing bounded-scope result behavior is preserved. ebookjapan opts out and uses the existing Full registration flow.
 - scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
 - bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない。完全一覧を把握できるAdapterはscope slice前にglobal display-position hintを付与し、scope-local `1..N`へ再採番しない。hintなしbounded runはincompleteでfail closedとする
 - bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する。global hintがあればそれをauthorityとして使い、boundedでhintがなければincompleteとする

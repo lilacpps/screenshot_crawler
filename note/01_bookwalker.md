@@ -992,7 +992,7 @@ page_number: parsed current page
 source_id: content_id
 ```
 
-**保存duplicate判定はidentityではなくCoreのcapture SHA-256 fingerprintがauthority。**
+**Core uses a capture-part full key for duplicate detection.** A part is duplicate only when `(all ContentIdentity fields, part_count, part_index, capture bytes SHA-256)` matches. The all-`None` identity fallback remains. The BookWalker Adapter must prove page/frame identity.
 
 ## 10. Content context
 
@@ -1069,7 +1069,7 @@ alter the normal ArrowLeft/click-fallback navigation path.
 
 共通仕様は `note/00_core.md`。
 
-BookWalker captureでも保存dedupeは各artifactのSHA-256 fingerprint。
+BookWalker capture follows Core's capture-part full key. Capture fingerprint alone does not make a different page or spread part a duplicate.
 
 主guard:
 
@@ -1677,7 +1677,13 @@ JPEG artifacts in `canvas` mode.
 - drawImage geometryが取れない未知作品ではfallbackになる可能性がある。
 - 直接viewer URLから開始すると商品metadataが不足する可能性がある。
 - 同名完成ZIPは上書きしない。
-- global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
+- Capture hash alone is not global page identity: pixel-identical pages with
+  distinct complete `ContentIdentity` values or spread-part indices are saved
+  separately. When every identity field is unavailable, Core keeps the
+  existing all-`None` fallback. Only a repeated full key
+  `(ContentIdentity, part_count, part_index, artifact SHA-256)` is guarded by
+  `max_same_content`. The Adapter must prove page/frame identity because a
+  wrong identity can admit stale bytes under a different key.
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
 - BookWalker Site Policyは05:00 JST window / site-wide capacity 1として実装済み。

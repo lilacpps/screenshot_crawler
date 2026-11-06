@@ -27,6 +27,16 @@ from screenshot_crawler.management.inventory import default_policy_registry
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
+def _fake_discovery_registry() -> SimpleNamespace:
+    adapter = SimpleNamespace(
+        supports_incremental_discovery=True,
+        supports_bounded_discovery=True,
+        supports_exclusion_only_scope=True,
+        supports_exclusion_replay=True,
+    )
+    return SimpleNamespace(create=lambda _site: adapter)
+
+
 def test_worker_endpoint_resolution_uses_explicit_then_transient_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,7 +148,7 @@ def test_worker_does_not_treat_incomplete_discovery_as_success(
     preview = SimpleNamespace(blockers=(), fingerprint="confirmed")
     monkeypatch.setattr("screenshot_crawler.execution_worker.InventoryService.load", lambda *args, **kwargs: InventorySnapshot.__new__(InventorySnapshot))
     monkeypatch.setattr("screenshot_crawler.execution_worker.ExecutionPlanService.preview", lambda *args, **kwargs: preview)
-    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", _fake_discovery_registry)
     monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
     async def incomplete(*args, **kwargs):
         return DiscoveryResult(
@@ -179,6 +189,53 @@ def test_worker_does_not_treat_incomplete_discovery_as_success(
     )
 
 
+def test_worker_rejects_mixed_incremental_before_any_target_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from screenshot_crawler.catalog import CatalogService
+    from screenshot_crawler.management.models import InventorySnapshot
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    catalog = CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    watchlist.add(
+        key="ebook", work_key="example", site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/134336/", label="Example",
+    )
+    watchlist.add(
+        key="manga", work_key="manga", site="mangaone",
+        url="https://manga-one.com/manga/1/chapter/2", label="Manga",
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.InventoryService.load",
+        lambda *args, **kwargs: InventorySnapshot.__new__(InventorySnapshot),
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.ExecutionPlanService.preview",
+        lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"),
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker._discover_target",
+        lambda **_kwargs: pytest.fail("worker started a target before whole-selection preflight"),
+    )
+    request = {
+        "action": "discover",
+        "selected_keys": ["ebook", "manga"],
+        "sites": ["ebookjapan", "mangaone"],
+        "keys_by_site": {"ebookjapan": ["ebook"], "mangaone": ["manga"]},
+        "mode": "incremental",
+        "catalog_path": str(catalog_path),
+        "watchlist_path": str(watchlist_path),
+        "plan_fingerprint": "confirmed",
+        "fingerprint_kind": "legacy",
+    }
+
+    with pytest.raises(RuntimeError, match="Discovery preflight failed.*incremental discovery"):
+        asyncio.run(_run(request))
+    assert catalog.list_works() == []
+
+
 def test_worker_discovery_result_event_and_stdout_match_cui_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -201,7 +258,7 @@ def test_worker_discovery_result_event_and_stdout_match_cui_fields(
         "screenshot_crawler.execution_worker.ExecutionPlanService.preview",
         lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"),
     )
-    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", _fake_discovery_registry)
     monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
 
     async def complete(*args, **kwargs):
@@ -264,7 +321,7 @@ def test_worker_discovery_exception_is_redacted_keyed_and_fail_stop(
         "screenshot_crawler.execution_worker.ExecutionPlanService.preview",
         lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"),
     )
-    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", _fake_discovery_registry)
     monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
     called: list[str] = []
 

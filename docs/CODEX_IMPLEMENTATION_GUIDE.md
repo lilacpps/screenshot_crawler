@@ -125,7 +125,20 @@ Core変更では特に確認する。
 - output directory安全性
 - manifest基準packaging
 
-現行Runnerではcapture fingerprintが保存dedupeのauthority。identity優先方式へ変更する場合は実viewer遷移を先に確認する。
+The runner deduplicates each captured part using the complete key:
+
+```text
+(ContentIdentity(page_id, page_number, source_id, identity.fingerprint),
+ part_count, part_index, capture_bytes_SHA-256)
+```
+
+Capture fingerprints are artifact evidence, not global logical-page identity.
+Different logical identities with equal bytes and different parts of the same
+spread are saved separately. When every identity field is unavailable, the
+existing all-`None` identity fallback remains. A repeated full key remains
+subject to the existing `max_same_content` guard. This behavior is implemented
+in commit `17e9115908582ad7627beef3742ea5c97e705a5b`; adapters still need to
+prove frame identity so stale bytes are not admitted as a different page. Adapter code must prove frame identity and must not treat fingerprint or identity alone as the duplicate authority.
 
 ## 8. Site Adapter bug fix時
 

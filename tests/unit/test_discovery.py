@@ -725,6 +725,26 @@ async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mu
     assert catalog.list_source_targets() == []
 
 
+async def test_incremental_capability_fails_before_lock_or_catalog_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("should-not-be-observed")])
+    adapter.supports_incremental_discovery = False
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    lock_calls: list[bool] = []
+    monkeypatch.setattr(catalog, "job_lock", lambda: lock_calls.append(True))
+
+    with pytest.raises(DiscoveryIncompleteError, match="does not support incremental discovery"):
+        await service.discover(FakePage(), watch_target, "incremental")
+
+    assert adapter.iter_records_calls == 0
+    assert lock_calls == []
+    assert catalog.list_works() == []
+    assert catalog.list_items() == []
+    assert catalog.list_sources() == []
+    assert catalog.list_source_targets() == []
+
+
 async def test_bounded_full_syncs_records_without_global_reconciliation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

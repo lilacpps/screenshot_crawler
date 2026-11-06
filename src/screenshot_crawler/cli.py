@@ -58,6 +58,10 @@ from screenshot_crawler.discovery import (
     DiscoveryService,
 )
 from screenshot_crawler.discovery.models import DiscoveredRecord, DiscoveryResult
+from screenshot_crawler.discovery.validation import (
+    blocked_discovery_result,
+    discovery_capability_error,
+)
 from screenshot_crawler.maintenance.source_identity import SourceIdentityMaintenance
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.runtime_settings import load_runtime_settings
@@ -573,6 +577,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerDiscoveryAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysDiscoveryAdapter
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzDiscoveryAdapter
+    from screenshot_crawler.site_adapters.ebookjapan import EbookJapanDiscoveryAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeDiscoveryAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
@@ -596,6 +601,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("younganimal", YounganimalDiscoveryAdapter)
     registry.register("comicfuz", ComicFuzDiscoveryAdapter)
     registry.register("yanmaga", YanmagaDiscoveryAdapter)
+    registry.register("ebookjapan", EbookJapanDiscoveryAdapter)
     return registry
 
 
@@ -880,6 +886,27 @@ async def _discover_target(
     keep_open: bool = False,
 ) -> DiscoveryResult:
     """Run one target with a caller-owned, target-scoped browser session."""
+
+    if not target.enabled:
+        return DiscoveryResult(
+            mode=mode,  # type: ignore[arg-type]
+            target_key=target.key,
+            observed_count=0,
+            new_count=0,
+            known_count=0,
+            complete=None,
+            stopped_reason="disabled",
+            warnings=(),
+        )
+    adapter = registry.create(target.site)
+    capability_error = discovery_capability_error(adapter, target, mode)
+    if capability_error is not None:
+        if (
+            mode == "incremental"
+            and getattr(adapter, "supports_incremental_discovery", True) is not True
+        ):
+            raise DiscoveryIncompleteError(capability_error)
+        return blocked_discovery_result(target, mode, capability_error)
 
     endpoint = resolve_cdp_endpoint(
         site=target.site,

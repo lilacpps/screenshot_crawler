@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 class DiscoveryAdapter(ABC):
     """Enumerate site-specific listing results without knowing Catalog."""
 
+    supports_incremental_discovery: ClassVar[bool] = True
     supports_bounded_discovery: ClassVar[bool] = False
     registration_hosts: ClassVar[tuple[str, ...]] = ()
 

@@ -27,6 +27,10 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
+from screenshot_crawler.discovery.validation import (
+    blocked_discovery_result,
+    discovery_capability_error,
+)
 from screenshot_crawler.maintenance.source_identity import (
     SourceIdentityError,
     SourceIdentityMaintenance,
@@ -68,14 +72,37 @@ class DiscoveryService:
         target: WatchlistTarget,
         mode: DiscoveryMode | str,
     ) -> DiscoveryResult:
+        mode = self._validate_mode(mode)
+        if not target.enabled:
+            return DiscoveryResult(
+                mode=mode,
+                target_key=target.key,
+                observed_count=0,
+                new_count=0,
+                known_count=0,
+                complete=None,
+                stopped_reason="disabled",
+                warnings=(),
+            )
+        adapter = self.registry.create(target.site)
+        capability_error = discovery_capability_error(adapter, target, mode)
+        if capability_error is not None:
+            if (
+                mode == "incremental"
+                and getattr(adapter, "supports_incremental_discovery", True) is not True
+            ):
+                raise DiscoveryIncompleteError(capability_error)
+            return blocked_discovery_result(target, mode, capability_error)
         with self.catalog.job_lock():
-            return await self._discover_locked(page, target, mode)
+            return await self._discover_locked(page, target, mode, adapter=adapter)
 
     async def _discover_locked(
         self,
         page: Page,
         target: WatchlistTarget,
         mode: DiscoveryMode | str,
+        *,
+        adapter=None,
     ) -> DiscoveryResult:
         mode = self._validate_mode(mode)
         if not target.enabled:
@@ -90,10 +117,11 @@ class DiscoveryService:
                 warnings=(),
             )
 
-        adapter = None
-        if target.discovery_scope is not None:
+        if adapter is None:
             adapter = self.registry.create(target.site)
-            if getattr(adapter, "supports_bounded_discovery", False) is not True:
+        if target.discovery_scope is not None and target.discovery_scope.excluded_external_ids:
+            preflight_error = await self._preflight_exclusion_scope(page, target, adapter)
+            if preflight_error is not None:
                 return DiscoveryResult(
                     mode=mode,
                     target_key=target.key,
@@ -103,53 +131,8 @@ class DiscoveryService:
                     complete=False if mode == "full" else None,
                     stopped_reason="incomplete",
                     warnings=(),
-                    error="Discovery adapter does not support bounded scope",
+                    error=preflight_error,
                 )
-            if (
-                target.discovery_scope.from_url is None
-                and target.discovery_scope.through_url is None
-                and not getattr(adapter, "supports_exclusion_only_scope", False)
-            ):
-                return DiscoveryResult(
-                    mode=mode,
-                    target_key=target.key,
-                    observed_count=0,
-                    new_count=0,
-                    known_count=0,
-                    complete=False if mode == "full" else None,
-                    stopped_reason="incomplete",
-                    warnings=(),
-                    error="Discovery adapter does not support exclusion-only scope",
-                )
-            if target.discovery_scope.excluded_external_ids:
-                if getattr(adapter, "supports_exclusion_replay", False) is not True:
-                    return DiscoveryResult(
-                        mode=mode,
-                        target_key=target.key,
-                        observed_count=0,
-                        new_count=0,
-                        known_count=0,
-                        complete=False if mode == "full" else None,
-                        stopped_reason="incomplete",
-                        warnings=(),
-                        error=(
-                            "Exclusion scope requires an adapter that replays the "
-                            "validated complete listing"
-                        ),
-                    )
-                preflight_error = await self._preflight_exclusion_scope(page, target, adapter)
-                if preflight_error is not None:
-                    return DiscoveryResult(
-                        mode=mode,
-                        target_key=target.key,
-                        observed_count=0,
-                        new_count=0,
-                        known_count=0,
-                        complete=False if mode == "full" else None,
-                        stopped_reason="incomplete",
-                        warnings=(),
-                        error=preflight_error,
-                    )
 
         # The Watchlist label is only the initial title for a new Work.
         work = self.catalog.find_work(target.work_key)
@@ -158,8 +141,6 @@ class DiscoveryService:
                 WorkInput(work_key=target.work_key, title=target.label)
             )
 
-        if adapter is None:
-            adapter = self.registry.create(target.site)
         adapter.reset_complete_listing_inventory()
         if mode == "full":
             # A failed or partial Full run must never leave an older listing proof
