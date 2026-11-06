@@ -1899,6 +1899,84 @@ async def test_younganimal_top_empty_profile_skips_only_observed_blank_and_captu
             assert hashlib.sha256(actual_rgba).digest() == hashlib.sha256(expected_rgba).digest()
 
 
+@pytest.mark.parametrize(("mutation", "changed_field"), [
+    ("same_dimensions", "slot_1.canvas.generation"),
+    ("width", "slot_1.canvas.width"),
+    ("height", "slot_1.canvas.height"),
+    ("canvas", "slot_1.canvas.node"),
+    ("holder", "slot_1.canvas.parentNode"),
+    ("wrapper", "slot_1.wrapperNode"),
+    ("viewer", "viewerNode"),
+    ("pages", "pagesNode"),
+    ("seek", "seekNode"),
+])
+async def test_younganimal_initial_identity_failure_records_structural_before_and_after(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    mutation: str, changed_field: str,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "VIEWER_READY_POLL_MS", 10)
+
+    class MutationAdapter(YounganimalAdapter):
+        async def _wait_for_initial_quiet(self, page, initial):
+            await page.evaluate("""mutation => {
+              const pages = document.querySelector('#xCVPages');
+              const wrapper = pages.children[1];
+              const canvas = wrapper.querySelector('canvas');
+              const replace = node => node.replaceWith(node.cloneNode(true));
+              if (mutation === 'same_dimensions' || mutation === 'width') {
+                canvas.width += mutation === 'width' ? 1 : 0;
+                window.__yaRenderers[1]();
+              }
+              if (mutation === 'height') {
+                canvas.height += 1;
+                window.__yaRenderers[1]();
+              }
+              if (mutation === 'canvas') replace(canvas);
+              if (mutation === 'holder') replace(canvas.parentNode);
+              if (mutation === 'wrapper') replace(wrapper);
+              if (mutation === 'viewer') replace(document.querySelector('#comici-viewer'));
+              if (mutation === 'pages') replace(pages);
+              if (mutation === 'seek') replace(document.querySelector('#xCVSeekBar'));
+            }""", mutation)
+            return await super()._wait_for_initial_quiet(page, initial)
+
+    adapter = MutationAdapter(preflight_work_url=WORK_URL)
+    output_dir = tmp_path / "run"
+    diagnostics_dir = tmp_path / "diagnostics"
+    with pytest.raises(UnknownPageStateError, match="first canvas or wrapper identity/dimensions changed"):
+        await CrawlerRunner(RunConfig(
+            site="younganimal", source_url=EPISODE_URL, output_dir=output_dir,
+            diagnostics_dir=diagnostics_dir, page_turn_delay_ms=0,
+        )).run(browser_page, adapter)
+
+    metadata = json.loads((diagnostics_dir / "metadata.json").read_text(encoding="utf-8"))
+    quiet = metadata["adapter_debug"]["capture"]["initial_canvas_quiet"]
+    assert quiet["status"] == "identity_changed"
+    assert quiet["slots"] == [1]
+    assert quiet["quiet_ms"] == 1_000
+    assert quiet["elapsed_ms"] >= 0
+    assert quiet["stable_for_ms"] >= 0
+    assert changed_field in quiet["changed_fields"]
+    assert quiet["initial"][changed_field] != quiet["current"][changed_field]
+    assert quiet["initial"]["seek_value"] == quiet["current"]["seek_value"] == 21
+    assert quiet["initial"]["active_slots"] == quiet["current"]["active_slots"] == [1]
+    assert quiet["initial"]["ready_slots"] == quiet["current"]["ready_slots"] == [1]
+    assert quiet["initial"]["viewport.width"] == quiet["current"]["viewport.width"] == 1906
+    assert quiet["initial"]["viewport.height"] == quiet["current"]["viewport.height"] == 986
+    if mutation == "same_dimensions":
+        for field in ("node", "parentNode", "width", "height"):
+            assert quiet["initial"][f"slot_1.canvas.{field}"] == quiet["current"][f"slot_1.canvas.{field}"]
+    assert "pixels" not in json.dumps(quiet)
+    assert "https://" not in json.dumps(quiet)
+    assert requested == [f"/episodes/{EPISODE_ID}"]
+    assert metadata["saved_pages"] == 0
+    assert list(output_dir.glob("page-*.*")) == []
+    assert adapter._captured_slots == []
+
+
 @pytest.mark.parametrize(
     ("case", "malformed_field", "malformed_value"),
     [

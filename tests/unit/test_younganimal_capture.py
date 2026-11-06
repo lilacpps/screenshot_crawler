@@ -9,6 +9,7 @@ from PIL import Image
 from screenshot_crawler.core.errors import UnknownPageStateError
 from screenshot_crawler.site_adapters.younganimal import native_capture
 from screenshot_crawler.site_adapters.younganimal.adapter import (
+    YounganimalAdapter,
     _native_failure_details,
     _native_failure_reason,
 )
@@ -141,6 +142,25 @@ def _snapshot(
         "terminalMarkerVisible": seek_value == 1,
         "terminalMarkerCenterInViewport": seek_value == 1,
     }
+
+
+def test_younganimal_initial_canvas_debug_excludes_content_and_malformed_values() -> None:
+    observation = _parse_viewer_observation(_snapshot(21), expected_url=EPISODE_URL)
+    observation.raw["viewerNode"] = "https://private.invalid/source?token=secret"
+    observation.raw["viewerNavOpen"] = "private UI text"
+    observation.raw["viewerSplashCount"] = True
+    observation.raw["viewport"] = {"width": True, "height": "private viewport", "dpr": float("inf")}
+    canvas = observation.raw["slots"][1]["canvas"]
+    canvas.update(node=-1, parentNode=2**53, width=True, height="private text", generation=1.5)
+    debug = YounganimalAdapter._initial_canvas_debug(observation, observation.active_slots)
+    assert debug["viewerNode"] is None
+    assert debug["viewer_nav_open"] is None
+    assert debug["viewer_splash_count"] is None
+    assert all(debug[f"viewport.{key}"] is None for key in ("width", "height", "dpr"))
+    assert all(debug[f"slot_1.canvas.{key}"] is None for key in
+               ("node", "parentNode", "width", "height", "generation"))
+    assert all("pixels" not in key and "url" not in key.lower() for key in debug)
+    assert "private" not in repr(debug)
 
 
 def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10, no_lead: bool = False) -> dict[str, object]:

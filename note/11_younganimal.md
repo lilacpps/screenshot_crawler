@@ -104,6 +104,47 @@ behavior for those historical runs, not current Batch eligibility or a current
 operational procedure. Current verification must use an explicit matching
 Watchlist; scope-sync is optional maintenance.
 
+## Initial canvas quiet failure diagnostics (2026-11-06)
+
+Item/Source 35787, episode `811cf7640931d`, stopped before saving any page with
+`Younganimal first canvas or wrapper identity/dimensions changed before quiet settle`.
+The original metrics show failure about 2.7 seconds after candidate start, but
+the original diagnostics retain neither side of the identity comparison. The
+exact cause (node replacement, dimensions or canvas generation) is unresolved.
+Two bounded direct shared-CDP initialization probes on the same episode succeeded;
+the original intermittent failure was not reproduced. Additional first-image
+delay and resize-event probes also initialized without that failure. These are
+initialization observations, not full capture/END/ZIP verification.
+
+At the user's direction this change adds diagnostics only. The existing exception,
+identity comparison, one-second quiet requirement and five-second deadline are
+unchanged; no retry, acceptance of changed canvases, seek recovery or access-resource
+behavior is added. On this comparison failure, existing Runner diagnostics now
+include `adapter_debug.capture.initial_canvas_quiet` in `diagnostics/metadata.json`:
+`status=identity_changed`, elapsed/required/stable quiet milliseconds, expected slots,
+`changed_fields`, and structural `initial`/`current` snapshots. Snapshots retain
+viewer/pages/seek node IDs, DOM/capture epochs, viewport/DPR, seek, active/ready slots, typed nav/
+splash state, and at most two wrappers' canvas node/parent IDs, dimensions,
+generation and write counts. Unknown numeric values become null. No pixel bytes,
+pixel fingerprints, source URLs, signed query parameters or account state are
+added to these records. No new output file or CLI/config option is introduced.
+
+Synthetic browser regressions force same-dimension buffer reset, width/height
+change, canvas/holder/wrapper replacement and viewer/pages/seek replacement.
+Each still raises the original error before any artifact and persists both
+structural snapshots with the changed field identified. Existing malformed/
+unsettled UI cases remain covered. The cause must be reassessed from a future
+failure's metadata before changing the runtime behavior. Shared Core is unchanged,
+so `note/00_core.md` requires no update.
+
+Validation: capture Unit 479 and selected browser Integration 20 passed, zero
+failed/skipped. The Integration selection covers the nine injected identity
+failures, three existing UI failure cases and eight existing bounded initial
+native redraw cases; metadata persistence and zero saved pages are asserted.
+Global `ruff check src tests` and `git diff --check` passed. Full repository,
+unrelated Integration and Research/Probe tests were not run for this diagnostic-only
+site-local change. No full live capture or normal Batch rerun was performed.
+
 ## Current verification snapshot (2026-11-04)
 
 ### Capture versus offscreen prefetch: Item/Source 35445

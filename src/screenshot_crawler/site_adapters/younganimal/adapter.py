@@ -1234,6 +1234,24 @@ class YounganimalAdapter(SiteAdapter):
             if self._canvas_identity_signature(observation, expected) != self._canvas_identity_signature(
                 initial, expected
             ):
+                # The intermittent startup change is not yet reproduced live.
+                # Retain both sides for diagnosis; keep the existing stop condition.
+                initial_debug = self._initial_canvas_debug(initial, expected)
+                current_debug = self._initial_canvas_debug(observation, expected)
+                changed_fields = [
+                    key for key in initial_debug if initial_debug[key] != current_debug[key]
+                ]
+                self._initial_canvas_quiet = {
+                    "status": "identity_changed",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                    "quiet_ms": INITIAL_QUIET_MS,
+                    "stable_for_ms": round((time.monotonic() - quiet_since) * 1000, 2) if quiet_since is not None else 0,
+                    "slots": list(expected),
+                    "changed_fields": changed_fields,
+                    "initial": initial_debug,
+                    "current": current_debug,
+                }
+                self._capture_diagnostics["initial_canvas_quiet"] = dict(self._initial_canvas_quiet)
                 raise UnknownPageStateError(
                     "Younganimal first canvas or wrapper identity/dimensions changed before quiet settle"
                 )
@@ -1388,6 +1406,42 @@ class YounganimalAdapter(SiteAdapter):
                 for index in slots
             ),
         )
+
+    @staticmethod
+    def _initial_canvas_debug(
+        observation: ViewerObservation, slots: tuple[int, ...]
+    ) -> dict[str, object]:
+        """Bounded structural diagnostics; never include source URLs or pixels."""
+        raw = observation.raw
+
+        def integer(value: object) -> int | None:
+            return value if type(value) is int and 0 <= value <= 2**53 - 1 else None
+
+        result: dict[str, object] = {
+            name: integer(raw.get(name))
+            for name in ("viewerNode", "pagesNode", "seekNode", "domGeneration", "captureDomGeneration")
+        }
+        result.update({
+            "seek_value": observation.seek_value,
+            "active_slots": list(observation.active_slots),
+            "ready_slots": list(observation.ready_slots),
+            "viewer_nav_open": raw.get("viewerNavOpen") if type(raw.get("viewerNavOpen")) is bool else None,
+            "viewer_splash_count": integer(raw.get("viewerSplashCount")),
+        })
+        viewport = raw.get("viewport")
+        for name in ("width", "height", "dpr"):
+            value = viewport.get(name) if isinstance(viewport, dict) else None
+            result[f"viewport.{name}"] = (
+                value if type(value) in {int, float} and math.isfinite(value)
+                and 0 < value <= 2**53 - 1 else None
+            )
+        for index in slots[:2]:
+            row = raw["slots"][index]
+            result[f"slot_{index}.wrapperNode"] = integer(row.get("wrapperNode"))
+            canvas = row.get("canvas")
+            for name in ("node", "parentNode", "width", "height", "generation", "writes"):
+                result[f"slot_{index}.canvas.{name}"] = integer(canvas.get(name)) if isinstance(canvas, dict) else None
+        return result
 
     @staticmethod
     def _canvas_identity_signature(

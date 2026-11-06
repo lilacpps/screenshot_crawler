@@ -950,7 +950,15 @@ The adapter rewinds a resumed viewer with the public seek control. Before the
 first capture it requires read-only observer metadata to show `mode-nav-open`
 absent and zero `.-cv-splash` nodes, then requires the existing first-canvas and
 capture-epoch quiet signature to remain stable for 1 second within the same
-5-second bound. UI reappearance resets the quiet interval. Missing or malformed
+5-second bound. If the first-canvas identity comparison fails, existing Runner
+`diagnostics/metadata.json` includes `adapter_debug.capture.initial_canvas_quiet`
+with `status=identity_changed`, elapsed/required/stable quiet milliseconds, expected
+slots, changed field names, and bounded structural before/after snapshots.
+These record root/wrapper/canvas node IDs, dimensions, generation/write counters,
+DOM epochs, viewport/DPR, seek/ready slots and typed navigation/splash state, without pixels,
+source URLs or account data. The original exception, comparison and timeout
+remain unchanged; this is diagnostic only (2026-11-06, Item/Source 35787).
+UI reappearance resets the quiet interval. Missing or malformed
 metadata and UI that does not settle fail closed before capture. Global DOM
 generation still records every observed mutation; capture stability uses the
 separate epoch described above. It then
