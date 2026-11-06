@@ -62,9 +62,12 @@ def test_inputs_fingerprint_ignores_catalog_bytes_but_signs_runtime_and_watchlis
     catalog.write_bytes(b"catalog-version-two")
     assert ExecutionPlanService().input_fingerprint(request) == first
 
+    WatchlistService(request["watchlist_path"]).set_work_archived("work-a", True)
+    archived_watchlist = ExecutionPlanService().input_fingerprint(request)
+    assert archived_watchlist != first
     WatchlistService(request["watchlist_path"]).update_target("key-a", enabled=False)
     changed_watchlist = ExecutionPlanService().input_fingerprint(request)
-    assert changed_watchlist != first
+    assert changed_watchlist != archived_watchlist
 
     Path(str(request["runtime_path"])).write_text("sites: {mangaone: {}}\n", encoding="utf-8")
     assert ExecutionPlanService().input_fingerprint(request) != changed_watchlist
@@ -95,13 +98,19 @@ def test_inputs_fingerprint_uses_worker_defaults_when_paths_are_omitted(
     )
 
 
-@pytest.mark.parametrize("action,enabled", [("batch", True), ("batch", False), ("discover", True)])
+@pytest.mark.parametrize("action,enabled,archived", [
+    ("batch", True, False), ("batch", False, False), ("discover", True, False),
+    ("batch", True, True), ("discover", True, True),
+])
 def test_inputs_worker_skips_inventory_and_legacy_plan_preflight(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, enabled: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, enabled: bool, archived: bool
 ) -> None:
     request = _request(tmp_path, action=action)
     if not enabled:
         WatchlistService(request["watchlist_path"]).update_target("key-a", enabled=False)
+    if archived:
+        WatchlistService(request["watchlist_path"]).set_work_archived("work-a", True)
+    if not enabled or archived:
         request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint(request)
     calls: list[tuple[str, str]] = []
 

@@ -80,6 +80,26 @@ unverified workers, stale/loading Inventory, dirty or busy editors and pending
 saves block switching. Saving also blocks GUI job starts. Queued configuration
 fingerprints remain unchanged and configuration drift stops them as before.
 
+## Work archiving (2026-11-06)
+
+Watchlist's optional top-level `archived_work_keys` is a duplicate-free list of
+non-empty, trimmed Work keys (omitted means empty). Archiving applies to every
+site/key and retained Catalog-only row with the same `work_key`. It is manual
+display management, independent of Item completion, Watchlist `enabled`, Source
+acquisition flags, Discovery/Batch selection rules, archive numbering and files.
+Discovery neither archives nor restores Works automatically.
+
+The main GUI starts in Normal view; a separate Normal / Archived / All selector
+combines with existing search/status filters. A Work-row context menu archives
+or restores the whole Work without confirmation. Saves use Watchlist lock/CAS
+and atomic replace; only committed saves change displayed state. Newly archived
+Works lose execution selection in every view; changing visibility removes
+selection outside that view. Parent execution checks include text/status-hidden
+descendants only within the selected visibility view. Archived Works can be
+explicitly selected in Archived/All. Existing Watchlist editors retain all Works
+for maintenance. Existing queued jobs retain whole-file configuration checks.
+No Catalog schema migration is required.
+
 ## 3. Browser Session Model
 
 Real-site automationの標準は、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する方式**とする。

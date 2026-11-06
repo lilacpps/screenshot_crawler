@@ -736,6 +736,91 @@ def test_read_snapshot_parses_and_hashes_one_read(tmp_path, monkeypatch):
     assert revision == service._content_digest(reads[0])
 
 
+@pytest.mark.parametrize("archived", [False, True])
+def test_read_document_parses_visibility_and_revision_from_one_read(tmp_path, monkeypatch, archived):
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    target = add_target(service)
+    if archived:
+        service.set_work_archived(target.work_key, True)
+    content = service.path.read_bytes().decode("utf-8")
+    reads = []
+
+    def read_once():
+        reads.append(content)
+        assert len(reads) == 1
+        return content
+
+    monkeypatch.setattr(service, "_read_content", read_once)
+    document = service.read_document()
+    assert document.targets == (target,)
+    assert document.archived_work_keys == ((target.work_key,) if archived else ())
+    assert document.revision == service._content_digest(content)
+
+
+@pytest.mark.parametrize("placement", ["before", "after"])
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_work_archive_preserves_targets_comments_and_survives_other_edits(tmp_path, placement, eol):
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    first = add_target(service)
+    second = add_target(service, key="two", site="bookwalker", enabled=False)
+    targets_text = service.path.read_text(encoding="utf-8")
+    extension = "# keep operator note\ncustom: retained\narchived_work_keys: [other-work]\n"
+    content = extension + targets_text if placement == "before" else targets_text + extension
+    service.path.write_bytes(content.replace("\n", eol).encode("utf-8"))
+    previous = service.read_document()
+    document = service.set_work_archived("work-one", True, expected_revision=previous.revision)
+    assert document.targets == (first, second)
+    assert document.archived_work_keys == ("other-work", "work-one")
+    assert document.revision == service.revision()
+    after_save = service.path.read_bytes()
+    assert targets_text.replace("\n", eol).encode("utf-8") in after_save
+    assert ("# keep operator note" + eol + "custom: retained").encode() in after_save
+    assert configuration_json(document.targets) == configuration_json(previous.targets)
+    assert service.set_work_archived("work-one", True).revision == document.revision
+    with pytest.raises(WatchlistError, match="changed"):
+        service.set_work_archived("work-one", False, expected_revision=previous.revision)
+    assert service.path.read_bytes() == after_save
+    service.update_target("one", label="Changed", expected_revision=document.revision)
+    assert service.read_document().archived_work_keys == document.archived_work_keys
+    third = replace(first, key="three", work_key="new-work")
+    service.apply_edit((*service.list_targets(), third), expected_revision=service.revision())
+    assert service.read_document().archived_work_keys == document.archived_work_keys
+    service.remove("three")
+    service.set_work_archived("work-one", False, expected_revision=service.revision())
+    assert service.read_document().archived_work_keys == ("other-work",)
+    assert service.get("two").enabled is False
+    if eol == "\r\n":
+        assert b"\n" not in service.path.read_bytes().replace(b"\r\n", b"")
+
+
+@pytest.mark.parametrize("value", ["null", "true", "{}", "[1]", "['']", "[' w ']", "[w, w]"])
+def test_invalid_archived_work_keys_fail_without_writing(tmp_path, value):
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    service.path.write_text(f"targets: []\narchived_work_keys: {value}\n", encoding="utf-8")
+    before = service.path.read_bytes()
+    with pytest.raises(InvalidWatchlistError, match="archived_work_keys"):
+        service.read_document()
+    with pytest.raises(WatchlistError, match="archived_work_keys"):
+        service.set_work_archived("w", True)
+    assert service.path.read_bytes() == before
+
+
+def test_archive_write_failure_and_unsafe_yaml_leave_file_unchanged(tmp_path, monkeypatch):
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    add_target(service)
+    before = service.path.read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setattr(watchlist_module.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("disk failure")))
+        with pytest.raises(WatchlistError, match="disk failure"):
+            service.set_work_archived("work-one", True)
+    assert service.path.read_bytes() == before
+    service.path.write_bytes(b"archived_work_keys:\n  - other # keep this note\n" + before)
+    before = service.path.read_bytes()
+    with pytest.raises(WatchlistError, match="commented"):
+        service.set_work_archived("work-one", True)
+    assert service.path.read_bytes() == before
+
+
 def test_apply_edit_combines_scope_and_work_order_in_one_replace(tmp_path: Path, monkeypatch) -> None:
     service = WatchlistService(tmp_path / "watchlist.yaml")
     add_target(service, key="one", work_key="shared", archive_order=1)

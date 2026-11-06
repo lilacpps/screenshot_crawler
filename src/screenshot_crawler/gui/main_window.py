@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -55,11 +56,13 @@ from .model import (
     DISCOVERY_COLUMN,
     DISCOVERY_HELP,
     DISCOVERY_ROLE,
+    ArchiveFilter,
     InventoryTreeModel,
     StatusFilter,
     ViewMode,
 )
 from .watchlist_editor import WatchlistEditorPage
+from .work_archive import WorkArchiveSaveWorker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -207,6 +210,7 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._inventory_stale = False
         self._discovery_save_worker = None
+        self._archive_save_worker = None
         self._discovery_refresh = False
         self._discovery_notice = ""
         self._discovery_controls_state = None
@@ -246,6 +250,8 @@ class MainWindow(QMainWindow):
         self.tree.header().setSortIndicatorShown(True)
         self.tree.header().sortIndicatorChanged.connect(self._on_sort_requested)
         self.tree.setUniformRowHeights(True)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_archive_context_menu)
         self.tree.setColumnWidth(0, 300)
         self.tree.setItemDelegateForColumn(DISCOVERY_COLUMN, DiscoverySwitchDelegate(self.tree))
         self.tree.setColumnWidth(DISCOVERY_COLUMN, 132)
@@ -326,9 +332,17 @@ class MainWindow(QMainWindow):
         self.mode_combo.addItem("サイト別", ViewMode.SITE)
         self.mode_combo.addItem("作品別", ViewMode.WORK)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        toolbar.addWidget(QLabel("表示: "))
+        toolbar.addWidget(QLabel("並び: "))
         toolbar.addWidget(self.mode_combo)
         toolbar.addSeparator()
+        toolbar.addWidget(QLabel("表示: "))
+        self.archive_combo = QComboBox()
+        self.archive_combo.setObjectName("archive_filter")
+        for label, value in (("通常", ArchiveFilter.NORMAL), ("アーカイブ済み", ArchiveFilter.ARCHIVED),
+                             ("すべて", ArchiveFilter.ALL)):
+            self.archive_combo.addItem(label, value)
+        self.archive_combo.currentIndexChanged.connect(self._on_archive_filter_changed)
+        toolbar.addWidget(self.archive_combo)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("作品名 / label / key / site を検索")
         self.search_edit.setClearButtonEnabled(True)
@@ -346,6 +360,7 @@ class MainWindow(QMainWindow):
         for label, value in filters:
             self.filter_combo.addItem(label, value)
         self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        toolbar.addWidget(QLabel("取得状態: "))
         toolbar.addWidget(self.filter_combo)
         self.reload_button = QPushButton("再読込")
         self.reload_button.clicked.connect(self.reload)
@@ -501,7 +516,75 @@ class MainWindow(QMainWindow):
     # --- loading ---------------------------------------------------------------
 
     def _discovery_busy(self) -> bool:
-        return self._discovery_save_worker is not None or self._discovery_refresh
+        return (self._discovery_save_worker is not None or self._archive_save_worker is not None
+                or self._discovery_refresh)
+
+    def _archive_context_menu(self, index):
+        node = self.model.node_for_index(index)
+        if node is None or node.kind != "work" or self.model.snapshot is None:
+            return None
+        archived = node.work_key in self.model.snapshot.archived_work_keys
+        menu = QMenu(self)
+        action = menu.addAction("通常に戻す（全サイト共通）" if archived
+                                else "作品をアーカイブする（全サイト共通）")
+        action.setObjectName("restore_work_action" if archived else "archive_work_action")
+        reason = self._discovery_block_reason()
+        action.setEnabled(not reason)
+        action.setToolTip(reason or "同じwork_keyの全登録に適用します。Discovery設定は変わりません。")
+        action.triggered.connect(lambda: self._set_work_archived(node.work_key, not archived))
+        return menu
+
+    def _show_archive_context_menu(self, position) -> None:
+        menu = self._archive_context_menu(self.tree.indexAt(position))
+        if menu is not None:
+            menu.exec(self.tree.viewport().mapToGlobal(position))
+            menu.deleteLater()
+
+    def _set_work_archived(self, work_key: str, archived: bool) -> None:
+        reason = self._discovery_block_reason()
+        snapshot = self.model.snapshot
+        if reason or snapshot is None or not any(key.work_key == work_key for key in snapshot.keys):
+            self.error_label.setText(reason or "作品が見つかりません。再読込してください")
+            return
+        if (work_key in snapshot.archived_work_keys) == archived:
+            return
+        worker = WorkArchiveSaveWorker(self.watchlist_path, work_key, archived, snapshot.watchlist_revision)
+        self._archive_save_worker = worker
+        self._discovery_notice = ""
+        self.error_label.clear()
+        worker.signals.succeeded.connect(self._archive_saved, Qt.ConnectionType.QueuedConnection)
+        worker.signals.failed.connect(self._archive_save_failed, Qt.ConnectionType.QueuedConnection)
+        self._refresh_discovery_controls()
+        title = next(key.title or key.label for key in snapshot.keys if key.work_key == work_key)
+        self.statusBar().showMessage(f"{title}: アーカイブ設定を保存中…")
+        self.thread_pool.start(worker)
+
+    @Slot(object)
+    def _archive_saved(self, document) -> None:
+        worker = self._archive_save_worker
+        self._archive_save_worker = None
+        self._discovery_refresh = True
+        snapshot = replace(self.model.snapshot, archived_work_keys=frozenset(document.archived_work_keys),
+                           watchlist_revision=document.revision)
+        self.set_snapshot(snapshot)
+        title = next(key.title or key.label for key in snapshot.keys if key.work_key == worker.work_key)
+        self._discovery_notice = (f"{title}をアーカイブしました" if worker.archived
+                                  else f"{title}を通常に戻しました")
+        try:
+            self._sync_discovery_editors(snapshot)
+        except Exception as exc:  # noqa: BLE001 - the save already committed
+            self.error_label.setText(f"保存済み・編集画面の更新失敗: {exc}")
+        self._reload_again = False
+        self.reload()
+
+    @Slot(str)
+    def _archive_save_failed(self, message: str) -> None:
+        self._archive_save_worker = None
+        self._inventory_stale = True
+        self._reload_again = False
+        self.error_label.setText("保存できませんでした。再読込して確認してください: " + message)
+        self.statusBar().showMessage("アーカイブ設定の保存失敗（自動再試行なし）")
+        self._refresh_discovery_controls()
 
     def _registration_open(self) -> bool:
         editor = getattr(self, "_registration_editor", None)
@@ -713,7 +796,7 @@ class MainWindow(QMainWindow):
     def reload(self) -> None:
         if self._closed:
             return
-        if self._discovery_save_worker is not None:
+        if self._discovery_save_worker is not None or self._archive_save_worker is not None:
             self._reload_again = True
             return
         if self._loading:
@@ -810,7 +893,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("読み込みに失敗しました")
         if self._discovery_refresh:
             self._discovery_refresh = False
-            self.error_label.setText("Discovery設定は保存済み・表示更新失敗: " + message)
+            self.error_label.setText("Watchlist設定は保存済み・表示更新失敗: " + message)
             self.statusBar().showMessage("保存済みです。一覧を再読込してください")
         self._refresh_discovery_controls()
         if self._pending_rerun is not None:
@@ -837,7 +920,7 @@ class MainWindow(QMainWindow):
         focus = self.model.node_by_key_identity(old_focus_key) if old_focus_key else None
         if focus is None and old_focus_work:
             focus = next((node for node in self.model._nodes.values() if node.kind == "work" and node.work_key == old_focus_work), None)
-        if focus is not None:
+        if focus is not None and self.model.index_for_node(focus.node_id).isValid():
             self.model.focus_node(focus)
         self._sync_upper_geometry_minimum()
         QTimer.singleShot(0, self._sync_upper_geometry_minimum)
@@ -959,6 +1042,18 @@ class MainWindow(QMainWindow):
             current = self.model.index_for_node(focused)
             if current.isValid():
                 self.tree.setCurrentIndex(current)
+
+    def _on_archive_filter_changed(self, index: int) -> None:
+        expanded = self._expanded_node_ids()
+        self.model.set_archive_filter(self.archive_combo.itemData(index))
+        self._restore_expanded(expanded)
+        focused = self.model.focused_node_id
+        if focused:
+            current = self.model.index_for_node(focused)
+            if current.isValid():
+                self.tree.setCurrentIndex(current)
+            else:
+                self.model.focus_node(None)
 
     def _on_search_changed(self, text: str) -> None:
         focused = self.model.focused_node_id

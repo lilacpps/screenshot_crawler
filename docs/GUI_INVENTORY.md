@@ -105,8 +105,15 @@ Work → site → key project the same snapshot. Detail includes full Work/site/
 membership, source rows and recent Item history. Item rows use a Qt table model.
 
 Checked keys are a stable set of actual Watchlist keys, independent of focused
-detail. Parents act on all descendant keys, including hidden ones; partial
-selection has Qt's intermediate state. View/filter/sort never change this set.
+detail. Parents act on all descendant keys, including text/status-hidden ones,
+within the current Normal / Archived / All visibility view; partial selection
+has Qt's intermediate state. Projection/text/status/sort changes preserve this
+set. Archive visibility changes remove out-of-view selection; newly archived
+Works lose selection even in All. Matching parents in search cannot reveal
+archived descendants in Normal. Work-row context menus save or restore the
+whole work_key through the Watchlist-only locked/CAS worker. Inventory keeps
+all Catalog data and parent summary counts; archiving does not change domain
+counts or numbering. The separate Watchlist maintenance tree uses All.
 Reload intersects it with current keys and reports removals. Disabled discovery
 keys remain selectable and visibly disabled for Discovery. Unmanaged groups
 cannot become execution targets. Search matches title, label, key and site;

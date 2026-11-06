@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QAbstractItemModelTester, QSignalSpy
 from PySide6.QtWidgets import QApplication
 
-from screenshot_crawler.gui.model import InventoryTreeModel, StatusFilter, ViewMode
+from screenshot_crawler.gui.model import ArchiveFilter, InventoryTreeModel, StatusFilter, ViewMode
 from screenshot_crawler.management.models import (
     InventoryCounts,
     InventorySnapshot,
@@ -182,6 +182,66 @@ def test_terminal_external_or_skipped_is_not_unfinished(qt_app, field):
     model = InventoryTreeModel(snapshot)
     model.set_status_filter(StatusFilter.UNFINISHED)
     assert model.rowCount() == 0
+
+
+@pytest.mark.parametrize("mode", [ViewMode.SITE, ViewMode.WORK])
+def test_archive_filter_cross_site_search_selection_and_restore(qt_app, mode):
+    snapshot = _snapshot()
+    first = snapshot.keys[0]
+    normal = replace(first, identity="normal", work_key="another-work", title="別作品",
+                     target=replace(first.target, key="normal", work_key="another-work"))
+    snapshot = replace(snapshot, keys=(*snapshot.keys, normal))
+    model = InventoryTreeModel(snapshot)
+    model.set_view_mode(mode)
+    tester = QAbstractItemModelTester(model, QAbstractItemModelTester.FailureReportingMode.Warning)
+    model.set_checked_keys({"wk-1", "wk-2", "normal"})
+    model.focus_node(model.node_by_key_identity("wk-1"))
+    archived = replace(snapshot, archived_work_keys=frozenset({"same-work"}))
+    model.set_snapshot(archived)
+    assert model.selected_keys == {"normal"}
+    assert model.focused_node_id is None
+    for identity in ("wk-1", "wk-2"):
+        node = model.node_by_key_identity(identity)
+        assert not model.index_for_node(node.node_id).isValid()
+    model.set_search("bookwalker")  # Matching parent must not reveal archived descendants.
+    assert not model.index_for_node(model.node_by_key_identity("wk-1").node_id).isValid()
+    model.set_checked_keys(set())
+    model.setData(model.index(0, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    assert model.selected_keys == {"normal"}
+    model.set_archive_filter(ArchiveFilter.ARCHIVED)
+    model.set_search("")
+    assert model.selected_keys == set()
+    assert model.selectable_key_identities() == {"wk-1", "wk-2"}
+    work = next(node for node in model._nodes.values() if node.kind == "work" and node.work_key == "same-work")
+    assert "アーカイブ済み" in model.display_value(work, 0)
+    model.set_checked_keys({"wk-1", "wk-2"})
+    assert model.selected_keys == {"wk-1", "wk-2"}
+    model.set_archive_filter(ArchiveFilter.NORMAL)
+    assert not model.selected_keys
+    model.set_archive_filter(ArchiveFilter.ALL)
+    model.set_checked_keys({"wk-1", "normal"})
+    model.set_snapshot(snapshot)
+    assert model.index_for_node(model.node_by_key_identity("wk-2").node_id).isValid()
+    assert "アーカイブ済み" not in model.display_value(work, 0)
+    assert tester is not None
+
+
+def test_archived_site_totals_do_not_bypass_status_filter(qt_app):
+    snapshot = _snapshot()
+    first = snapshot.keys[0]
+    normal = replace(first, identity="normal", work_key="another-work", title="Normal",
+                     target=replace(first.target, key="normal", work_key="another-work"),
+                     summary=replace(first.summary, counts=InventoryCounts(total_assigned=1, paid=1)))
+    summaries = dict(snapshot.summaries)
+    summaries[("pair", first.site, "another-work")] = normal.summary
+    model = InventoryTreeModel(replace(snapshot, keys=(*snapshot.keys, normal), summaries=summaries,
+                                       archived_work_keys=frozenset({"same-work"})))
+    model.set_status_filter(StatusFilter.DIRECT)
+    assert model.rowCount() == 0
+    model.set_search(first.site)
+    assert model.rowCount() == 0
+    model.set_status_filter(StatusFilter.ALL)
+    assert model.rowCount() == 1
 
 
 def _multi_key_snapshot():

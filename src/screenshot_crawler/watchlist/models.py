@@ -36,3 +36,12 @@ class WatchlistTarget:
     discovery_scope: DiscoveryScope | None = None
     archive_order: int | None = None
     archive_segments: tuple[ArchiveSegment, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WatchlistSnapshot:
+    """Targets and Work visibility from one version of the Watchlist file."""
+
+    targets: tuple[WatchlistTarget, ...]
+    archived_work_keys: tuple[str, ...]
+    revision: str

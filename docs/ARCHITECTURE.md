@@ -9,7 +9,14 @@ snapshot reader. Existing Watchlist parsing, Site Policies, ScopeReconciler
 P1 inventory reads remain strictly read-only. The main screen's separate Discovery-switch worker
 writes only a key's Watchlist `enabled` field through the existing locked/CAS
 service. InventorySnapshot carries the Watchlist revision computed from the same
-read as its parsed targets. Qt model/delegate emit intent; the main window owns
+read as its parsed targets. Work archiving additionally uses a Watchlist-only
+save worker and the top-level `archived_work_keys` list. `read_document()`
+returns frozen targets, Work visibility and revision from one file read;
+the legacy `read_snapshot()` target/revision API remains compatible.
+InventorySnapshot carries the archived Work-key set without removing domain
+rows, changing numbering or writing Catalog. Main-window visibility and
+execution selection are enforced in the Qt tree model; maintenance editors
+retain the All view. Qt model/delegate emit intent; the main window owns
 save serialization, editor rebasing and GUI job-start exclusion. Saved values
 are committed before Inventory refresh; refresh failure never reports a failed
 save or rolls back the file. Selected execution uses a lightweight

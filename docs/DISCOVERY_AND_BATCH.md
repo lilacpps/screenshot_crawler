@@ -894,6 +894,32 @@ fields:
 
 ### 4.3 操作
 
+#### 作品のアーカイブ（2026-11-06）
+
+Watchlistのトップレベルに任意の `archived_work_keys` を保存できる。
+
+```yaml
+archived_work_keys:
+  - finished-work
+targets: []
+```
+
+省略時は空のlist。同じ `work_key` の全site/keyと保持済みCatalog行へ共通に適用する。
+各要素は前後の空白を含まない非空stringで、重複は禁止。登録targetがなくなっても
+アーカイブ設定は保持でき、後から同じWorkへ登録を追加してもアーカイブ扱いを引き継ぐ。
+`archive_order` / `archive_segments` は取得物の並び設定であり、この表示設定とは独立する。
+
+`WatchlistService.read_document()` はtargets・アーカイブWork一覧・revisionを同じreadから
+返す。`set_work_archived(work_key, archived, expected_revision=...)` は既存のper-path lock、
+CAS、atomic replaceでこの項目だけを保存する。既存のtarget編集でもこの項目を保持する。
+周囲のコメント・未知field・改行を保持し、安全に書き換えられないflow形式のroot、
+アーカイブfield内のコメントやanchor等では書き込まず停止する。直接YAML編集も可能。
+
+これは手動の表示管理であり、Item status、Watchlist `enabled`、Source担当flag、
+Discovery/BatchのCLI対象選択、quota、番号、Catalog、ZIPを変更しない。
+GUIの通常表示ではアーカイブWorkを親行の実行選択からも除外する。
+GUIの保存・表示・復帰手順は `GUI_README.md` を参照する。
+
 最低限、次を提供する。
 
 ```text

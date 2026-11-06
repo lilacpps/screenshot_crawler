@@ -117,7 +117,8 @@ class InventoryService:
         if not Path(watchlist_path).is_file():
             raise InventoryLoadError(f"Watchlistが見つかりません: {watchlist_path}")
         try:
-            targets, watchlist_revision = WatchlistService(watchlist_path).read_snapshot()
+            document = WatchlistService(watchlist_path).read_document()
+            targets, watchlist_revision = document.targets, document.revision
             settings = load_runtime_settings(runtime_path)
         except (ValueError, OSError) as exc:
             raise InventoryLoadError(f"Watchlist / runtime設定を読み込めません: {exc}") from exc
@@ -360,4 +361,5 @@ class InventoryService:
             MappingProxyType(archive_positions), MappingProxyType(resources), tuple(grants),
             perf_counter() - start,
             watchlist_revision=watchlist_revision,
+            archived_work_keys=frozenset(document.archived_work_keys),
         )

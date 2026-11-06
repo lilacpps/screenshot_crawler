@@ -44,6 +44,12 @@ class StatusFilter(StrEnum):
     OUT_OF_SCOPE = "out_of_scope"
 
 
+class ArchiveFilter(StrEnum):
+    NORMAL = "normal"
+    ARCHIVED = "archived"
+    ALL = "all"
+
+
 @dataclass(slots=True)
 class TreeNode:
     node_id: str
@@ -96,6 +102,7 @@ class InventoryTreeModel(QAbstractItemModel):
         self.snapshot: InventorySnapshot | None = None
         self.view_mode = ViewMode.SITE
         self.status_filter = StatusFilter.ALL
+        self.archive_filter = ArchiveFilter.NORMAL
         self.search_text = ""
         self.sort_column = 0
         self.sort_order = Qt.SortOrder.AscendingOrder
@@ -116,6 +123,7 @@ class InventoryTreeModel(QAbstractItemModel):
 
     def set_snapshot(self, snapshot: InventorySnapshot | None) -> None:
         old_checked = set(self.checked_keys)
+        old_archived = self.snapshot.archived_work_keys if self.snapshot else frozenset()
         old_focus_id = self.focused_node_id
         removed: set[str] = set()
         self.beginResetModel()
@@ -130,12 +138,18 @@ class InventoryTreeModel(QAbstractItemModel):
                 self._key_by_identity.setdefault(key.identity, key)
                 self._key_order.setdefault(key.identity, position)
             available = {key.identity for key in snapshot.keys if key.target is not None}
-            self.checked_keys = available & old_checked
+            newly_archived = snapshot.archived_work_keys - old_archived
+            self.checked_keys = {
+                identity for identity in available & old_checked
+                if self._key_by_identity[identity].work_key not in newly_archived
+                and self._archive_matches_work(self._key_by_identity[identity].work_key)
+            }
             removed = old_checked - available
             self._build_projection()
         else:
             self.checked_keys = set()
-        if self.focused_node_id not in self._nodes:
+        if (self.focused_node_id not in self._nodes
+                or not self._is_visible(self._nodes[self.focused_node_id])):
             self.focused_node_id = None
         self.endResetModel()
         self.checkedKeysChanged.emit(frozenset(self.checked_keys))
@@ -177,9 +191,17 @@ class InventoryTreeModel(QAbstractItemModel):
         self._invalidate_visibility()
         self.endResetModel()
 
+    def set_archive_filter(self, value: ArchiveFilter | str) -> None:
+        self.beginResetModel()
+        self.archive_filter = ArchiveFilter(value)
+        self._invalidate_visibility()
+        self.checked_keys.intersection_update(self.selectable_key_identities())
+        self.endResetModel()
+        self._emit_check_updates()
+
     def set_checked_keys(self, identities: Iterable[str]) -> None:
         """Replace selection using stable Watchlist identities."""
-        self.checked_keys = set(identities) & self.all_key_identities()
+        self.checked_keys = set(identities) & self.selectable_key_identities()
         self._emit_check_updates()
 
     @property
@@ -307,9 +329,24 @@ class InventoryTreeModel(QAbstractItemModel):
         haystack = " ".join((node.label, node.title, node.site or "", node.work_key or "", node.key_identity or "")).casefold()
         return self.search_text in haystack
 
+    def _archive_matches_work(self, work_key: str) -> bool:
+        archived = bool(self.snapshot and work_key in self.snapshot.archived_work_keys)
+        return (self.archive_filter is ArchiveFilter.ALL
+                or archived == (self.archive_filter is ArchiveFilter.ARCHIVED))
+
+    def _archive_matches_node(self, node: TreeNode) -> bool:
+        if node.work_key is not None:
+            return self._archive_matches_work(node.work_key)
+        return any(self._archive_matches_work(child.work_key) for child in node.key_descendants())
+
     def _status_matches(self, node: TreeNode) -> bool:
         if node.kind == "root":
             return True
+        if (node.kind == "site" and node.work_key is None
+                and any(not self._archive_matches_work(child.work_key) for child in node.key_descendants())):
+            # Site totals retain all Works. Hidden archived Works must not make
+            # an otherwise nonmatching site pass the active status filter.
+            return any(self._status_visible_subtree(child) for child in node.children)
         summary = self.summary_for(node)
         counts = _summary_counts(summary)
         if self.status_filter is StatusFilter.ALL:
@@ -331,9 +368,13 @@ class InventoryTreeModel(QAbstractItemModel):
         return self._text_matches(node) and self._status_matches(node)
 
     def _status_visible_subtree(self, node: TreeNode) -> bool:
+        if not self._archive_matches_node(node):
+            return False
         return self._status_matches(node) or any(self._status_visible_subtree(child) for child in node.children)
 
     def _is_visible(self, node: TreeNode) -> bool:
+        if not self._archive_matches_node(node):
+            return False
         if node._visible_cache is not None:
             return node._visible_cache
         own = self._matches(node)
@@ -434,7 +475,7 @@ class InventoryTreeModel(QAbstractItemModel):
                     or self.discovery_guard()):
                 return Qt.ItemFlag.ItemIsSelectable
             return flags | Qt.ItemFlag.ItemIsEditable
-        if index.column() == 0 and (node.kind in ("site", "work") and any(node.key_descendants()) or node.kind == "key" and self._managed(node)):
+        if index.column() == 0 and self._selection_identities(node):
             flags |= Qt.ItemFlag.ItemIsUserCheckable
         return flags
 
@@ -451,10 +492,7 @@ class InventoryTreeModel(QAbstractItemModel):
         if role != Qt.ItemDataRole.CheckStateRole or not index.isValid() or index.column() != 0:
             return False
         node = index.internalPointer()
-        if node.kind == "key":
-            identities = {node.key_identity} if self._managed(node) else set()
-        else:
-            identities = {child.key_identity for child in node.key_descendants() if self._managed(child)}
+        identities = self._selection_identities(node)
         if not identities:
             return False
         checked = value in (Qt.CheckState.Checked, Qt.CheckState.PartiallyChecked, 2, 1)
@@ -490,9 +528,7 @@ class InventoryTreeModel(QAbstractItemModel):
             if resolved is None:
                 return Qt.CheckState.Unchecked
             node = resolved
-        identities = {child.key_identity for child in node.key_descendants() if self._managed(child)}
-        if node.kind == "key" and self._managed(node):
-            identities = {node.key_identity}
+        identities = self._selection_identities(node)
         if not identities:
             return Qt.CheckState.Unchecked
         selected = len(identities & self.checked_keys)
@@ -501,6 +537,11 @@ class InventoryTreeModel(QAbstractItemModel):
         if selected == len(identities):
             return Qt.CheckState.Checked
         return Qt.CheckState.PartiallyChecked
+
+    def _selection_identities(self, node: TreeNode) -> set[str]:
+        nodes = (node,) if node.kind == "key" else node.key_descendants()
+        return {child.key_identity for child in nodes
+                if self._managed(child) and self._archive_matches_work(child.work_key)}
 
     def summary_for(self, node: TreeNode) -> InventorySummary | None:
         if self.snapshot is None:
@@ -524,6 +565,9 @@ class InventoryTreeModel(QAbstractItemModel):
 
     def display_value(self, node: TreeNode, column: int) -> str:
         if column == 0:
+            if (node.kind == "work" and self.snapshot
+                    and node.work_key in self.snapshot.archived_work_keys):
+                return "（アーカイブ済み）" + node.label
             return node.label
         if column == DISCOVERY_COLUMN:
             if self.discovery_pending_key is not None and node.key_identity == self.discovery_pending_key:
@@ -630,6 +674,11 @@ class InventoryTreeModel(QAbstractItemModel):
         node = self._nodes.get(node_id)
         if node is None or node is self.root:
             return QModelIndex()
+        ancestor = node
+        while ancestor is not self.root:
+            if ancestor not in self.visible_children(ancestor.parent or self.root):
+                return QModelIndex()
+            ancestor = ancestor.parent or self.root
         parent = node.parent or self.root
         siblings = self.visible_children(parent)
         try:
@@ -640,6 +689,11 @@ class InventoryTreeModel(QAbstractItemModel):
 
     def all_key_identities(self) -> set[str]:
         return {key.identity for key in self._key_by_identity.values() if key.target is not None}
+
+    def selectable_key_identities(self) -> set[str]:
+        """Ignore text/status filters, but respect the explicit Work visibility view."""
+        return {key.identity for key in self._key_by_identity.values()
+                if key.target is not None and self._archive_matches_work(key.work_key)}
 
     def key_inventory(self, identity: str) -> KeyInventory | None:
         return self._key_by_identity.get(identity)

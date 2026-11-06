@@ -90,3 +90,4 @@ class InventorySnapshot:
     grants: tuple[GrantEstimate, ...]
     load_seconds: float
     watchlist_revision: str | None = None
+    archived_work_keys: frozenset[str] = frozenset()

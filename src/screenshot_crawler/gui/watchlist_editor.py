@@ -51,7 +51,7 @@ from screenshot_crawler.catalog.job_lock import CatalogJobLock
 from screenshot_crawler.catalog.service import CatalogService
 from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow
-from screenshot_crawler.gui.model import InventoryTreeModel, StatusFilter, ViewMode
+from screenshot_crawler.gui.model import ArchiveFilter, InventoryTreeModel, StatusFilter, ViewMode
 from screenshot_crawler.gui.watchlist_comparison import WorkEpisodeModel, WorkEpisodeRow
 from screenshot_crawler.management.catalog_reader import (
     CatalogInventoryReader,
@@ -604,6 +604,8 @@ class WatchlistEditorPage(QWidget):
         self.target_table.setMinimumHeight(90)
         self.target_table.clicked.connect(self._select_target_row)
         self.inventory_model = InventoryTreeModel(self.snapshot, parent=self)
+        # This editor must retain access to every registered Work for maintenance.
+        self.inventory_model.set_archive_filter(ArchiveFilter.ALL)
         self.inventory_model.set_view_mode(ViewMode.WORK)
         self.inventory_tree = QTreeView()
         self.inventory_tree.setModel(self.inventory_model)

@@ -735,8 +735,9 @@ numbering, Catalog and ZIP data are unaffected. No Discovery or Full prompt is
 triggered. The former main-window read-only label now distinguishes Catalog
 viewing from Watchlist editing.
 
-`WatchlistService.read_snapshot()` returns targets and their SHA-256 revision
-from one content read; `InventorySnapshot.watchlist_revision` binds the displayed
+`WatchlistService.read_document()` returns immutable targets, archived Work keys
+and their SHA-256 revision from one content read; legacy `read_snapshot()` keeps
+its targets/revision API. `InventorySnapshot.watchlist_revision` binds the displayed
 targets to CAS. Legacy/synthetic snapshots without a revision cannot toggle.
 `gui/discovery_toggle.py` contains the switch delegate and a Watchlist-only
 QRunnable that uses `update_target(enabled=..., expected_revision=...)` under
@@ -754,7 +755,51 @@ not as an unsaved edit. A visible warning explains that waiting jobs retain thei
 old configuration fingerprint and may stop after any Watchlist edit. No CLI,
 schema, browser or site behavior changes are introduced.
 
-Verification uses isolated synthetic Catalog/Watchlist/management fixtures, Qt
+Work archiving (2026-11-06) adds optional top-level `archived_work_keys` to
+Watchlist. Omitted means empty; duplicate/non-string/blank/untrimmed entries and
+duplicate root fields are invalid. `set_work_archived()` performs a Work-only
+lock/CAS/atomic replacement, retaining targets, other root fields, comments and
+LF/CRLF. Ordinary target saves validate preservation of this field. Root flow
+collections and archive-field comments/anchors that cannot be safely rewritten
+fail without writing and can be edited directly. Keys without current targets
+are retained so Catalog-only history and later registrations share visibility.
+
+The main GUI starts in Normal and offers a separate Normal/Archived/All filter,
+combined with search/status filters. Right-click a Work row to archive or restore
+all sites/keys with that work_key, without confirmation; All/Archived mark Work
+labels as archived. `gui/work_archive.py` saves in a bounded worker under the
+same busy/active-worker/editor guards as Discovery switching. Failure retains
+rows/selection and requires reload; a committed save followed by reload failure
+keeps the saved visibility and reports stale display. Clean editors rebase
+their revision; waiting jobs retain their original whole-file fingerprints.
+The maintenance Inventory tree uses All. No auto-archive/auto-restore exists.
+
+Newly archived Works lose execution selection even in All; changing visibility
+removes out-of-view selection. Parent selection still includes search/status
+hidden descendants, but only within the chosen archive view. Explicit archived
+selection remains possible in Archived/All. Catalog-only rows follow their Work's
+visibility. Item statuses, history, ZIPs, Source flags, numbering, Discovery
+enabled values and CLI Discovery/Batch target selection remain unchanged.
+Snapshot data and summary counts include every Work; visibility is a GUI concern.
+No new CLI flag, Catalog schema/migration or browser behavior is introduced.
+Verification uses synthetic Catalog/Watchlist/Qt inputs only; no operational
+Catalog/Watchlist/Books or live-site resource was modified for this feature.
+Work-archive verification: 170 targeted Watchlist/Inventory/model/Qt tests and
+251 affected editor/registration/scope/Batch/execution/GUI tests passed, plus
+four Watchlist-related CLI cases (102 unrelated CLI cases deselected). Final
+model/worker/menu rerun passed 31 tests after the label/title adjustments;
+these overlap the two groups. The final execution-input group passed 11 tests,
+including two additional archived-Work Discovery/Batch worker cases: 427 distinct
+test nodes passed across these groups. Whole-file fingerprints change on archive
+edits; explicitly requested archived keys remain executable. Ruff over `src tests` and `git diff --check`
+passed. No tests skipped. Synthetic offscreen renders with an explicitly loaded
+Meiryo font checked the 1400x850 and compact layouts; artifacts are isolated in
+`.tmp/work-archive-ui-final/`. Full suite and browser-backed Integration/
+Research/Live were not run: this change adds Watchlist display metadata and GUI
+selection behavior without changing Core, Catalog schema or site automation.
+
+Discovery-switch verification (2026-10-31) uses isolated synthetic
+Catalog/Watchlist/management fixtures, Qt
 mouse/keyboard events, CAS/write/read-failure injection and existing GUI/execution
 regressions. The final affected group passed 299 tests, zero skipped
 (`.tmp/discovery-toggle-affected-final.xml`); the final Work-editor/discovery
@@ -878,8 +923,10 @@ mtime. Use an externally prepared consistent rollback-journal backup. GUI does
 not checkpoint, switch journals or use immutable=1 to ignore WAL contents.
 
 The two projections are site/work/key and work/site/key. Checked Watchlist keys
-are independent of detail focus and survive filtering/view switching. Parent
-selection includes hidden descendants. The right pane reads source scope, access,
+are independent of detail focus and survive text/status filtering and projection
+switching; archive visibility and newly archived Works prune selection as above.
+Parent selection includes hidden descendants within the chosen archive view.
+The right pane reads source scope, access,
 recent Item Run and Artifact records. No ZIP existence checks or renumber preview.
 
 Counts deduplicate Item IDs, preserve completed/external/skipped separately and

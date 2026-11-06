@@ -41,6 +41,7 @@ def fingerprints(paths):
 def test_snapshot_invariants_scope_unmanaged_and_immutable(inventory_inputs):
     snapshot = load(inventory_inputs)
     assert snapshot.watchlist_revision == WatchlistService(inventory_inputs[1]).revision()
+    assert snapshot.archived_work_keys == frozenset()
     assert len(snapshot.sources) == 96
     assert len(snapshot.keys) == 10
     keys = {key.identity: key for key in snapshot.keys}
@@ -65,6 +66,18 @@ def test_snapshot_invariants_scope_unmanaged_and_immutable(inventory_inputs):
         snapshot.sources[1] = snapshot.sources[2]
     with pytest.raises(FrozenInstanceError):
         keys["sample-0004"].label = "changed"
+
+
+def test_archiving_changes_only_inventory_visibility_metadata(inventory_inputs):
+    before = load(inventory_inputs)
+    watch = WatchlistService(inventory_inputs[1])
+    document = watch.set_work_archived(before.keys[0].work_key, True)
+    after = load(inventory_inputs)
+    assert after.archived_work_keys == frozenset(document.archived_work_keys)
+    assert after.watchlist_revision == document.revision
+    for field in ("keys", "summaries", "items", "sources", "source_targets", "classifications",
+                  "latest_runs", "artifacts", "archive_positions", "resources", "grants"):
+        assert getattr(after, field) == getattr(before, field)
 
 
 def test_no_write_capability_and_one_read_transaction(inventory_inputs, tmp_path, monkeypatch):

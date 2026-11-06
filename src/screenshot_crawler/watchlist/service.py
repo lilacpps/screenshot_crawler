@@ -14,7 +14,12 @@ from typing import Any
 import yaml
 
 from screenshot_crawler.catalog.job_lock import CatalogJobLock
-from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.models import (
+    ArchiveSegment,
+    DiscoveryScope,
+    WatchlistSnapshot,
+    WatchlistTarget,
+)
 
 
 class WatchlistError(ValueError):
@@ -60,7 +65,7 @@ class WatchlistService:
 
     def __init__(self, path: str | Path = "watchlist.yaml") -> None:
         self.path = Path(path)
-        self._cached_document: tuple[str, tuple[WatchlistTarget, ...]] | None = None
+        self._cached_document: tuple[str, tuple[WatchlistTarget, ...], tuple[str, ...]] | None = None
 
     def list_targets(self) -> list[WatchlistTarget]:
         """Return targets in file order."""
@@ -97,6 +102,87 @@ class WatchlistService:
 
         content = self._read_content()
         return tuple(self._load_content(content)), self._content_digest(content)
+
+    def read_document(self) -> WatchlistSnapshot:
+        """Read targets, Work visibility and revision atomically as one snapshot."""
+        content = self._read_content()
+        targets = tuple(self._load_content(content))
+        archived = self._cached_document[2] if self._cached_document else ()
+        return WatchlistSnapshot(targets, archived, self._content_digest(content))
+
+    def set_work_archived(
+        self, work_key: str, archived: bool, *, expected_revision: str | None = None,
+    ) -> WatchlistSnapshot:
+        """Persist visibility only; never alter targets, Catalog or execution flags."""
+        if not isinstance(work_key, str) or not work_key.strip() or work_key != work_key.strip():
+            raise InvalidWatchlistError("work_key must be a non-empty, trimmed string")
+        if not isinstance(archived, bool):
+            raise InvalidWatchlistError("archived must be a boolean")
+        with self.edit_lock():
+            original = self._content_for_revision(expected_revision)
+            targets = tuple(self._load_content(original))
+            current = self._cached_document[2] if self._cached_document else ()
+            if (work_key in current) == archived:
+                return WatchlistSnapshot(targets, current, self._content_digest(original))
+            desired = (*current, work_key) if archived else tuple(k for k in current if k != work_key)
+            patched = self._patch_archived_work_keys(original, desired)
+            # Validate all known fields before committing, including the unchanged targets.
+            self._validate_written_content(patched, list(targets), archived_work_keys=desired)
+            if self._read_content() != original:
+                raise WatchlistError("Watchlist changed while saving; reload and retry the edit")
+            written = self._preserve_eol(patched, original)
+            self._atomic_write(written)
+            return WatchlistSnapshot(targets, desired, self._content_digest(written))
+
+    @classmethod
+    def _parse_archived_work_keys(cls, raw: Mapping[str, Any]) -> tuple[str, ...]:
+        values = raw.get("archived_work_keys", [])
+        if (not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() or value != value.strip()
+            for value in values
+        )):
+            raise InvalidWatchlistError("archived_work_keys must be a list of non-empty, trimmed strings")
+        if len(values) != len(set(values)):
+            raise InvalidWatchlistError("archived_work_keys must not contain duplicates")
+        return tuple(values)
+
+    @classmethod
+    def _patch_archived_work_keys(cls, original: str, desired: tuple[str, ...]) -> str:
+        rendered = yaml.safe_dump(
+            {"archived_work_keys": list(desired)}, allow_unicode=True, sort_keys=False,
+        )
+        root = yaml.compose(original)
+        if root is None:
+            return rendered + "targets: []\n"
+        if not isinstance(root, yaml.MappingNode) or root.flow_style or root.start_mark.column:
+            raise WatchlistError("Cannot safely update archived_work_keys in this YAML format")
+        fields = [(key, value) for key, value in root.value if key.value == "archived_work_keys"]
+        if not fields:
+            offset = root.start_mark.index
+            return original[:offset] + rendered + original[offset:]
+        if len(fields) != 1:
+            raise WatchlistError("Duplicate archived_work_keys fields")
+        key, value = fields[0]
+        lines = original.splitlines(keepends=True)
+        starts = cls._line_starts(lines)
+        if (not isinstance(value, yaml.SequenceNode)
+                or value.start_mark.index < key.end_mark.index):
+            raise WatchlistError("Cannot safely update archived_work_keys in this YAML format")
+        # Block YAML allows unindented sequence dashes at the same column as
+        # the root key, so the generic indented-field helper cannot delimit it.
+        end_line = min(len(lines), value.end_mark.line + bool(value.end_mark.column))
+        while end_line > key.start_mark.line + 1 and (
+            not lines[end_line - 1].strip() or lines[end_line - 1].lstrip().startswith("#")
+        ):
+            end_line -= 1
+        start = starts[key.start_mark.line]
+        end = starts[end_line] if end_line < len(starts) else len(original)
+        if "#" in original[start:end] or any(
+            isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken))
+            for token in yaml.scan(original[start:end])
+        ):
+            raise WatchlistError("Cannot safely rewrite commented or anchored archived_work_keys; edit this field directly")
+        return original[:start] + rendered + original[end:]
 
     def edit_lock(self) -> CatalogJobLock:
         """Return the per-Watchlist CAS/replace lock.
@@ -382,6 +468,7 @@ class WatchlistService:
 
     def _load_content(self, content: str) -> list[WatchlistTarget]:
         if not self.path.exists():
+            self._cached_document = (content, (), ())
             return []
         try:
             # Content comparison also catches same-size edits and atomic replacements.
@@ -395,7 +482,7 @@ class WatchlistService:
             raise InvalidWatchlistError(f"Malformed YAML in {self.path}: {exc}") from exc
 
         if raw is None:
-            self._cached_document = (content, ())
+            self._cached_document = (content, (), ())
             return []
         if not isinstance(raw, dict):
             raise InvalidWatchlistError("Watchlist root must be a mapping")
@@ -404,6 +491,11 @@ class WatchlistService:
         raw_targets = raw["targets"]
         if not isinstance(raw_targets, list):
             raise InvalidWatchlistError("Watchlist 'targets' must be a list")
+        archived = self._parse_archived_work_keys(raw)
+        if "archived_work_keys" in raw:
+            root = yaml.compose(content)
+            if sum(key.value == "archived_work_keys" for key, _ in root.value) > 1:
+                raise InvalidWatchlistError("Duplicate archived_work_keys fields")
 
         targets: list[WatchlistTarget] = []
         keys: set[str] = set()
@@ -416,7 +508,7 @@ class WatchlistService:
         self._validate_archive_orders(targets)
         # Read the file on every call; only parsing unchanged content is shared.
         # Rows are immutable and callers receive a fresh list.
-        self._cached_document = (content, tuple(targets))
+        self._cached_document = (content, tuple(targets), archived)
         return targets
 
     def _parse_target(self, raw_target: Any, index: int) -> WatchlistTarget:
@@ -690,6 +782,8 @@ class WatchlistService:
         self._validate_archive_orders(targets)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         current_content = self._read_content()
+        current_raw = yaml.safe_load(current_content)
+        archived = self._parse_archived_work_keys(current_raw or {})
         if expected_content is not None and current_content != expected_content:
             raise WatchlistError(
                 "Watchlist changed while saving; reload and retry the edit"
@@ -703,15 +797,15 @@ class WatchlistService:
                         f"Cannot safely update {self.path} while preserving its comments; "
                         "edit the target mapping directly"
                     )
-                self._validate_written_content(patched, targets)
+                self._validate_written_content(patched, targets, archived_work_keys=archived)
                 self._atomic_write(self._preserve_eol(patched, original))
                 return
             content = self._preserve_eol(self._serialize_targets(targets), original)
-            self._validate_written_content(content, targets)
+            self._validate_written_content(content, targets, archived_work_keys=archived)
             self._atomic_write(content)
             return
         content = self._serialize_targets(targets)
-        self._validate_written_content(content, targets)
+        self._validate_written_content(content, targets, archived_work_keys=archived)
         self._atomic_write(content)
 
     @staticmethod
@@ -769,12 +863,15 @@ class WatchlistService:
         )
 
     def _validate_written_content(
-        self, content: str, expected: list[WatchlistTarget]
+        self, content: str, expected: list[WatchlistTarget],
+        *, archived_work_keys: tuple[str, ...] = (),
     ) -> None:
         try:
             raw = yaml.safe_load(content)
             if not isinstance(raw, dict) or not isinstance(raw.get("targets"), list):
                 raise InvalidWatchlistError("written Watchlist targets are not a list")
+            if self._parse_archived_work_keys(raw) != archived_work_keys:
+                raise InvalidWatchlistError("written Watchlist changed archived_work_keys unexpectedly")
             actual = [self._parse_target(target, index) for index, target in enumerate(raw["targets"])]
             keys = [target.key for target in actual]
             if len(keys) != len(set(keys)):
