@@ -498,6 +498,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
+    from screenshot_crawler.site_adapters.yanmaga import YanmagaAdapter
     from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
@@ -515,6 +516,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
     registry.register("kadocomi", KadocomiAdapter)
+    registry.register("yanmaga", YanmagaAdapter)
     younganimal_work_url = env_value("YOUNGANIMAL_WORK_URL", values or {})
     registry.register(
         "younganimal",
@@ -536,6 +538,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
+    from screenshot_crawler.site_adapters.yanmaga import YanmagaAdapter
     from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
@@ -559,6 +562,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
     registry.register("kadocomi", KadocomiAdapter)
+    registry.register("yanmaga", YanmagaAdapter)
     registry.register("younganimal", YounganimalAdapter)
     return registry
 
@@ -575,6 +579,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
+    from screenshot_crawler.site_adapters.yanmaga import YanmagaDiscoveryAdapter
     from screenshot_crawler.site_adapters.younganimal import YounganimalDiscoveryAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackDiscoveryAdapter
 
@@ -590,6 +595,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("hanayume", HanayumeDiscoveryAdapter)
     registry.register("younganimal", YounganimalDiscoveryAdapter)
     registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    registry.register("yanmaga", YanmagaDiscoveryAdapter)
     return registry
 
 
@@ -603,11 +609,13 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("comicfuz", ComicFuzSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+    from screenshot_crawler.site_policies.yanmaga import YanmagaSitePolicy
     from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
     registry.register("comicdays", ComicDaysSitePolicy)
     registry.register("piccoma", PiccomaSitePolicy)
     registry.register("hanayume", HanayumeSitePolicy)
     registry.register("kadocomi", KadocomiSitePolicy)
+    registry.register("yanmaga", YanmagaSitePolicy)
     registry.register("younganimal", YounganimalSitePolicy)
     return registry
 

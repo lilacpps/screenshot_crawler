@@ -822,6 +822,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "yanmaga",
         "younganimal",
         "zeblack",
     )
@@ -847,6 +848,9 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     comicfuz_policy = cli._batch_policy_registry().create("comicfuz")
     assert comicfuz_policy.supported_access_resources() == ()
     assert comicfuz_policy.grant_only_supported_access_resources() == ()
+    yanmaga_policy = cli._batch_policy_registry().create("yanmaga")
+    assert yanmaga_policy.supported_access_resources() == ()
+    assert yanmaga_policy.grant_only_supported_access_resources() == ()
 
 
 def test_discovery_and_batch_registries_contain_supported_sites() -> None:
@@ -860,6 +864,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "yanmaga",
         "younganimal",
         "zeblack",
     )
@@ -873,6 +878,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "yanmaga",
         "younganimal",
         "zeblack",
     )
@@ -888,6 +894,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "yanmaga",
         "younganimal",
         "zeblack",
     )
@@ -898,7 +905,9 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "younganimal" in cli._batch_policy_registry().sites()
     assert "comicfuz" in cli._batch_policy_registry().sites()
     assert cli._registry().create("kadocomi").__class__.__name__ == "KadocomiAdapter"
+    assert cli._registry().create("yanmaga").__class__.__name__ == "YanmagaAdapter"
     assert cli._batch_adapter_registry({}).create("kadocomi").__class__.__name__ == "KadocomiAdapter"
+    assert cli._batch_adapter_registry({}).create("yanmaga").__class__.__name__ == "YanmagaAdapter"
     # Both adapters must keep the current Kadocomi entry contract when a new site is added.
     kadocomi_url = (
         "https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000700021_E"

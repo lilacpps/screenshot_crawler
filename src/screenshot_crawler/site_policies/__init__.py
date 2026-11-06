@@ -16,6 +16,7 @@ from screenshot_crawler.site_policies.magapoke import MagapokeSitePolicy
 from screenshot_crawler.site_policies.mangaone import MangaOneSitePolicy
 from screenshot_crawler.site_policies.piccoma import PiccomaSitePolicy
 from screenshot_crawler.site_policies.registry import SitePolicyRegistry
+from screenshot_crawler.site_policies.yanmaga import YanmagaSitePolicy
 from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
 from screenshot_crawler.site_policies.zeblack import ZeblackSitePolicy
 
@@ -34,6 +35,7 @@ __all__ = [
     "SitePolicy",
     "SitePolicyError",
     "SitePolicyRegistry",
+    "YanmagaSitePolicy",
     "YounganimalSitePolicy",
     "ZeblackSitePolicy",
 ]

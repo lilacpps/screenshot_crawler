@@ -82,3 +82,6 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   read-only事前プレビュー、Full DiscoveryとScope同期の段階適用（planned）。
 
 - [Watchlist URL一括登録](watchlist-url-registration/README.md) — URL形式自動検証・安全変換、作品名とhuman-readable key/work_key生成、複数URLと同一Workのscope編集、一括保存の段階実装（planned）。
+
+- [ヤンマガWeb 通常無料のみ Site Adapter](yanmaga-free/README.md) —
+  初回無料・黄色の無料/チケット・ポイントを対象外にした、Discovery → direct Batch → Viewer → ZIP/E2E の実装契約（planned）。
