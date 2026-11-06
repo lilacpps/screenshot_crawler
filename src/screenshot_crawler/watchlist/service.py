@@ -762,11 +762,11 @@ class WatchlistService:
         return False
 
     def _serialize_targets(self, targets: list[WatchlistTarget]) -> str:
-        serialized_targets: list[dict[str, Any]] = []
-        for target in targets:
-            serialized_targets.append(self._target_mapping(target))
-        payload = {"targets": serialized_targets}
-        return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+        if not targets:
+            return "targets: []\n"
+        return "targets:\n" + "\n".join(
+            self._render_target_item(target, 0) for target in targets
+        )
 
     def _validate_written_content(
         self, content: str, expected: list[WatchlistTarget]
@@ -919,14 +919,23 @@ class WatchlistService:
             ]
             edits.append((starts[start_line], starts[end_line] if end_line < len(starts) else len(original), "".join(kept)))
 
-        for key in sorted(added_keys):
+        if added_keys:
             if not item_starts_sorted:
                 append_at = sequence.start_mark.index
                 indent = 0
             else:
                 append_at = sequence.end_mark.index
                 indent = len(lines[item_starts_sorted[0]]) - len(lines[item_starts_sorted[0]].lstrip())
-            rendered = self._render_target_item(new_by_key[key], indent)
+            rendered = "\n".join(
+                self._render_target_item(target, indent)
+                for target in targets if target.key in added_keys
+            )
+            if item_starts_sorted:
+                prefix = original[:append_at]
+                if not prefix.endswith("\n"):
+                    rendered = "\n\n" + rendered
+                elif not re.search(r"\n[ \t]*\r?\n$", prefix):
+                    rendered = "\n" + rendered
             edits.append((append_at, append_at, rendered))
 
         for key in sorted(set(old_by_key) & set(new_by_key)):

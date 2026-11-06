@@ -60,6 +60,7 @@ def test_selected_set_single_apply_preserves_unselected_drafts_catalog_zip_and_c
     assert result.verified and calls == [True]
     assert {target.key for target in WatchlistService(path).list_targets()} == {"legacy", "first-jumpplus"}
     assert path.read_text(encoding="utf-8").startswith("# 人の注釈\n")
+    assert "label: 既存\n\n- key: first-jumpplus\n" in path.read_text(encoding="utf-8")
     actual = yaml.safe_load(path.read_text(encoding="utf-8"))["targets"]
     assert planned == [target for target in actual if target["key"] == "first-jumpplus"]
     assert original == (catalog.path.read_bytes(), archive.read_bytes())

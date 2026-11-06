@@ -525,7 +525,9 @@ The Watchlist model now accepts DiscoveryScope.excluded_external_ids as canonica
 
 WatchlistService provides read-only revision/preview support, update_target, and work-atomic update_work_archive_order. Mutations use a per-Watchlist path lock, revision compare-and-swap, durable temporary-file flush, and atomic replace. Ordinary block YAML edits patch source spans so unrelated comments, root keys, and target keys survive; ambiguous flow/multiline or nested-scope-comment cases fail without writing. These APIs do not write Catalog, ZIP, or scope-sync state. Stage 03 now provides the narrow Batch safety overlay for newly saved exclusions; outer-boundary edits still carry the GUI Full/Apply warning until scope reflection.
 
-Validation status: Watchlist unit tests cover legacy/boundary/exclusion forms, canonicalization, comment and unknown-key preservation, preview no-write, CAS/concurrency, archive ordering, and fail-closed syntax. No live-site or operational data verification was performed.
+GUI登録・編集とCLIで共用するYAML writerは、通常の再出力と表示用excerptで各target間に空行を1行入れる。コメント等を保持するpatch追記でも、新規targetの前と複数追加target間に空行を1行入れ、既存末尾の空行は重ねない。既存のコメント・無関係な項目・LF/CRLFを保持し、変更のない保存では整形のためだけの書き換えをしない。
+
+Validation status: Watchlist unit tests cover legacy/boundary/exclusion forms, canonicalization, comment and unknown-key preservation, target separators for ordinary and comment-preserving writes (including LF/CRLF), preview no-write, CAS/concurrency, archive ordering, and fail-closed syntax. The registration save regression also checks target separation. No live-site or operational data verification was performed.
 
 ## Watchlist GUI scope editor Stage 04 (2026-10-25)
 

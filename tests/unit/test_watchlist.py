@@ -45,6 +45,15 @@ def test_missing_watchlist_is_empty_and_add_roundtrips_v3_fields(tmp_path: Path)
     assert "label: 作品A" in written
     assert "discovery_scope" not in written
 
+    second = add_target(service, key="two", work_key="work-two", label="作品B")
+    third = replace(second, key="three", work_key="work-three", label="作品C")
+    service.apply_edit((added, second, third), expected_revision=service.revision())
+    written = service.path.read_text(encoding="utf-8")
+    assert "label: 作品A\n\n- key: two\n" in written
+    assert "label: 作品B\n\n- key: three\n" in written
+    assert service.list_targets() == [added, second, third]
+    assert service.format_targets_yaml((added, second, third)) == written
+
 
 def test_existing_scope_less_yaml_loads_as_unbounded(tmp_path: Path) -> None:
     path = tmp_path / "watchlist.yaml"
@@ -323,7 +332,11 @@ def test_archive_order_invalid_groups_are_rejected(
         WatchlistService(path).list_targets()
 
 
-def test_watchlist_mutations_preserve_unrelated_comments(tmp_path: Path) -> None:
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+@pytest.mark.parametrize("trailing", ["", "\n", "\n\n"])
+def test_watchlist_mutations_preserve_unrelated_comments(
+    tmp_path: Path, eol: str, trailing: str,
+) -> None:
     path = tmp_path / "watchlist.yaml"
     original = (
         "# keep document comment\n"
@@ -335,9 +348,9 @@ def test_watchlist_mutations_preserve_unrelated_comments(tmp_path: Path) -> None
         "    url: https://example.invalid/one\n"
         "    enabled: true # retain enabled note\n"
         "    label: One\n"
-        "# keep trailing comment\n"
+        "# keep trailing comment"
     )
-    path.write_text(original, encoding="utf-8")
+    path.write_bytes((original + trailing).replace("\n", eol).encode("utf-8"))
     service = WatchlistService(path)
 
     service.disable("one")
@@ -353,6 +366,19 @@ def test_watchlist_mutations_preserve_unrelated_comments(tmp_path: Path) -> None
     add_target(service, key="two", work_key="work-two", label="Two")
     assert path.read_text(encoding="utf-8").startswith(after)
     assert service.get("two").label == "Two"
+    assert "# keep trailing comment\n\n  - key: two\n" in path.read_text(encoding="utf-8")
+    two = service.get("two")
+    proposed = (*service.list_targets(),
+        replace(two, key="three", work_key="work-three", label="Three"),
+        replace(two, key="four", work_key="work-four", label="Four"))
+    service.apply_edit(proposed)
+    assert service.list_targets() == list(proposed)
+    written = path.read_text(encoding="utf-8")
+    assert "label: Two\n\n  - key:" in written
+    assert written.count("\n\n  - key:") == 3
+    assert "\n\n\n" not in written
+    raw = path.read_bytes()
+    assert raw.decode("utf-8").replace(eol, "\n") == written
 
 
 @pytest.mark.parametrize("removed_key", ["one", "two", "three"])
