@@ -1,6 +1,6 @@
 # 03 — 原画像 / source-native Capture を最大限追求する
 
-Status: **NOT STARTED**。開始条件: Stage 00の画像経路仮説、Stage 02の安全なViewer baselineと正しいページ/END判定が確立済み。
+Status: **OFFLINE PREPARATION / LIVE NOT STARTED**. The copied observer/verifier passed 60 local synthetic checks and offline review; the metadata-only Muda 1 harness passed 15 local checks and independent review found blocking issues; fixes are applied and re-review is pending, so live use is not approved. No live source probe, response-body read or source-pixel read occurred. A/B/C remain unverified. Stage 02 is accepted only for the one-work D baseline.
 
 ## 目的（品質要件）
 

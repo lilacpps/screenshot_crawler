@@ -1,6 +1,6 @@
 # 00 — 実サイトProbe（一覧・権利・Viewer・画像ソース）
 
-Status: **VERIFIED / REVIEWER ACCEPTED** (2026-11-07)。一覧、購入権利、Reader入口・遷移・Angel 10のEND、および原画像候補調査を実施済み。Stage 02では部分Reader Adapterを実装中。このStageで運用Catalog更新はしない。
+Status: **VERIFIED / REVIEWER ACCEPTED** (2026-11-07). Listing, rights, Reader entry/transition, and the Angel 10 END profile were observed. A separate Mudazumo 1 terminal structure was observed but has not been exercised by a full Mudazumo crawl. Stage 02 is now VERIFIED / ACCEPTED for the one-work Angel 10 D baseline; bounded probe evidence is not source-provenance proof. Stage 03 remains offline preparation / live not started. This stage does not update the operational Catalog.
 
 ## 入力・既知／未知
 
