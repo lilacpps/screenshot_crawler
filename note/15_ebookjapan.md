@@ -82,14 +82,58 @@ rejection or proof that the server response lacks listing content.
 
 The first-party PNG response observed during Stage 00 is not bound to a current
 page. A (original bytes), B (lossless reconstruction) and C (source-derived
-pixels) are unproven. One D compositor cover control is retained only in the
-ignored phase02 research output; it is not an adopted capture method. No
+pixels) are unproven. Two D compositor cover controls (Angel and Mudazumo) are
+retained only in the ignored phase02 research output, along with 287 D page
+artifacts from a run that failed before END; these are not an adopted source
+capture method. No
 DRM/access-control bypass or decryption was attempted. An offline Site Policy
 candidate is now prepared: only an available `owned` Catalog source is planned
 as `direct`, with no quota consumption. It is not registered in CLI, Batch or
 GUI and is not live-verified; Catalog state does not replace current Reader
 ownership checks. ZIP creation and end-to-end acquisition remain later stages.
 See `runbooks/ebookjapan-owned/PROGRESS.md` for the current gate.
+
+## Stage 03 method ledger and local preparation
+
+The previous bounded live probes leave A/B/C unproven. One ordinary first-party
+PNG response from Stage 00 was not tied to the current page. Stage 02 observed
+10 `image/avif` and one `image/webp` response, but no response was joined by
+identity to the selected source bitmap and no response body was read. An
+OffscreenCanvas `transferToImageBitmap()` result was joined to the selected
+main-canvas draw, but the source draw history had exceeded the old 64-call cap.
+No source bytes or currentSrc-to-response binding were established. This is
+insufficient evidence for A.
+
+B was not attempted because no encoded image or complete source/tile lineage
+was bound to the selected page. `getImageData` on the selected main canvas
+returned `SecurityError`; this blocks that exact readback path only. No offscreen
+source pixel read, bypass, decryption, or C capture was attempted. D remains a
+diagnostic only: two cover compositor controls (Angel and Mudazumo) passed
+visual QA, and a 287-page D artifact run was integrity-checked but failed
+closed before verified END and ZIP. It does not make D the adopted site
+capture method.
+
+Stage 03 preparation currently consists only of local synthetic Chromium work
+under `output/ebookjapan_experiment/phase03/`. The epoch observer freezes
+immutable OffscreenCanvas epoch metadata when a transfer succeeds and records
+the returned bitmap's run-local identity. Its test verified local synthetic
+currentSrc-to-response matching, bitmap-to-target-draw identity, immutability
+after later mutation, fail-closed handling of untracked methods/clip/state
+setters and cap overflow, persistence of unknown state across later epochs,
+the private URL entry/character cap with drop behavior and stop-time clearing,
+fixed-enum context/exception strings, original exception propagation,
+one-time native coordinate conversion, shared operation/epoch/target-draw
+byte-operation-time limits, and wrapper cleanup (39 checks passed). Metadata
+overflow leaves native drawing operations intact but makes the trace
+incomplete. This is metadata tracing, not pixel or full-page paint proof. The
+independent Reviewer reran all 39 checks and passed 6 additional cases;
+Phase 03 local preparation is VERIFIED / BLOCKING 0 only. A/B/C and live source
+capture remain unverified. The
+raw `currentSrc` used for response matching was synthetic local data only. A
+future real-site probe must still bind the returned bitmap to the actual
+selected slot/canvas and current frame. `source-native-evidence.json` records
+`proof_status=NOT_VERIFIED` and `capture_class=UNASSIGNED`; no ebookjapan page
+or source was used for this preparation.
 
 ## Stage 02 bounded Viewer observations and partial entry implementation
 
@@ -190,8 +234,8 @@ establish A, B or C. Exact sanitized evidence is in
 
 All Stage 02 artifacts are isolated under
 `output/ebookjapan_experiment/phase02/`. They contain sanitized structural
-metadata, ephemeral canvas/slot IDs, bounded SecurityError details, one D
-compositor control PNG, and 287 output D page PNGs from the failed-closed
+metadata, ephemeral canvas/slot IDs, bounded SecurityError details, two D
+compositor cover control PNGs, and 287 output D page PNGs from the failed-closed
 production run. No raw readback bytes were retained. The page artifacts passed
 integrity checks, but CoreRunner completion, END acceptance, A/B/C provenance,
 and final capture policy remain unverified and are recorded separately in
@@ -224,7 +268,7 @@ The latest affected viewer suite passed 92 tests with 0 skipped (69 warnings): 2
 
 The isolated production CoreRunner baseline saved 287 ordered D PNG artifacts and then failed closed with `UnknownPageStateError: ebookjapan D canvas surface is unsafe (outset-painted-element:img)`. The exact failing method was not captured; attributing it to terminal advance is an inference from the completed-page Runner flow. No ZIP, completed RunResult, or Catalog write was produced. Root independently verified decoded format/dimensions, source fingerprints, RGBA hashes, manifest order, and part grouping for all 287 files; this validates artifact integrity only.
 
-A subsequent isolated full-baseline attempt stopped before `CrawlerRunner.run`: Playwright `BrowserType.connect_over_cdp` timed out after 180 seconds while initializing the shared browser. `/json/version` returned HTTP 200 (Chrome 156 / CDP 1.3). In a separate bounded diagnostic, the Node built-in WebSocket received a read-only `Browser.getVersion` response and a types-only `Target.getTargets` summary counted 6 page, 2 browser_ui, 15 iframe and 1 worker targets. No target IDs, titles or URLs were retained, and no target operation, activation, Page creation or navigation occurred. A separate 10-second Playwright attach-only attempt, including `no_defaults=True`, also timed out. The observed fact is that WebSocket/RPC succeeds while Playwright attachment initialization stalls; a delayed/discarded existing page is only a hypothesis. No new PNG/output/library run, ZIP or Catalog write occurred. Sanitized evidence: `core-run-angel10-20261107-184139-316247-evidence.json`.
+A subsequent isolated full-baseline attempt stopped before `CrawlerRunner.run`: Playwright `BrowserType.connect_over_cdp` timed out after 180 seconds while initializing the shared browser. `/json/version` returned HTTP 200 (Chrome 156 / CDP 1.3). In a separate bounded diagnostic, the Node built-in WebSocket received a read-only `Browser.getVersion` response and a types-only `Target.getTargets` summary counted 6 page, 2 browser_ui, 15 iframe and 1 worker targets. No target IDs, titles or URLs were retained, and no target operation, activation, Page creation or navigation occurred. A separate 10-second Playwright attach-only attempt, including `no_defaults=True`, also timed out. On 2026-11-07 at 19:53:57 JST, one later 10-second attach-only retry with `no_defaults=True` ended in `TimeoutError` after 10.369 seconds; connection cleanup ended STOPPED. It created no Page and made no navigation, UI input or remote `Browser.close` call; no further retry is planned. The observed fact is that WebSocket/RPC succeeds while Playwright attachment initialization stalls; a delayed/discarded existing page is only a hypothesis. No new PNG/output/library run, ZIP or Catalog write occurred. Evidence: `core-run-angel10-20261107-184139-316247-evidence.json` and ignored `phase02/root-attach-healthcheck-20261107-195357.json`.
 
 A separate owned Angel 10 normal-navigation probe reached one exact viewport-visible terminal marker after the final left-edge advance, with 287 frozen slots and zero visible page slots. Twelve visible actions shared the `.book-last-dead-end__inner` root: one review action, one coupon banner action, and ten recommendation-module actions. No recommendation destination was opened. The local implementation has an exact structural partition for this profile and passed local material review; no successful live CoreRunner END or ZIP is claimed.
 
@@ -242,3 +286,14 @@ planning eligibility only: the live adapter must recheck current owned rights
 before Reader entry. The focused test module passed 12 tests with 0 skips. Stage
 04 remains **OFFLINE POLICY PREPARED / NOT INTEGRATED / NOT LIVE** pending Stage
 03 source/capture decisions.
+
+## Stage 05 offline E2E audit preparation
+
+An ignored synthetic audit preparation exists under
+`output/ebookjapan_experiment/e2e-validation/`; it is not a live E2E run. After
+the aggregate item-status fix, the independent Reviewer passed 19 audit cases
+(2 positive, 17 negative); the Tester passed 2 positive and 8 negative cases,
+and 4 existing validator-negative cases passed. This verifies only the offline
+audit preparation. Page coverage, source proof, repeated Full Discovery,
+repeated Batch, production E2E and ZIP remain `NOT_VERIFIED`; the source-proof
+schema is `NOT_DEFINED`, and Stage 05 live verification has not started.
