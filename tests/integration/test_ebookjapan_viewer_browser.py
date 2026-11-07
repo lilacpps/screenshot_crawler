@@ -983,6 +983,26 @@ async def test_capture_page_is_atomic_when_one_spread_part_is_not_ready(
         "offscreen-host-outset-shadow",
         "canvas-outline-outset",
         "ancestor-outline-outset",
+        "img-outline-expanded-touch",
+        "img-outline-expanded-contact",
+        "img-outline-huge-offset-reaches-canvas",
+        "img-outline-negative-offset-reaches-canvas",
+        "img-outline-negative-huge-offset-reaches-canvas",
+        "img-outline-ancestor-scale",
+        "img-outline-ancestor-zoom",
+        "img-outline-ancestor-rotate",
+        "img-outline-ancestor-motion-path",
+        "img-outline-ancestor-skew",
+        "img-outline-ancestor-perspective",
+        "img-outline-self-scale",
+        "img-outline-ancestor-border-image",
+        "img-outline-ancestor-reflection",
+        "img-outline-svg-ancestor",
+        "img-outline-border-image-outset",
+        "img-outline-reflection",
+        "img-outline-pseudo",
+        "svg-image-outline",
+        "outlined-div",
     ],
 )
 async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_commit(
@@ -1008,7 +1028,7 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
         browser_page, frame=frame, expected_path=READER_PATH, current=1, total=1
     )
     await browser_page.evaluate(
-        """issue=>{
+        """async issue=>{
           if(issue==='opaque-overlay'){
             const overlay=document.createElement('div');overlay.id='opaque-overlay';
             overlay.style='position:fixed;inset:0;z-index:99999;background:rgb(255,0,0)';
@@ -1039,6 +1059,69 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
             const canvas=document.querySelector('.page-canvas');canvas.style.outline='20px solid rgb(255,0,0)';canvas.style.outlineOffset='-20px';
           }else if(issue==='ancestor-outline-outset'){
             const slot=document.querySelector('.comic-viewer__page-slot');slot.style.outline='20px solid rgb(255,0,0)';slot.style.outlineOffset='-20px';
+          }else if(issue.startsWith('img-outline-')){
+            const image=document.createElement('img');image.className='neutral-outline-image';
+            image.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+            const mode=issue.slice('img-outline-'.length);
+            if(mode==='ancestor-scale'||mode==='ancestor-zoom'||mode==='ancestor-rotate'||mode==='ancestor-motion-path'
+              ||mode==='ancestor-skew'||mode==='ancestor-perspective'){
+              const host=document.createElement('div');host.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:40px;height:40px';
+              if(mode==='ancestor-scale')host.style.scale='2';
+              else if(mode==='ancestor-zoom')host.style.zoom='2';
+              else if(mode==='ancestor-rotate')host.style.rotate='10deg';
+              else if(mode==='ancestor-motion-path'){host.style.offsetPath='ray(45deg)';host.style.offsetDistance='20px';}
+              else if(mode==='ancestor-skew')host.style.transform='skew(10deg)';
+              else host.style.perspective='100px';
+              host.append(image);document.body.append(host);
+            }else if(mode==='ancestor-border-image'||mode==='ancestor-reflection'){
+              const host=document.createElement('div');host.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:40px;height:40px';
+              if(mode==='ancestor-border-image'){
+                host.style.border='4px solid transparent';host.style.borderImageSource='linear-gradient(red,blue)';
+                host.style.borderImageSlice='1';host.style.borderImageOutset='2';
+              }else host.style.webkitBoxReflect='below 2px';
+              image.style.cssText='width:24px;height:24px;outline:solid 1px red';
+              host.append(image);document.body.append(host);
+            }else if(mode==='svg-ancestor'){
+              const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+              svg.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:40px;height:40px';
+              const foreign=document.createElementNS('http://www.w3.org/2000/svg','foreignObject');
+              foreign.setAttribute('width','40');foreign.setAttribute('height','40');
+              image.style.cssText='width:24px;height:24px;outline:solid 1px red';
+              foreign.append(image);svg.append(foreign);document.body.append(svg);
+            }else if(mode==='border-image-outset'){
+              image.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red;border:4px solid transparent;border-image-source:linear-gradient(red,blue);border-image-slice:1;border-image-outset:2';
+              document.body.append(image);
+            }else if(mode==='reflection'){
+              image.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red;-webkit-box-reflect:below 2px';
+              document.body.append(image);
+            }else if(mode==='pseudo'){
+              const style=document.createElement('style');style.textContent='img.neutral-outline-image::after{content:"";position:absolute;inset:-5px;background:red}';document.head.append(style);
+              image.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red';document.body.append(image);
+            }else{
+              let gap=100,outline='solid 1px red',offset='0px';
+              if(mode==='expanded-touch'){gap=2;outline='solid 2px red';}
+              else if(mode==='expanded-contact'){gap=3;outline='solid 1px red';}
+              else if(mode==='huge-offset-reaches-canvas')offset='100px';
+              else if(mode==='negative-offset-reaches-canvas'){gap=1;outline='solid 2px red';offset='-1px';}
+              else if(mode==='negative-huge-offset-reaches-canvas'){gap=150;offset='-150px';}
+              if(mode==='self-scale')image.style.cssText='position:fixed;left:calc(50vw + '+gap+'px);top:100px;width:24px;height:24px;outline:'+outline+';outline-offset:'+offset+';scale:2';
+              else image.style.cssText='position:fixed;left:calc(50vw + '+gap+'px);top:100px;width:24px;height:24px;outline:'+outline+';outline-offset:'+offset;
+              document.body.append(image);
+            }
+            if(mode==='ancestor-scale'||mode==='ancestor-zoom'||mode==='ancestor-rotate'||mode==='ancestor-motion-path'
+              ||mode==='ancestor-skew'||mode==='ancestor-perspective'
+              ||mode==='ancestor-border-image'||mode==='ancestor-reflection'||mode==='svg-ancestor'){
+              image.style.cssText='width:24px;height:24px;outline:solid 1px red';
+            }
+            await image.decode();
+          }else if(issue==='svg-image-outline'){
+            const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+            svg.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red';
+            const image=document.createElementNS('http://www.w3.org/2000/svg','image');
+            image.setAttribute('width','24');image.setAttribute('height','24');
+            image.setAttribute('href','data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');svg.append(image);document.body.append(svg);
+          }else if(issue==='outlined-div'){
+            const div=document.createElement('div');div.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red';document.body.append(div);
           }else{
             document.querySelector('.comic-viewer__page-slot').style.transform='rotate(180deg)';
           }
@@ -1050,6 +1133,91 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
         await adapter.capture_page(browser_page)
     assert adapter._seen_slot_ids == set()
     assert adapter._captured_slot_order == []
+
+
+@pytest.mark.parametrize("translation", [False, True], ids=["no-transform", "pure-2d-translation"])
+async def test_capture_accepts_only_far_finite_solid_outline_on_complete_html_image(
+    browser_page: Page, translation: bool,
+) -> None:
+    await _open_reader(browser_page)
+    await _draw_full_same_size(browser_page)
+    adapter = EbookJapanAdapter()
+    adapter._page = browser_page
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 1
+    adapter._last_native_counter = 1
+    await _redraw_on_resize(browser_page)
+    await adapter._pin_reader_anchor(
+        browser_page, expected_path=READER_PATH, expected_current=1, expected_total=1
+    )
+    await adapter.get_content_identity(browser_page)
+    await browser_page.evaluate(
+        """async translation=>{
+          const image=document.createElement('img');image.className='neutral-far-outline-image';
+          image.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+          image.style.cssText='width:24px;height:24px;outline:solid .666667px oklch(0 0 0 / 0.05)';
+          if(translation){
+            const host=document.createElement('div');
+            host.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;transform:translate(8px,4px);translate:2px 1px';
+            host.append(image);document.body.append(host);
+          }else{
+            image.style.position='fixed';image.style.left='calc(50vw + 100px)';image.style.top='100px';document.body.append(image);
+          }
+          await image.decode();
+        }""",
+        translation,
+    )
+
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 1
+    assert adapter._seen_slot_ids == {1}
+    assert adapter._captured_slot_order == [1]
+
+
+async def test_capture_rejects_finite_outline_qualifier_below_supported_dpr(
+    integration_browser: Browser,
+) -> None:
+    context = await integration_browser.new_context(
+        viewport={"width": 1906, "height": 986}, device_scale_factor=0.75
+    )
+    page = await context.new_page()
+    try:
+        await _open_reader(page)
+        await _draw_full_same_size(page)
+        adapter = EbookJapanAdapter()
+        adapter._page = page
+        adapter._owned_title = TITLE
+        adapter._series_id = "134336"
+        adapter._external_id = "A000083590"
+        adapter._work_key = "neutral-work"
+        adapter._reader_path = READER_PATH
+        adapter._reader_total = 1
+        adapter._last_native_counter = 1
+        await _redraw_on_resize(page)
+        await adapter._pin_reader_anchor(
+            page, expected_path=READER_PATH, expected_current=1, expected_total=1
+        )
+        await adapter.get_content_identity(page)
+        assert await page.evaluate("() => window.devicePixelRatio") == 0.75
+        await page.evaluate(
+            """async()=>{
+              const image=document.createElement('img');image.className='neutral-low-dpr-outline-image';
+              image.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+              image.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid .666667px red';
+              document.body.append(image);await image.decode();
+            }"""
+        )
+
+        with pytest.raises(UnknownPageStateError):
+            await adapter.capture_page(page)
+        assert adapter._seen_slot_ids == set()
+        assert adapter._captured_slot_order == []
+    finally:
+        await context.close()
 
 
 async def test_unknown_terminal_notice_is_not_classified_as_end(browser_page: Page) -> None:

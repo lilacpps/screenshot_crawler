@@ -227,6 +227,87 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     }
     return false;
   };
+  const strictFinitePx=value=>{
+    if(typeof value!=='string')return null;
+    const match=/^(-?(?:\d+(?:\.\d+)?|\.\d+))px$/.exec(value.trim());
+    if(!match)return null;
+    const parsed=Number(match[1]);return Number.isFinite(parsed)?parsed:null;
+  };
+  const zeroBorderImageOutset=value=>typeof value==='string'&&value.trim().split(/\s+/).length>=1
+    &&value.trim().split(/\s+/).every(part=>/^0(?:\.0+)?(?:px)?$/.test(part));
+  const supportedPure2dTranslation=value=>{
+    if(value==='none')return true;
+    try{
+      const matrix=new DOMMatrixReadOnly(value);
+      return matrix.is2D&&matrix.a===1&&matrix.b===0&&matrix.c===0&&matrix.d===1
+        &&Number.isFinite(matrix.e)&&Number.isFinite(matrix.f);
+    }catch{return false;}
+  };
+  const supportedTranslate=value=>{
+    if(value==='none')return true;
+    const parts=typeof value==='string'?value.trim().split(/\s+/):[];
+    return parts.length>=1&&parts.length<=2&&parts.every(part=>strictFinitePx(part)!==null);
+  };
+  const hasUnsupportedOutlineImageTransform=element=>{
+    let depth=0,reachedDocumentElement=false;
+    for(let node=element;node;node=node.parentElement){
+      depth+=1;if(depth>64)return true;
+      if(!(node instanceof HTMLElement)||node.namespaceURI!=='http://www.w3.org/1999/xhtml')return true;
+      const style=getComputedStyle(node);
+      if(!supportedPure2dTranslation(style.transform)||!supportedTranslate(style.translate)
+        ||style.rotate!=='none'||style.scale!=='none'||style.zoom!=='1'
+        ||style.perspective!=='none'||style.transformStyle==='preserve-3d'
+        ||style.offsetPath!=='none'||style.offsetDistance!=='0px'
+        ||style.offsetRotate!=='auto 0deg'||style.offsetAnchor!=='auto'
+        ||style.filter!=='none'||style.backdropFilter!=='none'||style.boxShadow!=='none'
+        ||style.textShadow!=='none'||style.borderImageSource!=='none'
+        ||!zeroBorderImageOutset(style.borderImageOutset)
+        ||style.getPropertyValue('-webkit-box-reflect')!=='none'
+        ||(node!==element&&style.outlineStyle!=='none'&&paintsColor(style.outlineColor)))return true;
+      for(const pseudo of ['::before','::after']){
+        const pseudoStyle=getComputedStyle(node,pseudo);
+        if(pseudoStyle.content&&pseudoStyle.content!=='none'&&pseudoStyle.content!=='normal')return true;
+      }
+      if(node===document.documentElement){reachedDocumentElement=true;break;}
+    }
+    return !reachedDocumentElement;
+  };
+  const finiteOutlineOnlyImageDisjointFromTarget=(element,targetRect)=>{
+    if(!Number.isFinite(window.devicePixelRatio)||window.devicePixelRatio<1
+      ||!(element instanceof HTMLImageElement)||element.namespaceURI!=='http://www.w3.org/1999/xhtml'
+      ||!element.isConnected||!element.complete||element.naturalWidth<=0||element.naturalHeight<=0
+      ||element.namespaceURI!=='http://www.w3.org/1999/xhtml'
+      ||element.childNodes.length!==0||element.children.length!==0
+      ||hasUnsupportedOutlineImageTransform(element))return false;
+    const style=getComputedStyle(element);
+    if(style.outlineStyle!=='solid'||style.filter!=='none'||style.backdropFilter!=='none'
+      ||style.boxShadow!=='none'||style.textShadow!=='none'
+      ||style.borderImageSource!=='none'||!zeroBorderImageOutset(style.borderImageOutset)
+      ||style.getPropertyValue('-webkit-box-reflect')!=='none')return false;
+    for(const pseudo of ['::before','::after']){
+      const pseudoStyle=getComputedStyle(element,pseudo);
+      if(pseudoStyle.content&&pseudoStyle.content!=='none'&&pseudoStyle.content!=='normal')return false;
+    }
+    const outlineWidth=strictFinitePx(style.outlineWidth),outlineOffset=strictFinitePx(style.outlineOffset);
+    if(outlineWidth===null||outlineOffset===null||outlineWidth<0)return false;
+    const clientRects=element.getClientRects();
+    if(clientRects.length!==1)return false;
+    const client=clientRects[0],box=element.getBoundingClientRect();
+    const finitePositive=[box.left,box.top,box.right,box.bottom,box.width,box.height].every(Number.isFinite)
+      &&box.width>0&&box.height>0;
+    if(!finitePositive||![client.left,client.top,client.right,client.bottom,client.width,client.height].every(Number.isFinite)
+      ||client.width<=0||client.height<=0
+      ||['left','top','right','bottom','width','height'].some(key=>client[key]!==box[key]))return false;
+    // Bound this supported Chromium image-outline case with a conservative 2 CSS px AA margin.
+    // Equality/contact is unsafe; only strict separation from the target canvas is accepted.
+    const expansion=outlineWidth+Math.abs(outlineOffset)+2;
+    const expanded={left:box.left-expansion,top:box.top-expansion,
+      right:box.right+expansion,bottom:box.bottom+expansion};
+    if(!Object.values(expanded).every(Number.isFinite))return false;
+    const strictlyDisjoint=expanded.right<targetRect.left||expanded.left>targetRect.right
+      ||expanded.bottom<targetRect.top||expanded.top>targetRect.bottom;
+    return strictlyDisjoint;
+  };
   const captureSurfaceReason=canvas=>{
     const r=canvas.getBoundingClientRect(),style=getComputedStyle(canvas);
     if(r.left < -0.5 || r.top < -0.5 || r.right > innerWidth+0.5 || r.bottom > innerHeight+0.5) return 'outside-viewport';
@@ -252,7 +333,8 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     if(all.length>20000)return 'dom-inventory-limit';
     for(const element of all){
       if(element===canvas||ancestors.has(element)||canvas.contains(element)||!visible(element))continue;
-      if(hasOutsetPaintRisk(element))return 'outset-painted-element:'+element.tagName.toLowerCase();
+      if(hasOutsetPaintRisk(element)&&!finiteOutlineOnlyImageDisjointFromTarget(element,r))
+        return 'outset-painted-element:'+element.tagName.toLowerCase();
       const o=element.getBoundingClientRect();
       if(o.right<=r.left||o.left>=r.right||o.bottom<=r.top||o.top>=r.bottom)continue;
       if(hasPaintRisk(element))return 'intersecting-painted-element:'+element.tagName.toLowerCase();
