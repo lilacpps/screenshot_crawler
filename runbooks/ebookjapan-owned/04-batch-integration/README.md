@@ -1,6 +1,6 @@
 # 04 — Owned-only Site Policy / Batch / GUI Integration
 
-Status: **NOT STARTED**。開始条件: Stages 01〜03のDiscovery、Viewer、画像取得判断のEvidence/Reviewer gateが成立。
+Status: **OFFLINE POLICY PREPARED / NOT INTEGRATED / NOT LIVE**。実際のStage 04統合は、Stages 01〜03のDiscovery、Viewer、source/capture判断のEvidence/Reviewer gate成立後に開始する。
 
 ## 目的と実装範囲
 
@@ -10,6 +10,8 @@ Status: **NOT STARTED**。開始条件: Stages 01〜03のDiscovery、Viewer、�
 - `site_adapters/ebookjapan/README.md` と最新`note/15_ebookjapan.md`（実際の最新番号に応じ調整）へ運用と取得方式・制限を記載。
 
 ## Policy
+
+Offline preparation exists in `src/screenshot_crawler/site_policies/ebookjapan.py` with focused policy/planner tests (12 passed, 0 skipped). It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The policy is not registered in CLI, Batch, or GUI and has not been exercised by a Batch run. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Stage 04 integration is **NOT STARTED** while Stage 03 source/capture remains unresolved.
 
 `EbookJapanSitePolicy.site = "ebookjapan"`。
 
