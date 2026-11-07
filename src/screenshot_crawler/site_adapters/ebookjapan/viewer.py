@@ -116,6 +116,75 @@ ANCHOR_READER_JS = r"""({expectedTitle,expectedPath,maxSlots})=>{
 }"""
 
 
+NAVIGATION_TARGET_JS = r"""({x,capturedParts})=>{
+  const a=window.__ejReaderAnchor;
+  const observer=window.__ejCaptureObserver;
+  const classes=e=>typeof e?.className==='string'?[...e.classList].filter(x=>/^[A-Za-z0-9_-]{1,80}$/.test(x)).slice(0,8):[];
+  const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+  const visible=e=>{if(!e||!e.isConnected||e.getClientRects().length===0)return false;for(let n=e;n;n=n.parentElement){const s=getComputedStyle(n);if(n.hidden||s.display==='none'||s.visibility==='hidden'||s.visibility==='collapse'||Number(s.opacity)===0)return false;}return true;};
+  const sameArray=(left,right)=>Array.isArray(left)&&Array.isArray(right)&&left.length===right.length&&left.every((value,index)=>value===right[index]);
+  const partMatches=expected=>{
+    if(!expected||!Number.isInteger(expected.slotOrdinal)||!Number.isInteger(expected.slotId)||!Number.isInteger(expected.canvasIndex))return false;
+    const slot=a?.slots?.[expected.slotOrdinal],canvas=slot?.querySelectorAll('canvas')[expected.canvasIndex];
+    if(!slot||slot!==slots[expected.slotOrdinal]||a.weak.get(slot)!==expected.slotId||!canvas
+      ||a.canvasWeak.get(canvas)!==expected.canvasId||canvas.width!==expected.backingWidth||canvas.height!==expected.backingHeight)return false;
+    const r=canvas.getBoundingClientRect(),expectedRect=expected.cssRect;
+    if(!expectedRect||['left','right','top','bottom','width','height'].some(key=>r[key]!==expectedRect[key])
+      ||(r.right>0&&r.left<innerWidth&&r.bottom>0&&r.top<innerHeight)!==expectedRect.viewport)return false;
+    const state=observer?.statusFor?.(canvas),geometry=state?.lastDraw,expectedGeometry=expected.drawGeometry;
+    const geometryKeys=['eligible','overload','sourceType','sourceWidth','sourceHeight','targetWidth','targetHeight','alpha','composite'];
+    const geometryMatches=!!geometry&&!!expectedGeometry&&geometryKeys.every(key=>geometry[key]===expectedGeometry[key])
+      &&sameArray(geometry.sourceRect,expectedGeometry.sourceRect)&&sameArray(geometry.destRect,expectedGeometry.destRect)
+      &&sameArray(geometry.transform,expectedGeometry.transform);
+    const cssAspect=r.width/r.height,backingAspect=canvas.width/canvas.height;
+    const aspectMatches=Number.isFinite(cssAspect)&&Number.isFinite(backingAspect)&&Math.abs(backingAspect-cssAspect)<=Math.max(0.01,cssAspect*0.02);
+    const ready=!!state&&state.contextIs2d===true&&state.drawGeneration>0&&state.lastFullDraw===true
+      &&state.resetObserved===false&&state.overflow===false&&state.metadataFailures===0&&state.clipCalls===0
+      &&geometry?.eligible===true&&geometry.targetWidth===canvas.width&&geometry.targetHeight===canvas.height&&aspectMatches;
+    return ready&&expected.drawReady===true&&geometryMatches
+      &&state.drawGeneration===expected.drawGeneration&&state.successfulDraws===expected.successfulDraws
+      &&state.mutationCount===expected.mutationCount&&state.clipCalls===expected.clipCalls
+      &&state.lastFullDraw===expected.lastFullDraw&&state.resetObserved===expected.resetObserved
+      &&state.contextIs2d===expected.contextIs2d&&state.overflow===expected.observerOverflow;
+  };
+  const titleNode=document.querySelector('.legacy-comic-header__title');
+  const titleMatches=!titleNode||String(titleNode.innerText||titleNode.textContent||'').normalize('NFKC').replace(/\s+/g,'')===a?.title;
+  const layout=document.querySelector('.comic-viewer__scroll-container');
+  const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];
+  const slotsPinned=!!a&&document===a.document&&location.hostname==='ebookjapan.yahoo.co.jp'&&!location.search&&!location.hash
+    &&location.pathname===a.pathname&&slots.length===a.slots.length&&slots.every((slot,index)=>slot===a.slots[index])
+    &&layout===a.layout&&layout.classList.contains('comic-viewer__scroll-container--horizontal-rtl')
+    &&layout.classList.contains('comic-viewer__scroll-container--spread')&&titleMatches;
+  const expectedParts=Array.isArray(capturedParts)?capturedParts:[];
+  const uniqueCapturedParts=expectedParts.length>=1&&expectedParts.length<=2
+    &&new Set(expectedParts.map(part=>part?.slotId)).size===expectedParts.length;
+  const partsMatch=uniqueCapturedParts&&expectedParts.every(partMatches);
+  const observerHealth=observer?.health?.()||null;
+  const capturedPartsMatch=partsMatch&&observerHealth?.installed===true
+    &&observerHealth.overflow===false&&observerHealth.metadataFailures===0;
+  const y=Math.floor(innerHeight/2);
+  const hit=document.elementFromPoint(x,y),slot=hit?.closest('.comic-viewer__page-slot')||null;
+  const slotId=slot&&a?.weak?a.weak.get(slot):null;
+  const expected=Array.isArray(capturedParts)?capturedParts.find(part=>part&&part.slotId===slotId):null;
+  const canvas=hit?.closest('canvas')||null,canvasId=canvas&&a?.canvasWeak?a.canvasWeak.get(canvas):null;
+  const canvasMatches=!canvas||!!expected&&expected.canvasId===canvasId&&slot?.contains(canvas);
+  const exactPageHit=hit===slot||!!canvas&&hit===canvas;
+  const inPinnedSlot=!!slot&&layout?.contains(slot)&&!!expected&&canvasMatches&&exactPageHit&&slot===a.slots[slotId-1];
+  let interactive=false,blocked=false,insideSlot=false;
+  for(let node=hit;node;node=node.parentElement){
+    if(node.matches?.('a,button,[role="button"],input,select,textarea,[contenteditable="true"]'))interactive=true;
+    if(node.matches?.('dialog,[role="dialog"],[aria-modal="true"],.intro-modal,.book-last,.next-item,.book-last-dead-end__next,.book-last__cta'))blocked=true;
+    if(node===slot)insideSlot=true;
+  }
+  const modalVisible=[...document.querySelectorAll('dialog,[role="dialog"],[aria-modal="true"],.intro-modal')].some(e=>visible(e)&&(()=>{const r=rect(e);return r.right>0&&r.left<innerWidth&&r.bottom>0&&r.top<innerHeight;})());
+  const r=hit?rect(hit):null;
+  return {safe:slotsPinned&&capturedPartsMatch&&inPinnedSlot&&insideSlot&&!interactive&&!blocked&&!modalVisible,
+    slotsPinned,capturedPartsMatch,inPinnedSlot,insideSlot,interactive,blocked,modalVisible,slotId:typeof slotId==='number'?slotId:null,
+    canvasId:typeof canvasId==='number'?canvasId:null,targetTag:hit?.tagName||null,targetClasses:classes(hit),
+    targetRect:r,viewport:{width:innerWidth,height:innerHeight},x,y};
+}"""
+
+
 FRAME_STATE_JS = r"""({expectedCurrent})=>{
   const a=window.__ejReaderAnchor,o=window.__ejCaptureObserver;
   const normalize=value=>String(value||'').normalize('NFKC').replace(/\s+/g,'');
@@ -229,17 +298,156 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     const captureSurface=captureSurfaceReason(canvas);
     parts.push({slotId,slotOrdinal:ordinal,canvasId,canvasIndex:[...slot.querySelectorAll('canvas')].indexOf(canvas),backingWidth:canvas.width,backingHeight:canvas.height,
       cssRect:cr,captureSurfaceSafe:captureSurface===null,captureSurfaceReason:captureSurface,backingAspect,cssAspect,drawGeneration:draw?.drawGeneration??null,successfulDraws:draw?.successfulDraws??null,mutationCount:draw?.mutationCount??null,clipCalls:draw?.clipCalls??null,
-      lastFullDraw:draw?.lastFullDraw??false,resetObserved:draw?.resetObserved??true,contextIs2d:draw?.contextIs2d??false,observerOverflow:draw?.overflow??true,drawReady});
+      lastFullDraw:draw?.lastFullDraw??false,resetObserved:draw?.resetObserved??true,contextIs2d:draw?.contextIs2d??false,observerOverflow:draw?.overflow??true,drawReady,drawGeometry:geometry});
   }
   parts.sort((left,right)=>right.cssRect.left-left.cssRect.left);
   const headerVisible=titleVisible;
-  const dead=[...document.querySelectorAll('.next-item.book-last-dead-end__next')].filter(visible).map(element=>{const r=rect(element),text=normalize(element.innerText||element.textContent);const controls=[...element.querySelectorAll('a,button,[role="button"]')].filter(visible).length;return {text,rect:r,controls};});
-  const deadVisible=dead.some(item=>item.rect.viewport&&item.controls===0&&item.text==='\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059');
-  const visibleActions=[...document.querySelectorAll('a,button,[role="button"]')].filter(visible).filter(e=>rect(e).viewport).length;
-  if(parts.length===0&&deadVisible)return {status:'end',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible};
-  if(parts.length===0&&dead.some(item=>item.rect.viewport))return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible};
+  const dead=[...document.querySelectorAll('.next-item.book-last-dead-end__next')].map(element=>{const r=rect(element),text=normalize(element.innerText||element.textContent);const controls=[...element.querySelectorAll('a,button,[role="button"]')].filter(visible).length;return {visible:visible(element),text,textExact:text==='\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059',rect:r,controls};});
+  const actionable=[...document.querySelectorAll('a,button,[role="button"],input,select,textarea,[contenteditable="true"]')].filter(visible).filter(e=>rect(e).viewport);
+  const visibleActions=actionable.length,actionInventoryCapped=visibleActions>256;
+  const modalCount=[...document.querySelectorAll('dialog,[role="dialog"],[aria-modal="true"],.intro-modal')].filter(visible).filter(e=>rect(e).viewport).length;
+  const pageCanvasCount=slots.reduce((count,slot)=>count+[...slot.querySelectorAll('canvas')].filter(canvas=>visible(canvas)&&rect(canvas).viewport&&canvas.width>=2&&canvas.height>=100).length,0);
+  const isUnder=(element,root)=>!!element&&!!root&&root.contains(element);
+  const terminal={profile:null,rootCount:0,innerCount:0,rootVisible:false,innerVisible:false,rootInViewport:false,innerInViewport:false,insidePinnedLayout:false,visibleSlotCount:visibleSlots.length,
+    visiblePageCanvasCount:pageCanvasCount,visibleActionCount:visibleActions,actionInventoryCapped,modalCount,unknownActionCount:0,
+    riskyActionCount:0,partition:{},moduleCounts:{},headerCounts:{},nativeCounterVisible:counterVisible,nativeCounter:counter};
+  const angelRoots=[...document.querySelectorAll('.book-last-dead-end')];
+  const angelMarkers=[...document.querySelectorAll('.next-item.book-last-dead-end__next')];
+  const mudaRoots=[...document.querySelectorAll('.book-last')];
+  const activeAngelRoot=angelRoots.some(element=>visible(element)&&rect(element).viewport);
+  const activeAngelMarker=angelMarkers.some(element=>visible(element)&&rect(element).viewport);
+  const activeMudaRoot=mudaRoots.some(element=>visible(element)&&rect(element).viewport);
+  if(parts.length===0&&visibleSlots.length===0&&pageCanvasCount===0&&modalCount>0
+    &&!activeAngelRoot&&!activeAngelMarker&&!activeMudaRoot){
+    return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,
+      visibleActions,toolbarVisible:headerVisible||counterVisible,terminal:{...terminal,profile:'unknown-modal'}};
+  }
+  if(parts.length===0&&visibleSlots.length===0&&pageCanvasCount===0&&(activeAngelRoot||activeAngelMarker)){
+    terminal.profile='angel-dead-end';terminal.rootCount=angelRoots.length;
+    const root=angelRoots.length===1?angelRoots[0]:null;
+    const inners=root?[...root.querySelectorAll(':scope > .book-last-dead-end__inner')]:[];
+    terminal.innerCount=inners.length;
+    const inner=inners.length===1?inners[0]:null;
+    terminal.rootVisible=!!root&&visible(root);terminal.innerVisible=!!inner&&visible(inner);
+    terminal.rootInViewport=!!root&&rect(root).viewport;terminal.innerInViewport=!!inner&&rect(inner).viewport;
+    const shell=root?.parentElement?.matches('.viewer-last-shell')?root.parentElement:null;
+    const lastCell=shell?.parentElement?.matches('.viewer-liber__viewer-last-cell')?shell.parentElement:null;
+    const customCell=lastCell?.parentElement?.matches('.comic-viewer__custom-cell--interactive')?lastCell.parentElement:null;
+    terminal.shellChainValid=!!root&&!!shell&&!!lastCell&&!!customCell&&customCell.contains(root);
+    terminal.insidePinnedLayout=terminal.shellChainValid&&isUnder(customCell,layout);
+    const modules={review:inner?[...inner.children].filter(e=>e.matches('.review-module.book-last-dead-end__review')):[],
+      coupon:inner?[...inner.children].filter(e=>e.matches('.banner-group.book-last-dead-end__banner-group')):[],
+      author:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__author')):[],
+      i2i:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__i2i')):[]};
+    terminal.moduleCounts={review:modules.review.length,coupon:modules.coupon.length,author:modules.author.length,i2i:modules.i2i.length};
+    terminal.markerCount=angelMarkers.length;
+    const marker=angelMarkers.length===1?angelMarkers[0]:null,markerRect=marker?rect(marker):null;
+    terminal.markerInsideInner=!!marker&&!!inner&&marker.parentElement===inner;
+    terminal.markerVisible=!!marker&&visible(marker)&&markerRect.viewport;
+    terminal.markerTextExact=!!marker&&marker.tagName==='DIV'&&normalize(marker.innerText||marker.textContent)==='\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059';
+    terminal.markerControls=marker?[...marker.querySelectorAll('a,button,[role="button"],input,select,textarea,[contenteditable="true"]')].filter(visible).length:null;
+    const safeModules=modules.review.length===1&&modules.coupon.length===1&&modules.author.length===1&&modules.i2i.length===1;
+    if(!actionInventoryCapped&&inner&&root&&safeModules&&marker&&terminal.markerInsideInner&&terminal.markerVisible&&terminal.markerTextExact&&terminal.markerControls===0){
+      for(const action of actionable){
+        let category=null;
+        if(!inner.contains(action)){terminal.unknownActionCount++;continue;}
+        const review=action.closest('.review-module.book-last-dead-end__review');
+        const coupon=action.closest('.banner-group.book-last-dead-end__banner-group');
+        const recommendation=action.closest('.recommend-grid.book-last-dead-end__section');
+        if(action.matches('button.review-module__action')&&action.parentElement===review&&modules.review.includes(review)&&review.parentElement===inner)category='review';
+        else if(action.matches('button.banner__row--line-coupon')&&action.parentElement===coupon&&modules.coupon.includes(coupon)&&coupon.parentElement===inner)category='coupon';
+        const directHeading=action.matches('a.recommend-grid__heading.recommend-grid__heading--more')&&action.parentElement===recommendation;
+        const itemLink=action.matches('a.recommend-grid__link')&&action.parentElement?.matches('.recommend-grid__item')
+          &&action.parentElement.parentElement?.matches('.recommend-grid__list')
+          &&action.parentElement.parentElement.parentElement===recommendation;
+        if(!category&&(directHeading||itemLink)&&recommendation?.parentElement===inner){
+          if(modules.author.includes(recommendation))category='recommendAuthor';
+          else if(modules.i2i.includes(recommendation))category='recommendI2i';
+        }
+        if(!category){terminal.unknownActionCount++;continue;}
+        terminal.partition[category]=(terminal.partition[category]||0)+1;
+      }
+    }
+    terminal.actionPartitionComplete=!actionInventoryCapped&&terminal.unknownActionCount===0&&terminal.riskyActionCount===0
+      &&Object.values(terminal.partition).reduce((sum,count)=>sum+count,0)===visibleActions;
+    if(terminal.insidePinnedLayout&&terminal.shellChainValid&&mudaRoots.length===0&&terminal.rootVisible&&terminal.innerVisible&&terminal.rootInViewport&&terminal.innerInViewport&&terminal.actionPartitionComplete&&modalCount===0){
+      return {status:'end',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,counter,counterVisible,toolbarVisible:headerVisible||counterVisible,terminal};
+    }
+    return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible,terminal};
+  }
+  if(parts.length===0&&visibleSlots.length===0&&pageCanvasCount===0&&activeMudaRoot){
+    terminal.profile='muda-book-last';terminal.rootCount=mudaRoots.length;
+    const root=mudaRoots.length===1?mudaRoots[0]:null;
+    const inners=root?[...root.querySelectorAll(':scope > .book-last__inner')]:[];
+    terminal.innerCount=inners.length;const inner=inners.length===1?inners[0]:null;
+    terminal.rootVisible=!!root&&visible(root);terminal.innerVisible=!!inner&&visible(inner);
+    terminal.rootInViewport=!!root&&rect(root).viewport;terminal.innerInViewport=!!inner&&rect(inner).viewport;
+    const shell=root?.parentElement?.matches('.viewer-last-shell')?root.parentElement:null;
+    const lastCell=shell?.parentElement?.matches('.viewer-liber__viewer-last-cell')?shell.parentElement:null;
+    const customCell=lastCell?.parentElement?.matches('.comic-viewer__custom-cell--interactive')?lastCell.parentElement:null;
+    const viewer=layout?.closest('.comic-viewer')||null;
+    const header=viewer?[...viewer.querySelectorAll(':scope > .legacy-comic-header')]:[];
+    terminal.shellChainValid=!!root&&!!inner&&!!shell&&!!lastCell&&!!customCell&&customCell.contains(root);
+    terminal.insidePinnedLayout=terminal.shellChainValid&&isUnder(customCell,layout)&&!!viewer&&header.length===1;
+    const requiredModules={review:'.book-last__review',nextItem:'.book-last__next',cta:'.book-last__cta',banner:'.book-last__banner-group',i2i:'.book-last__i2i',author:'.book-last__author',forYou:'.book-last__for-you'};
+    for(const [name,selector] of Object.entries(requiredModules)){
+      terminal.moduleCounts[name]=inner?[...inner.children].filter(e=>e.matches(selector)).length:0;
+    }
+    terminal.moduleChildCount=inner?.children.length??0;
+    const bars=header.length===1?[...header[0].querySelectorAll(':scope > .legacy-comic-header__bar')]:[];
+    const menus=bars.length===1?[...bars[0].querySelectorAll(':scope > .legacy-comic-header__menu--pc')]:[];
+    terminal.headerBarCount=bars.length;terminal.headerMenuCount=menus.length;
+    const headerControls={
+      'close-button':bars.length===1?[...bars[0].querySelectorAll(':scope > button.close-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+      'contents-button':menus.length===1?[...menus[0].querySelectorAll(':scope > button.contents-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+      'settings-button':menus.length===1?[...menus[0].querySelectorAll(':scope > button.settings-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+    };
+    terminal.headerCounts=headerControls;
+    const requiredModulesPresent=Object.values(terminal.moduleCounts).every(count=>count===1)&&Object.values(terminal.moduleCounts).length===7;
+    const headerCountsValid=Object.values(headerControls).every(count=>count===1)&&bars.length===1&&menus.length===1;
+    if(!actionInventoryCapped&&root&&inner&&shell&&lastCell&&customCell&&viewer&&header.length===1&&requiredModulesPresent&&headerCountsValid){
+      for(const action of actionable){
+        let category=null;
+        const module=action.closest(Object.values(requiredModules).join(','));
+        if(module&&inner.contains(module)){
+          const moduleName=Object.entries(requiredModules).find(([,selector])=>module.matches(selector))?.[0]||null;
+          if(moduleName==='review'&&module.parentElement===inner&&action.matches('button.review-module__action')&&action.parentElement===module)category='review';
+          else if(moduleName==='nextItem'&&action.matches('button.next-item__rating')
+            &&module.parentElement===inner&&action.parentElement?.matches('.next-item__outline')
+            &&action.parentElement.parentElement===module)category='nextItem';
+          else if(moduleName==='cta'&&action.matches('button.cta-button__read-btn')
+            &&module.parentElement===inner
+            &&action.parentElement?.matches('.cta-button__primary')
+            &&action.parentElement.parentElement?.matches('.cta-button__row')
+            &&action.parentElement.parentElement.parentElement===module)category='cta';
+          else if(moduleName==='banner'&&(action.matches('button.banner__row--lottery')||action.matches('button.banner__row--line-coupon'))
+            &&module.parentElement===inner
+            &&action.closest('.banner-group.book-last__banner-group')===module)category='banner';
+          else if(['i2i','author','forYou'].includes(moduleName)&&module.parentElement===inner
+            &&action.matches('a.recommend-grid__link')&&action.parentElement?.matches('.recommend-grid__item')
+            &&action.parentElement.parentElement?.matches('.recommend-grid__list')
+            &&action.parentElement.parentElement.parentElement===module)category=moduleName;
+          else if(moduleName==='author'&&module.parentElement===inner
+            &&action.matches('a.recommend-grid__heading.recommend-grid__heading--more')&&action.parentElement===module)category='author';
+        }
+        const closeAction=action.matches('button.close-button')&&bars.length===1&&action.parentElement===bars[0];
+        const contentsAction=action.matches('button.contents-button')&&menus.length===1&&action.parentElement===menus[0];
+        const settingsAction=action.matches('button.settings-button')&&menus.length===1&&action.parentElement===menus[0];
+        if(!category&&header[0].contains(action)&&(closeAction||contentsAction||settingsAction))category='header';
+        if(!category){terminal.unknownActionCount++;continue;}
+        terminal.partition[category]=(terminal.partition[category]||0)+1;
+      }
+    }
+    terminal.actionPartitionComplete=!actionInventoryCapped&&terminal.unknownActionCount===0
+      &&Object.values(terminal.partition).reduce((sum,count)=>sum+count,0)===visibleActions;
+    if(terminal.insidePinnedLayout&&terminal.shellChainValid&&angelRoots.length===0&&angelMarkers.length===0&&terminal.rootVisible&&terminal.innerVisible&&terminal.rootInViewport&&terminal.innerInViewport&&requiredModulesPresent&&headerCountsValid&&terminal.actionPartitionComplete&&modalCount===0){
+      return {status:'end',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,counter,counterVisible,toolbarVisible:headerVisible||counterVisible,terminal};
+    }
+    return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible,terminal};
+  }
+  if(parts.length===0&&dead.some(item=>item.visible&&item.rect.viewport))return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible};
   const current=counter?.current??expectedCurrent;
-  if(parts.length===0)return {status:'loading',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,toolbarVisible:headerVisible||counterVisible};
+  if(parts.length===0)return {status:visibleSlots.length===0?'loading':'partial',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible};
   const expectedParts=current===1?1:2;
   if(incomplete||parts.length!==expectedParts)return {status:'partial',routeStable:true,slotCount:slots.length,visibleSlots,parts,deadEnd:dead,toolbarVisible:headerVisible||counterVisible,current};
   return {status:'content',routeStable:true,slotCount:slots.length,visibleSlots,parts,deadEnd:dead,toolbarVisible:headerVisible||counterVisible,

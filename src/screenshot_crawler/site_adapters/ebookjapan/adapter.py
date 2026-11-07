@@ -39,6 +39,7 @@ from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     FRAME_STATE_JS,
     MAX_PART_PIXELS,
     MAX_SLOTS,
+    NAVIGATION_TARGET_JS,
     normalize_title,
 )
 
@@ -120,6 +121,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._last_capture_page_id: str | None = None
         self._last_capture_parts: tuple[dict[str, object], ...] = ()
         self._last_capture_node_key: tuple[object, ...] | None = None
+        self._last_capture_paint_signature: tuple[object, ...] | None = None
         self._last_capture_ids: tuple[int, ...] = ()
         self._last_capture_ordinals: tuple[int, ...] = ()
         self._last_capture_part_count: int = 0
@@ -665,22 +667,100 @@ class EbookJapanAdapter(SiteAdapter):
             or frame.get("routeStable") is not True
             or frame.get("slotCount") != total
             or frame.get("parts") != []
-            or frame.get("visibleActions") != 0
+            or frame.get("visibleSlots") != []
         ):
             return False
-        dead_end = frame.get("deadEnd")
-        if not isinstance(dead_end, list) or len(dead_end) != 1:
+        terminal = frame.get("terminal")
+        if not isinstance(terminal, Mapping):
             return False
-        item = dead_end[0]
-        rect = item.get("rect") if isinstance(item, Mapping) else None
-        return (
-            isinstance(item, Mapping)
-            and normalize_title(str(item.get("text") or ""))
-            == normalize_title("\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059")
-            and item.get("controls") == 0
-            and isinstance(rect, Mapping)
-            and rect.get("viewport") is True
+        common = (
+            terminal.get("rootCount") == 1
+            and terminal.get("innerCount") == 1
+            and terminal.get("rootVisible") is True
+            and terminal.get("innerVisible") is True
+            and terminal.get("rootInViewport") is True
+            and terminal.get("innerInViewport") is True
+            and terminal.get("insidePinnedLayout") is True
+            and terminal.get("shellChainValid") is True
+            and terminal.get("visibleSlotCount") == 0
+            and terminal.get("visiblePageCanvasCount") == 0
+            and terminal.get("modalCount") == 0
+            and terminal.get("actionInventoryCapped") is False
+            and terminal.get("actionPartitionComplete") is True
+            and terminal.get("unknownActionCount") == 0
+            and terminal.get("visibleActionCount") == frame.get("visibleActions")
         )
+        if not common:
+            return False
+        if terminal.get("nativeCounterVisible") is not frame.get("counterVisible"):
+            return False
+        if terminal.get("nativeCounterVisible") is True:
+            counter = terminal.get("nativeCounter")
+            if not isinstance(counter, Mapping) or counter.get("current") != total or counter.get("total") != total:
+                return False
+        partition = terminal.get("partition")
+        if not isinstance(partition, Mapping) or any(
+            type(count) is not int or count < 0 for count in partition.values()
+        ) or sum(partition.values()) != frame.get("visibleActions"):
+            return False
+        profile = terminal.get("profile")
+        if profile == "angel-dead-end":
+            marker = frame.get("deadEnd")
+            modules = terminal.get("moduleCounts")
+            return (
+                isinstance(marker, list)
+                and len(marker) == 1
+                and isinstance(marker[0], Mapping)
+                and marker[0].get("visible") is True
+                and marker[0].get("textExact") is True
+                and marker[0].get("controls") == 0
+                and isinstance(marker[0].get("rect"), Mapping)
+                and marker[0]["rect"].get("viewport") is True
+                and terminal.get("markerCount") == 1
+                and terminal.get("markerInsideInner") is True
+                and terminal.get("markerVisible") is True
+                and terminal.get("markerTextExact") is True
+                and terminal.get("markerControls") == 0
+                and terminal.get("riskyActionCount") == 0
+                and isinstance(modules, Mapping)
+                and modules.get("review") == 1
+                and modules.get("coupon") == 1
+                and modules.get("author") == 1
+                and modules.get("i2i") == 1
+                and partition.get("review") == 1
+                and partition.get("coupon") == 1
+                and partition.get("recommendAuthor", 0) >= 1
+                and partition.get("recommendI2i", 0) >= 1
+                and set(modules) == {"review", "coupon", "author", "i2i"}
+                and set(partition).issubset({"review", "coupon", "recommendAuthor", "recommendI2i"})
+            )
+        if profile == "muda-book-last":
+            modules = terminal.get("moduleCounts")
+            headers = terminal.get("headerCounts")
+            required_modules = {
+                "review", "nextItem", "cta", "banner", "i2i", "author", "forYou"
+            }
+            required_headers = {"close-button", "contents-button", "settings-button"}
+            return (
+                isinstance(modules, Mapping)
+                and set(modules) == required_modules
+                and all(modules.get(name) == 1 for name in required_modules)
+                and terminal.get("moduleChildCount") == 7
+                and isinstance(headers, Mapping)
+                and set(headers) == required_headers
+                and all(headers.get(name) == 1 for name in required_headers)
+                and terminal.get("moduleChildCount") == 7
+                and terminal.get("headerBarCount") == 1
+                and terminal.get("headerMenuCount") == 1
+                and terminal.get("riskyActionCount") == 0
+                and partition.get("review") == 1
+                and partition.get("nextItem") == 1
+                and partition.get("cta") == 1
+                and partition.get("banner") == 2
+                and partition.get("header") == 3
+                and set(partition).issubset(required_modules | {"header"})
+            )
+        return False
 
     async def _ensure_native_css_viewport(
         self, page: Page, *, expected_path: str, current: int, total: int
@@ -1158,8 +1238,17 @@ class EbookJapanAdapter(SiteAdapter):
                 "derived_frame_shape": "cover" if current == 1 else "spread",
                 "width": first[1],
                 "height": first[2],
+                "css_rect": dict(part["cssRect"]) if isinstance(part.get("cssRect"), Mapping) else None,
                 "draw_generation": part.get("drawGeneration"),
                 "successful_draws": part.get("successfulDraws"),
+                "mutation_count": part.get("mutationCount"),
+                "clip_calls": part.get("clipCalls"),
+                "last_full_draw": part.get("lastFullDraw"),
+                "reset_observed": part.get("resetObserved"),
+                "context_is_2d": part.get("contextIs2d"),
+                "observer_overflow": part.get("observerOverflow"),
+                "draw_ready": part.get("drawReady"),
+                "draw_geometry": dict(part["drawGeometry"]) if isinstance(part.get("drawGeometry"), Mapping) else None,
                 "compositor_pixel_sha256": first[3],
                 "capture_method": "D_compositor_png",
                 "source_provenance": "UNKNOWN",
@@ -1170,6 +1259,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._captured_slot_order.extend(ids)
         self._last_capture_parts = tuple(cached_parts)
         self._last_capture_node_key = identity_key
+        self._last_capture_paint_signature = frame_signature
         self._last_capture_ids = tuple(ids)
         self._last_capture_ordinals = tuple(ordinals)
         self._last_capture_part_count = len(parts)
@@ -1392,31 +1482,63 @@ class EbookJapanAdapter(SiteAdapter):
             raise UnknownPageStateError("ebookjapan page changed after its atomic capture")
         if tuple(self._visible_slot_ids(frame)) != self._last_capture_ids:
             raise UnknownPageStateError("ebookjapan captured slot order changed before normal advance")
-        self._require_safe_capture_surface(frame)
+        if (
+            self._last_capture_paint_signature is None
+            or self._frame_paint_signature(frame) != self._last_capture_paint_signature
+        ):
+            raise UnknownPageStateError(
+                "ebookjapan captured paint and geometry state changed before normal advance"
+            )
         controls = await self._reader_controls(page, expected_path=reader_path)
         if controls.get("visibleEnd") is True:
             raise UnknownPageStateError("ebookjapan is already showing an END control before normal advance")
         target = await page.evaluate(
-            """() => {
-              const x=12,y=Math.floor(innerHeight/2),target=document.elementFromPoint(x,y);
-              let node=target,hasPageRegion=false,interactive=false,blockedEnd=false;
-              for(let depth=0;node&&depth<12;depth++,node=node.parentElement){
-                if(node.matches?.('a,button,[role="button"],input,select,textarea'))interactive=true;
-                if(node.matches?.('.comic-viewer__page-slot,canvas'))hasPageRegion=true;
-                if(node.matches?.('.next-item,.book-last-dead-end__next'))blockedEnd=true;
-              }
-              return {x,y,hasPageRegion,interactive,blockedEnd,targetTag:target?.tagName||null};
-            }"""
+            NAVIGATION_TARGET_JS,
+            {
+                "x": 12,
+                "capturedParts": [
+                    {
+                        "slotId": part.get("slot_id"),
+                        "slotOrdinal": part.get("slot_ordinal"),
+                        "canvasId": part.get("canvas_id"),
+                        "canvasIndex": part.get("canvas_index"),
+                        "backingWidth": part.get("width"),
+                        "backingHeight": part.get("height"),
+                        "cssRect": part.get("css_rect"),
+                        "drawGeneration": part.get("draw_generation"),
+                        "successfulDraws": part.get("successful_draws"),
+                        "mutationCount": part.get("mutation_count"),
+                        "clipCalls": part.get("clip_calls"),
+                        "lastFullDraw": part.get("last_full_draw"),
+                        "resetObserved": part.get("reset_observed"),
+                        "contextIs2d": part.get("context_is_2d"),
+                        "observerOverflow": part.get("observer_overflow"),
+                        "drawReady": part.get("draw_ready"),
+                        "drawGeometry": part.get("draw_geometry"),
+                    }
+                    for part in self._last_capture_parts
+                ],
+            },
         )
         if (
             not isinstance(target, Mapping)
-            or target.get("hasPageRegion") is not True
+            or target.get("safe") is not True
+            or target.get("slotsPinned") is not True
+            or target.get("capturedPartsMatch") is not True
+            or target.get("inPinnedSlot") is not True
+            or target.get("insideSlot") is not True
             or target.get("interactive") is not False
-            or target.get("blockedEnd") is not False
+            or target.get("blocked") is not False
+            or target.get("modalVisible") is not False
             or type(target.get("x")) is not int
+                or target.get("x") != 12
             or type(target.get("y")) is not int
+                or not isinstance(target.get("viewport"), Mapping)
+                or target.get("y") != target["viewport"].get("height", -1) // 2
         ):
-            raise UnknownPageStateError("ebookjapan observed normal left-edge page target is unsafe")
+            raise UnknownPageStateError(
+                "ebookjapan normal advance hit is not bound to the captured pinned page slot"
+            )
         self._transition_before_key = self._last_capture_node_key
         self._transition_pending = True
         self._terminal_end_verified = False
@@ -1554,6 +1676,15 @@ class EbookJapanAdapter(SiteAdapter):
             if not isinstance(part, Mapping):
                 raise UnknownPageStateError("ebookjapan paint part is malformed")
             rect = part.get("cssRect")
+            draw_geometry = part.get("drawGeometry")
+            geometry_signature = (
+                tuple(
+                    (key, tuple(value) if isinstance(value, list) else value)
+                    for key, value in sorted(draw_geometry.items())
+                )
+                if isinstance(draw_geometry, Mapping)
+                else None
+            )
             signature.extend((
                 part.get("slotId"),
                 part.get("canvasId"),
@@ -1571,6 +1702,7 @@ class EbookJapanAdapter(SiteAdapter):
                 part.get("contextIs2d"),
                 part.get("observerOverflow"),
                 part.get("drawReady"),
+                geometry_signature,
             ))
         return tuple(signature)
 

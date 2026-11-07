@@ -43,7 +43,10 @@ async def browser_page(integration_browser: Browser) -> Page:
         await context.close()
 
 
-def _html(*, current: int = 1, total: int = 1, slot_count: int = 1) -> str:
+def _html(
+    *, current: int = 1, total: int = 1, slot_count: int = 1,
+    terminal_profile: str = "angel",
+) -> str:
     slots = []
     for index in range(slot_count):
         if slot_count == 3:
@@ -57,16 +60,55 @@ def _html(*, current: int = 1, total: int = 1, slot_count: int = 1) -> str:
             '<canvas class="page-canvas" width="300" height="150" '
             'style="position:absolute;right:0;width:auto;height:100%"></canvas></div>'
         )
-    return f"""<!doctype html><html><head><style>
+    if terminal_profile not in {"angel", "muda"}:
+        raise ValueError("unsupported neutral terminal profile")
+    viewer_open = '<div class="comic-viewer">' if terminal_profile == "muda" else ""
+    viewer_close = "</div>" if terminal_profile == "muda" else ""
+    header_controls = (
+        '<div class="legacy-comic-header__bar is-entrance-delayed"><button class="close-button"></button>'
+        '<div class="legacy-comic-header__menu legacy-comic-header__menu--pc">'
+        '<button class="contents-button"></button><button class="settings-button"></button></div></div>'
+        if terminal_profile == "muda" else ""
+    )
+    terminal_markup = (
+        '<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none"><div class="viewer-liber__viewer-last-cell">'
+        '<div class="viewer-last-shell" style="display:none">'
+        '<div class="book-last" style="position:fixed;left:30vw;top:80px;width:40vw;height:1400px;overflow:auto;background:#eee">'
+        '<div class="book-last__inner">'
+        '<div class="review-module book-last__review"><button class="review-module__action">Review</button></div>'
+        '<div class="next-item book-last__next"><div class="next-item__outline"><button class="next-item__rating">Rate</button></div></div>'
+        '<div class="cta-button book-last__cta"><div class="cta-button__row"><div class="cta-button__primary"><button class="cta-button__read-btn">Read</button></div></div></div>'
+        '<div class="banner-group book-last__banner-group"><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>'
+        '<section class="recommend-grid book-last__section book-last__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000001/">Related</a></li></ul></section>'
+        '<section class="recommend-grid book-last__section book-last__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>'
+        '<section class="recommend-grid book-last__section book-last__for-you"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>'
+        '</div></div></div></div></div>'
+        if terminal_profile == "muda" else ""
+    )
+    if terminal_profile == "angel":
+        terminal_markup = (
+            '<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none"><div class="viewer-liber__viewer-last-cell">'
+            '<div class="viewer-last-shell" style="display:none"><div class="book-last-dead-end" style="position:fixed;left:30vw;top:80px;width:40vw;height:300px;background:#eee">'
+            '<div class="book-last-dead-end__inner">'
+            '<div class="review-module book-last-dead-end__review"><button class="review-module__action">Review</button></div>'
+            '<div class="banner-group book-last-dead-end__banner-group"><button class="banner__row banner__row--line-coupon">Coupon</button></div>'
+            '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000001/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>'
+            '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>'
+            '<div class="next-item book-last-dead-end__next">&#12371;&#12398;&#20316;&#21697;&#12399;&#12371;&#12371;&#12414;&#12391;&#12391;&#12377;</div>'
+            '</div></div></div></div></div>'
+        )
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
       .legacy-comic-header,.legacy-comic-footer{{position:fixed;left:0;width:100%;height:24px;z-index:20;background:#ddd}}
       .legacy-comic-header{{top:0}} .legacy-comic-footer{{bottom:0}}
+      .book-last__author{{margin-top:1050px}}
       </style></head><body>
-      <header class="legacy-comic-header"><span class="legacy-comic-header__title">{TITLE}</span></header>
+      {viewer_open}
+      <header class="legacy-comic-header"><span class="legacy-comic-header__title">{TITLE}</span>{header_controls}</header>
       <footer class="legacy-comic-footer"><span class="legacy-comic-footer__page-output">{current} / {total}</span></footer>
       <div class="comic-viewer__scroll-container comic-viewer__scroll-container--horizontal-rtl comic-viewer__scroll-container--spread">
-        {''.join(slots)}
+        {''.join(slots)}{terminal_markup}
       </div>
-      <div class="next-item book-last-dead-end__next" style="display:none;position:fixed;left:40px;top:180px;z-index:30">&#12371;&#12398;&#20316;&#21697;&#12399;&#12371;&#12371;&#12414;&#12391;&#12391;&#12377;</div>
+      {viewer_close}
       <input type="range" class="seekbar__slider" min="0" max="{total - 1}" value="0" style="position:fixed;left:0;top:650px">
       <script>
       let fixtureCurrent={current};
@@ -91,20 +133,30 @@ def _html(*, current: int = 1, total: int = 1, slot_count: int = 1) -> str:
           slots[2].style.display='none';
         }}else if(fixtureCurrent===2){{
           fixtureCurrent=3;document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');
-          document.querySelector('.book-last-dead-end__next').style.display='block';
+          document.querySelector('.legacy-comic-footer__page-output').textContent='3 / {total}';
+          document.querySelector('.seekbar__slider').style.display='none';
+          document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';
+          const terminalShell=document.querySelector('.viewer-last-shell');
+          if(window.__ejFixtureMode==='delayed-terminal'){{terminalShell.style.display='none';setTimeout(()=>terminalShell.style.display='block',250);}}
+          else if(window.__ejFixtureMode==='opacity-hidden-terminal'){{terminalShell.style.display='block';terminalShell.style.opacity='0';setTimeout(()=>terminalShell.style.opacity='1',250);}}
+          else terminalShell.style.display='block';
+          if('{terminal_profile}'==='muda'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
         }}
       }});
       </script>
     </body></html>"""
 
 
-async def _open_reader(page: Page, *, current: int = 1, total: int = 1, slot_count: int = 1) -> None:
+async def _open_reader(
+    page: Page, *, current: int = 1, total: int = 1, slot_count: int = 1,
+    terminal_profile: str = "angel",
+) -> None:
     await page.context.route(
         "https://ebookjapan.yahoo.co.jp/**",
         lambda route: route.fulfill(
             status=200,
             content_type="text/html",
-            body=_html(current=current, total=total, slot_count=slot_count),
+            body=_html(current=current, total=total, slot_count=slot_count, terminal_profile=terminal_profile),
         ),
     )
     await page.goto(READER_URL)
@@ -147,6 +199,47 @@ async def _frame(page: Page, *, current: int = 1) -> dict[str, object]:
     return await page.evaluate(FRAME_STATE_JS, {"expectedCurrent": current})
 
 
+async def _capture_neutral_cover(page: Page) -> tuple[EbookJapanAdapter, object]:
+    await _open_reader(page, current=1, total=3, slot_count=3)
+    await _draw_full_same_size(page)
+    adapter = EbookJapanAdapter()
+    adapter._page = page
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 3
+    adapter._expected_current = 1
+    await _redraw_on_resize(page)
+    await adapter._pin_reader_anchor(
+        page, expected_path=READER_PATH, expected_current=1, expected_total=3
+    )
+    identity = await adapter.get_content_identity(page)
+    await adapter.capture_page(page)
+    await page.evaluate("window.__fixtureClickCount=0;document.addEventListener('click',()=>window.__fixtureClickCount++)")
+    return adapter, identity
+
+
+async def _show_terminal_profile(page: Page, profile: str) -> dict[str, object]:
+    await _open_reader(page, current=3, total=3, slot_count=3, terminal_profile=profile)
+    await page.evaluate(
+        """profile=>{
+          document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');
+          document.querySelector('.legacy-comic-footer__page-output').textContent='3 / 3';
+          document.querySelector('.seekbar__slider').style.display='none';
+          document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';
+          document.querySelector('.viewer-last-shell').style.display='block';
+          if(profile==='angel')document.querySelector('.book-last-dead-end').style.display='block';
+          else {
+            document.querySelector('.legacy-comic-header').hidden=false;
+            document.querySelector('.legacy-comic-footer').hidden=false;}
+        }""",
+        profile,
+    )
+    return await _frame(page, current=3)
+
+
 def _runner_listing_html(*, account_mode: str = "present") -> str:
     account_markup = (
         '<div class="account__user"><a href="/mypage/">signed-in</a></div>'
@@ -178,8 +271,8 @@ def _runner_listing_html(*, account_mode: str = "present") -> str:
     </body></html>"""
 
 
-def _runner_reader_html(*, mode: str = "normal") -> str:
-    body = _html(current=1, total=3, slot_count=3)
+def _runner_reader_html(*, mode: str = "normal", terminal_profile: str = "angel") -> str:
+    body = _html(current=1, total=3, slot_count=3, terminal_profile=terminal_profile)
     prefix = f"""
       window.__ejFixtureMode={mode!r};
       function renderFixturePages(){{
@@ -196,7 +289,7 @@ def _runner_reader_html(*, mode: str = "normal") -> str:
     body = body.replace("<script>\n      let fixtureCurrent=1;", "<script>\n      let fixtureCurrent=1;\n" + prefix + "\n      renderFixturePages();")
     body = body.replace(
         "if(fixtureCurrent===1){\n          fixtureCurrent=2;",
-        "if(fixtureCurrent===1){\n          if(window.__ejFixtureMode==='premature-end'){document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');document.querySelector('.book-last-dead-end__next').style.display='block';return;}\n          fixtureCurrent=2;",
+        "if(fixtureCurrent===1){\n          if(window.__ejFixtureMode==='premature-end'){document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');document.querySelector('.seekbar__slider').style.display='none';document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';document.querySelector('.viewer-last-shell').style.display='block';document.querySelector('.book-last-dead-end').style.display='block';return;}\n          fixtureCurrent=2;",
     )
     body = body.replace(
         "slots[2].style.display='none';\n        }else if(fixtureCurrent===2){",
@@ -224,20 +317,36 @@ def _runner_seven_slot_reader_html(*, mode: str = "normal") -> str:
       .comic-viewer__scroll-container--horizontal-rtl{direction:rtl}
       .comic-viewer__scroll-container--spread{display:block}
       .comic-viewer__page-slot canvas{display:block}
-      .next-item.book-last-dead-end__next{position:fixed;inset:0;display:grid;place-items:center}
-      .next-item.book-last-dead-end__next[hidden],body.toolbar-hidden .legacy-comic-header__title,
+      .book-last-dead-end{position:fixed;inset:0;display:grid;place-items:center}
+      .book-last-dead-end[hidden],body.toolbar-hidden .legacy-comic-header__title,
       body.toolbar-hidden .legacy-comic-footer__page-output,body.toolbar-hidden .seekbar__slider{display:none}
       </style></head><body>
       <header class="legacy-comic-header__title">__TITLE__</header>
       <footer class="legacy-comic-footer__page-output">1 / 7</footer>
       <input class="seekbar__slider" type="range" min="0" max="6" step="1" value="6">
-      <main class="comic-viewer__scroll-container comic-viewer__scroll-container--horizontal-rtl comic-viewer__scroll-container--spread">__SLOTS__</main>
-      <div class="next-item book-last-dead-end__next" hidden>\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059</div>
+      <main class="comic-viewer__scroll-container comic-viewer__scroll-container--horizontal-rtl comic-viewer__scroll-container--spread">__SLOTS__
+      <div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive">
+        <div class="viewer-liber__viewer-last-cell"><div class="viewer-last-shell">
+          <div class="book-last-dead-end" hidden><div class="book-last-dead-end__inner">
+            <div class="review-module book-last-dead-end__review"><button class="review-module__action">Review</button></div>
+            <div class="banner-group book-last-dead-end__banner-group"><button class="banner__row banner__row--line-coupon">Coupon</button></div>
+            <section class="recommend-grid book-last-dead-end__section book-last-dead-end__author">
+              <a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000001/">More</a>
+              <ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul>
+            </section>
+            <section class="recommend-grid book-last-dead-end__section book-last-dead-end__i2i">
+              <ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul>
+            </section>
+            <div class="next-item book-last-dead-end__next">\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059</div>
+          </div></div>
+        </div></div>
+      </div>
+      </main>
       <script>
       let current=1;const sequence=[1,2,4,6,7];const mode=__MODE__;
       const root=document.querySelector('.comic-viewer__scroll-container');
       const counter=document.querySelector('.legacy-comic-footer__page-output');
-      const dead=document.querySelector('.book-last-dead-end__next');
+      const dead=document.querySelector('.book-last-dead-end');
       const slots=[...root.querySelectorAll('.comic-viewer__page-slot')];
       function render(){
         const active=current===1?[1]:current<4?[2,3]:current<6?[4,5]:current===6?[6,7]:[];
@@ -281,6 +390,7 @@ async def _run_neutral_core_flow(
     mode: str = "normal",
     max_pages: int = 5,
     total_slots: int = 3,
+    terminal_profile: str = "angel",
 ) -> tuple[EbookJapanAdapter, object]:
     async def route_fixture(route) -> None:
         path = route.request.url.split("?", 1)[0]
@@ -295,7 +405,7 @@ async def _run_neutral_core_flow(
             reader_body = (
                 _runner_seven_slot_reader_html(mode=mode)
                 if total_slots == 7
-                else _runner_reader_html(mode=mode)
+                else _runner_reader_html(mode=mode, terminal_profile=terminal_profile)
             )
             await route.fulfill(
                 status=200,
@@ -360,6 +470,45 @@ async def test_core_runner_completes_neutral_owned_entry_capture_end_and_zip(
     assert json.loads(packaged.status_path.read_text(encoding="utf-8"))["status"] == "completed"
     with zipfile.ZipFile(packaged.archive_path) as archive:
         assert sorted(archive.namelist()) == [f"page-{index:04d}.png" for index in range(1, 8)]
+
+
+@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+@pytest.mark.parametrize(
+    "fixture_mode", ["normal", "delayed-terminal", "opacity-hidden-terminal"]
+)
+async def test_core_runner_accepts_each_observed_book_terminal_profile(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+    terminal_profile: str, fixture_mode: str,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan.viewer import NAVIGATION_TARGET_JS
+
+    navigation_samples: list[object] = []
+    original_evaluate = browser_page.evaluate
+
+    async def record_navigation_sample(expression, *args, **kwargs):
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression == NAVIGATION_TARGET_JS:
+            navigation_samples.append(result)
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", record_navigation_sample)
+    try:
+        _adapter, result = await _run_neutral_core_flow(
+            browser_page,
+            tmp_path,
+            total_slots=3,
+            max_pages=10,
+            terminal_profile=terminal_profile,
+            mode=fixture_mode,
+        )
+    except UnknownPageStateError as exc:
+        pytest.fail(
+            f"neutral {terminal_profile}/{fixture_mode} flow stopped at "
+            f"{navigation_samples!r}: {exc}"
+        )
+
+    assert result.stop_state.value == "end"
+    assert len(result.pages) == 3
 
 
 async def test_core_runner_waits_for_delayed_signed_in_account_shell(
@@ -904,24 +1053,96 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
 
 
 async def test_unknown_terminal_notice_is_not_classified_as_end(browser_page: Page) -> None:
-    await _open_reader(browser_page)
+    baseline = await _show_terminal_profile(browser_page, "angel")
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
     await browser_page.evaluate(
         """()=>{
-          document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');
-          document.querySelector('.book-last-dead-end__next').style.display='block';
+          document.querySelector('.book-last-dead-end__next').textContent+=' UNKNOWN NOTICE';
         }"""
-    )
-    assert (await _frame(browser_page))["status"] == "end"
-    await browser_page.evaluate(
-        """()=>{document.querySelector('.book-last-dead-end__next').textContent+=' UNKNOWN NOTICE';}"""
     )
     assert (await _frame(browser_page))["status"] == "unknown-terminal-marker"
 
 
-async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
-    browser_page: Page,
+@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+@pytest.mark.parametrize(
+    "extra_markup",
+    [
+        '<button id="outside-action" style="position:fixed;left:100px;top:100px">Next</button>',
+        '<div class="review-module" style="position:fixed;left:100px;top:100px"><button>Extra</button></div>',
+        '<button class="checkout-action" style="position:fixed;left:120px;top:100px">Purchase</button>',
+        '<div role="dialog" aria-modal="true" style="position:fixed;left:100px;top:100px">Notice</div>',
+    ],
+    ids=["outside-action", "same-class-outside-root", "purchase-extra", "modal-extra"],
+)
+async def test_terminal_profiles_reject_unknown_or_mixed_visible_actions(
+    browser_page: Page, terminal_profile: str, extra_markup: str,
 ) -> None:
-    await _open_reader(browser_page, current=1, total=3, slot_count=3)
+    baseline = await _show_terminal_profile(browser_page, terminal_profile)
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+    await browser_page.evaluate(
+        "extra=>document.body.insertAdjacentHTML('beforeend',extra)",
+        extra_markup,
+    )
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker"
+    assert frame["terminal"]["actionPartitionComplete"] is False or frame["terminal"]["modalCount"] > 0
+
+
+async def test_muda_terminal_rejects_purchase_action_inside_known_module(browser_page: Page) -> None:
+    baseline = await _show_terminal_profile(browser_page, "muda")
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+    await browser_page.evaluate(
+        """()=>document.querySelector('.book-last__cta').insertAdjacentHTML(
+          'beforeend','<button class="checkout-action">Purchase</button>')"""
+    )
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker"
+    assert frame["terminal"]["unknownActionCount"] == 1
+    assert frame["terminal"]["actionPartitionComplete"] is False
+
+
+async def test_muda_terminal_accepts_observed_author_heading_in_tall_viewport(browser_page: Page) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 1600})
+    baseline = await _show_terminal_profile(browser_page, "muda")
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "end", json.dumps(frame.get("terminal"), sort_keys=True)
+    assert frame["terminal"]["partition"]["author"] == 2
+
+
+@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+async def test_terminal_profile_does_not_accept_visible_page_canvas(
+    browser_page: Page, terminal_profile: str,
+) -> None:
+    await _open_reader(browser_page, current=3, total=3, slot_count=3, terminal_profile=terminal_profile)
+    await _draw_full_same_size(browser_page)
+    await browser_page.evaluate(
+        """profile=>{
+          const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];
+          slots.forEach((slot,index)=>slot.style.display=index===0?'block':'none');
+          slots[0].style.left='0px';
+          document.querySelector('.seekbar__slider').style.display='none';
+          document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';
+          document.querySelector('.viewer-last-shell').style.display='block';
+          if(profile==='angel')document.querySelector('.book-last-dead-end').style.display='block';
+        }""",
+        terminal_profile,
+    )
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] != "end"
+    assert frame["visibleSlots"]
+
+
+@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
+    browser_page: Page, terminal_profile: str,
+) -> None:
+    await _open_reader(
+        browser_page, current=1, total=3, slot_count=3, terminal_profile=terminal_profile
+    )
     await _draw_full_same_size(browser_page)
     adapter = EbookJapanAdapter()
     adapter._page = browser_page
@@ -957,12 +1178,23 @@ async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
     assert adapter._capture_coverage_complete() is True
     assert adapter._last_native_counter is None
 
+    await browser_page.evaluate("window.__terminalAdvanceClicks=0;document.addEventListener('click',()=>window.__terminalAdvanceClicks++)")
     await adapter.go_next(browser_page)
     terminal_snapshot = await browser_page.evaluate(FRAME_STATE_JS, {"expectedCurrent": 2})
-    assert terminal_snapshot["status"] == "end", terminal_snapshot
+    assert terminal_snapshot["status"] == "end", json.dumps(terminal_snapshot.get("terminal"), sort_keys=True)
+    assert terminal_snapshot["terminal"]["profile"] == (
+        "angel-dead-end" if terminal_profile == "angel" else "muda-book-last"
+    )
+    assert terminal_snapshot["terminal"]["visiblePageCanvasCount"] == 0
+    assert adapter._capture_coverage_complete() is True
     await adapter.wait_for_change(browser_page, spread_identity)
     assert await adapter.detect_state(browser_page) == "end"
     assert adapter._terminal_end_verified is True
+    clicks_at_end = await browser_page.evaluate("window.__terminalAdvanceClicks")
+    assert clicks_at_end == 1
+    with pytest.raises(UnknownPageStateError, match="not ready"):
+        await adapter.go_next(browser_page)
+    assert await browser_page.evaluate("window.__terminalAdvanceClicks") == clicks_at_end
 
 
 async def test_reader_end_is_rejected_until_every_frozen_slot_was_captured(
@@ -985,7 +1217,10 @@ async def test_reader_end_is_rejected_until_every_frozen_slot_was_captured(
     await browser_page.evaluate(
         """()=>{
           document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');
-          document.querySelector('.book-last-dead-end__next').style.display='block';
+          document.querySelector('.seekbar__slider').style.display='none';
+          document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';
+          document.querySelector('.viewer-last-shell').style.display='block';
+          document.querySelector('.book-last-dead-end').style.display='block';
         }"""
     )
 
@@ -993,6 +1228,124 @@ async def test_reader_end_is_rejected_until_every_frozen_slot_was_captured(
         await adapter.detect_state(browser_page)
     assert adapter._seen_slot_ids == set()
     assert adapter._terminal_end_verified is False
+
+
+async def test_navigation_uses_a_bound_hit_without_rechecking_global_d_surface(
+    browser_page: Page,
+) -> None:
+    adapter, identity = await _capture_neutral_cover(browser_page)
+    await browser_page.evaluate(
+        """()=>{
+          const overlay=document.createElement('div');
+          overlay.style='position:fixed;left:200px;top:200px;width:20px;height:20px;z-index:99999;background:red;pointer-events:none';
+          document.body.append(overlay);
+          const hidden=document.createElement('div');hidden.setAttribute('role','dialog');hidden.setAttribute('aria-modal','true');hidden.style.display='none';
+          document.body.append(hidden);
+        }"""
+    )
+    state = await _frame(browser_page)
+    assert state["status"] == "content"
+    assert state["parts"][0]["captureSurfaceSafe"] is False
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, identity)
+    assert await browser_page.evaluate("window.__fixtureClickCount") == 1
+
+
+@pytest.mark.parametrize("target_kind", ["cta", "visible-modal", "unknown-element", "interactive-ancestor"])
+async def test_navigation_rejects_interactive_or_modal_hit_without_click(
+    browser_page: Page, target_kind: str,
+) -> None:
+    adapter, _identity = await _capture_neutral_cover(browser_page)
+    if target_kind == "cta":
+        await browser_page.evaluate(
+            """()=>{const b=document.createElement('button');b.id='navigation-cta';
+              b.style='position:fixed;left:0;top:calc(50vh - 20px);width:24px;height:40px;z-index:99999';
+              b.addEventListener('click',()=>window.__unsafeActionClick=(window.__unsafeActionClick||0)+1);document.body.append(b);} """
+        )
+    elif target_kind == "visible-modal":
+        await browser_page.evaluate(
+            """()=>{const modal=document.createElement('div');modal.setAttribute('role','dialog');
+              modal.setAttribute('aria-modal','true');modal.style='position:fixed;left:700px;top:100px;width:50px;height:50px;background:#fff;z-index:99999';
+              document.body.append(modal);} """
+        )
+    elif target_kind == "unknown-element":
+        await browser_page.evaluate(
+            """()=>{const unknown=document.createElement('div');unknown.id='navigation-unknown';
+              unknown.style='position:fixed;left:0;top:calc(50vh - 20px);width:24px;height:40px;z-index:99999;background:#ddd';
+              document.body.append(unknown);} """
+        )
+    else:
+        await browser_page.evaluate(
+            """()=>{const slot=document.querySelector('.comic-viewer__page-slot[data-index="2"]');
+              const link=document.createElement('a');link.href='#navigation-ancestor-clicked';link.style='display:contents';
+              link.addEventListener('click',()=>window.__ancestorLinkClicks=(window.__ancestorLinkClicks||0)+1);
+              slot.before(link);link.append(slot);} """
+        )
+
+    with pytest.raises(UnknownPageStateError, match="hit is not bound"):
+        await adapter.go_next(browser_page)
+    assert await browser_page.evaluate("window.__fixtureClickCount") == 0
+    assert await browser_page.evaluate("window.__unsafeActionClick||0") == 0
+    assert await browser_page.evaluate("window.__ancestorLinkClicks||0") == 0
+
+
+@pytest.mark.parametrize("drift", ["geometry", "paint", "node"])
+async def test_navigation_rejects_frame_drift_before_click(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, drift: str,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan import adapter as adapter_module
+
+    adapter, _identity = await _capture_neutral_cover(browser_page)
+    if drift == "geometry":
+        await browser_page.evaluate(
+            """()=>document.querySelector('.comic-viewer__page-slot[data-index="2"]').style.left='1px'"""
+        )
+    elif drift == "paint":
+        await browser_page.evaluate(
+            """()=>{const c=document.querySelector('.comic-viewer__page-slot[data-index="2"] canvas');
+              const s=document.createElement('canvas');s.width=c.width;s.height=c.height;
+              s.getContext('2d').fillRect(0,0,s.width,s.height);c.getContext('2d').drawImage(s,0,0);} """
+        )
+    else:
+        monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 100)
+        await browser_page.evaluate(
+            """()=>{const c=document.querySelector('.comic-viewer__page-slot[data-index="2"] canvas');c.replaceWith(c.cloneNode());} """
+        )
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.go_next(browser_page)
+    assert await browser_page.evaluate("window.__fixtureClickCount") == 0
+    assert adapter._transition_pending is False
+
+
+@pytest.mark.parametrize("race", ["geometry", "paint"])
+async def test_navigation_final_sample_rechecks_committed_canvas_state(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, race: str,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan.viewer import NAVIGATION_TARGET_JS
+
+    adapter, _identity = await _capture_neutral_cover(browser_page)
+    original_evaluate = browser_page.evaluate
+
+    async def mutate_before_final_sample(expression, *args, **kwargs):
+        if expression == NAVIGATION_TARGET_JS:
+            if race == "geometry":
+                await original_evaluate(
+                    """()=>document.querySelector('.comic-viewer__page-slot[data-index="2"]').style.left='1px'"""
+                )
+            else:
+                await original_evaluate(
+                    """()=>{const c=document.querySelector('.comic-viewer__page-slot[data-index="2"] canvas');
+                      const s=document.createElement('canvas');s.width=c.width;s.height=c.height;
+                      s.getContext('2d').fillRect(0,0,s.width,s.height);c.getContext('2d').drawImage(s,0,0);} """
+                )
+        return await original_evaluate(expression, *args, **kwargs)
+
+    monkeypatch.setattr(browser_page, "evaluate", mutate_before_final_sample)
+    with pytest.raises(UnknownPageStateError, match="hit is not bound"):
+        await adapter.go_next(browser_page)
+    assert await original_evaluate("window.__fixtureClickCount") == 0
+    assert adapter._transition_pending is False
 
 
 async def test_normal_advance_rejects_route_drift_and_skipped_slot_order(
