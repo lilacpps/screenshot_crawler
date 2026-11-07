@@ -1,12 +1,12 @@
 # 00 — 実サイトProbe（一覧・権利・Viewer・画像ソース）
 
-Status: **NOT STARTED**。このStageで本番Adapter実装や運用Catalog更新をしない。
+Status: **VERIFIED / REVIEWER ACCEPTED** (2026-11-07)。一覧、購入権利、Reader入口・遷移・Angel 10のEND、および原画像候補調査を実施済み。Stage 02では部分Reader Adapterを実装中。このStageで運用Catalog更新はしない。
 
 ## 入力・既知／未知
 
 - 対象: `https://ebookjapan.yahoo.co.jp/books/all/134336/`（エンジェル伝説、ユーザー申告：10巻のみ購入）、`https://ebookjapan.yahoo.co.jp/books/all/115888/`（ムダヅモ無き改革、ユーザー申告：全16巻購入）。
 - 公開公式ヘルプはPCの見開き表示、画面端クリック、ページ数表示・スライダー・読む方向切替を説明。これは現行の**認証済み実DOM・画像形式の証明ではない**。
-- 不明: account-marker、カードの「購入済み」DOM/表示条件、lazy load/並び順、巻固有ID、閲覧URL、Viewerページ構造、原画像response、終端挙動。
+- 未確定: per-slot native page ID、全巻取得時のA/B/C原画像source provenance、Mudazumo 1の終端挙動。account shellは新規Pageで約899ms遅れて現れる場合があり、認証確認はbounded wait後に行う。
 - 共有Crawler Chrome/Playwright。ログインできていなければ手動ログインを依頼して **BLOCKED** にする。認証自動突破は行わない。
 
 ## Probe 00-A — 作品一覧と所有判定（閲覧のみ）

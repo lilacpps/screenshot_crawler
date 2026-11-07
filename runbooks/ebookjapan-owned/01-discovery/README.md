@@ -1,6 +1,6 @@
 # 01 — URL登録・購入済みFull Discovery
 
-Status: **NOT STARTED**。開始条件: [00](../00-site-probe/README.md) の所有表示、全巻一覧、安定ID/順序が観測され、`PROGRESS.md` に記録済み。
+Status: **IMPLEMENTED / LIVE PASS / REVIEWER + LEAD ACCEPTED** (2026-11-07)。二作品の隔離CLI Full DiscoveryとFull rerunを検証済み。詳細は [`PROGRESS.md`](../PROGRESS.md) のStage 01記録。
 
 ## 目的 / 変更範囲
 

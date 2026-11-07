@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+
+import pytest
+
+from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.site_adapters.ebookjapan.adapter import (
+    EbookJapanAdapter,
+    parse_ebookjapan_product_url,
+)
+from screenshot_crawler.site_adapters.ebookjapan.viewer import (
+    normalize_title,
+    parse_page_counter,
+)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://ebookjapan.yahoo.co.jp/books/134336/A000083590/", ("134336", "A000083590")),
+        ("https://ebookjapan.yahoo.co.jp/books/1/A1/", ("1", "A1")),
+        ("http://ebookjapan.yahoo.co.jp/books/134336/A000083590/", None),
+        ("https://www.ebookjapan.yahoo.co.jp/books/134336/A000083590/", None),
+        ("https://ebookjapan.yahoo.co.jp/books/0134336/A000083590/", None),
+        ("https://ebookjapan.yahoo.co.jp/books/134336/A000083590", None),
+        ("https://ebookjapan.yahoo.co.jp/books/134336/A000083590/?x=1", None),
+        ("https://ebookjapan.yahoo.co.jp/books/134336/A000083590/#top", None),
+        ("https://ebookjapan.yahoo.co.jp.evil.test/books/134336/A000083590/", None),
+    ],
+)
+def test_product_url_requires_exact_canonical_identity(url: str, expected: object) -> None:
+    assert parse_ebookjapan_product_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1 / 287", (1, 287)),
+        (" 148 / 287 ", (148, 287)),
+        ("２８７／２８７", None),
+        ("0 / 287", None),
+        ("288 / 287", None),
+        ("1 /", None),
+        (None, None),
+    ],
+)
+def test_native_page_counter_parser_is_bounded(value: str | None, expected: object) -> None:
+    assert parse_page_counter(value) == expected
+
+
+def test_title_normalization_only_folds_width_and_whitespace() -> None:
+    assert normalize_title(" エンジェル伝説（１０） ") == "エンジェル伝説(10)"
+
+
+@pytest.mark.asyncio
+async def test_entry_waits_for_delayed_live_owned_badge_before_returning(monkeypatch) -> None:
+    adapter = EbookJapanAdapter()
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    row = {
+        "path": "/books/134336/A000083590/",
+        "title": "エンジェル伝説（10）",
+        "visible": True,
+    }
+
+    def snapshot(ownership: str) -> Mapping[str, object]:
+        payload = {"pageUrl": "https://ebookjapan.yahoo.co.jp/books/all/134336/", "accountAuthenticated": True}
+        return {"payload": payload, "row": row, "title": row["title"], "ownership": ownership}
+
+    states = ["explicitly_not_owned", "unknown", "owned", "owned", "owned"]
+    calls = 0
+
+    async def next_snapshot(_page):
+        nonlocal calls
+        state = states[min(calls, len(states) - 1)]
+        calls += 1
+        return snapshot(state)
+
+    class Page:
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    monkeypatch.setattr(adapter, "_owned_listing_snapshot", next_snapshot)
+    monkeypatch.setattr("screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_POLL_SECONDS", 0)
+    result = await adapter._wait_for_owned_card(Page())
+
+    assert result["ownership"] == "owned"
+    assert calls == 5
+
+
+@pytest.mark.asyncio
+async def test_entry_does_not_accept_unsettled_or_transient_not_owned_card(monkeypatch) -> None:
+    adapter = EbookJapanAdapter()
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    row = {"path": "/books/134336/A000083590/", "title": "エンジェル伝説（10）"}
+
+    async def transient(_page):
+        return {
+            "payload": {"pageUrl": "https://ebookjapan.yahoo.co.jp/books/all/134336/", "accountAuthenticated": True},
+            "row": row,
+            "title": row["title"],
+            "ownership": "explicitly_not_owned",
+        }
+
+    class Page:
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    monkeypatch.setattr(adapter, "_owned_listing_snapshot", transient)
+    monkeypatch.setattr("screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_SETTLE_SECONDS", 0.01)
+    monkeypatch.setattr("screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_POLL_SECONDS", 0)
+
+    with pytest.raises(UnknownPageStateError, match="did not settle"):
+        await adapter._wait_for_owned_card(Page())
+
+
+@pytest.mark.asyncio
+async def test_entry_waits_for_delayed_signed_in_account_shell(monkeypatch) -> None:
+    adapter = EbookJapanAdapter()
+    adapter._series_id = "134336"
+    states = [False, False, True]
+
+    class Page:
+        calls = 0
+
+        async def evaluate(self, _script):
+            authenticated = states[min(self.calls, len(states) - 1)]
+            self.calls += 1
+            return {
+                "pageUrl": "https://ebookjapan.yahoo.co.jp/books/all/134336/",
+                "pagePath": "/books/all/134336/",
+                "pageHost": "ebookjapan.yahoo.co.jp",
+                "oldestFirst": True,
+                "declaredTotal": 10,
+                "accountAuthenticated": authenticated,
+            }
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_POLL_SECONDS",
+        0,
+    )
+    page = Page()
+    await adapter._wait_for_signed_in_listing(page)
+    assert page.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_entry_rejects_account_shell_that_never_hydrates(monkeypatch) -> None:
+    adapter = EbookJapanAdapter()
+    adapter._series_id = "134336"
+
+    class Page:
+        async def evaluate(self, _script):
+            return {
+                "pageUrl": "https://ebookjapan.yahoo.co.jp/books/all/134336/",
+                "pagePath": "/books/all/134336/",
+                "pageHost": "ebookjapan.yahoo.co.jp",
+                "oldestFirst": True,
+                "declaredTotal": 10,
+                "accountAuthenticated": False,
+            }
+
+        async def wait_for_timeout(self, milliseconds: int) -> None:
+            await asyncio.sleep(milliseconds / 1000)
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_SETTLE_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.ebookjapan.adapter._OWNERSHIP_POLL_SECONDS",
+        0.002,
+    )
+    with pytest.raises(UnknownPageStateError, match="account shell did not settle"):
+        await adapter._wait_for_signed_in_listing(Page())
+
+
+@pytest.mark.asyncio
+async def test_stale_owned_card_is_rejected_before_reader_click(monkeypatch) -> None:
+    adapter = EbookJapanAdapter()
+    adapter._owned_title = "エンジェル伝説（10）"
+    monkeypatch.setattr(
+        adapter,
+        "_owned_listing_snapshot",
+        lambda _page: _async_result(
+            {"ownership": "explicitly_not_owned", "title": "エンジェル伝説（10）"}
+        ),
+    )
+
+    class NeverTouched:
+        async def count(self):
+            pytest.fail("stale card locator must not be inspected after rights loss")
+
+    with pytest.raises(UnknownPageStateError, match="immediately before Reader entry"):
+        await adapter._recheck_target_before_click(
+            object(),
+            target_path="/books/134336/A000083590/",
+            card=NeverTouched(),
+            action=NeverTouched(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_reader_waits_for_natural_canvas_transfer_after_route_is_pinned() -> None:
+    adapter = EbookJapanAdapter()
+    adapter._owned_title = "Mudazumo Naki Kaikaku"
+    path = "/viewer/purchased/B123456789012/"
+    states = [
+        {"status": "partial", "routeStable": True, "slotCount": 193},
+        {
+            "status": "content",
+            "routeStable": True,
+            "slotCount": 193,
+            "counterVisible": True,
+            "counter": {"current": 1, "total": 193},
+            "title": "Mudazumo Naki Kaikaku",
+        },
+    ]
+
+    class Page:
+        url = f"https://ebookjapan.yahoo.co.jp{path}"
+
+        async def evaluate(self, _script, _arg):
+            return states.pop(0)
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    frame = await adapter._wait_for_content_frame(
+        Page(),
+        expected_path=path,
+        expected_current=1,
+        expected_total=193,
+    )
+
+    assert frame["status"] == "content"
+    assert states == []
+
+
+@pytest.mark.asyncio
+async def test_reader_ready_wait_rejects_route_or_slot_identity_drift() -> None:
+    adapter = EbookJapanAdapter()
+    path = "/viewer/purchased/B123456789012/"
+
+    class Page:
+        url = "https://ebookjapan.yahoo.co.jp/viewer/purchased/B999999999999/"
+
+        async def evaluate(self, _script, _arg):
+            return {"status": "identity-mismatch"}
+
+    with pytest.raises(UnknownPageStateError, match="identity-mismatch"):
+        await adapter._wait_for_content_frame(
+            Page(), expected_path=path, expected_current=1, expected_total=193
+        )
+
+
+async def _async_result(value):
+    return value

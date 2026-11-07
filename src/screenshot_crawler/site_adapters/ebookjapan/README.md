@@ -1,10 +1,12 @@
-# ebookjapan purchased-only Discovery
+# ebookjapan purchased-only Discovery and partial Reader entry
 
 This adapter implements authenticated **Full Discovery** for ebookjapan series
 listing pages. It emits only books with an unambiguous, visible,
 card-local `購入済み` badge. The complete inventory retains every listing
 product and its observed oldest-first global position so the existing
 `DiscoveryService` can reconcile ownership safely.
+
+The package contains an **incomplete** Reader entry, D capture and normal navigation slice. Local neutral Chromium coverage is accepted by Reviewer and Lead. The initial live production-adapter attempt failed at viewport fitting; a post-fit center click advanced the cover to a spread and failed closed. The accepted runtime now hides before fitting and only clicks at the measured 1906?986 cover geometry after rechecking the actual bounding box. One bounded Angel cover D diagnostic succeeded with that order, and root visual QA passed; the normal multi-page CoreRunner baseline has not run. CLI/Batch registration and ZIP output are not enabled.
 
 ## Registration and mode
 
@@ -26,7 +28,10 @@ listing. It requires the exact series path, an authenticated account shell and
 stable bottom-of-list snapshots, matching DOM/layout order, unique product IDs
 belonging to the same series, and no list-local pagination/load-more control.
 The account shell is checked structurally; personal identity text is not
-retained.
+retained. A fresh Page may render its owned card before hydrating the account
+shell. The adapter waits within the existing eight-second ownership-settle bound
+for the exact visible shell and `/mypage/` link. An owned card alone never proves
+the current signed-in session; timeout remains fail-closed.
 
 Every card must have an explicit ownership state:
 
@@ -58,10 +63,35 @@ card title; an unnumbered title keeps an unknown volume label while retaining
 its observed global position. Complete listing inventory records all cards and
 the owned mask through the existing `CompleteListingInventory` hook.
 
-The adapter does not write Catalog state, open a book, click a basket or
-purchase control, inspect trial content, or implement Batch policy. Existing
+The Discovery adapter does not write Catalog state, open a book, click a basket
+or purchase control, inspect trial content, or implement Batch policy. Existing
 `DiscoveryService`, Catalog, GUI registration, shared CDP BrowserSession and
 Playwright Page are reused.
+
+## Partial Reader entry slice (Stage 02; not end-to-end)
+
+`EbookJapanAdapter` supports only `access_strategy="direct"` and no quota
+resource. Before opening a book it checks the same exact static owned witness
+used by Discovery, then waits up to eight seconds for three stable visible
+owned-card snapshots. If the static witness says owned but hydration temporarily
+shows price/cart, it waits; it never clicks before the visible badge settles to
+owned. Immediately before the click it rechecks the target A-ID path, card
+title, owned state, and unique observed `読む` action.
+
+The entry slice accepts only the same-page HTTPS purchased Viewer route
+`/viewer/purchased/B<digits>/`, exact title equality with the owned card, the
+observed harmless onboarding notice, a visible native counter whose total
+matches all actual slot nodes, and the observed horizontal RTL spread layout.
+It pins the Page document, exact route, slot node references/order and the same
+layout element. A resumed Reader is returned to 1/N using the observed native
+range `End` key. Readiness waits for the observed full-size, same-dimension
+three-argument `drawImage` transfer and complete visible part shape. Scaled or
+cropped overloads and changes to title, route, document, slots, layout,
+observer state, native canvas reset or canvas dimensions fail closed.
+
+This observed mutation set is conservative, not a proof that every possible pixel mutation or clipping operation was observed. `capture_page()` currently emits D compositor PNGs only: it uses a guarded normal center action to hide the toolbar; rejects clipped/off-viewport/transform/opacity/filter/mask/blend effects and intersecting visible painted DOM elements from a bounded inventory independent of pointer-events; checks two CSS-scale PNG samples; and returns all spread parts atomically. Per-capture diagnostics keep run-local slot IDs, physical part order, `native_page_number=None`, actual visible native counter or `None`, and `source_provenance=UNKNOWN`. The generic Core locator fallback is blocked.
+
+`go_next()`, `wait_for_change()` and `detect_state()` use the observed non-interactive left-edge action and require a new frame with the next contiguous frozen DOM slot order. END requires every frozen slot captured in order plus exactly the full viewport-visible dead-end text with no viewport action controls; modified or unknown text is rejected. Mudazumo 1 END remains unknown; the only live END evidence is for Angel volume 10. The 97-case focused suite includes delayed/absent account-shell cases, a neutral seven-slot CoreRunner capture/advance/END/ZIP flow, and five incomplete-run no-package cases. Reviewer and Lead accepted the local implementation and hide-before-fit correction. Root visual QA passed one bounded live D cover diagnostic; no multi-page production baseline or ZIP exists. The adapter is not registered with production CLI/Batch and is not a production E2E.
 
 ## Access and limits
 
@@ -105,8 +135,4 @@ Raw HTML and inline JSON are not retained.
 
 ## Capture-stage research boundary
 
-This Discovery module does not capture page images. Stage 00 found an unbound
-first-party PNG candidate, while A (original bytes), B (lossless
-reconstruction) and C (source-derived pixels) remain unproven. The temporary D
-compositor screenshot was diagnostic only. See `runbooks/ebookjapan-owned/PROGRESS.md`
-for the stage evidence and remaining source-attribution work.
+The Discovery module does not capture page images. The package has a Reviewer/Lead-accepted local D compositor capture slice. Its initial production-adapter live attempt reached the purchased Angel Reader but failed closed at viewport fitting before capture. The corrected local fit branch is independently reviewed. A bounded hide-before-fit diagnostic produced one QA-passed D cover PNG; A/B/C remain unproven. A (original bytes), B (lossless reconstruction) and C (source-derived pixels) remain unproven. The isolated D compositor control is diagnostic only. See `runbooks/ebookjapan-owned/PROGRESS.md` for evidence and limits.

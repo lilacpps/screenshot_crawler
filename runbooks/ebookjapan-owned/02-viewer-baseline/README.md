@@ -1,6 +1,6 @@
 # 02 — Owned Viewer baseline / ページ完全性と安全な閲覧
 
-Status: **NOT STARTED**。開始条件: Stage 01 owned対象の巻固有Source ID/URLとP0の閲覧入口が確定済み。
+Status: **LOCAL ENTRY + D CAPTURE/TRAVERSAL + HIDE-BEFORE-FIT VERIFIED; ONE-FRAME LIVE D QA PASS; FULL BASELINE PENDING** (2026-11-07 Asia/Tokyo). The local CoreRunner covers entry, seven-slot D capture, three continuous spreads, ordered coverage and exact END. One isolated production-adapter diagnostic captured the Angel 10 cover at the measured geometry; root visually QA-passed the full upright 816?1200 page without UI. No live multi-page baseline or ZIP exists; Mudazumo 1 terminal behavior remains unverified.
 
 ## 目的 / 設計
 
@@ -22,6 +22,16 @@ Status: **NOT STARTED**。開始条件: Stage 01 owned対象の巻固有Source I
 5. `get_capture_target(s)` / `capture_page()`で、現在の本文領域を検証したD系baselineを確保する。UI表示全体の撮影は、本文だけを切り出せるproven geometryがない場合には使わない。
 6. ENDは本当の最終本文の後に、実観測に基づく根拠が揃ってから判定。次巻の自動開始・購入・おすすめクリックを行わない。`max_pages`とsame-content guardを維持する。
 7. RunnerのManifestに対象巻ID/URL/順番が残ることを検査。本文が画面で欠けて見える場合は、読めたところだけを正常ZIPとして確定しない。
+
+## 現在の実装スライス（未完了）
+
+- `EbookJapanAdapter.initialize()` は `direct` のみ受け入れ、`auto` / `quota` とquota resourceを拒否する。
+- 同じ正規シリーズ一覧のHTTP 200 main-document witnessと、対象カードのvisible `購入済み` /価格なし状態が3回安定するまでReader操作をしない。購入済みの静的witnessに対し、hydration中の一時price/cartは待機扱いにする。最大8秒で一致しない場合は停止する。
+- 実際に押す直前に対象Product A-ID、カード内の読込ボタン、タイトル、購入済み表示を再確認する。購入済みカード内の観測済み一意 `読む` 操作だけを押す。
+- Viewerは同一ページの正規 `/viewer/purchased/B.../` routeとカード同一タイトルを確認する。新規タブ・redirect・別タイトルは未対応でfail-closed。既知の読書案内modalは正確な説明文・一意`OK`・form control不在の場合だけ閉じる。
+- native counter totalと実slot node総数を照合し、document/route/title/all slot references/orderと同一horizontal RTL spread layout nodeをpinする。既観測のnative range `End` を使って途中位置を1/Nへ戻し、自然なsame-size 3-argument full `drawImage` transferと完全なvisible partが揃うまで有界で待つ。
+- Observer failure, metadata error/overflow, slot/layout/title/route drift, and unknown draw overload keep the frame unready. A canvas backing reset is rejected unless a new complete full draw is observed. The first toolbar-center action is allowed only at the observed entry viewport (1906?986) and cover rect (left 282.52, right 953, top 0, bottom 986, width 670.48, height 986, 1 CSS-pixel tolerance); the actual viewport/bounding box/center hit is read again immediately before click. Any other visible-toolbar geometry fails closed before action. Capture hides the toolbar before fitting the owned Page. A fitted cover center at fraction 0.25/0.5 was observed to advance into the spread. CSS-only fit may preserve an unchanged full-draw signature only when all pinned identities/backing dimensions and observer health match and CSS/backing geometry is 1:1; a redraw branch requires increased cumulative successfulDraws, positive current generation and complete ready state. The chosen full signature must remain unchanged over two animation frames. D capture then rejects clipping/off-viewport/transform/opacity/filter/mask/blend and intersecting visible painted DOM elements using bounded inventory, then returns repeated CSS-scale samples atomically. Normal advance uses the observed non-interactive left edge and requires the next contiguous frozen slot order. END requires full ordered slot coverage and exact full dead-end text with no visible action controls. A hidden native counter remains None; derived cover/spread shape is separate.
+- 97 focused tests (24 adapter/parser unit + 34 Discovery unit + 39 neutral local Chromium), 0 skipped, pass. The neutral CoreRunner success covers a fixed seven-slot cover plus three continuous spreads and exact END; identical page pixels still produce seven manifest/ZIP entries. Five incomplete flows produce no ZIP or completion status. The hide-before-fit ordering, observed-geometry guard, async resize stabilization, reset-without-redraw negative, and seven-slot CoreRunner flow passed independent Reviewer/Lead review. Separately, the Reviewer tested a fresh bounding-box shift of 10 pixels and observed rejection before click; that probe is not counted as a suite case. One live Angel cover D diagnostic was visually QA-passed; the full 287-page CoreRunner baseline remains pending.
 
 ## Probe・確認の例
 
