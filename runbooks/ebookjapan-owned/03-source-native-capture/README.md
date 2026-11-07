@@ -1,6 +1,6 @@
 # 03 — 原画像 / source-native Capture を最大限追求する
 
-Status: **OFFLINE PREPARATION / LIVE NOT STARTED**. The copied observer/verifier passed 60 local synthetic checks and offline review; the metadata-only Muda 1 harness passed 15 local checks and independent review found blocking issues; fixes are applied and re-review is pending, so live use is not approved. No live source probe, response-body read or source-pixel read occurred. A/B/C remain unverified. Stage 02 is accepted only for the one-work D baseline.
+Status: **LIVE METADATA RESEARCH / INCOMPLETE; A/B/C UNVERIFIED**. Three bounded metadata-only Muda 1 attempts were made. The latest reached the owned Reader at 1/193 and recorded a selected canvas-to-ImageBitmap transfer/Offscreen epoch graph identity chain plus 256 draw operations linked to one same-document HTTP 200 WebP response. The observer was unhealthy because two unidentified context-method descriptors mismatched beyond the six critical keys; their drawing relevance is UNKNOWN, so evidence is `UNHEALTHY_METADATA_ONLY`, `proof_status=NOT_VERIFIED`, `capture_class=UNASSIGNED`. The copied health verifier passed 64 local checks and metadata harness 17 local checks; these validate the diagnostic copy only. No response body, source pixels, or screenshot was read. A/B/C and source-native capture remain unverified. Stage 02 is accepted only for the one-work D baseline.
 
 ## 目的（品質要件）
 
