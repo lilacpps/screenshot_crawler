@@ -1,5 +1,8 @@
 # ebookjapan purchased-only Discovery — current implementation
 
+> Current status (2026-11-07): Stage 00 and Stage 01 are accepted. Stage 02 is VERIFIED / ACCEPTED for the single Angel 10 D baseline `core-run-angel10-20261107-215910-399914`: 287 ordered pages reached actual END, with a retained prepackage manifest, completed isolated ZIP, 20 independent artifact checks and 9 visual samples. This does not establish A/B/C or a general capture policy. Stage 03 remains offline synthetic preparation only; the new lineage copy passed 58 local checks and awaits independent review. No Stage 03 live probe or response-body read has run. Stage 04 remains offline policy only/not integrated; Stage 05 live E2E and Batch remain unverified.
+
+
 ## Scope
 
 `EbookJapanDiscoveryAdapter` supports authenticated Full Discovery for ebookjapan
@@ -95,47 +98,15 @@ See `runbooks/ebookjapan-owned/PROGRESS.md` for the current gate.
 
 ## Stage 03 method ledger and local preparation
 
-The previous bounded live probes leave A/B/C unproven. One ordinary first-party
-PNG response from Stage 00 was not tied to the current page. Stage 02 observed
-10 `image/avif` and one `image/webp` response, but no response was joined by
-identity to the selected source bitmap and no response body was read. An
-OffscreenCanvas `transferToImageBitmap()` result was joined to the selected
-main-canvas draw, but the source draw history had exceeded the old 64-call cap.
-No source bytes or currentSrc-to-response binding were established. This is
-insufficient evidence for A.
+A/B/C remain unproven. Stage 00 observed a first-party PNG response of 364,375 bytes that was not bound to the current page. Stage 02 observed AVIF/WebP response metadata and one OffscreenCanvas `transferToImageBitmap()` object joined to a natural selected-canvas draw, but did not bind the bitmap source to an ordinary response or read response bytes. The earlier observer’s call cap had dropped relevant source history. These observations do not establish A.
 
-B was not attempted because no encoded image or complete source/tile lineage
-was bound to the selected page. `getImageData` on the selected main canvas
-returned `SecurityError`; this blocks that exact readback path only. No offscreen
-source pixel read, bypass, decryption, or C capture was attempted. D remains a
-diagnostic only: two cover compositor controls (Angel and Mudazumo) passed
-visual QA, and a 287-page D artifact run was integrity-checked but failed
-closed before verified END and ZIP. It does not make D the adopted site
-capture method.
+B has not been evaluated because no exact encoded source and complete source/tile lineage were bound to a page. Natural `getImageData` on the selected main canvas returned `SecurityError`, which blocks only that exact readback path; no bypass, decryption, or DRM circumvention was attempted. C remains untested. The accepted Stage 02 result is a one-work D compositor baseline, not source-native proof or adoption of D as the final capture policy.
 
-Stage 03 preparation currently consists only of local synthetic Chromium work
-under `output/ebookjapan_experiment/phase03/`. The epoch observer freezes
-immutable OffscreenCanvas epoch metadata when a transfer succeeds and records
-the returned bitmap's run-local identity. Its test verified local synthetic
-currentSrc-to-response matching, bitmap-to-target-draw identity, immutability
-after later mutation, fail-closed handling of untracked methods/clip/state
-setters and cap overflow, persistence of unknown state across later epochs,
-the private URL entry/character cap with drop behavior and stop-time clearing,
-fixed-enum context/exception strings, original exception propagation,
-one-time native coordinate conversion, shared operation/epoch/target-draw
-byte-operation-time limits, and wrapper cleanup (39 checks passed). Metadata
-overflow leaves native drawing operations intact but makes the trace
-incomplete. This is metadata tracing, not pixel or full-page paint proof. The
-independent Reviewer reran all 39 checks and passed 6 additional cases;
-Phase 03 local preparation is VERIFIED / BLOCKING 0 only. A/B/C and live source
-capture remain unverified. The
-raw `currentSrc` used for response matching was synthetic local data only. A
-future real-site probe must still bind the returned bitmap to the actual
-selected slot/canvas and current frame. `source-native-evidence.json` records
-`proof_status=NOT_VERIFIED` and `capture_class=UNASSIGNED`; no ebookjapan page
-or source was used for this preparation.
+Offline preparation under `output/ebookjapan_experiment/phase03/` includes a new copied observer, `offscreen_epoch_observer_source_lineage_20261107.js`, and `verify_offscreen_epoch_source_lineage_20261107.py`. Its **58 local synthetic checks passed**. They exercise connected-canvas IDs, natural target draw/bitmap/immutable epoch joins, exact private `(objectId,currentSrc)` pairing (including A→B→A and repeated B), same-document response uniqueness negatives, fixed UNKNOWN for present `getContext` options, operation/time/byte bounds, privacy and native-call semantics. The check does not demonstrate the site’s actual source chain. The new copy is awaiting independent review; the older frozen observer’s 39 checks + 6 additional reviewer cases are historical evidence for that older version only.
 
-## Stage 02 bounded Viewer observations and partial entry implementation
+`source-native-evidence.json` remains `proof_status=NOT_VERIFIED` and `capture_class=UNASSIGNED`. The copied `phase03_mudazumo_cover_source_lineage_probe_20261107.py` is an unreviewed legacy copy and is not safe or approved to run; a fresh metadata-only live harness remains to be prepared and reviewed. No real-site Source 03 probe, response-body read, source-pixel read, codec conclusion, or capture-method adoption occurred. Raw `currentSrc` in the local verifier is synthetic in-memory data only.
+
+## Stage 02 bounded Viewer observations and accepted one-work D baseline
 
 The probe entered Angel position 10 (`A000083590`) and Mudazumo global position
 1 (`A000039104`) through the exact live owned card. For each, the Reader title
@@ -188,7 +159,7 @@ It is a D compositor control for one cover only, not full-book coverage, END,
 or A/B/C source proof. The viewport was restored and the owned Reader closed at
 its anchored 1/193 entry.
 
-The Stage 02 entry, D capture and traversal slice and scoped END/navigation implementation passed local material review. The current affected selection passes 115 tests (24 adapter unit + 91 local Chromium viewer/Runner), 0 skipped, 69 warnings. An independent Reviewer separately passed 37 browser cases and 4 geometry cases for the finite-outline delta; this is local implementation review only. A bounded live qualifier preflight reached a stable Angel 287/287 frame but found zero visible IMG candidates with outset risk, so it could not test compatibility for the earlier failing image; both selected canvas surface checks remained unsafe. The refinement remains unproven against the real failure. Production completion evidence is mixed: one isolated run reached Angel 10 END and produced a ZIP, but its current manifest/metadata was lost during packaging, so its audit is PARTIAL. A later isolated run failed closed on page 285. No accepted/reproducible live baseline is established. A/B/C remain unproven, and CLI/Batch registration remains incomplete.
+The final Stage 02 runtime/test tree passed 115 affected tests (24 adapter unit + 91 local Chromium Viewer/Runner), 0 skipped. An independent Reviewer passed 37 browser and 4 geometry cases; runtime/test review is VERIFIED / BLOCKING 0. The finite-outline refinement remains a bounded supported Chromium case, not a universal paint proof, and the prior IMG rejection has not been explained. The accepted production result is the one-work Angel 10 D baseline recorded below; A/B/C remain unproven and CLI/Batch registration remains incomplete.
 
 The first isolated production-adapter live attempt used the phase01 Catalog read-only
 and a new shared-CDP Page. The canonical series listing returned HTTP 200, with
@@ -212,7 +183,7 @@ rejected. A later isolated **hide-before-fit** diagnostic at the measured 1906 b
 
 Normal advance uses the observed non-interactive left-edge page region. Before clicking, the current implementation rechecks committed slot/canvas nodes, backing dimensions, CSS rectangles, draw geometry, route, document, layout, and observer state in the same DOM sample used to bind the x=12 hit. Drift, an unpinned hit, interactive/modal/terminal ancestors, or unknown state fail before click. END requires complete ordered coverage plus one of two observed scoped profiles: Angel's exact terminal message and exhaustive scoped action partition, or Mudazumo's pinned `.book-last` shell/cell and observed module/header action partition. Inactive hidden roots remain LOADING; visible malformed, modal, unknown, or extra actions remain fatal. Other D surface guards and atomic spread capture remain unchanged by the narrow outline exception.
 
-Production CoreRunner history is not a clean accepted baseline. The earlier run saved and integrity-checked 287 D artifacts, then failed closed before verified END. A later run, `core-run-angel10-20261107-200001-949259`, reached END and produced an isolated ZIP, but packaging removed the run manifest/current metadata; its artifact audit is therefore PARTIAL. The independent old/new image comparison found 285 of 287 positions exact, with 23 differing pixels across the remaining positions; this does not replace the missing current manifest. A subsequent unique run, `core-run-angel10-20261107-202212-410192`, failed closed at page 285 with `outset-painted-element:img` and did not reach END/package. After the shared Chrome restart, a fresh owned Angel probe reached a stable 287/287 frame with the native counter visible and two current parts, but found only two IMG nodes and zero visible outset-risk IMG candidates. Both target canvas surface checks were still unsafe; the sanitized rejection reason was `other`, so this probe neither identified nor qualified the previous offender. It restored native End to 1/287 and closed its one owned Page. Evidence: `surface-outset-diagnostic-20261107-214309-424345.json`. The finite-outline implementation is locally reviewed but not accepted as a solution to the live failure. Source A/B/C remain unproven; production CLI/GUI registration, repeatable full-baseline evidence, and accepted E2E remain incomplete.
+Production CoreRunner history includes several distinct runs. Historical `core-run-angel10-20261107-200001-949259` reached END and created a ZIP but lost its current manifest during packaging; it remains PARTIAL, with an old/new comparison of 285/287 positions exact and 23 differing pixels. Historical `core-run-angel10-20261107-202212-410192` failed closed at page 285 with `outset-painted-element:img`. A later bounded 287/287 qualifier sample found zero candidate IMG nodes and did not identify the prior offender. The accepted current run is `core-run-angel10-20261107-215910-399914`: 287 ordered D pages reached actual END and produced a completed isolated ZIP with the exact prepackage manifest retained. The manifest SHA-256 is `3344d568e48089ec157e148cb20e30345edb71fcf7deae6e42b3c0a5cf2c4237`; the ZIP SHA-256 is `55d3e7298d1c9278f75e19e6540d26f940accd2f9c8c506dc303a5939f1d3933` (209,716,162 bytes). Tester passed 20 artifact checks and 9 visual samples; Reviewer and Lead accepted this one-work D baseline. Catalog before/after SHA matched at `7fce06b7e223c0c7abd7d48afdc7ec78dccb95b6e27b60317977971e048b6a1b`; owned Page close was confirmed 1/1. The run proves neither A/B/C nor a general capture policy, and does not resolve the earlier IMG failure.
 
 A separate one-entry source-lineage probe installed a native-pass-through
 main-frame `createImageBitmap` observer and grouped normal Page response
@@ -232,9 +203,9 @@ source drawing and any response-byte origin were not proven. This does not
 establish A, B or C. Exact sanitized evidence is in
 `stage02-mudazumo1-source-lineage.json` and `PROGRESS.md`.
 
-All Stage 02 artifacts are isolated under `output/ebookjapan_experiment/phase02/`. They include sanitized structural metadata, ephemeral canvas/slot IDs, bounded SecurityError details, two D compositor cover controls, 287 D pages from an earlier failed-closed run, the isolated ZIP from the 200001 END run, and the retained partial output/manifest from the 202212 failure. No raw readback bytes were retained. The 200001 package lacks its current run manifest metadata and remains PARTIAL; no artifact is promoted as an accepted/reproducible baseline. A/B/C provenance and final capture policy remain unverified.
+All Stage 02 artifacts are isolated under `output/ebookjapan_experiment/phase02/`. They include the accepted current manifest/ZIP, historical 287-page failed-closed output, two D cover diagnostics, the 200001 ZIP with lost current manifest, and the 202212 partial output. The current manifest was retained before packaging; no raw canvas readback bytes or source response bodies were retained. The accepted baseline is limited to Angel 10 and D capture. A/B/C provenance and final source-native capture policy remain unverified.
 
-The current affected selection (`tests/unit/test_ebookjapan_adapter.py` and `tests/integration/test_ebookjapan_viewer_browser.py`) passed 115 tests, 0 skipped, 69 warnings (24 adapter unit + 91 local Chromium viewer/Runner; 53.30 seconds). It includes the conservative finite-outline matrix: a distant simple solid HTML-image outline passes the exact production qualifier in neutral Chromium, while contact/reach, unsupported effects/transforms/ancestors, and DPR below 1 reject without coverage commit. Existing scoped END profiles, navigation atomicity, and neutral CoreRunner ZIP/failure cases also pass. An independent Reviewer separately passed 37 browser cases and 4 geometry cases for this local delta. `ruff check src tests` passes. The task-path `git diff --check` passes; whole-tree check reports only the user's pre-existing `watchlist.yaml` trailing whitespace. The zero-candidate live preflight does not test the earlier failing IMG; source A/B/C and a reproducible accepted production baseline remain unverified.
+The final affected selection (`tests/unit/test_ebookjapan_adapter.py` and `tests/integration/test_ebookjapan_viewer_browser.py`) passed 115 tests (24 adapter unit + 91 local Chromium Viewer/Runner), 0 skipped; an independent Reviewer separately passed 37 browser and 4 geometry cases. The finite-outline matrix tests only the bounded supported shape and keeps contact/reach, unsupported effects/transforms/ancestors, and DPR below 1 fail-closed. Existing scoped END profiles, navigation atomicity, neutral CoreRunner ZIP/failure cases, and artifact invariants remain covered. `ruff check src tests` passed. The task-path `git diff --check` passed; a whole-tree check reports only the user's pre-existing `watchlist.yaml` trailing whitespace. The separate 58-check Source 03 synthetic verifier is local preparation pending its own review, not live proof.
 
 ## Stage 01 verification
 
@@ -259,13 +230,13 @@ The current affected selection (`tests/unit/test_ebookjapan_adapter.py` and `tes
 
 ### 2026-11-07 production baseline and terminal probes
 
-The isolated production CoreRunner baseline saved 287 ordered D PNG artifacts and then failed closed with `UnknownPageStateError: ebookjapan D canvas surface is unsafe (outset-painted-element:img)`. The exact failing method was not captured; attributing it to terminal advance is an inference from the completed-page Runner flow. No ZIP, completed RunResult, or Catalog write was produced. Root independently verified decoded format/dimensions, source fingerprints, RGBA hashes, manifest order, and part grouping for all 287 files; this validates artifact integrity only.
+The earlier isolated production CoreRunner run `core-run-angel10-20261107-162050-596703` saved 287 ordered D PNG artifacts and then failed closed with `UnknownPageStateError: ebookjapan D canvas surface is unsafe (outset-painted-element:img)`. The exact failing method was not captured; attributing it to terminal advance is an inference from the completed-page Runner flow. That historical run produced no ZIP, completed RunResult, or Catalog write. Root independently verified decoded format/dimensions, source fingerprints, RGBA hashes, manifest order, and part grouping for all 287 files; this validates artifact integrity only. The later manifest-retained 215910–399914 run is the accepted one-work D baseline described above.
 
 A subsequent isolated full-baseline attempt (`core-run-angel10-20261107-184139-316247`) historically stopped before `CrawlerRunner.run` because Playwright `BrowserType.connect_over_cdp` timed out after 180 seconds while initializing the shared browser. At that time a bounded Node WebSocket did receive a read-only `Browser.getVersion` response; no Page was created. A separate 10-second attach-only check, including `no_defaults=True`, also timed out. On 2026-11-07 at 19:53:57 JST another 10-second check ended in `TimeoutError` after 10.369 seconds and cleanup ended STOPPED. The user later restarted shared Crawler Chrome, after which Playwright attachment recovered and the 200001 and 202212 CoreRunner attempts above were performed. The cause of the earlier attach stall remains unknown.
 
-A separate owned Angel 10 normal-navigation probe reached one exact viewport-visible terminal marker after the final left-edge advance, with 287 frozen slots and zero visible page slots. Twelve visible actions shared the `.book-last-dead-end__inner` root: one review action, one coupon banner action, and ten recommendation-module actions. No recommendation destination was opened. The local implementation has an exact structural partition for this profile and passed local material review. The 200001 CoreRunner run later reached END and created a ZIP, but its current manifest metadata is missing, so it remains PARTIAL rather than an accepted/reproducible baseline.
+A separate owned Angel 10 normal-navigation probe reached one exact viewport-visible terminal marker after the final left-edge advance, with 287 frozen slots and zero visible page slots. Twelve visible actions shared the `.book-last-dead-end__inner` root: one review action, one coupon banner action, and ten recommendation-module actions. No recommendation destination was opened. The local implementation has an exact structural partition for this profile. The 200001 run later reached END but remains PARTIAL because its current manifest was lost; the later 215910–399914 run is the accepted manifest-retained one-work D baseline.
 
-A separate owned Mudazumo 1 probe reached 193/193, made one validated normal edge advance, then remained `loading` for its 20-second bound with route stable, zero visible slots, and toolbar visible. A metadata-only snapshot found a distinct `.book-last` root with review, next-item, CTA, banner, and recommendation modules. Twelve visible actions were recorded; no CTA/recommendation or other control was clicked; fresh entry restored 1/193. The local implementation has a separate scoped classifier for this observed profile; Angel behavior is not generalized to it. Independent selected tests cover inactive hidden-root transitions for both profiles, but no fresh Muda production full-capture, Batch run, or E2E is claimed. Sanitized evidence is under the ignored phase02 output. A/B/C remain unproven; Stage 03 is not started.
+A separate owned Mudazumo 1 probe reached 193/193, made one validated normal edge advance, then remained `loading` for its 20-second bound with route stable, zero visible slots, and toolbar visible. A metadata-only snapshot found a distinct `.book-last` root with review, next-item, CTA, banner, and recommendation modules. Twelve visible actions were recorded; no CTA or recommendation was clicked; fresh entry restored 1/193. The local implementation has a separate scoped classifier for this observed profile. This was a terminal research probe, not a full Mudazumo capture/Batch run. No Batch, repeated Full Discovery, or Stage 05 live E2E is claimed.
 
 
 ## Stage 04 offline Site Policy preparation
