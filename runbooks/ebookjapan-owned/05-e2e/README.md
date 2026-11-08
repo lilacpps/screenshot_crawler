@@ -1,6 +1,13 @@
 # 05 — Live E2E / 独立Tester・Reviewer / 引渡し
 
-Status: **NOT STARTED**。開始条件: Stages 00〜04が各Acceptance/Reviewを満たし、現在の実装と`note`が同期している。
+Status: **ISOLATED FULL/PLAN PREFLIGHT VERIFIED / PAGE CAPTURE PENDING / FULL STAGE 05 E2E INCOMPLETE**. Stage 04 run 4 has an accepted END+ZIP result; this preflight does not claim a full multi-work E2E.
+
+## Current checkpoint (2026-11-08)
+
+In a fresh isolated environment, Full 17 and Plan 17 passed. Evidence: `output/ebookjapan_experiment/e2e/r/full-discovery-stage05-check.json` (SHA-256 `7b8ffde11bee85b21514e412eff97e8ecdf8272bf303f3408103ea66b6c2836b`). The inventory contained 26 records and 17 distinct owned Source/Items; all Items remained pending and 0 CrawlRun rows and 0 Artifact rows were created. No page capture has run in this Stage 05 environment.
+
+Stage 04 context: run 4 reached END after 287 ordered D pages and produced an isolated 209,716,162-byte ZIP (SHA-256 `364623441ab91a0aa5638bf7d4260822d8534e4b3c5a9f2219eae2fd698e71ae`) with manifest SHA-256 `e8a1c37e9f709089f733f1ee8e4a44f105bffa8a41b94681e5d714b73b372c80`. Strict ZIP audit passed 11 checks; independent current-ZIP audit and Reviewer B0 were accepted. Full details are in `../PROGRESS.md`.
+
 
 ## 運用・安全なテスト準備
 

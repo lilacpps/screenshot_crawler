@@ -1,6 +1,6 @@
 # 04 — Owned-only Site Policy / Batch / GUI Integration
 
-Status: **LOCAL CLI REGISTRY REVIEWED / THREE LIVE BATCH ATTEMPTS FAILED AT TERMINAL / BOUNDED UNKNOWN WAIT REVIEW PENDING**. Stage 03 source-research exit and the scoped D-policy gate are accepted. All three normal live Batch attempts saved all 287 ordered D pages but failed closed before verified END; none produced a ZIP. Attempt 3 retained 1,551 requests, zero 403/429/5xx/challenge/retry events, Page close 1/1, and partial manifest SHA-256 `609ef3f5061fca1f327350197bb7d723f4226d91b69e1101efffb085b14e71e3`. Its diagnostics contain no failed terminal frame, leaving the exact cause UNKNOWN. A local change permits a wait only for a fully covered, capture-bound, pinned Angel UNKNOWN terminal candidate with no visible slots/canvases, modal, inventory cap, or unknown action outside known terminal/header regions. It preserves strict END verification and caches sanitized first-unknown/last-sample data without reading Page state during debug collection. Independent review is pending before another live attempt. Stage 05 live E2E is not started.
+Status: **STAGE 04 END+ZIP VERIFIED / STRICT AND INDEPENDENT AUDITS PASSED / REVIEWER B0 ACCEPTED**. Run 4 captured 287 ordered D pages and reached strict END, producing a 209,716,162-byte ZIP with retained manifest. Three earlier terminal failures remain historical; see `PROGRESS.md`. Stage 05 full E2E remains incomplete after isolated Full/Plan preflight.
 
 ## 目的と実装範囲
 
@@ -11,7 +11,7 @@ Status: **LOCAL CLI REGISTRY REVIEWED / THREE LIVE BATCH ATTEMPTS FAILED AT TERM
 
 ## Policy
 
-`EbookJapanSitePolicy` is registered in the CLI Batch policy registry, and the Reader adapter is registered for manual Crawl and Batch. It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The GUI policy inventory discovers the module through `__all__`, so no GUI-specific code changed. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Independent review of the registry wiring passed. Three normal live Batch attempts saved 287 ordered D pages each, then failed closed at terminal classification without verified END or ZIP. The bounded Angel UNKNOWN wait and safe diagnostic cache await independent review before retry.
+`EbookJapanSitePolicy` is registered in the CLI Batch policy registry, and the Reader adapter is registered for manual Crawl and Batch. It plans only available owned sources as `direct` with no quota consumption; the adapter revalidates ownership before Reader entry. Stage 04 run 4 completed after 287 ordered D pages with strict END and ZIP. Strict audit passed 11 checks, and independent current-ZIP audit plus Reviewer B0 (`6facc89`) were accepted. Repeat Full preserved identities, history, ZIP, and status hash/mtime; repeat Batch created no new runs or artifacts, made no HTTP request, and left the Catalog SHA unchanged. Actual GUI validation on isolated clone `gui/r11` used the real MainWindow/Controller/worker without fakes; it succeeded with 1 skipped, 0 started, 0 HTTP. Tests: 162 passed, 0 skipped (158 warnings); independent validation 35 passed, 0 skipped; Ruff passed. See `PROGRESS.md` for SHAs, audits, and the three earlier failures.
 
 `EbookJapanSitePolicy.site = "ebookjapan"`。
 
