@@ -60,11 +60,40 @@ _FRAME_READY_WAIT_MS = 20_000
 _FRAME_POLL_MS = 150
 _INIT_BUDGET_MS = 120_000
 _RANGE_SELECTOR = "input[type='range'].seekbar__slider"
-# The only toolbar-center action geometry authorized by live observation. At
-# the fitted viewport, that same cover-center click advances into the spread.
+# These are the only observed toolbar-center action profiles. The click must
+# happen at the original viewport and match a unique backing-size/rect pair;
+# fitting first can put the same center inside the page-turn region.
 _OBSERVED_CENTER_ACTION_VIEWPORT = (1906, 986)
-_OBSERVED_CENTER_ACTION_RECT = (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0)
 _OBSERVED_CENTER_ACTION_RECT_TOLERANCE = 1.0
+_OBSERVED_CENTER_ACTION_PROFILES: tuple[
+    tuple[str, tuple[int, int], tuple[float, float, float, float, float, float]], ...
+] = (
+    (
+        "angel10-cover-816x1200",
+        (816, 1200),
+        (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
+    ),
+    (
+        "muda1-cover-1088x1600",
+        (1088, 1600),
+        (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
+    ),
+    (
+        "muda16-cover-1120x1600",
+        (1120, 1600),
+        (
+            262.8020935058594,
+            953.0000305175781,
+            0.0,
+            986.0,
+            690.1979370117188,
+            986.0,
+        ),
+    ),
+)
+_CAPTURE_CLASS = "D"
+_FALLBACK_REASON_CODE = "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
+_CAPTURE_POLICY_REVISION = "ebookjapan-owned-rendered-png-v1-20261108"
 
 
 def parse_ebookjapan_product_url(url: str) -> tuple[str, str] | None:
@@ -1251,6 +1280,9 @@ class EbookJapanAdapter(SiteAdapter):
                 "draw_geometry": dict(part["drawGeometry"]) if isinstance(part.get("drawGeometry"), Mapping) else None,
                 "compositor_pixel_sha256": first[3],
                 "capture_method": "D_compositor_png",
+                "capture_class": _CAPTURE_CLASS,
+                "fallback_reason_code": _FALLBACK_REASON_CODE,
+                "ebookjapan_capture_policy_revision": _CAPTURE_POLICY_REVISION,
                 "source_provenance": "UNKNOWN",
             })
         # Commit sequence coverage only after every part passed route, node,
@@ -1288,10 +1320,12 @@ class EbookJapanAdapter(SiteAdapter):
         if frame.get("toolbarVisible") is not True:
             raise UnknownPageStateError("ebookjapan Reader toolbar visibility is unknown")
         await self._require_reader_content(page, expected_path=expected_path)
-        if not self._has_observed_toolbar_hide_geometry(frame):
+        profile = self._observed_toolbar_hide_geometry_profile(frame)
+        if profile is None:
             raise UnknownPageStateError(
                 "ebookjapan center toolbar action is unverified at this viewport geometry"
             )
+        _profile_name, expected_backing, expected_rect = profile
         parts = frame.get("parts")
         if not isinstance(parts, list) or not parts or not isinstance(parts[0], Mapping):
             raise UnknownPageStateError("ebookjapan cannot locate a safe normal toolbar control area")
@@ -1302,6 +1336,7 @@ class EbookJapanAdapter(SiteAdapter):
               const r=canvas.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
               const hit=document.elementFromPoint(x,y);
               return {connected:canvas.isConnected,viewport:{width:innerWidth,height:innerHeight},
+                backing:{width:canvas.width,height:canvas.height},
                 rect:{left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height},
                 center:{x,y},hit:hit===canvas||canvas.contains(hit)};
             }"""
@@ -1309,13 +1344,15 @@ class EbookJapanAdapter(SiteAdapter):
         if not isinstance(geometry, Mapping) or geometry.get("connected") is not True:
             raise UnknownPageStateError("ebookjapan selected page bounds are unavailable")
         live_viewport = geometry.get("viewport")
+        live_backing = geometry.get("backing")
         rect = geometry.get("rect")
         center = geometry.get("center")
-        expected_rect = _OBSERVED_CENTER_ACTION_RECT
         if (
             not isinstance(live_viewport, Mapping)
             or (live_viewport.get("width"), live_viewport.get("height"))
             != _OBSERVED_CENTER_ACTION_VIEWPORT
+            or not isinstance(live_backing, Mapping)
+            or (live_backing.get("width"), live_backing.get("height")) != expected_backing
             or not isinstance(rect, Mapping)
             or any(
                 type(value) not in (int, float)
@@ -1382,6 +1419,12 @@ class EbookJapanAdapter(SiteAdapter):
 
     @staticmethod
     def _has_observed_toolbar_hide_geometry(frame: Mapping[str, object]) -> bool:
+        return EbookJapanAdapter._observed_toolbar_hide_geometry_profile(frame) is not None
+
+    @staticmethod
+    def _observed_toolbar_hide_geometry_profile(
+        frame: Mapping[str, object],
+    ) -> tuple[str, tuple[int, int], tuple[float, float, float, float, float, float]] | None:
         viewport = frame.get("viewport")
         parts = frame.get("parts")
         if (
@@ -1391,21 +1434,33 @@ class EbookJapanAdapter(SiteAdapter):
             or len(parts) != 1
             or not isinstance(parts[0], Mapping)
         ):
-            return False
-        rect = parts[0].get("cssRect")
-        if not isinstance(rect, Mapping) or rect.get("viewport") is not True:
-            return False
+            return None
+        part = parts[0]
+        backing_width, backing_height = part.get("backingWidth"), part.get("backingHeight")
+        rect = part.get("cssRect")
+        if (
+            type(backing_width) is not int
+            or type(backing_height) is not int
+            or not isinstance(rect, Mapping)
+            or rect.get("viewport") is not True
+        ):
+            return None
+        backing = (backing_width, backing_height)
         observed = tuple(
             rect.get(key)
             for key in ("left", "right", "top", "bottom", "width", "height")
         )
-        return all(
-            type(value) in (int, float)
-            and abs(float(value) - expected) <= _OBSERVED_CENTER_ACTION_RECT_TOLERANCE
-            for value, expected in zip(
-                observed, _OBSERVED_CENTER_ACTION_RECT, strict=True
+        matches = [
+            profile
+            for profile in _OBSERVED_CENTER_ACTION_PROFILES
+            if profile[1] == backing
+            and all(
+                type(value) in (int, float)
+                and abs(float(value) - expected) <= _OBSERVED_CENTER_ACTION_RECT_TOLERANCE
+                for value, expected in zip(observed, profile[2], strict=True)
             )
-        )
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     def _require_safe_capture_surface(frame: Mapping[str, object]) -> None:
@@ -1626,6 +1681,9 @@ class EbookJapanAdapter(SiteAdapter):
         del page
         return {
             "capture_method": "D_compositor_png",
+            "capture_class": _CAPTURE_CLASS,
+            "fallback_reason_code": _FALLBACK_REASON_CODE,
+            "ebookjapan_capture_policy_revision": _CAPTURE_POLICY_REVISION,
             "ebookjapan_capture_parts": [dict(part) for part in self._last_capture_parts],
             "ebookjapan_native_counter": self._last_native_counter,
             "ebookjapan_derived_frame_shape": "cover" if self._expected_current == 1 else "spread",

@@ -118,18 +118,21 @@ def _html(
         if(!header.hidden||!footer.hidden){{
           if(window.__ejCenterClickAdvances&&fixtureCurrent===1&&event.clientX/innerWidth<=.25&&{total}===3){{
             fixtureCurrent=2;header.hidden=true;footer.hidden=true;
+            document.querySelector('.seekbar__slider').style.display='none';
             document.querySelector('.legacy-comic-footer__page-output').textContent='2 / {total}';
             const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];
             slots[0].style.display='block';slots[1].style.display='block';slots[2].style.display='none';return;
           }}
-          header.hidden=true;footer.hidden=true;return;
+          header.hidden=true;footer.hidden=true;
+          document.querySelector('.seekbar__slider').style.display='none';
+          return;
         }}
         if(event.clientX>16||{total}!==3)return;
         if(fixtureCurrent===1){{
           fixtureCurrent=2;document.querySelector('.legacy-comic-footer__page-output').textContent='2 / {total}';
           const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];
           slots[0].style.display='block';slots[0].style.left='0px';
-          slots[1].style.display='block';slots[1].style.left='408px';
+          slots[1].style.display='block';slots[1].style.left=slots[1].querySelector('canvas').width+'px';
           slots[2].style.display='none';
         }}else if(fixtureCurrent===2){{
           fixtureCurrent=3;document.querySelectorAll('.comic-viewer__page-slot').forEach(slot=>slot.style.display='none');
@@ -169,17 +172,20 @@ async def _open_reader(
     assert anchor.get("ok") is True
 
 
-async def _draw_full_same_size(page: Page) -> None:
+async def _draw_full_same_size(
+    page: Page, *, width: int = 816, height: int = 1200
+) -> None:
     await page.evaluate(
-        """async() => {
-          const source=document.createElement('canvas');source.width=408;source.height=600;
-          source.getContext('2d').fillRect(0,0,408,600);
+        """async({width,height}) => {
+          const source=document.createElement('canvas');source.width=width;source.height=height;
+          source.getContext('2d').fillRect(0,0,width,height);
           for(const target of document.querySelectorAll('.page-canvas')){
-            target.width=408;target.height=600;
+            target.width=width;target.height=height;
             target.getContext('2d').drawImage(source,0,0);
           }
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-        }"""
+        }""",
+        {"width": width, "height": height},
     )
 
 
@@ -278,9 +284,9 @@ def _runner_reader_html(*, mode: str = "normal", terminal_profile: str = "angel"
       function renderFixturePages(){{
         for(const [index,canvas] of [...document.querySelectorAll('.page-canvas')].entries()){{
           if(window.__ejFixtureMode==='half-spread'&&fixtureCurrent===2&&index===1){{canvas.width=408;canvas.height=600;continue;}}
-          canvas.width=408;canvas.height=600;
-          const source=document.createElement('canvas');source.width=408;source.height=600;
-          const sourceContext=source.getContext('2d');sourceContext.fillStyle=`rgb(${{index*40}},0,0)`;sourceContext.fillRect(0,0,408,600);
+          canvas.width=816;canvas.height=1200;
+          const source=document.createElement('canvas');source.width=816;source.height=1200;
+          const sourceContext=source.getContext('2d');sourceContext.fillStyle=`rgb(${{index*40}},0,0)`;sourceContext.fillRect(0,0,816,1200);
           canvas.getContext('2d').drawImage(source,0,0);
         }}
       }}
@@ -446,6 +452,18 @@ async def test_core_runner_completes_neutral_owned_entry_capture_end_and_zip(
     assert [page["sequence"] for page in manifest["pages"]] == list(range(1, 8))
     assert {page["identity"]["source_id"] for page in manifest["pages"]} == {"A000083590"}
     assert manifest["pages"][0]["metadata"]["ebookjapan_capture_parts"][0]["side"] == "single"
+    for page in manifest["pages"]:
+        metadata = page["metadata"]
+        assert metadata["capture_method"] == "D_compositor_png"
+        assert metadata["capture_class"] == "D"
+        assert metadata["fallback_reason_code"] == "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
+        assert metadata["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-rendered-png-v1-20261108"
+        assert all(
+            part["capture_class"] == "D"
+            and part["fallback_reason_code"] == "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
+            and part["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-rendered-png-v1-20261108"
+            for part in metadata["ebookjapan_capture_parts"]
+        )
     assert [page["metadata"].get("part") for page in manifest["pages"]] == [None, 1, 2, 1, 2, 1, 2]
     part_groups = [
         page["metadata"]["ebookjapan_capture_parts"]
@@ -682,7 +700,7 @@ async def test_viewport_fit_accepts_unchanged_full_draw_when_only_css_geometry_c
     browser_page: Page,
 ) -> None:
     await _open_reader(browser_page)
-    await _draw_full_same_size(browser_page)
+    await _draw_full_same_size(browser_page, width=408, height=600)
     adapter = EbookJapanAdapter()
     adapter._owned_title = TITLE
     adapter._series_id = "134336"
@@ -737,7 +755,7 @@ async def test_viewport_fit_rejects_canvas_reset_without_redraw(
     monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 250)
     monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 10)
     await _open_reader(browser_page)
-    await _draw_full_same_size(browser_page)
+    await _draw_full_same_size(browser_page, width=408, height=600)
     adapter = EbookJapanAdapter()
     adapter._owned_title = TITLE
     adapter._series_id = "134336"
@@ -806,13 +824,82 @@ async def test_capture_hides_toolbar_before_fitting_and_keeps_the_entry_slot(
 
     assert identity.source_id == "A000083590"
     assert len(captures) == 1
-    assert (captures[0].width, captures[0].height) == (408, 600)
+    assert (captures[0].width, captures[0].height) == (816, 1200)
     assert after["status"] == "content"
     assert after["toolbarVisible"] is False
-    assert after["viewport"] == {"width": 816, "height": 600}
+    assert after["viewport"] == {"width": 1632, "height": 1200}
     assert after["parts"][0]["slotId"] == before["parts"][0]["slotId"]
     assert counter_text == "1 / 3"
     assert adapter._seen_slot_ids == {before["parts"][0]["slotId"]}
+
+
+@pytest.mark.parametrize(
+    ("width", "external_id", "profile_name", "expected_left", "expected_width"),
+    [
+        (1088, "A000039104", "muda1-cover-1088x1600", 282.5208, 670.4792),
+        (
+            1120,
+            "A001574536",
+            "muda16-cover-1120x1600",
+            262.8020935058594,
+            690.1979370117188,
+        ),
+    ],
+)
+async def test_capture_hides_observed_mudazumo_cover_before_native_fit(
+    browser_page: Page,
+    width: int,
+    external_id: str,
+    profile_name: str,
+    expected_left: float,
+    expected_width: float,
+) -> None:
+    await _open_reader(browser_page)
+    await _draw_full_same_size(browser_page, width=width, height=1600)
+    adapter = EbookJapanAdapter()
+    adapter._page = browser_page
+    adapter._owned_title = TITLE
+    adapter._series_id = "115888"
+    adapter._external_id = external_id
+    adapter._work_key = "mudazumo"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 1
+    adapter._last_native_counter = 1
+    await adapter._pin_reader_anchor(
+        browser_page, expected_path=READER_PATH, expected_current=1, expected_total=1
+    )
+    before = await _frame(browser_page)
+    before_part = before["parts"][0]
+    assert before["viewport"] == {"width": 1906, "height": 986}
+    assert (before_part["backingWidth"], before_part["backingHeight"]) == (width, 1600)
+    assert before_part["cssRect"]["left"] == pytest.approx(expected_left, abs=1)
+    assert before_part["cssRect"]["right"] == pytest.approx(953.0, abs=1)
+    assert before_part["cssRect"]["width"] == pytest.approx(expected_width, abs=1)
+    assert before_part["drawReady"] is True
+    identity = await adapter.get_content_identity(browser_page)
+
+    captures = await adapter.capture_page(browser_page)
+    after = await _frame(browser_page)
+    counter_text = await browser_page.locator(
+        ".legacy-comic-footer__page-output"
+    ).text_content()
+    debug = await adapter.collect_debug_metadata(browser_page)
+
+    assert identity.source_id == external_id
+    assert len(captures) == 1
+    assert (captures[0].width, captures[0].height) == (width, 1600)
+    assert after["status"] == "content"
+    assert after["toolbarVisible"] is False
+    assert after["viewport"] == {"width": width * 2, "height": 1600}
+    assert after["parts"][0]["slotId"] == before_part["slotId"]
+    assert (after["parts"][0]["cssRect"]["width"], after["parts"][0]["cssRect"]["height"]) == (width, 1600)
+    assert counter_text == "1 / 1"
+    assert adapter._seen_slot_ids == {before_part["slotId"]}
+    assert debug["capture_class"] == "D"
+    assert debug["fallback_reason_code"] == "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
+    assert debug["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-rendered-png-v1-20261108"
+    assert adapter._observed_toolbar_hide_geometry_profile(before)[0] == profile_name
+    assert debug["ebookjapan_capture_parts"][0]["source_provenance"] == "UNKNOWN"
 
 
 async def test_fitted_cover_center_is_a_page_turn_region_in_the_neutral_fixture(
@@ -836,7 +923,7 @@ async def test_fitted_cover_center_is_a_page_turn_region_in_the_neutral_fixture(
     fitted = await adapter._ensure_native_css_viewport(
         browser_page, expected_path=READER_PATH, current=1, total=3
     )
-    assert fitted["viewport"] == {"width": 816, "height": 600}
+    assert fitted["viewport"] == {"width": 1632, "height": 1200}
     with pytest.raises(UnknownPageStateError, match="unverified at this viewport geometry"):
         await adapter._hide_toolbar_for_capture(
             browser_page,
@@ -852,7 +939,7 @@ async def test_fitted_cover_center_is_a_page_turn_region_in_the_neutral_fixture(
     box = await canvas.bounding_box()
     assert box is not None
     center_x = box["x"] + box["width"] / 2
-    assert center_x / 816 == pytest.approx(0.25)
+    assert center_x / 1632 == pytest.approx(0.25)
     await browser_page.mouse.click(center_x, box["y"] + box["height"] / 2)
 
     turned = await browser_page.locator(
@@ -887,9 +974,9 @@ async def test_capture_page_returns_decoded_css_native_png_after_atomic_two_samp
     assert identity.source_id == "A000083590"
     assert len(captures) == 1
     assert captures[0].data.startswith(b"\x89PNG\r\n\x1a\n")
-    assert (captures[0].width, captures[0].height) == (408, 600)
+    assert (captures[0].width, captures[0].height) == (816, 1200)
     with Image.open(io.BytesIO(captures[0].data)) as image:
-        assert image.convert("RGBA").getpixel((204, 300)) == (0, 0, 0, 255)
+        assert image.convert("RGBA").getpixel((408, 600)) == (0, 0, 0, 255)
     assert adapter._seen_slot_ids == {1}
     debug = await adapter.collect_debug_metadata(browser_page)
     assert debug["capture_method"] == "D_compositor_png"
@@ -918,7 +1005,7 @@ async def test_capture_spread_is_atomic_and_emits_physical_right_to_left_parts(b
     )
     await adapter.get_content_identity(browser_page)
     await browser_page.evaluate(
-        "() => {document.querySelector('.legacy-comic-header').hidden=true;document.querySelector('.legacy-comic-footer').hidden=true;}"
+        "() => {document.querySelector('.legacy-comic-header').hidden=true;document.querySelector('.legacy-comic-footer').hidden=true;document.querySelector('.seekbar__slider').style.display='none';}"
     )
 
     captures = await adapter.capture_page(browser_page)
