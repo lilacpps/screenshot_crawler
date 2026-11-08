@@ -19,7 +19,9 @@ PRODUCT_ID = "A000083590"
 PRODUCT_URL = f"https://ebookjapan.yahoo.co.jp/books/{SERIES_ID}/{PRODUCT_ID}/"
 LISTING_URL = f"https://ebookjapan.yahoo.co.jp/books/all/{SERIES_ID}/"
 READER_URL = "https://ebookjapan.yahoo.co.jp/viewer/purchased/B123456789012/"
-SOURCE_URL = "https://cache2-ebookjapan.akamaized.net/generated-c2-fixture.webp?fixture=roi-proof"
+CACHE_SOURCE_HOST = "cache2-ebookjapan.akamaized.net"
+PRODUCTION_SOURCE_HOST = "prod-contents-br-page.akamaized.net"
+SOURCE_URL = f"https://{CACHE_SOURCE_HOST}/generated-c2-fixture.webp?fixture=roi-proof"
 SOURCE_WIDTH = 1088
 SOURCE_HEIGHT = 1600
 ROIS_X = 16
@@ -83,7 +85,7 @@ def _listing_html() -> str:
     </body></html>"""
 
 
-def _reader_html(*, clip_source: bool = False) -> str:
+def _reader_html(*, clip_source: bool = False, source_url: str = SOURCE_URL) -> str:
     clip_statement = (
         "context.beginPath();context.rect(0,0,1088,1600);context.clip();"
         if clip_source
@@ -112,7 +114,7 @@ def _reader_html(*, clip_source: bool = False) -> str:
       </div>
       <input class="seekbar__slider" type="range" min="0" max="1" value="1">
       <script>
-      const sourceUrl={json.dumps(SOURCE_URL)};
+      const sourceUrl={json.dumps(source_url)};
       const htmlContextPrototype=CanvasRenderingContext2D.prototype;
       const arcDescriptor=Object.getOwnPropertyDescriptor(htmlContextPrototype,'arc');
       Object.defineProperty(htmlContextPrototype,'arc',{{...arcDescriptor,value:function fixtureLateArc(){{}}}});
@@ -157,7 +159,11 @@ def _reader_html(*, clip_source: bool = False) -> str:
 
 
 async def _open_owned_reader(
-    page: Page, webp_bytes: bytes, *, clip_source: bool = False
+    page: Page,
+    webp_bytes: bytes,
+    *,
+    clip_source: bool = False,
+    source_host: str = CACHE_SOURCE_HOST,
 ) -> EbookJapanAdapter:
     # Model only the exact v3 profile admitted for comparison. This is a local
     # generated fixture and does not restore or call the hidden methods.
@@ -175,6 +181,7 @@ async def _open_owned_reader(
     await adapter.configure_target_identity(PRODUCT_ID, "generated-work")
     await adapter.configure_run(page, "direct")
     await adapter.prepare_page(page)
+    source_url = f"https://{source_host}/generated-c2-fixture.webp?fixture=roi-proof"
     await page.route(
         LISTING_URL,
         lambda route: route.fulfill(
@@ -188,11 +195,11 @@ async def _open_owned_reader(
         lambda route: route.fulfill(
             status=200,
             content_type="text/html",
-            body=_reader_html(clip_source=clip_source),
+            body=_reader_html(clip_source=clip_source, source_url=source_url),
         ),
     )
     await page.route(
-        "https://cache2-ebookjapan.akamaized.net/generated-c2-fixture.webp**",
+        f"https://{source_host}/generated-c2-fixture.webp**",
         lambda route: route.fulfill(
             status=200,
             content_type="image/webp",
@@ -208,9 +215,18 @@ async def _open_owned_reader(
     return adapter
 
 
-async def test_generated_title_alias_rewind_and_source_roi_comparison(c2_browser: Page) -> None:
+@pytest.mark.parametrize(
+    "source_host",
+    [CACHE_SOURCE_HOST, PRODUCTION_SOURCE_HOST],
+    ids=("observed-cache-host", "observed-production-host"),
+)
+async def test_generated_title_alias_rewind_and_source_roi_comparison(
+    c2_browser: Page,
+    source_host: str,
+) -> None:
     webp_bytes = _generated_vp8_webp()
-    adapter = await _open_owned_reader(c2_browser, webp_bytes)
+    source_url = f"https://{source_host}/generated-c2-fixture.webp?fixture=roi-proof"
+    adapter = await _open_owned_reader(c2_browser, webp_bytes, source_host=source_host)
     identity = await adapter.get_content_identity(c2_browser)
     assert identity.source_id == PRODUCT_ID
     assert adapter._expected_current == 1
@@ -228,7 +244,7 @@ async def test_generated_title_alias_rewind_and_source_roi_comparison(c2_browser
     assert projection["provenance"] == "VERIFIED_SOURCE_ROI"
     assert projection["runtime_adoption_status"] == "NOT_ADOPTED"
     assert projection["paint_history_complete"] is False
-    assert SOURCE_URL not in projected_json
+    assert source_url not in projected_json
     assert "fixturePrivateCallable" not in projected_json
     assert "生成作品" not in projected_json
 

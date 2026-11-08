@@ -11,7 +11,9 @@ from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
 from screenshot_crawler.site_adapters.ebookjapan.source_observer import SourceObserverProofError
 
 READER_URL = "https://ebookjapan.yahoo.co.jp/viewer/purchased/B123456789012/"
-SOURCE_URL = "https://cache2-ebookjapan.akamaized.net/fixture-atlas.webp"
+CACHE_SOURCE_URL = "https://cache2-ebookjapan.akamaized.net/fixture-atlas.webp"
+PRODUCTION_SOURCE_URL = "https://prod-contents-br-page.akamaized.net/fixture-atlas.webp"
+SOURCE_URL = CACHE_SOURCE_URL
 
 
 class _Frame:
@@ -128,7 +130,10 @@ def test_access_profile_marks_only_the_observed_source_hosts_relevant() -> None:
     assert matcher("https://ebookjapan.yahoo.co.jp/viewer/purchased/B123456789012/")
     assert matcher(SOURCE_URL)
     assert matcher("https://ebookjapan.akamaized.net/atlas.webp")
+    assert matcher(PRODUCTION_SOURCE_URL)
     assert not matcher("https://cache2-ebookjapan.akamaized.net.attacker.example/atlas.webp")
+    assert not matcher("https://prod-contents-br-page.akamaized.net.attacker.example/atlas.webp")
+    assert not matcher("https://sub.prod-contents-br-page.akamaized.net/atlas.webp")
     assert not matcher("https://unobserved.example/atlas.webp")
 
 
@@ -160,17 +165,20 @@ def test_limited_profile_rejects_bool_as_int_and_int_as_bool(
     assert limited_history_profile_matches(diagnostic) is False
 
 
-def test_unique_same_document_loaded_response_can_be_latched_and_revalidated() -> None:
+@pytest.mark.parametrize("source_url", [CACHE_SOURCE_URL, PRODUCTION_SOURCE_URL])
+def test_unique_same_document_loaded_response_can_be_latched_and_revalidated(
+    source_url: str,
+) -> None:
     ledger, frame = _ledger()
-    request, response = _add_image_response(ledger, frame)
-    binding, facts = ledger.bind_current_src(SOURCE_URL)
+    request, response = _add_image_response(ledger, frame, url=source_url)
+    binding, facts = ledger.bind_current_src(source_url)
 
     assert facts.current_document_matches is True
     assert facts.request_response_identity_matches is True
-    assert SOURCE_URL not in repr(ledger)
+    assert source_url not in repr(ledger)
     ledger.mark_body_attempted(facts.request_id)
     validated = ledger.validate_held_binding(
-        SOURCE_URL,
+        source_url,
         request_id=facts.request_id,
         response_id=facts.response_id,
         request_object=request,
@@ -179,7 +187,7 @@ def test_unique_same_document_loaded_response_can_be_latched_and_revalidated() -
     )
     assert validated == facts
     with pytest.raises(SourceObserverProofError, match="source-response-body-already-read"):
-        ledger.bind_current_src(SOURCE_URL)
+        ledger.bind_current_src(source_url)
 
 
 def test_late_duplicate_response_invalidates_a_held_binding() -> None:
@@ -253,18 +261,66 @@ def test_late_old_document_request_invalidates_a_new_document_binding() -> None:
         )
 
 
-@pytest.mark.parametrize("status", [403, 429])
-def test_nonselected_first_party_403_or_429_is_a_latched_access_stop(status: int) -> None:
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [
+        ("ebookjapan.akamaized.net", 403),
+        ("ebookjapan.akamaized.net", 429),
+        ("prod-contents-br-page.akamaized.net", 403),
+        ("prod-contents-br-page.akamaized.net", 429),
+    ],
+)
+def test_nonselected_first_party_403_or_429_is_a_latched_access_stop(
+    host: str,
+    status: int,
+) -> None:
     ledger, frame = _ledger()
     _request, _response = _add_image_response(
         ledger,
         frame,
-        url="https://ebookjapan.akamaized.net/unselected.webp",
+        url=f"https://{host}/unselected.webp",
         status=status,
     )
     assert ledger.access_stop_status == status
     with pytest.raises(SourceObserverProofError, match="source-access-stop"):
-        ledger.bind_current_src(SOURCE_URL)
+        ledger.bind_current_src(PRODUCTION_SOURCE_URL)
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_duplicate_production_host_stop_response_is_latched(status: int) -> None:
+    ledger, frame = _ledger()
+    request, _response = _add_image_response(
+        ledger,
+        frame,
+        url=PRODUCTION_SOURCE_URL,
+    )
+    assert ledger.access_stop_status is None
+
+    duplicate_stop = _Response(request, frame, status=status)
+    ledger.response_received(duplicate_stop, main_frame=frame)
+
+    assert ledger.access_stop_status == status
+    with pytest.raises(SourceObserverProofError, match="source-access-stop"):
+        ledger.bind_current_src(PRODUCTION_SOURCE_URL)
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://prod-contents-br-page.akamaized.net.attacker.example/atlas.webp",
+        "https://sub.prod-contents-br-page.akamaized.net/atlas.webp",
+        "http://prod-contents-br-page.akamaized.net/atlas.webp",
+    ],
+)
+def test_production_host_lookalikes_are_not_tracked_or_adopted(source_url: str) -> None:
+    ledger, frame = _ledger()
+    request = _Request(frame, source_url)
+
+    ledger.request_started(request, main_frame=frame, reader_url=READER_URL)
+
+    assert len(ledger._requests) == 0
+    with pytest.raises(SourceObserverProofError, match="source-current-src-host-unobserved"):
+        ledger.bind_current_src(source_url)
 
 
 def test_redirected_request_cannot_bind_current_src() -> None:

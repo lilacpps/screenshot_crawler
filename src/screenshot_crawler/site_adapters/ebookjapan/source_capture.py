@@ -31,7 +31,11 @@ from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
 
 MAX_TRACKED_IMAGE_REQUESTS: Final = 4096
 SOURCE_IMAGE_HOSTS: Final = frozenset(
-    {"cache2-ebookjapan.akamaized.net", "ebookjapan.akamaized.net"}
+    {
+        "cache2-ebookjapan.akamaized.net",
+        "ebookjapan.akamaized.net",
+        "prod-contents-br-page.akamaized.net",
+    }
 )
 LIMITED_HISTORY_PROFILE: Final = "muda2-install-unknown-callable-v3"
 SOURCE_METHOD: Final = "C_source_roi_lossless"
@@ -214,6 +218,12 @@ class SourceRequestLedger:
             return
         if tracked.response_object is not None:
             # Preserve an explicit duplicate response event as ambiguity.
+            try:
+                duplicate_status = response.status
+            except Exception:  # noqa: BLE001 - disposed duplicate responses remain UNKNOWN.
+                duplicate_status = None
+            if type(duplicate_status) is int and duplicate_status in (403, 429):
+                self._access_stop_status = duplicate_status
             tracked.response_count += 1
             self._next_response_id += 1
             tracked.response_id = self._next_response_id
