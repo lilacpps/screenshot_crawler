@@ -30,12 +30,26 @@ SOURCE_OBSERVER_JS = r"""(() => {
   const diagnosticStateNames=new Set(['globalAlpha','globalCompositeOperation','filter','shadowColor','shadowBlur','shadowOffsetX',
     'shadowOffsetY','imageSmoothingEnabled','imageSmoothingQuality']);
   const diagnosticDimensionNames=new Set(['width','height']);
+  const diagnosticSlotKinds=new Set(['data','accessor','missing']);
+  const diagnosticValueTypes=new Set(['function','object','string','number','boolean','undefined','symbol','bigint','accessor','missing']);
   let nextObjectId=0,nextEpochId=0,nextTransferSequence=0,cacheEvictions=0,metadataFailures=0;
   let nativeDescriptorsMatch=true,contextWrapperCoverageComplete=false,stopped=false;
   const idFor=(map,value)=>{let id=map.get(value);if(!id){id=++nextObjectId;map.set(value,id);}return id;};
   const finite=n=>typeof n==='number'&&Number.isFinite(n);
   const integer=n=>finite(n)&&Number.isInteger(n);
   const safeEnumList=(value,allowlist)=>Array.isArray(value)?value.filter(name=>allowlist.has(name)).slice(0,32):[];
+  const safeDiagnosticSlotList=value=>Array.isArray(value)?value.slice(0,8).flatMap(slot=>{
+    if(!slot||typeof slot!=='object'||typeof slot.opaqueId!=='string'||!/^slot-[1-8]$/.test(slot.opaqueId)
+      ||!Number.isInteger(slot.ownerDepth)||slot.ownerDepth<0||slot.ownerDepth>16
+      ||!diagnosticSlotKinds.has(slot.descriptorKind)||!diagnosticValueTypes.has(slot.valueType))return [];
+    return [{opaqueId:slot.opaqueId,ownerDepth:slot.ownerDepth,
+      offscreenInstallObserved:slot.offscreenInstallObserved===true,currentSlotMismatchObserved:slot.currentSlotMismatchObserved===true,
+      descriptorKind:slot.descriptorKind,valueType:slot.valueType,functionNative:slot.functionNative===true,
+      writable:slot.writable===true,configurable:slot.configurable===true,enumerable:slot.enumerable===true,
+      getterPresent:slot.getterPresent===true,getterNative:slot.getterNative===true,
+      setterPresent:slot.setterPresent===true,setterNative:slot.setterNative===true}];
+  }):[];
+  const safeDiagnosticCount=value=>Number.isInteger(value)&&value>=0?Math.min(1024,value):0;
   const safeInstrumentationDiagnostic=()=>{
     try{
       const captureObserver=window.__ejCaptureObserver;
@@ -57,7 +71,13 @@ SOURCE_OBSERVER_JS = r"""(() => {
         slotMismatchMethods:safeEnumList(value.slotMismatchMethods,diagnosticMethodNames),
         slotMismatchStateProperties:safeEnumList(value.slotMismatchStateProperties,diagnosticStateNames),
         slotMismatchDimensionProperties:safeEnumList(value.slotMismatchDimensionProperties,diagnosticDimensionNames),
-        otherMethodCount:Number.isInteger(count)&&count>=0?Math.min(1024,count):0};
+        offscreenInstallOtherCount:safeDiagnosticCount(value.offscreenInstallOtherCount),
+        currentSlotOtherCount:safeDiagnosticCount(value.currentSlotOtherCount),
+        unknownMethodSlotCount:safeDiagnosticCount(value.unknownMethodSlotCount),
+        unknownMethodSlotDescriptorsOmittedCount:safeDiagnosticCount(value.unknownMethodSlotDescriptorsOmittedCount),
+        unknownMethodSlotOverflow:value.unknownMethodSlotOverflow===true,
+        unknownMethodSlotDescriptors:safeDiagnosticSlotList(value.unknownMethodSlotDescriptors),
+        otherMethodCount:safeDiagnosticCount(count)};
     }catch{return null;}
   };
   const rectOf=values=>Array.isArray(values)&&values.length===8&&values.every(integer)
@@ -292,6 +312,7 @@ SOURCE_OBSERVER_JS = r"""(() => {
       binding:binding?{epochId:binding.epochId,bitmapObjectId:binding.bitmapObjectId,
         sourceCanvasObjectId:binding.sourceCanvasObjectId,sourceContextObjectId:binding.sourceContextObjectId,
         sourceEpoch:binding.sourceEpoch,sourceResetSequence:binding.sourceResetSequence,
+        sourceResetSequenceCurrent:!!liveSourceState&&liveSourceState.resetSequence===binding.sourceResetSequence,
         transferSequence:binding.transferSequence,targetCanvasObjectId:binding.targetCanvasObjectId,
         targetBindingToken:binding.targetBindingToken,targetResetSequence:binding.targetResetSequence,
         targetWidth:binding.targetWidth,targetHeight:binding.targetHeight,targetDrawSequence:binding.targetDrawSequence,
@@ -313,6 +334,34 @@ SOURCE_OBSERVER_JS = r"""(() => {
           mutationCount:dState.mutationCount,clipCalls:dState.clipCalls,lastFullDraw:dState.lastFullDraw,
           resetObserved:dState.resetObserved,contextIs2d:dState.contextIs2d,overflow:dState.overflow,
           metadataFailures:dState.metadataFailures}:null};
+  };
+  // Research-only bridge: currentSrc leaves the page only in this synchronous
+  // return value so the adapter can compare it with already-observed Requests.
+  // It is not copied into targetSnapshot, a public proof DTO, or persisted data.
+  const privateCurrentSourceForTarget=canvas=>{
+    if(!routeAllowed()||!(canvas instanceof HTMLCanvasElement))return null;
+    const snapshot=targetSnapshot(canvas),epochId=snapshot?.binding?.epochId;
+    const metadata=Number.isInteger(epochId)?epochCache.get(epochId):null;
+    if(!metadata)return null;
+    const liveSourceState=canvasStates.get(metadata.sourceCanvas);
+    const latestTransfer=!!liveSourceState&&liveSourceState.latestBitmapId===metadata.bitmapObjectId
+      &&liveSourceState.latestTransferSequence===metadata.transferSequence
+      &&liveSourceState.dirtySinceLatestTransfer===false;
+    const sourceOwnDimensionPropertiesAbsent=!!metadata.sourceCanvas
+      &&ownDimensionPropertiesAbsent(metadata.sourceCanvas);
+    const liveSourceIsCurrent=!!liveSourceState&&liveSourceState.contextKnown
+      &&liveSourceState.contextObjectId===metadata.sourceContextObjectId
+      &&liveSourceState.ownDimensionPropertiesAbsent&&sourceOwnDimensionPropertiesAbsent
+      &&liveSourceState.settersIntact&&metadata.sourceCanvas.width===metadata.width
+      &&metadata.sourceCanvas.height===metadata.height;
+    return {snapshot,liveSourceIsCurrent,latestTransfer,sourceOwnDimensionPropertiesAbsent,
+      sourceImages:metadata.sourceImages.map(value=>({
+      imageId:value.imageId,currentSrc:value.currentSrc,width:value.width,height:value.height,
+      currentSrcUnchanged:!!value.image&&String(value.image.currentSrc||'')===value.currentSrc,
+      dimensionsUnchanged:!!value.image&&value.image.naturalWidth===value.width
+        &&value.image.naturalHeight===value.height,
+      naturalWidth:value.image?.naturalWidth??null,naturalHeight:value.image?.naturalHeight??null
+    }))};
   };
   const recordStateMutation=(context,name,didThrow)=>{
     if(!routeAllowed()||!(context?.canvas instanceof OffscreenCanvas))return;
@@ -363,7 +412,7 @@ SOURCE_OBSERVER_JS = r"""(() => {
   const observer={
     recordContextReturn,recordSourceContextCall,recordTargetDraw,recordStateMutation,
     invalidateTarget,recordContextLoss,setContextWrapperCoverage,
-    targetSnapshot,
+    targetSnapshot,privateCurrentSourceForTarget,
     recordInstrumentationFailure(){nativeDescriptorsMatch=false;metadataFailures++;},
     health(){return {installed:!stopped&&routeAllowed(),routeMatches:routeAllowed(),nativeDescriptorsMatch,
       contextWrapperCoverageComplete,activeEpochs:epochCache.size,cacheEvictions,metadataFailures,

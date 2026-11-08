@@ -82,10 +82,44 @@ CAPTURE_OBSERVER_JS = r"""(() => {
   const stateSetterMissing=new Set(),stateSetterNonNative=new Set(),offscreenStateSetterMissing=new Set(),offscreenStateSetterNonNative=new Set();
   const slotMismatchMethods=new Set(),slotMismatchStateProperties=new Set();
   let diagnosticOtherMethodCount=0;
-  const MAX_DIAGNOSTIC_OTHER=1024;
+  let offscreenInstallOtherCount=0;
+  const MAX_DIAGNOSTIC_OTHER=1024,MAX_UNKNOWN_SLOT_DETAILS=8,MAX_TRACKED_UNKNOWN_SLOTS=1024;
+  const unknownSlotMaps=new WeakMap(),unknownMethodSlotDescriptors=[];
+  let unknownMethodSlotCount=0,unknownMethodSlotDescriptorsOmittedCount=0,unknownMethodSlotOverflowCount=0;
+  const recordUnknownMethodSlot=(proto,name,ownerDepth,descriptor,stage)=>{
+    let slots=unknownSlotMaps.get(proto);
+    if(!slots){slots=new Map();unknownSlotMaps.set(proto,slots);}
+    let slot=slots.get(name);
+    if(!slot){
+      if(unknownMethodSlotCount>=MAX_TRACKED_UNKNOWN_SLOTS){
+        unknownMethodSlotOverflowCount=Math.min(MAX_DIAGNOSTIC_OTHER,unknownMethodSlotOverflowCount+1);return;
+      }
+      unknownMethodSlotCount++;
+      slot={opaqueId:`slot-${unknownMethodSlotCount}`,ownerDepth,offscreenInstallObserved:false,currentSlotMismatchObserved:false};
+      slots.set(name,slot);
+      if(unknownMethodSlotDescriptors.length<MAX_UNKNOWN_SLOT_DETAILS)unknownMethodSlotDescriptors.push(slot);
+      else unknownMethodSlotDescriptorsOmittedCount++;
+    }
+    if(stage==='offscreen-install')slot.offscreenInstallObserved=true;
+    else if(stage==='current-slot-mismatch')slot.currentSlotMismatchObserved=true;
+    const dataDescriptor=!!descriptor&&Object.prototype.hasOwnProperty.call(descriptor,'value');
+    slot.descriptorKind=!descriptor?'missing':dataDescriptor?'data':'accessor';
+    slot.valueType=!descriptor?'missing':dataDescriptor?typeof descriptor.value:'accessor';
+    slot.functionNative=dataDescriptor&&typeof descriptor.value==='function'&&native(descriptor.value);
+    slot.writable=descriptor?.writable===true;
+    slot.configurable=descriptor?.configurable===true;
+    slot.enumerable=descriptor?.enumerable===true;
+    slot.getterPresent=typeof descriptor?.get==='function';
+    slot.getterNative=slot.getterPresent&&native(descriptor.get);
+    slot.setterPresent=typeof descriptor?.set==='function';
+    slot.setterNative=slot.setterPresent&&native(descriptor.set);
+  };
   const recordDiagnosticName=(set,name,allowlist)=>{
     if(allowlist.has(name))set.add(name);
-    else if(diagnosticOtherMethodCount<MAX_DIAGNOSTIC_OTHER)diagnosticOtherMethodCount++;
+    else if(diagnosticOtherMethodCount<MAX_DIAGNOSTIC_OTHER){
+      diagnosticOtherMethodCount++;
+      if(set===offscreenMethodMissing||set===offscreenMethodNonNative)offscreenInstallOtherCount++;
+    }
   };
   const contexts={'getContext':canvasProto,'drawImage':contextProto,'putImageData':contextProto,'clearRect':contextProto,
     'fillRect':contextProto,'strokeRect':contextProto,'fillText':contextProto,'strokeText':contextProto,'fill':contextProto,'stroke':contextProto,'clip':contextProto};
@@ -214,7 +248,7 @@ CAPTURE_OBSERVER_JS = r"""(() => {
     if(instrumentedSourcePrototypes.has(first))return offscreenContextCoverage;
     instrumentedSourcePrototypes.add(first);
     let complete=sourceMethodCoverage&&sourceStateCoverage;
-    for(let proto=first;proto&&proto!==Object.prototype;proto=Object.getPrototypeOf(proto)){
+    for(let proto=first,ownerDepth=0;proto&&proto!==Object.prototype;proto=Object.getPrototypeOf(proto),ownerDepth++){
       if(proto===contextProto)break;
       for(const name of Object.getOwnPropertyNames(proto)){
         if(name==='constructor')continue;
@@ -225,10 +259,12 @@ CAPTURE_OBSERVER_JS = r"""(() => {
         }
         if(descriptor.value===wrappers[name]||descriptor.value===sourceMethodWrappers[name])continue;
         if(!(descriptor.writable||descriptor.configurable)||!native(descriptor.value)){
-          complete=false;recordDiagnosticName(offscreenMethodNonNative,name,diagnosticMethodSet);continue;}
+          complete=false;recordDiagnosticName(offscreenMethodNonNative,name,diagnosticMethodSet);
+          if(!diagnosticMethodSet.has(name))recordUnknownMethodSlot(proto,name,ownerDepth,descriptor,'offscreen-install');
+          continue;}
         const wrapper=wrap(name,descriptor.value,{core:false,sourceOnly:true});
         Object.defineProperty(proto,name,{...descriptor,value:wrapper});
-        dynamicMethodWrappers.push({proto,name,descriptor,wrapper});
+        dynamicMethodWrappers.push({proto,name,descriptor,wrapper,ownerDepth});
       }
       for(const name of sourceStateProperties){
         const descriptor=Object.getOwnPropertyDescriptor(proto,name);
@@ -278,9 +314,13 @@ CAPTURE_OBSERVER_JS = r"""(() => {
   catch{metadataFailures++;try{window.__ejSourceObserver?.recordInstrumentationFailure?.();}catch{}}
   const sourceInstrumentationDiagnostic=()=>{
     const mismatchedMethods=new Set(),mismatchedState=new Set(),mismatchedDimensions=new Set();
-    let otherMismatchCount=0;
-    const noteMismatch=(name,set,allowlist)=>{
-      if(allowlist.has(name))set.add(name);else if(otherMismatchCount<MAX_DIAGNOSTIC_OTHER)otherMismatchCount++;
+    let currentSlotOtherCount=0;
+    const noteMismatch=(name,set,allowlist,slot=null)=>{
+      if(allowlist.has(name))set.add(name);
+      else{
+        currentSlotOtherCount=Math.min(MAX_DIAGNOSTIC_OTHER,currentSlotOtherCount+1);
+        if(slot)recordUnknownMethodSlot(slot.proto,name,slot.ownerDepth,slot.descriptor,'current-slot-mismatch');
+      }
     };
     for(const name of names)if((contexts[name]||contextProto)[name]!==wrappers[name])
       noteMismatch(name,mismatchedMethods,diagnosticMethodSet);
@@ -293,8 +333,10 @@ CAPTURE_OBSERVER_JS = r"""(() => {
         noteMismatch(name,mismatchedState,diagnosticStateSet);
     }
     for(const entry of dynamicMethodWrappers){
-      if(Object.getOwnPropertyDescriptor(entry.proto,entry.name)?.value!==entry.wrapper)
-        noteMismatch(entry.name,mismatchedMethods,diagnosticMethodSet);
+      const currentDescriptor=Object.getOwnPropertyDescriptor(entry.proto,entry.name);
+      if(currentDescriptor?.value!==entry.wrapper)
+        noteMismatch(entry.name,mismatchedMethods,diagnosticMethodSet,
+          {proto:entry.proto,ownerDepth:entry.ownerDepth,descriptor:currentDescriptor});
     }
     for(const entry of dynamicStateWrappers){
       if(Object.getOwnPropertyDescriptor(entry.proto,entry.name)?.set!==entry.wrapper)
@@ -307,14 +349,21 @@ CAPTURE_OBSERVER_JS = r"""(() => {
         mismatchedDimensions.add(name);
     }
     return {sourceMethodCoverage,sourceStateCoverage,offscreenInstall:offscreenContextCoverage,
-      currentSlotMismatch:mismatchedMethods.size+mismatchedState.size+mismatchedDimensions.size+otherMismatchCount>0,
+      currentSlotMismatch:mismatchedMethods.size+mismatchedState.size+mismatchedDimensions.size+currentSlotOtherCount>0,
       sourceMethodMissing:[...sourceMethodMissing],sourceMethodNonNative:[...sourceMethodNonNative],
       offscreenMethodMissing:[...offscreenMethodMissing],offscreenMethodNonNative:[...offscreenMethodNonNative],
       stateSetterMissing:[...stateSetterMissing],stateSetterNonNative:[...stateSetterNonNative],
       offscreenStateSetterMissing:[...offscreenStateSetterMissing],offscreenStateSetterNonNative:[...offscreenStateSetterNonNative],
       slotMismatchMethods:[...mismatchedMethods],slotMismatchStateProperties:[...mismatchedState],
       slotMismatchDimensionProperties:[...mismatchedDimensions],
-      otherMethodCount:Math.min(MAX_DIAGNOSTIC_OTHER,diagnosticOtherMethodCount+otherMismatchCount)};
+      offscreenInstallOtherCount:Math.min(MAX_DIAGNOSTIC_OTHER,offscreenInstallOtherCount),
+      currentSlotOtherCount,
+      unknownMethodSlotCount:Math.min(MAX_DIAGNOSTIC_OTHER,unknownMethodSlotCount+unknownMethodSlotOverflowCount),
+      unknownMethodSlotDescriptorsOmittedCount:Math.min(MAX_DIAGNOSTIC_OTHER,
+        unknownMethodSlotDescriptorsOmittedCount+unknownMethodSlotOverflowCount),
+      unknownMethodSlotOverflow:unknownMethodSlotOverflowCount>0,
+      unknownMethodSlotDescriptors:unknownMethodSlotDescriptors.map(slot=>({...slot})),
+      otherMethodCount:Math.min(MAX_DIAGNOSTIC_OTHER,diagnosticOtherMethodCount+currentSlotOtherCount)};
   };
   const sourceInstrumentationIsCurrent=()=>{
     const diagnostic=sourceInstrumentationDiagnostic();

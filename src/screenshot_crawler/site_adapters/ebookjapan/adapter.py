@@ -34,7 +34,30 @@ from screenshot_crawler.site_adapters.ebookjapan.discovery import (
     _rights_signature,
     parse_ebookjapan_source_witness,
 )
+from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
+    LIMITED_HISTORY_PROFILE,
+    SOURCE_IMAGE_HOSTS,
+    BoundResponseFacts,
+    SourceCaptureProofError,
+    SourceRequestLedger,
+    SourceResearchOutcome,
+    SourceResearchPartProof,
+    comparison_proof_fields,
+    limited_history_profile_matches,
+)
 from screenshot_crawler.site_adapters.ebookjapan.source_hook import SOURCE_OBSERVER_JS
+from screenshot_crawler.site_adapters.ebookjapan.source_observer import (
+    SourceObserverProofError,
+    read_bound_response_body_once,
+)
+from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
+    ReferencePixels,
+    SourcePixelProofError,
+    compare_candidate_rgba,
+    decode_webp_source,
+    encode_lossless_candidate,
+    reconstruct_roi_part,
+)
 from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     ANCHOR_READER_JS,
     CAPTURE_OBSERVER_JS,
@@ -211,6 +234,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._work_key: str | None = None
         self._access_strategy: AccessStrategy = "auto"
         self._source_response: Response | None = None
+        self._source_request_ledger: SourceRequestLedger | None = None
         self._owned_title: str | None = None
         self._reader_title: str | None = None
         self._page: Page | None = None
@@ -232,6 +256,8 @@ class EbookJapanAdapter(SiteAdapter):
         self._last_capture_ids: tuple[int, ...] = ()
         self._last_capture_ordinals: tuple[int, ...] = ()
         self._last_capture_part_count: int = 0
+        self._last_d_reference_captures: tuple[CaptureResult, ...] = ()
+        self._research_capture_active = False
         self._transition_before_key: tuple[object, ...] | None = None
         self._transition_pending: bool = False
         self._terminal_end_verified: bool = False
@@ -242,8 +268,9 @@ class EbookJapanAdapter(SiteAdapter):
         self._advance_started_at: float | None = None
 
     def get_access_profile(self) -> AccessProfile:
+        relevant_hosts = {SITE_HOST, *SOURCE_IMAGE_HOSTS}
         return AccessProfile(
-            relevant_host=lambda url: (urlsplit(url).hostname or "").lower() == SITE_HOST
+            relevant_host=lambda url: (urlsplit(url).hostname or "").lower() in relevant_hosts
         )
 
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
@@ -305,12 +332,15 @@ class EbookJapanAdapter(SiteAdapter):
     async def prepare_page(self, page: Page) -> None:
         self._page = page
         self._source_response = None
+        source_ledger = SourceRequestLedger()
+        self._source_request_ledger = source_ledger
         # This Page-only init hook observes normal Reader rendering before the
         # site's scripts run. It is inert outside the exact purchased route.
         await page.add_init_script(script=SOURCE_OBSERVER_JS)
         await page.add_init_script(script=CAPTURE_OBSERVER_JS)
 
         def observe_response(response: Response) -> None:
+            source_ledger.response_received(response, main_frame=page.main_frame)
             series_id = self._series_id
             if series_id is not None and _same_listing_document(
                 response, series_id=series_id
@@ -318,6 +348,19 @@ class EbookJapanAdapter(SiteAdapter):
                 self._source_response = response
 
         page.on("response", observe_response)
+
+        def observe_request(request: object) -> None:
+            source_ledger.request_started(
+                request,
+                main_frame=page.main_frame,
+                reader_url=page.url,
+            )
+
+        def observe_frame_commit(frame: object) -> None:
+            source_ledger.main_frame_committed(frame, main_frame=page.main_frame)
+
+        page.on("request", observe_request)
+        page.on("framenavigated", observe_frame_commit)
 
     async def _verify_static_owned_witness(self) -> None:
         series_id, external_id = self._series_id, self._external_id
@@ -1465,6 +1508,7 @@ class EbookJapanAdapter(SiteAdapter):
         raise UnknownPageStateError("ebookjapan unverified D capture is disabled")
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._last_d_reference_captures = ()
         reader_path = self._reader_path
         total = self._reader_total
         current = self._expected_current
@@ -1554,6 +1598,13 @@ class EbookJapanAdapter(SiteAdapter):
             CaptureResult(data=first[0], width=first[1], height=first[2])
             for first in first_pngs
         )
+        # Keep only the already-taken second D samples for the private C2
+        # comparison caller. They are cleared when that call returns.
+        if self._research_capture_active:
+            self._last_d_reference_captures = tuple(
+                CaptureResult(data=second[0], width=second[1], height=second[2])
+                for second in second_pngs
+            )
         cached_parts: list[dict[str, object]] = []
         for index, (part, first) in enumerate(zip(parts, first_pngs, strict=True)):
             assert isinstance(part, Mapping)
@@ -1607,6 +1658,698 @@ class EbookJapanAdapter(SiteAdapter):
             self._next_dom_ordinal = ordinals[-1] - 1
         self._pending_identity_key = None
         return captures
+
+    @staticmethod
+    def _research_candidate_snapshot(private_snapshot: object) -> tuple[
+        Mapping[str, object],
+        Mapping[str, object],
+        Mapping[str, object],
+        tuple[bool, str, str, bool, bool],
+        tuple[
+            tuple[float, float, float, float, float, float],
+            float,
+            str,
+            str,
+            bool,
+            float,
+            float,
+            float,
+            bool,
+            str,
+        ],
+    ]:
+        if not isinstance(private_snapshot, Mapping):
+            raise SourceCaptureProofError("source-hook-snapshot-unavailable")
+        snapshot = private_snapshot.get("snapshot")
+        if not isinstance(snapshot, Mapping) or snapshot.get("installed") is not True or snapshot.get("routeMatches") is not True:
+            raise UnknownPageStateError("ebookjapan source observer route or install state changed")
+        binding = snapshot.get("binding")
+        target = snapshot.get("target")
+        health = snapshot.get("health")
+        d_state = snapshot.get("dState")
+        if not isinstance(binding, Mapping) or not isinstance(target, Mapping):
+            raise SourceCaptureProofError("source-target-binding-unavailable")
+        source = binding.get("source")
+        if not isinstance(source, Mapping):
+            raise SourceCaptureProofError("source-epoch-unavailable")
+        source_reset = source.get("resetSequence")
+        if (
+            binding.get("sourceResetSequenceCurrent") is not True
+            or type(source_reset) is not int
+            or source_reset != 0
+            or source.get("contextResetCount") != 0
+            or source.get("contextLossCount") != 0
+        ):
+            raise UnknownPageStateError("ebookjapan source canvas reset or context loss was observed")
+        if (
+            private_snapshot.get("liveSourceIsCurrent") is not True
+            or private_snapshot.get("latestTransfer") is not True
+            or private_snapshot.get("sourceOwnDimensionPropertiesAbsent") is not True
+            or target.get("ownDimensionPropertiesAbsent") is not True
+        ):
+            raise UnknownPageStateError(
+                "ebookjapan current source or target context, dimensions, or transfer changed"
+            )
+        if not isinstance(health, Mapping) or not isinstance(d_state, Mapping):
+            raise SourceCaptureProofError("source-runtime-health-unavailable")
+        if health.get("nativeDescriptorsMatch") is not True:
+            raise SourceCaptureProofError("source-native-descriptor-mismatch")
+        if not limited_history_profile_matches(health.get("instrumentationDiagnostic")):
+            raise SourceCaptureProofError("source-limited-history-profile-unsupported")
+        if (
+            source.get("clipCount") != 0
+            or source.get("stateMutationCount") != 0
+            or source.get("contextKnown") is not True
+            or source.get("ownDimensionPropertiesAbsent") is not True
+            or source.get("settersIntact") is not True
+        ):
+            raise SourceCaptureProofError("source-paint-state-unsupported")
+        if (
+            snapshot.get("binding", {}).get("current") is not False
+            or binding.get("reason") != "offscreen-draw-state-unknown"
+            or health.get("contextWrapperCoverageComplete") is not False
+            or health.get("instrumentationCurrent") is not False
+            or source.get("incompleteReason") != "offscreen-draw-state-unknown"
+            or source.get("wrapperCoverageComplete") is not False
+        ):
+            raise SourceCaptureProofError("source-limited-history-state-unsupported")
+        rows = source.get("roiRows")
+        draw_count = source.get("successfulDraws")
+        if (
+            not isinstance(rows, list)
+            or not 1 <= len(rows) <= 512
+            or type(draw_count) is not int
+            or draw_count != len(rows)
+            or source.get("drawCalls") != draw_count
+        ):
+            raise SourceCaptureProofError("source-roi-history-incomplete")
+        if (
+            d_state.get("contextIs2d") is not True
+            or d_state.get("drawGeneration") != binding.get("dDrawGeneration")
+            or d_state.get("successfulDraws") != binding.get("dSuccessfulDraws")
+            or d_state.get("lastFullDraw") is not True
+            or d_state.get("resetObserved") is not False
+            or d_state.get("clipCalls") != 0
+            or d_state.get("overflow") is not False
+            or d_state.get("metadataFailures") != 0
+            or binding.get("dLastFullDraw") is not True
+            or binding.get("dResetObserved") is not False
+            or binding.get("dClipCalls") != 0
+        ):
+            raise UnknownPageStateError("ebookjapan current D frame is not a fresh valid compositor reference")
+        if (
+            binding.get("targetCanvasObjectId") != target.get("canvasObjectId")
+            or binding.get("targetBindingToken") != target.get("bindingToken")
+            or binding.get("targetResetSequence") != target.get("resetSequence")
+            or binding.get("targetDrawSequence") != target.get("lastDrawSequence")
+            or binding.get("targetWidth") != target.get("width")
+            or binding.get("targetHeight") != target.get("height")
+        ):
+            raise UnknownPageStateError("ebookjapan source binding no longer matches the current target token")
+        draw_state = source.get("drawState")
+        if not isinstance(draw_state, Mapping):
+            raise SourceCaptureProofError("source-draw-state-unavailable")
+        attributes = draw_state.get("contextAttributes")
+        expected_attributes = (
+            isinstance(attributes, Mapping)
+            and attributes.get("alpha") is True
+            and attributes.get("colorSpace") == "srgb"
+            and attributes.get("colorType") == "unorm8"
+            and attributes.get("desynchronized") is False
+            and attributes.get("willReadFrequently") is False
+        )
+        transform = draw_state.get("transform")
+        numeric_state_names = (
+            "globalAlpha",
+            "shadowBlur",
+            "shadowOffsetX",
+            "shadowOffsetY",
+        )
+        if (
+            not expected_attributes
+            or not isinstance(transform, list)
+            or len(transform) != 6
+            or any(type(value) not in (int, float) for value in transform)
+            or tuple(float(value) for value in transform) != (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            or any(type(draw_state.get(name)) not in (int, float) for name in numeric_state_names)
+            or draw_state.get("globalAlpha") != 1
+            or draw_state.get("compositeOperation") != "source-over"
+            or draw_state.get("filterValue") != "none"
+            or draw_state.get("shadowColor") not in {"rgba(0, 0, 0, 0)", "transparent"}
+            or draw_state.get("shadowBlur") != 0
+            or draw_state.get("shadowOffsetX") != 0
+            or draw_state.get("shadowOffsetY") != 0
+            or draw_state.get("imageSmoothingEnabled") is not True
+            or draw_state.get("imageSmoothingQuality") != "low"
+        ):
+            raise SourceCaptureProofError("source-default-draw-attributes-invalid")
+        context_attributes = (
+            True,
+            "srgb",
+            "unorm8",
+            False,
+            False,
+        )
+        draw_attributes = (
+            (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+            1.0,
+            "source-over",
+            "none",
+            True,
+            0.0,
+            0.0,
+            0.0,
+            True,
+            "low",
+        )
+        return source, binding, target, context_attributes, draw_attributes
+
+    @staticmethod
+    def _research_source_image(private_snapshot: object) -> Mapping[str, object]:
+        if not isinstance(private_snapshot, Mapping):
+            raise SourceCaptureProofError("source-hook-snapshot-unavailable")
+        images = private_snapshot.get("sourceImages")
+        snapshot = private_snapshot.get("snapshot")
+        if not isinstance(images, list) or len(images) != 1 or not isinstance(snapshot, Mapping):
+            raise SourceCaptureProofError("source-image-identity-ambiguous")
+        image = images[0]
+        binding = snapshot.get("binding")
+        source = binding.get("source") if isinstance(binding, Mapping) else None
+        safe_images = source.get("sourceImages") if isinstance(source, Mapping) else None
+        if (
+            not isinstance(image, Mapping)
+            or not isinstance(safe_images, list)
+            or len(safe_images) != 1
+            or not isinstance(safe_images[0], Mapping)
+            or image.get("imageId") != safe_images[0].get("imageId")
+            or image.get("currentSrcUnchanged") is not True
+            or image.get("dimensionsUnchanged") is not True
+            or not isinstance(image.get("currentSrc"), str)
+            or not image.get("currentSrc")
+            or type(image.get("naturalWidth")) is not int
+            or type(image.get("naturalHeight")) is not int
+            or image.get("width") != image.get("naturalWidth")
+            or image.get("height") != image.get("naturalHeight")
+        ):
+            raise SourceCaptureProofError("source-image-identity-or-dimensions-invalid")
+        return image
+
+    @staticmethod
+    def _research_image_identity(image: Mapping[str, object]) -> tuple[object, ...]:
+        return (
+            image.get("imageId"),
+            image.get("currentSrc"),
+            image.get("width"),
+            image.get("height"),
+            image.get("naturalWidth"),
+            image.get("naturalHeight"),
+            image.get("currentSrcUnchanged"),
+            image.get("dimensionsUnchanged"),
+        )
+
+    @staticmethod
+    def _research_target_binding_signature(private_snapshot: object) -> tuple[object, ...]:
+        if not isinstance(private_snapshot, Mapping):
+            raise SourceCaptureProofError("source-hook-snapshot-unavailable")
+        snapshot = private_snapshot.get("snapshot")
+        binding = snapshot.get("binding") if isinstance(snapshot, Mapping) else None
+        target = snapshot.get("target") if isinstance(snapshot, Mapping) else None
+        source = binding.get("source") if isinstance(binding, Mapping) else None
+        if not isinstance(binding, Mapping) or not isinstance(target, Mapping) or not isinstance(source, Mapping):
+            raise SourceCaptureProofError("source-target-binding-unavailable")
+        return (
+            binding.get("epochId"),
+            binding.get("bitmapObjectId"),
+            binding.get("sourceEpoch"),
+            binding.get("sourceResetSequence"),
+            binding.get("transferSequence"),
+            binding.get("sourceCanvasObjectId"),
+            binding.get("sourceContextObjectId"),
+            target.get("canvasObjectId"),
+            target.get("bindingToken"),
+            target.get("resetSequence"),
+            target.get("lastDrawSequence"),
+            binding.get("dDrawGeneration"),
+            binding.get("dSuccessfulDraws"),
+            source.get("width"),
+            source.get("height"),
+            source.get("roiRows"),
+        )
+
+    @staticmethod
+    def _decode_research_reference(capture: CaptureResult) -> ReferencePixels:
+        try:
+            with Image.open(io.BytesIO(capture.data)) as image:
+                if image.format != "PNG" or image.size != (capture.width, capture.height):
+                    raise SourceCaptureProofError("d-reference-png-invalid")
+                image.load()
+                rgba = image.convert("RGBA").tobytes()
+        except SourceCaptureProofError:
+            raise
+        except Exception:  # noqa: BLE001 - Pillow error text may include source details.
+            raise SourceCaptureProofError("d-reference-png-decode-failed") from None
+        if len(rgba) != capture.width * capture.height * 4:
+            raise SourceCaptureProofError("d-reference-pixel-buffer-invalid")
+        return ReferencePixels(width=capture.width, height=capture.height, rgba=rgba)
+
+    async def _research_private_snapshot(
+        self, page: Page, part: Mapping[str, object]
+    ) -> Mapping[str, object] | None:
+        locator = await self._pinned_canvas_locator(page, part)
+        value = await locator.evaluate(
+            "canvas => window.__ejSourceObserver?.privateCurrentSourceForTarget?.(canvas) ?? null"
+        )
+        return value if isinstance(value, Mapping) else None
+
+    async def _research_compare_source_capture(self, page: Page) -> SourceResearchOutcome:
+        """Compare the narrowly observed C candidate while leaving normal D default.
+
+        Call after the adapter's normal initialize/identity path. This internal
+        research entry returns C only after all visible spread parts pass the
+        bounded source-response, lineage, and pixel-comparison proof.
+        """
+
+        if page is not self._page or self._reader_path is None or self._reader_total is None:
+            raise UnknownPageStateError("ebookjapan Reader is not initialized on this Page")
+        if self._source_request_ledger is None:
+            raise UnknownPageStateError("ebookjapan source request observer is unavailable")
+        if self._pending_identity_key is None:
+            raise UnknownPageStateError("ebookjapan current Reader identity was not read")
+        reader_path = self._reader_path
+        current = self._expected_current
+        total = self._reader_total
+        before = await self._read_ready_frame(
+            page, expected_path=reader_path, current=current, total=total
+        )
+        identity_key = self._frame_nodes_key(before)
+        if identity_key != self._pending_identity_key:
+            raise UnknownPageStateError("ebookjapan visible page changed before source comparison")
+        before_signature = self._frame_paint_signature(before)
+        parts = before.get("parts")
+        if not isinstance(parts, list) or not 1 <= len(parts) <= 2:
+            raise UnknownPageStateError("ebookjapan current spread layout is incomplete")
+        _ids, _ordinals = self._validate_capture_sequence(parts, current=current)
+        viewport_before_value = await page.evaluate("() => ({width:innerWidth,height:innerHeight})")
+        if (
+            not isinstance(viewport_before_value, Mapping)
+            or type(viewport_before_value.get("width")) is not int
+            or type(viewport_before_value.get("height")) is not int
+        ):
+            raise UnknownPageStateError("ebookjapan Reader viewport is unavailable")
+        viewport_before = (viewport_before_value["width"], viewport_before_value["height"])
+
+        pre_entries: list[dict[str, object]] = []
+        source_failure: str | None = None
+        limited_profile: str | None = None
+        loaded_by_request: dict[int, tuple[object, BoundResponseFacts, object, str]] = {}
+        loaded_request_by_src: dict[str, int] = {}
+        comparison_parts: list[SourceResearchPartProof] = []
+        d_captures: tuple[CaptureResult, ...] | None = None
+        try:
+            try:
+                for index, part in enumerate(parts):
+                    if not isinstance(part, Mapping):
+                        raise UnknownPageStateError("ebookjapan visible part descriptor is malformed")
+                    private = await self._research_private_snapshot(page, part)
+                    if private is None:
+                        raise SourceCaptureProofError("source-hook-snapshot-unavailable")
+                    source_image = self._research_source_image(private)
+                    pre_entries.append(
+                        {
+                            "part_index": index,
+                            "part": part,
+                            "private": private,
+                            "image": source_image,
+                            "image_identity": self._research_image_identity(source_image),
+                        }
+                    )
+                for entry in pre_entries:
+                    private = entry["private"]
+                    source, binding, target, _attrs, _draw_attrs = self._research_candidate_snapshot(private)
+                    if not limited_history_profile_matches(
+                        private["snapshot"]["health"].get("instrumentationDiagnostic")
+                    ):
+                        raise SourceCaptureProofError("source-limited-history-profile-unsupported")
+                    limited_profile = LIMITED_HISTORY_PROFILE
+                    lineage = entry["image"]
+                    current_src = str(lineage["currentSrc"])
+                    if current_src in loaded_request_by_src:
+                        request_id = loaded_request_by_src[current_src]
+                        loaded, response_facts, response_binding, _bound_src = loaded_by_request[request_id]
+                    else:
+                        response_binding, response_facts = self._source_request_ledger.bind_current_src(
+                            current_src
+                        )
+                        request_id = response_facts.request_id
+                        self._source_request_ledger.mark_body_attempted(request_id)
+                        loaded = await read_bound_response_body_once(
+                            response_binding, timeout_seconds=5.0
+                        )
+                        self._source_request_ledger.validate_held_binding(
+                            current_src,
+                            request_id=request_id,
+                            response_id=response_facts.response_id,
+                            request_object=response_binding.request_object,
+                            response_object=response_binding.response_object,
+                            document_token=response_binding.document_token,
+                        )
+                        loaded_by_request[request_id] = (
+                            loaded,
+                            response_facts,
+                            response_binding,
+                            current_src,
+                        )
+                        loaded_request_by_src[current_src] = request_id
+                    entry["response_facts"] = response_facts
+                    entry["response_request_id"] = request_id
+                if self._source_request_ledger.overflowed:
+                    raise SourceObserverProofError("source-response-tracker-overflow")
+                for _loaded, facts, held_binding, current_src in loaded_by_request.values():
+                    self._source_request_ledger.validate_held_binding(
+                        current_src,
+                        request_id=facts.request_id,
+                        response_id=facts.response_id,
+                        request_object=held_binding.request_object,
+                        response_object=held_binding.response_object,
+                        document_token=held_binding.document_token,
+                    )
+            except SourceObserverProofError as exc:
+                if exc.reason_code == "source-access-stop":
+                    raise UnknownPageStateError(
+                        "ebookjapan source request received an AccessGuard stop response"
+                    ) from None
+                if exc.reason_code == "source-document-navigation-pending":
+                    raise UnknownPageStateError(
+                        "ebookjapan Reader navigation is pending during source comparison"
+                    ) from None
+                source_failure = exc.reason_code
+            except SourcePixelProofError as exc:
+                source_failure = exc.reason_code
+            except SourceCaptureProofError as exc:
+                source_failure = exc.reason_code
+
+            # Always take one fresh, atomic D pair. This is also the whole-spread
+            # fallback when C proof is unavailable.
+            self._research_capture_active = True
+            try:
+                d_captures = await self.capture_page(page)
+                d_references = self._last_d_reference_captures
+            finally:
+                self._research_capture_active = False
+            if not d_captures or not d_references or len(d_captures) != len(parts) or len(d_references) != len(parts):
+                raise UnknownPageStateError("ebookjapan fresh atomic D references are unavailable")
+
+            if self._source_request_ledger.access_stop_status in (403, 429):
+                raise UnknownPageStateError(
+                    "ebookjapan source request received an AccessGuard stop response"
+                )
+            if self._source_request_ledger.pending_main_navigation:
+                raise UnknownPageStateError(
+                    "ebookjapan Reader navigation is pending after D capture"
+                )
+            if source_failure is None:
+                for _loaded, facts, held_binding, current_src in loaded_by_request.values():
+                    try:
+                        self._source_request_ledger.validate_held_binding(
+                            current_src,
+                            request_id=facts.request_id,
+                            response_id=facts.response_id,
+                            request_object=held_binding.request_object,
+                            response_object=held_binding.response_object,
+                            document_token=held_binding.document_token,
+                        )
+                    except SourceObserverProofError as exc:
+                        if exc.reason_code in {
+                            "source-access-stop",
+                            "source-document-navigation-pending",
+                        }:
+                            raise UnknownPageStateError(
+                                "ebookjapan source response became unsafe during D capture"
+                            ) from None
+                        source_failure = exc.reason_code
+                        break
+
+            post_entries: list[dict[str, object]] = []
+            if pre_entries:
+                for entry in pre_entries:
+                    part = entry["part"]
+                    post_private = await self._research_private_snapshot(page, part)
+                    if post_private is None:
+                        raise UnknownPageStateError("ebookjapan source image disappeared during native fit")
+                    try:
+                        post_image = self._research_source_image(post_private)
+                    except SourceCaptureProofError:
+                        raise UnknownPageStateError(
+                            "ebookjapan source image identity became unsafe during native fit"
+                        ) from None
+                    if self._research_image_identity(post_image) != entry["image_identity"]:
+                        raise UnknownPageStateError(
+                            "ebookjapan source identity or natural resolution changed during native fit"
+                        )
+                    post_entries.append(
+                        {
+                            **entry,
+                            "post_private": post_private,
+                            "post_image": post_image,
+                            "post_binding_signature": self._research_target_binding_signature(post_private),
+                        }
+                    )
+
+            if source_failure is not None or len(post_entries) != len(parts):
+                return SourceResearchOutcome(
+                    status="D_FALLBACK",
+                    failure_reason=source_failure or "source-lineage-unavailable",
+                    limited_history_profile=limited_profile,
+                    paint_history_complete=False,
+                    parts=(),
+                    captures=d_captures,
+                    fallback_captures=d_captures,
+                )
+
+            viewport_after_value = await page.evaluate("() => ({width:innerWidth,height:innerHeight})")
+            if (
+                not isinstance(viewport_after_value, Mapping)
+                or type(viewport_after_value.get("width")) is not int
+                or type(viewport_after_value.get("height")) is not int
+            ):
+                raise UnknownPageStateError("ebookjapan fitted Reader viewport is unavailable")
+            viewport_after = (viewport_after_value["width"], viewport_after_value["height"])
+            after_capture_frame = await self._read_ready_frame(
+                page, expected_path=reader_path, current=current, total=total
+            )
+            if (
+                self._frame_nodes_key(after_capture_frame) != identity_key
+                or self._frame_paint_signature(after_capture_frame) != self._last_capture_paint_signature
+            ):
+                raise UnknownPageStateError("ebookjapan frame changed after the D reference pair")
+
+            decoded_by_request: dict[int, object] = {}
+            for entry in post_entries:
+                private = entry["post_private"]
+                source, binding, target, context_attributes, draw_attributes = self._research_candidate_snapshot(private)
+                source_image = entry["post_image"]
+                safe_source_images = source.get("sourceImages")
+                if (
+                    not isinstance(safe_source_images, list)
+                    or len(safe_source_images) != 1
+                    or not isinstance(safe_source_images[0], Mapping)
+                    or safe_source_images[0].get("imageId") != source_image.get("imageId")
+                    or safe_source_images[0].get("width") != source_image.get("width")
+                    or safe_source_images[0].get("height") != source_image.get("height")
+                ):
+                    raise UnknownPageStateError("ebookjapan source image dimensions no longer match the captured ROI")
+                request_id = entry.get("response_request_id")
+                response_facts = entry.get("response_facts")
+                if type(request_id) is not int or not isinstance(response_facts, BoundResponseFacts):
+                    raise SourceCaptureProofError("source-response-binding-unavailable")
+                if request_id not in decoded_by_request:
+                    loaded = loaded_by_request[request_id][0]
+                    decoded_by_request[request_id] = decode_webp_source(
+                        loaded.data,
+                        source_mime=loaded.mime_type,
+                        expected_dimensions=(source_image["naturalWidth"], source_image["naturalHeight"]),
+                    )
+                candidate = reconstruct_roi_part(
+                    decoded_by_request[request_id],
+                    target_dimensions=(target.get("width"), target.get("height")),
+                    rois=source.get("roiRows"),
+                )
+                part_index = entry["part_index"]
+                if type(part_index) is not int or part_index >= len(d_captures):
+                    raise SourceCaptureProofError("source-part-order-invalid")
+                first_reference = self._decode_research_reference(d_captures[part_index])
+                second_reference = self._decode_research_reference(d_references[part_index])
+                comparison = compare_candidate_rgba(
+                    candidate,
+                    first_reference,
+                    second_reference,
+                    tolerance=2,
+                )
+                encoded = encode_lossless_candidate(candidate)
+                target_binding = {
+                    "canvasObjectId": target.get("canvasObjectId"),
+                    "bindingToken": target.get("bindingToken"),
+                    "resetSequence": target.get("resetSequence"),
+                    "lastDrawSequence": target.get("lastDrawSequence"),
+                    "dDrawGeneration": binding.get("dDrawGeneration"),
+                }
+                proof = comparison_proof_fields(
+                    part_index=part_index,
+                    candidate=candidate,
+                    encoded=encoded,
+                    comparison=comparison,
+                    response=response_facts,
+                    source_binding=source,
+                    target_binding=target_binding,
+                    default_context_attributes_valid=True,
+                    context_attributes=context_attributes,
+                    draw_attributes=draw_attributes,
+                    source_image_identity_stable=True,
+                    source_natural_dimensions_stable=True,
+                    viewport_stable=True,
+                    viewport_before=viewport_before,
+                    viewport_after=viewport_after,
+                )
+                comparison_parts.append(proof)
+
+            # Re-read the frame and private binding after reconstruction and
+            # comparisons. Any late draw, reset, source swap, or frame race is
+            # fatal instead of silently selecting either candidate.
+            final_frame = await self._read_ready_frame(
+                page, expected_path=reader_path, current=current, total=total
+            )
+            if (
+                self._frame_nodes_key(final_frame) != identity_key
+                or self._frame_paint_signature(final_frame) != self._last_capture_paint_signature
+            ):
+                raise UnknownPageStateError("ebookjapan current frame changed during source comparison")
+            for entry in post_entries:
+                final_private = await self._research_private_snapshot(page, entry["part"])
+                if final_private is None:
+                    raise UnknownPageStateError("ebookjapan source or target binding changed during comparison")
+                try:
+                    self._research_candidate_snapshot(final_private)
+                    final_image_identity = self._research_image_identity(
+                        self._research_source_image(final_private)
+                    )
+                except SourceCaptureProofError:
+                    raise UnknownPageStateError(
+                        "ebookjapan source health or identity became unsafe during comparison"
+                    ) from None
+                if (
+                    final_image_identity != entry["image_identity"]
+                    or self._research_target_binding_signature(final_private)
+                    != entry["post_binding_signature"]
+                ):
+                    raise UnknownPageStateError("ebookjapan source or target binding changed during comparison")
+
+            if self._source_request_ledger.access_stop_status in (403, 429):
+                raise UnknownPageStateError(
+                    "ebookjapan source request received an AccessGuard stop response"
+                )
+            for _loaded, facts, held_binding, current_src in loaded_by_request.values():
+                try:
+                    self._source_request_ledger.validate_held_binding(
+                        current_src,
+                        request_id=facts.request_id,
+                        response_id=facts.response_id,
+                        request_object=held_binding.request_object,
+                        response_object=held_binding.response_object,
+                        document_token=held_binding.document_token,
+                    )
+                except SourceObserverProofError as exc:
+                    if exc.reason_code in {
+                        "source-access-stop",
+                        "source-document-navigation-pending",
+                    }:
+                        raise UnknownPageStateError(
+                            "ebookjapan source response became unsafe before C comparison return"
+                        ) from None
+                    source_failure = exc.reason_code
+                    break
+            if source_failure is not None:
+                return SourceResearchOutcome(
+                    status="D_FALLBACK",
+                    failure_reason=source_failure,
+                    limited_history_profile=LIMITED_HISTORY_PROFILE,
+                    paint_history_complete=False,
+                    parts=tuple(comparison_parts),
+                    captures=d_captures,
+                    fallback_captures=d_captures,
+                )
+
+            all_passed = len(comparison_parts) == len(parts) and all(
+                proof.comparison_passed
+                and proof.d_reference_pair_exact
+                and proof.dimensions_exact
+                and proof.alpha_mismatch_pixels == 0
+                and proof.output_roundtrip_exact
+                for proof in comparison_parts
+            )
+            if not all_passed:
+                return SourceResearchOutcome(
+                    status="D_FALLBACK",
+                    failure_reason="source-pixel-equivalence-failed",
+                    limited_history_profile=LIMITED_HISTORY_PROFILE,
+                    paint_history_complete=False,
+                    parts=tuple(comparison_parts),
+                    captures=d_captures,
+                    fallback_captures=d_captures,
+                )
+            return SourceResearchOutcome(
+                status="C_VERIFIED",
+                failure_reason=None,
+                limited_history_profile=LIMITED_HISTORY_PROFILE,
+                paint_history_complete=False,
+                parts=tuple(comparison_parts),
+                captures=tuple(proof.capture for proof in comparison_parts),
+            )
+        except SourceObserverProofError as exc:
+            if exc.reason_code == "source-access-stop":
+                raise UnknownPageStateError(
+                    "ebookjapan source request received an AccessGuard stop response"
+                ) from None
+            raise UnknownPageStateError(
+                "ebookjapan source comparison encountered an incomplete runtime proof"
+            ) from None
+        except SourcePixelProofError as exc:
+            # An incomplete WebP/ROI/pixel proof can use only a fresh, already
+            # validated D pair, handled above before C reconstruction starts.
+            if d_captures:
+                return SourceResearchOutcome(
+                    status="D_FALLBACK",
+                    failure_reason=exc.reason_code,
+                    limited_history_profile=limited_profile,
+                    paint_history_complete=False,
+                    parts=tuple(comparison_parts),
+                    captures=d_captures,
+                    fallback_captures=d_captures,
+                )
+            raise UnknownPageStateError(
+                "ebookjapan source pixel proof failed before a fresh D pair was available"
+            ) from None
+        except SourceCaptureProofError as exc:
+            if d_captures:
+                return SourceResearchOutcome(
+                    status="D_FALLBACK",
+                    failure_reason=exc.reason_code,
+                    limited_history_profile=limited_profile,
+                    paint_history_complete=False,
+                    parts=tuple(comparison_parts),
+                    captures=d_captures,
+                    fallback_captures=d_captures,
+                )
+            raise UnknownPageStateError(
+                "ebookjapan source comparison proof failed before a fresh D pair was available"
+            ) from None
+        finally:
+            self._research_capture_active = False
+            self._last_d_reference_captures = ()
+            loaded_by_request.clear()
+            loaded_request_by_src.clear()
+            pre_entries.clear()
+            if "decoded_by_request" in locals():
+                decoded_by_request.clear()
 
     async def _hide_toolbar_for_capture(
         self,

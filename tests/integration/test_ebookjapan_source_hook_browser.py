@@ -103,6 +103,11 @@ async def _install_diagnostic_runtime(page: Page, *, shadow: dict[str, object]) 
           const probe=new OffscreenCanvas(1,1),prototype=Object.getPrototypeOf(probe.getContext('2d'));
           for(const name of shadow.methods||[])
             Object.defineProperty(prototype,name,{configurable:true,writable:true,value:function diagnosticShadow(){}});
+          for(const [name,sourceName] of Object.entries(shadow.nativeAliases||[])){
+            const descriptor=Object.getOwnPropertyDescriptor(prototype,sourceName);
+            if(typeof descriptor?.value==='function')
+              Object.defineProperty(prototype,name,{configurable:true,writable:true,value:descriptor.value});
+          }
           if(shadow.state){
             const descriptor=shadow.state.missing
               ?{configurable:true,get(){return 'none';},set:undefined}
@@ -467,6 +472,87 @@ async def test_unknown_shadow_name_is_counted_but_never_returned(source_page: Pa
         encoded = json.dumps(diagnostic)
         assert snapshot["binding"]["current"] is False
         assert diagnostic["otherMethodCount"] >= 1
+        assert diagnostic["offscreenInstallOtherCount"] == 1
+        assert diagnostic["currentSlotOtherCount"] == 0
+        assert diagnostic["unknownMethodSlotCount"] == 1
+        assert diagnostic["unknownMethodSlotDescriptorsOmittedCount"] == 0
+        assert diagnostic["unknownMethodSlotOverflow"] is False
+        slot = diagnostic["unknownMethodSlotDescriptors"][0]
+        assert slot["opaqueId"] == "slot-1"
+        assert slot["offscreenInstallObserved"] is True
+        assert slot["currentSlotMismatchObserved"] is False
+        assert slot["descriptorKind"] == "data"
+        assert slot["valueType"] == "function"
+        assert slot["functionNative"] is False
+        assert slot["writable"] is True
+        assert slot["configurable"] is True
         assert private_name not in encoded
+    finally:
+        await page.close()
+
+
+async def test_unknown_late_slot_mismatch_is_separate_and_keeps_opaque_id_stable(
+    source_page: Page,
+) -> None:
+    private_name = "privateSecretLateSlot_23c1"
+    page, initial = await _run_shadow_diagnostic(
+        source_page, shadow={"nativeAliases": {private_name: "measureText"}}
+    )
+    try:
+        initial_diagnostic = initial["health"]["instrumentationDiagnostic"]
+        assert initial_diagnostic["offscreenInstallOtherCount"] == 0
+        assert initial_diagnostic["currentSlotOtherCount"] == 0
+
+        first = await page.evaluate(
+            """({methodName})=>{
+              const prototype=Object.getPrototypeOf(window.__ejTestSourceContext);
+              Object.defineProperty(prototype,methodName,{configurable:true,writable:true,value:function lateReplacement(){}});
+              return window.__ejSourceObserver.targetSnapshot(window.__ejTestTarget);
+            }""",
+            {"methodName": private_name},
+        )
+        second = await page.evaluate(
+            "window.__ejSourceObserver.targetSnapshot(window.__ejTestTarget)"
+        )
+        first_diagnostic = first["health"]["instrumentationDiagnostic"]
+        second_diagnostic = second["health"]["instrumentationDiagnostic"]
+        first_slot = first_diagnostic["unknownMethodSlotDescriptors"][0]
+        second_slot = second_diagnostic["unknownMethodSlotDescriptors"][0]
+        encoded = json.dumps(second_diagnostic)
+
+        assert first["binding"]["current"] is False
+        assert second["binding"]["current"] is False
+        assert first_diagnostic["offscreenInstallOtherCount"] == 0
+        assert second_diagnostic["offscreenInstallOtherCount"] == 0
+        assert first_diagnostic["currentSlotOtherCount"] == 1
+        assert second_diagnostic["currentSlotOtherCount"] == 1
+        assert first_diagnostic["unknownMethodSlotCount"] == 1
+        assert first_slot["opaqueId"] == second_slot["opaqueId"] == "slot-1"
+        assert first_slot["offscreenInstallObserved"] is False
+        assert first_slot["currentSlotMismatchObserved"] is True
+        assert first_slot["functionNative"] is False
+        assert first_slot["writable"] is True
+        assert first_slot["configurable"] is True
+        assert private_name not in encoded
+    finally:
+        await page.close()
+
+
+async def test_unknown_slot_inventory_cap_reports_omitted_count(source_page: Page) -> None:
+    private_names = [f"privateSecretDiagnosticSlot_{index}" for index in range(10)]
+    page, snapshot = await _run_shadow_diagnostic(
+        source_page, shadow={"methods": private_names}
+    )
+    try:
+        diagnostic = snapshot["health"]["instrumentationDiagnostic"]
+        encoded = json.dumps(diagnostic)
+        assert snapshot["binding"]["current"] is False
+        assert diagnostic["offscreenInstallOtherCount"] == 10
+        assert diagnostic["currentSlotOtherCount"] == 0
+        assert diagnostic["unknownMethodSlotCount"] == 10
+        assert len(diagnostic["unknownMethodSlotDescriptors"]) == 8
+        assert diagnostic["unknownMethodSlotDescriptorsOmittedCount"] == 2
+        assert diagnostic["unknownMethodSlotOverflow"] is False
+        assert all(name not in encoded for name in private_names)
     finally:
         await page.close()
