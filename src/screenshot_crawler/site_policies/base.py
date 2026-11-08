@@ -11,7 +11,7 @@ from typing import Literal
 from screenshot_crawler.catalog.models import Source
 
 BatchAccessStrategy = Literal["direct", "quota"]
-BatchOrdering = Literal["catalog", "published_at"]
+BatchOrdering = Literal["catalog", "published_at", "display_position"]
 
 
 class SitePolicyError(RuntimeError):

@@ -4,7 +4,7 @@ Status: **ISOLATED FULL/PLAN PREFLIGHT VERIFIED / PAGE CAPTURE PENDING / FULL ST
 
 ## Current checkpoint (2026-11-08)
 
-In a fresh isolated environment, Full 17 and Plan 17 passed. Evidence: `output/ebookjapan_experiment/e2e/r/full-discovery-stage05-check.json` (SHA-256 `7b8ffde11bee85b21514e412eff97e8ecdf8272bf303f3408103ea66b6c2836b`). The inventory contained 26 records and 17 distinct owned Source/Items; all Items remained pending and 0 CrawlRun rows and 0 Artifact rows were created. No page capture has run in this Stage 05 environment.
+In a fresh isolated environment, Full 17 and Plan 17 passed. Evidence: `output/ebookjapan_experiment/e2e/r/full-discovery-stage05-check.json` (SHA-256 `7b8ffde11bee85b21514e412eff97e8ecdf8272bf303f3408103ea66b6c2836b`). The inventory contained 26 records and 17 distinct owned Source/Items; all Items remained pending and 0 CrawlRun rows and 0 Artifact rows were created. After the ordering fix, a normal read-only CLI Plan returned 17 candidates with Angel 10 followed by Muda positions 1 through 16. Catalog SHA remained `4d839d7f34b4a695d31b68b5ba1b79afc7978e7bb656a0d74d1441682262e752`; evidence is `stage05-plan-order-20261108-implemented.json` (SHA-256 `787492261ea2adae7922360b8ea9aab10c177e8aff8b682d901f12cbc36c2cf4`). The prior `stage05-plan-order-check-20261108.json` recorded the pre-fix reverse order and is superseded. No page capture has run in this Stage 05 environment.
 
 Stage 04 context: run 4 reached END after 287 ordered D pages and produced an isolated 209,716,162-byte ZIP (SHA-256 `364623441ab91a0aa5638bf7d4260822d8534e4b3c5a9f2219eae2fd698e71ae`) with manifest SHA-256 `e8a1c37e9f709089f733f1ee8e4a44f105bffa8a41b94681e5d714b73b372c80`. Strict ZIP audit passed 11 checks; independent current-ZIP audit and Reviewer B0 were accepted. Full details are in `../PROGRESS.md`.
 
@@ -26,7 +26,7 @@ Stage 04 context: run 4 reached END after 287 ordered D pages and produced an is
 ## Test B — ムダヅモ無き改革（全16巻所有）
 
 1. `books/all/115888/`を登録しFull。**16件がowned**、1～16巻の公式順に`display_position` / 巻metadataが正しい。
-2. Batch Plan 16件。まず`--limit 1`の本番経路で1巻を確認し、次に順次16巻へ広げる。異なる読書レイアウトがあればclass単位のViewer・source-native gateを再評価。
+2. Batch Plan 16件を`display_position` 1～16の順で確認する。`Source.id`が逆順でも巻順の根拠にしない。まず`--limit 1`の本番経路でposition 1を確認し、次に順次16巻へ広げる。異なる読書レイアウトがあればclass単位のViewer・source-native gateを再評価。
 3. すべての巻で`END`、正しいZIP件数、Manifest imagesの実ファイル/format/hash、ページ順・欠損/重複/本文の混入、Catalog completedとArtifact locatorを照合。
 4. 失敗・権利・表示構造変更時は当該itemが未完了/診断保持になり、勝手に次巻購入や危険な改変をしない。**16完了でないなら「全巻E2E PASS」と報告しない**。
 

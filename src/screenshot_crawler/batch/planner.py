@@ -352,7 +352,8 @@ class BatchPlanner:
                         ordered_selections.append(selection)
                     elif selection.item.id in accepted_ids:
                         ordered_selections.append(next(quota_iter))
-            if policy.batch_ordering() == "published_at":
+            ordering = policy.batch_ordering()
+            if ordering == "published_at":
                 direct_selections = [
                     selection
                     for selection in ordered_selections
@@ -367,6 +368,33 @@ class BatchPlanner:
                     _order_by_published_at_within_work(direct_selections)
                     + _order_by_published_at_within_work(quota_selections)
                 )
+            elif ordering == "display_position":
+                direct_selections = iter(
+                    _order_by_display_position_within_work_and_key(
+                        [
+                            selection
+                            for selection in ordered_selections
+                            if not selection.decision.consumes_quota
+                        ]
+                    )
+                )
+                quota_selections = iter(
+                    _order_by_display_position_within_work_and_key(
+                        [
+                            selection
+                            for selection in ordered_selections
+                            if selection.decision.consumes_quota
+                        ]
+                    )
+                )
+                # Refill the existing direct/quota slots so ordering cannot
+                # move a candidate across the planner's access-pool boundary.
+                ordered_selections = [
+                    next(quota_selections)
+                    if selection.decision.consumes_quota
+                    else next(direct_selections)
+                    for selection in ordered_selections
+                ]
             for selection in ordered_selections:
                 plan.candidates.append(
                     _candidate_from_selection(
@@ -691,6 +719,46 @@ def _order_by_published_at_within_work(selections: list[_Selection]) -> list[_Se
             )
         )
     return ordered
+
+
+def _order_by_display_position_within_work_and_key(
+    selections: list[_Selection],
+) -> list[_Selection]:
+    """Keep Work and Discovery-key blocks, then stably sort each by position.
+
+    Work and key order come from first appearance in the current candidate
+    pool. A NULL discovery key is one group and keeps its first-appearance
+    position. Missing or invalid positions stay stable at the group end.
+    """
+
+    by_work: dict[int, list[_Selection]] = defaultdict(list)
+    work_order: list[int] = []
+    for selection in selections:
+        work_id = selection.work.id
+        if work_id not in by_work:
+            work_order.append(work_id)
+        by_work[work_id].append(selection)
+
+    ordered: list[_Selection] = []
+    for work_id in work_order:
+        by_key: dict[str | None, list[_Selection]] = defaultdict(list)
+        key_order: list[str | None] = []
+        for selection in by_work[work_id]:
+            key = selection.source.discovery_key
+            if key not in by_key:
+                key_order.append(key)
+            by_key[key].append(selection)
+
+        for key in key_order:
+            ordered.extend(sorted(by_key[key], key=_display_position_order_key))
+    return ordered
+
+
+def _display_position_order_key(selection: _Selection) -> tuple[int, int]:
+    position = selection.source.display_position
+    if type(position) is int and position >= 1:
+        return (0, position)
+    return (1, 0)
 
 
 def _parse_episode_order_key(value: str | None) -> tuple[int, int] | None:

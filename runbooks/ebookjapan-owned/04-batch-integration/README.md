@@ -17,10 +17,13 @@ Status: **STAGE 04 END+ZIP VERIFIED / STRICT AND INDEPENDENT AUDITS PASSED / REV
 
 | Source状態 | Batch決定 |
 | --- | --- |
-| `available=True` かつ `access_mode=owned` | `eligible=True, access_strategy=direct, consumes_quota=False` |
+| `available=True`、`access_mode=owned`、正の整数`display_position` | `eligible=True, access_strategy=direct, consumes_quota=False` |
+| `available=True`、`access_mode=owned`、位置がNULL/不正 | `owned_display_position_invalid`。Full Discoveryで位置が修復されるまで候補外 |
 | `available=False` | `unavailable` |
 | `paid/free/quota/unknown/rental/grant` その他 | `eligible=False`。silent fallbackしない |
 | quota/resource | `available_quota=None`、消費なし、grant-only利用不可 |
+
+`EbookJapanSitePolicy.batch_ordering()`は`display_position`を明示opt-inする。Batch Planは既存Work順と各Work内の初出discovery-key順を保ち、各key block内を正の整数位置昇順に安定sortする。NULL keyも1つのgroupとして初出位置を保ち、位置不明はgroup末尾。`selected_keys`は従来どおり先に適用される。Source IDや`archive_order`から巻順を推測せず、`archive_order`はZIP naming専用である。
 
 `SitePolicy` はCatalogの適格性だけを決める。これが購入済みの**現在の権利確認**を代替してはならない。`BatchExecutor` から通常の`configure_target_identity`と`initialize`/direct-owned入口で同じ巻IDのowned状態を再確認する。
 

@@ -105,6 +105,24 @@ The AccessGuard watches only `ebookjapan.yahoo.co.jp` and stops on a relevant
 403, 429, challenge or CAPTCHA. The adapter performs no DRM bypass, token
 extraction, key extraction or decryption. Live evidence verifies Full Discovery and the accepted one-work Angel 10 D baseline. Stage 04 Batch run 4 reached strict END after 287 ordered D pages and produced an isolated 209,716,162-byte ZIP with retained manifest; the strict audit passed 11 checks and independent current-ZIP review plus Reviewer B0 were accepted. Three earlier 287-page terminal failures remain historical; the third has no terminal snapshot. Repeat Full preserved identities, history, ZIP, and status hash/mtime; repeat Batch yielded zero new runs, HTTP requests, or artifacts and unchanged Catalog SHA. Actual GUI validation on isolated clone `gui/r11` used real MainWindow/Controller/worker without fakes and succeeded with 1 skipped, 0 started, 0 HTTP. Stage 05 isolated Full 17 / Plan 17 preflight passed; 26 inventory entries contained 17 distinct owned Source/Items, all pending, 0 CrawlRun rows and 0 Artifact rows. No page capture has run. Affected tests: 162 passed, 0 skipped (158 warnings); independent validation 35 passed, 0 skipped; Ruff passed. The full suite remains incomplete as recorded in `PROGRESS.md`.
 
+## Batch plan order
+
+The EbookJapan Site Policy opts into `display_position` candidate ordering.
+Within each Work, first-seen `discovery_key` groups remain contiguous and keep
+their first-appearance order; candidates within a group sort by positive
+integer `Source.display_position`, ascending and stable for ties. A NULL key is
+one group at its first-appearance position among explicit keys, and missing or
+invalid positions remain stable at the end of their group. `selected_keys` continues to filter the plan. An
+owned Source without a positive integer position is skipped with
+`owned_display_position_invalid` until Full Discovery repairs the Catalog
+metadata. `archive_order` is used for archive naming and does not determine
+Batch execution order.
+
+The normal CLI Plan was rechecked on the isolated Stage 05 Catalog: 17
+candidates appeared as Angel 10, then Muda positions 1 through 16. The Catalog
+SHA was unchanged, and the read-only evidence is recorded in the owned
+runbook. This confirms Plan ordering only; no capture was run.
+
 ## Live verification
 
 On 2026-11-07, the existing CLI Full path completed against two isolated

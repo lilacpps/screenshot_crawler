@@ -1776,6 +1776,22 @@ Phase 5B: existing crawl / persistence
 reservations. `BatchPlan.quota_remaining` is the residual after the plan's
 in-memory reservations; neither value is written to Catalog.
 
+### 11.1.1 Site Policy batch ordering
+
+`SitePolicy.batch_ordering()` is an explicit opt-in for a site's candidate
+order. The default `catalog` mode keeps the existing planner order, and the
+existing `published_at` mode keeps its current behavior. The optional
+`display_position` mode preserves each candidate pool's Work and
+`discovery_key` first-appearance blocks, then sorts only within each
+`(Work, discovery_key)` block by positive integer `Source.display_position`
+ascending. Ties are stable. A `NULL` discovery key forms one group at its
+first-appearance position among all keys, and missing or invalid positions
+remain stable at that group's tail. The direct and quota pools are ordered separately and refilled into their
+existing pool slots, so ordering does not change quota admission, consumption,
+or access strategy. `selected_keys` filtering remains in effect before planning.
+This mode does not use Source IDs, publication dates, or `archive_order` as a
+fallback; `archive_order` remains an archive naming input.
+
 When more than one pending item needs a new quota consumption, the Planner
 groups quota-consuming candidates by `source.discovery_key`. Groups are
 processed in the first Catalog-registration order of each Discovery group,

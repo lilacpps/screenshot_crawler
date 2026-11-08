@@ -26,6 +26,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyRegistry,
     ZeblackSitePolicy,
 )
+from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
@@ -59,6 +60,231 @@ def test_access_resource_contract_is_policy_owned() -> None:
     )
     assert MangaOneSitePolicy().supported_access_resources() == ()
     assert BookWalkerSitePolicy().ordered_access_resource_passes() == ()
+
+
+def test_display_position_order_keeps_work_key_blocks_and_unknowns_stable(
+    tmp_path: Path,
+) -> None:
+    class DisplayPositionPolicy(SitePolicy):
+        site = "display-position-test"
+
+        def batch_ordering(self):
+            return "display_position"
+
+        def evaluate(self, source, *, now, quota_available):
+            del now, quota_available
+            if source.site != self.site:
+                return PolicyDecision(False, None, "wrong_site")
+            if not source.available:
+                return PolicyDecision(False, None, "unavailable")
+            if source.access_mode == "quota":
+                return PolicyDecision(
+                    True,
+                    "quota",
+                    "test_quota_candidate",
+                    consumes_quota=True,
+                    quota_resource="test_resource",
+                )
+            return PolicyDecision(True, "direct", "test_direct_candidate")
+
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    first_work = catalog.create_work(WorkInput(work_key="work-first", title="First"))
+    second_work = catalog.create_work(WorkInput(work_key="work-second", title="Second"))
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="key-b",
+        work_key=first_work.work_key,
+        site="display-position-test",
+        url="https://example.invalid/first/b",
+        label="Key B",
+        archive_order=2,
+    )
+    watchlist.add(
+        key="key-a",
+        work_key=first_work.work_key,
+        site="display-position-test",
+        url="https://example.invalid/first/a",
+        label="Key A",
+        archive_order=1,
+    )
+    watchlist.add(
+        key="key-c",
+        work_key=second_work.work_key,
+        site="display-position-test",
+        url="https://example.invalid/second/c",
+        label="Key C",
+    )
+    watchlist.add(
+        key="key-d",
+        work_key=second_work.work_key,
+        site="display-position-test",
+        url="https://example.invalid/second/d",
+        label="Key D",
+    )
+
+    def add_candidate(
+        work: Work,
+        *,
+        key: str | None,
+        label: str,
+        position: int | None,
+    ) -> None:
+        item = catalog.create_item(
+            ItemInput(item_title=label, order_label=label), work_id=work.id
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="display-position-test",
+                external_id=label,
+                discovery_key=key,
+                access_mode="owned",
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://example.invalid/source/{label}"
+            ),
+            source_id=source.id,
+        )
+
+    # A NULL key first appears before key-b and keeps that group position.
+    add_candidate(first_work, key=None, label="first-null-4", position=4)
+    add_candidate(first_work, key="key-b", label="b-4", position=4)
+    add_candidate(first_work, key=None, label="first-null-2", position=2)
+    # key-b first appears before key-a, while archive_order and display_position
+    # would otherwise put key-a first and interleave their positions.
+    add_candidate(first_work, key="key-a", label="a-1", position=1)
+    add_candidate(first_work, key="key-b", label="b-2", position=2)
+    add_candidate(first_work, key="key-a", label="a-3", position=3)
+    # Position ties are stable. Here NULL first appears between key-c and key-d;
+    # its position stays in the middle even when another NULL source follows.
+    add_candidate(second_work, key="key-c", label="c-16", position=16)
+    add_candidate(second_work, key="key-c", label="c-1-first", position=1)
+    add_candidate(second_work, key="key-c", label="c-1-second", position=1)
+    add_candidate(second_work, key=None, label="middle-null-unknown-first", position=None)
+    add_candidate(second_work, key="key-d", label="d-1", position=1)
+    add_candidate(second_work, key=None, label="middle-null-1", position=1)
+    add_candidate(second_work, key=None, label="middle-null-unknown-second", position=None)
+
+    policies = SitePolicyRegistry()
+    policies.register("display-position-test", DisplayPositionPolicy)
+    planner = BatchPlanner(
+        catalog,
+        policies,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    plan = planner.plan(site="display-position-test", now=NOW)
+
+    assert [candidate.metadata["order"] for candidate in plan.candidates] == [
+        "first-null-2",
+        "first-null-4",
+        "b-2",
+        "b-4",
+        "a-1",
+        "a-3",
+        "c-1-first",
+        "c-1-second",
+        "c-16",
+        "middle-null-1",
+        "middle-null-unknown-first",
+        "middle-null-unknown-second",
+        "d-1",
+    ]
+
+
+def test_display_position_order_preserves_direct_quota_slots_and_quota_selection(
+    tmp_path: Path,
+) -> None:
+    class OneQuotaDisplayPositionPolicy(SitePolicy):
+        site = "display-position-quota-test"
+
+        def batch_ordering(self):
+            return "display_position"
+
+        def available_quota(self, sources, now):
+            del sources, now
+            return 1
+
+        def evaluate(self, source, *, now, quota_available):
+            del now, quota_available
+            if source.access_mode == "quota":
+                return PolicyDecision(
+                    True,
+                    "quota",
+                    "test_quota_candidate",
+                    consumes_quota=True,
+                    quota_resource="test_resource",
+                )
+            return PolicyDecision(True, "direct", "test_direct_candidate")
+
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="pool-work", title="Pool"))
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="pool-key",
+        work_key=work.work_key,
+        site="display-position-quota-test",
+        url="https://example.invalid/pool",
+        label="Pool",
+    )
+    for label, position, access_mode in (
+        ("direct-4", 4, "owned"),
+        ("quota-3", 3, "quota"),
+        ("direct-2", 2, "owned"),
+        ("quota-1", 1, "quota"),
+    ):
+        item = catalog.create_item(
+            ItemInput(item_title=label, order_key=f"{position:02d}", order_label=label),
+            work_id=work.id,
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="display-position-quota-test",
+                external_id=label,
+                discovery_key="pool-key",
+                access_mode=access_mode,
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://example.invalid/pool/{label}"
+            ),
+            source_id=source.id,
+        )
+
+    policies = SitePolicyRegistry()
+    policies.register("display-position-quota-test", OneQuotaDisplayPositionPolicy)
+    planner = BatchPlanner(
+        catalog,
+        policies,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    plan = planner.plan(site="display-position-quota-test", now=NOW)
+
+    assert [candidate.metadata["order"] for candidate in plan.candidates] == [
+        "direct-2",
+        "direct-4",
+        "quota-1",
+    ]
+    assert [candidate.access_strategy for candidate in plan.candidates] == [
+        "direct",
+        "direct",
+        "quota",
+    ]
+    assert sum(candidate.consumes_quota for candidate in plan.candidates) == 1
+    assert plan.quota_available == 1
+    assert plan.quota_remaining == 0
+    assert [(entry.reason, entry.source_id) for entry in plan.skipped] == [
+        ("quota_exhausted", 2)
+    ]
 
 
 def test_planner_rejects_unsupported_explicit_resource(tmp_path: Path) -> None:

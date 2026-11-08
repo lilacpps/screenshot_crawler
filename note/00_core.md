@@ -2843,6 +2843,15 @@ candidateを生成する。metadataは`Work.title` / `Work.author` / `Work.genre
 指定siteのSourceを持つItemだけを対象にし、Web targetだけを`priority ASC, target.id ASC`
 で選ぶ。`BatchCandidate`には`backend` / `target_key` / `locator`をsnapshotする。
 
+Site Policyの`batch_ordering()`はsite-localな順序要件を明示する。既存の`catalog`と
+`published_at`はその挙動を維持し、`display_position`は明示opt-inしたPolicyだけに適用する。
+このmodeは各direct/quota pool内でWorkと`discovery_key`の初出順を保ち、各組の中だけを
+正の整数`Source.display_position`昇順に安定sortする。同位置は入力順、`discovery_key=NULL`
+は1つのgroupとして他keyと同じ初出位置を保ち、位置不明・不正は同group末尾の安定順とする。poolをまたいで候補を移動せず、
+元のdirect/quota slot patternへ並べたpoolを戻すため、quota選択集合・消費・access strategyは
+変わらない。`selected_keys`のfilterも既存のplan前に適用する。`archive_order`はBatch候補順ではなく
+archive naming用の入力である。
+
 `BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はcandidateを1件ずつ既存
 `CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを知らず、Batch側だけが`item_id` /
 `source_id` / `target_id`とCatalog stateを扱う。

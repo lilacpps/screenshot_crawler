@@ -30,6 +30,7 @@ from screenshot_crawler.discovery.models import (
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 
@@ -811,6 +812,84 @@ def test_batch_plan_parser_accepts_site_and_catalog() -> None:
     assert defaults.site == "mangaone"
     assert defaults.catalog == Path("catalog.sqlite")
     assert custom.catalog == Path("custom.sqlite")
+
+
+def test_ebookjapan_cli_batch_plan_prints_listing_position_order(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="ebook-order", title="Order"))
+    by_position: dict[int, tuple[int, int]] = {}
+    for position in (2, 1):
+        item = catalog.create_item(
+            ItemInput(
+                item_title=f"Volume {position}",
+                order_label=f"{position}巻",
+            ),
+            work_id=work.id,
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="ebookjapan",
+                external_id=f"A{position:09d}",
+                discovery_key="ebook-order-key",
+                access_mode="owned",
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web",
+                locator=f"https://ebookjapan.yahoo.co.jp/books/{source.external_id}/",
+            ),
+            source_id=source.id,
+        )
+        by_position[position] = (item.id, source.id)
+
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    watchlist.add(
+        key="ebook-order-key",
+        work_key=work.work_key,
+        site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/115888/",
+        label="Order",
+    )
+    args = _parser().parse_args(
+        [
+            "batch",
+            "plan",
+            "--site",
+            "ebookjapan",
+            "--catalog",
+            str(catalog.path),
+            "--watchlist",
+            str(watchlist_path),
+            "--library-dir",
+            str(tmp_path / "Books"),
+        ]
+    )
+
+    cli._run_batch_plan(args)
+
+    candidate_lines = [
+        line.strip()
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("  item=")
+    ]
+    assert candidate_lines == [
+        (
+            f"item={by_position[1][0]} source={by_position[1][1]} 1巻 owned -> direct "
+            f"https://ebookjapan.yahoo.co.jp/books/{'A000000001'}/"
+        ),
+        (
+            f"item={by_position[2][0]} source={by_position[2][1]} 2巻 owned -> direct "
+            f"https://ebookjapan.yahoo.co.jp/books/{'A000000002'}/"
+        ),
+    ]
 
 
 def test_batch_policy_registry_contains_supported_sites() -> None:

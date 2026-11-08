@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyError,
     SitePolicyRegistry,
 )
+from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 11, 7, 12, tzinfo=JST)
@@ -30,6 +32,7 @@ def _source(
     available: bool = True,
     site: str = "ebookjapan",
     access_granted_until: str | None = None,
+    display_position: object = 10,
 ) -> Source:
     return Source(
         id=1,
@@ -47,7 +50,7 @@ def _source(
         published_at=None,
         created_at="2026-11-07T00:00:00+09:00",
         updated_at="2026-11-07T00:00:00+09:00",
-        display_position=10,
+        display_position=display_position,  # type: ignore[arg-type]
     )
 
 
@@ -68,6 +71,22 @@ def test_ebookjapan_policy_allows_only_available_catalog_owned_as_direct() -> No
         "catalog_owned_candidate",
         consumes_quota=False,
     )
+
+
+def test_ebookjapan_policy_opts_into_display_position_batch_ordering() -> None:
+    assert EbookJapanSitePolicy().batch_ordering() == "display_position"
+
+
+@pytest.mark.parametrize("position", [None, 0, -1, True, False, 1.5, "1"])
+def test_ebookjapan_policy_rejects_owned_source_with_invalid_display_position(
+    position: object,
+) -> None:
+    decision = _evaluate(_source(display_position=position))
+
+    assert decision.eligible is False
+    assert decision.access_strategy is None
+    assert decision.reason == "owned_display_position_invalid"
+    assert decision.consumes_quota is False
 
 
 @pytest.mark.parametrize(
@@ -98,8 +117,8 @@ def test_ebookjapan_policy_rejects_every_non_owned_mode(
 
 
 def test_ebookjapan_policy_rejects_unavailable_owned_and_wrong_site_sources() -> None:
-    unavailable = _evaluate(_source(available=False))
-    wrong_site = _evaluate(_source(site="comicdays"))
+    unavailable = _evaluate(_source(available=False, display_position=None))
+    wrong_site = _evaluate(_source(site="comicdays", display_position=None))
 
     assert (unavailable.eligible, unavailable.access_strategy, unavailable.reason) == (
         False,
@@ -113,6 +132,81 @@ def test_ebookjapan_policy_rejects_unavailable_owned_and_wrong_site_sources() ->
     )
     assert unavailable.consumes_quota is False
     assert wrong_site.consumes_quota is False
+
+
+def test_ebookjapan_plan_uses_listing_position_not_source_id_and_selected_keys(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(
+        WorkInput(work_key="muda16-order", title="Muda 16 order")
+    )
+    source_ids_by_position: dict[int, int] = {}
+    for position in range(16, 0, -1):
+        item = catalog.create_item(
+            ItemInput(
+                item_title=f"Volume {position}",
+                order_key=f"{position:02d}",
+                order_label=f"{position}巻",
+            ),
+            work_id=work.id,
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="ebookjapan",
+                external_id=f"A{115888000 + position:09d}",
+                discovery_key="muda16-order-key",
+                access_mode="owned",
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web",
+                locator=f"https://ebookjapan.yahoo.co.jp/books/115888/{source.external_id}/",
+            ),
+            source_id=source.id,
+        )
+        source_ids_by_position[position] = source.id
+
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="muda16-order-key",
+        work_key=work.work_key,
+        site="ebookjapan",
+        url="https://ebookjapan.yahoo.co.jp/books/all/115888/",
+        label="Muda 16 order",
+    )
+    policies = SitePolicyRegistry()
+    policies.register("ebookjapan", EbookJapanSitePolicy)
+    planner = BatchPlanner(
+        catalog,
+        policies,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+
+    before_plan_sha = hashlib.sha256(catalog.path.read_bytes()).hexdigest()
+    plan = planner.plan(site="ebookjapan", now=NOW)
+    selected_plan = planner.plan(
+        site="ebookjapan", selected_keys=["muda16-order-key"], now=NOW
+    )
+    after_plan_sha = hashlib.sha256(catalog.path.read_bytes()).hexdigest()
+
+    expected_source_ids = [source_ids_by_position[position] for position in range(1, 17)]
+    assert source_ids_by_position[1] > source_ids_by_position[16]
+    assert [candidate.source_id for candidate in plan.candidates] == expected_source_ids
+    assert [candidate.source_id for candidate in selected_plan.candidates] == expected_source_ids
+    assert [candidate.metadata["order"] for candidate in plan.candidates] == [
+        f"{position}巻" for position in range(1, 17)
+    ]
+    assert plan.quota_available is None
+    assert plan.quota_remaining is None
+    assert all(candidate.access_strategy == "direct" for candidate in plan.candidates)
+    assert all(not candidate.consumes_quota for candidate in plan.candidates)
+    assert after_plan_sha == before_plan_sha
 
 
 def test_ebookjapan_policy_exposes_no_quota_or_grant_only_path() -> None:

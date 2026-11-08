@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from screenshot_crawler.catalog.models import Source
-from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy, SitePolicyError
+from screenshot_crawler.site_policies.base import (
+    BatchOrdering,
+    PolicyDecision,
+    SitePolicy,
+    SitePolicyError,
+)
 
 
 class EbookJapanSitePolicy(SitePolicy):
@@ -17,6 +22,9 @@ class EbookJapanSitePolicy(SitePolicy):
     """
 
     site = "ebookjapan"
+
+    def batch_ordering(self) -> BatchOrdering:
+        return "display_position"
 
     def evaluate(
         self,
@@ -33,6 +41,8 @@ class EbookJapanSitePolicy(SitePolicy):
         if not source.available:
             return PolicyDecision(False, None, "unavailable")
         if source.access_mode == "owned":
+            if type(source.display_position) is not int or source.display_position < 1:
+                return PolicyDecision(False, None, "owned_display_position_invalid")
             return PolicyDecision(
                 True,
                 "direct",
