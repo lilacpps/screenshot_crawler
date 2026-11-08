@@ -34,6 +34,7 @@ from screenshot_crawler.site_adapters.ebookjapan.discovery import (
     _rights_signature,
     parse_ebookjapan_source_witness,
 )
+from screenshot_crawler.site_adapters.ebookjapan.source_hook import SOURCE_OBSERVER_JS
 from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     ANCHOR_READER_JS,
     CAPTURE_OBSERVER_JS,
@@ -42,6 +43,7 @@ from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     MAX_SLOTS,
     NAVIGATION_TARGET_JS,
     normalize_title,
+    reader_title_matches_owned_title,
 )
 
 _PRODUCT_URL = re.compile(
@@ -210,6 +212,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._access_strategy: AccessStrategy = "auto"
         self._source_response: Response | None = None
         self._owned_title: str | None = None
+        self._reader_title: str | None = None
         self._page: Page | None = None
         self._reader_path: str | None = None
         self._reader_total: int | None = None
@@ -247,6 +250,13 @@ class EbookJapanAdapter(SiteAdapter):
         # Includes the bounded source-body read, ownership settle window, and
         # one normal Reader navigation. Every wait still has its own limit.
         return max(default_ms, _INIT_BUDGET_MS)
+
+    def _reader_title_matches(self, value: object) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        if self._reader_title is not None:
+            return normalize_title(value) == normalize_title(self._reader_title)
+        return reader_title_matches_owned_title(self._owned_title or "", value)
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         identity = parse_ebookjapan_product_url(source_url)
@@ -297,6 +307,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._source_response = None
         # This Page-only init hook observes normal Reader rendering before the
         # site's scripts run. It is inert outside the exact purchased route.
+        await page.add_init_script(script=SOURCE_OBSERVER_JS)
         await page.add_init_script(script=CAPTURE_OBSERVER_JS)
 
         def observe_response(response: Response) -> None:
@@ -617,7 +628,7 @@ class EbookJapanAdapter(SiteAdapter):
     async def _require_reader_content(self, page: Page, *, expected_path: str) -> tuple[int, int]:
         state = await self._reader_controls(page, expected_path=expected_path)
         title = state.get("title")
-        if title is not None and normalize_title(str(title)) != normalize_title(self._owned_title or ""):
+        if title is not None and not self._reader_title_matches(title):
             raise UnknownPageStateError("ebookjapan Reader title differs from the owned Catalog card")
         counter = state.get("counter")
         if not isinstance(counter, Mapping):
@@ -677,7 +688,7 @@ class EbookJapanAdapter(SiteAdapter):
                     ):
                         raise UnknownPageStateError("ebookjapan Reader native counter conflicts with the current frame shape")
                 title = frame.get("title")
-                if title is not None and normalize_title(str(title)) != normalize_title(self._owned_title or ""):
+                if title is not None and not self._reader_title_matches(title):
                     raise UnknownPageStateError("ebookjapan Reader title changed while content was settling")
                 if urlsplit(page.url).path != expected_path:
                     raise UnknownPageStateError("ebookjapan Reader left its pinned purchased route")
@@ -1252,7 +1263,7 @@ class EbookJapanAdapter(SiteAdapter):
             anchor = await page.evaluate(
                 ANCHOR_READER_JS,
                 {
-                    "expectedTitle": self._owned_title,
+                    "expectedTitle": self._reader_title or self._owned_title,
                     "expectedPath": expected_path,
                     "maxSlots": MAX_SLOTS,
                 },
@@ -1317,6 +1328,7 @@ class EbookJapanAdapter(SiteAdapter):
         )
 
     async def initialize(self, page: Page) -> None:
+        self._reader_title = None
         if self._access_strategy != "direct":
             raise UnsupportedAccessStrategyError(
                 "ebookjapan Reader requires direct owned access"
@@ -1355,8 +1367,9 @@ class EbookJapanAdapter(SiteAdapter):
         # route and fail as UNKNOWN until the observed native identity is visible.
         if title is None:
             raise UnknownPageStateError("ebookjapan Reader title is hidden or unavailable after entry")
-        if normalize_title(str(title)) != normalize_title(self._owned_title or ""):
+        if not reader_title_matches_owned_title(self._owned_title or "", str(title)):
             raise UnknownPageStateError("ebookjapan purchased Reader title differs from its owned card")
+        self._reader_title = str(title)
         counter = state.get("counter")
         if not isinstance(counter, Mapping):
             raise UnknownPageStateError("ebookjapan Reader native page counter is unavailable")
@@ -1409,7 +1422,7 @@ class EbookJapanAdapter(SiteAdapter):
         if controls.get("documentMatches") is not True or controls.get("layoutMatchesAnchor") is not True:
             raise UnknownPageStateError("ebookjapan Reader document or layout anchor changed")
         title = controls.get("title")
-        if title is not None and normalize_title(str(title)) != normalize_title(self._owned_title or ""):
+        if title is not None and not self._reader_title_matches(title):
             raise UnknownPageStateError("ebookjapan Reader title differs from its owned card")
         frame = await page.evaluate(
             FRAME_STATE_JS, {"expectedCurrent": self._expected_current}
@@ -2019,7 +2032,7 @@ class EbookJapanAdapter(SiteAdapter):
         if controls.get("documentMatches") is not True or controls.get("layoutMatchesAnchor") is not True:
             raise UnknownPageStateError("ebookjapan Reader document or layout anchor changed")
         title = controls.get("title")
-        if title is not None and normalize_title(str(title)) != normalize_title(self._owned_title or ""):
+        if title is not None and not self._reader_title_matches(title):
             raise UnknownPageStateError("ebookjapan visible Reader title changed")
         control_counter = controls.get("counter")
         if isinstance(control_counter, Mapping) and control_counter.get("total") != total:

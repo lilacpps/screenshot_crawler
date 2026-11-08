@@ -14,10 +14,37 @@ MAX_DRAW_CALLS = 20_000
 MAX_PART_PIXELS = 2_000_000
 
 _COUNTER = re.compile(r"^(\d+)\s*/\s*(\d+)$")
+_CARD_VOLUME_SUFFIX = re.compile(r"^(?P<base>.+?)(?P<number>[1-9][0-9]{0,2})巻$")
+_READER_VOLUME_SUFFIX = re.compile(r"^(?P<base>.+)\((?P<number>[1-9][0-9]{0,2})\)$")
 
 
 def normalize_title(value: str) -> str:
     return "".join(unicodedata.normalize("NFKC", value).split())
+
+
+def reader_title_matches_owned_title(owned_title: str, reader_title: str) -> bool:
+    """Match the exact owned title or the one observed Reader title alias.
+
+    The only non-exact alias observed is ``base N巻`` on the owned listing to
+    ``base(N)`` in the Reader. Parsing is deliberately suffix-only and rejects
+    ambiguous numeric bases, leading zeroes, and numbers outside 1..999.
+    """
+
+    owned = normalize_title(owned_title)
+    reader = normalize_title(reader_title)
+    if not owned or not reader:
+        return False
+    if owned == reader:
+        return True
+    card_match = _CARD_VOLUME_SUFFIX.fullmatch(owned)
+    reader_match = _READER_VOLUME_SUFFIX.fullmatch(reader)
+    if card_match is None or reader_match is None:
+        return False
+    card_base, reader_base = card_match.group("base"), reader_match.group("base")
+    card_number, reader_number = card_match.group("number"), reader_match.group("number")
+    if card_base[-1:].isdigit() or reader_base[-1:].isdigit():
+        return False
+    return card_base == reader_base and card_number == reader_number
 
 
 def parse_page_counter(value: str | None) -> tuple[int, int] | None:
@@ -38,6 +65,28 @@ CAPTURE_OBSERVER_JS = r"""(() => {
   const canvasProto=HTMLCanvasElement.prototype,contextProto=window.CanvasRenderingContext2D?.prototype;
   if(!contextProto)return status({installed:false,reason:'2d-context-unavailable'});
   const names=['getContext','drawImage','putImageData','clearRect','fillRect','strokeRect','fillText','strokeText','fill','stroke','clip','reset'];
+  const sourceContextMethods=Object.getOwnPropertyNames(contextProto).filter(name=>{
+    const descriptor=Object.getOwnPropertyDescriptor(contextProto,name);
+    return name!=='constructor'&&!names.includes(name)&&typeof descriptor?.value==='function';
+  });
+  const sourceStateProperties=['globalAlpha','globalCompositeOperation','filter','shadowColor','shadowBlur','shadowOffsetX',
+    'shadowOffsetY','imageSmoothingEnabled','imageSmoothingQuality'];
+  const diagnosticMethodNames=['arc','beginPath','closePath','fill','stroke','clip','drawImage','getImageData','putImageData',
+    'clearRect','fillRect','strokeRect','fillText','strokeText','getTransform','reset','save','restore','translate','rotate',
+    'scale','transform','setTransform','resetTransform','setLineDash','isPointInPath','isPointInStroke','createImageData',
+    'getContext','transferToImageBitmap','getContextAttributes','isContextLost','getLineDash','measureText','arcTo','ellipse',
+    'rect','roundRect','moveTo','lineTo','quadraticCurveTo','bezierCurveTo','createPattern','createLinearGradient',
+    'createRadialGradient','createConicGradient','drawFocusIfNeeded','scrollPathIntoView'];
+  const diagnosticMethodSet=new Set(diagnosticMethodNames),diagnosticStateSet=new Set(sourceStateProperties);
+  const sourceMethodMissing=new Set(),sourceMethodNonNative=new Set(),offscreenMethodMissing=new Set(),offscreenMethodNonNative=new Set();
+  const stateSetterMissing=new Set(),stateSetterNonNative=new Set(),offscreenStateSetterMissing=new Set(),offscreenStateSetterNonNative=new Set();
+  const slotMismatchMethods=new Set(),slotMismatchStateProperties=new Set();
+  let diagnosticOtherMethodCount=0;
+  const MAX_DIAGNOSTIC_OTHER=1024;
+  const recordDiagnosticName=(set,name,allowlist)=>{
+    if(allowlist.has(name))set.add(name);
+    else if(diagnosticOtherMethodCount<MAX_DIAGNOSTIC_OTHER)diagnosticOtherMethodCount++;
+  };
   const contexts={'getContext':canvasProto,'drawImage':contextProto,'putImageData':contextProto,'clearRect':contextProto,
     'fillRect':contextProto,'strokeRect':contextProto,'fillText':contextProto,'strokeText':contextProto,'fill':contextProto,'stroke':contextProto,'clip':contextProto};
   const descriptors=Object.fromEntries(names.map(name=>[name,Object.getOwnPropertyDescriptor(contexts[name]||contextProto,name)]));
@@ -46,13 +95,43 @@ CAPTURE_OBSERVER_JS = r"""(() => {
   const native=fn=>{try{return typeof fn==='function'&&/\[native code\]/.test(Function.prototype.toString.call(fn));}catch{return false;}};
   const unavailable=[...names,'getTransform'].filter(name=>!descriptors[name]||typeof originals[name]!=='function'||!(descriptors[name].writable||descriptors[name].configurable)||!native(originals[name]));
   if(unavailable.length)return status({installed:false,reason:'native-descriptor-conflict',unavailable});
+  const sourceMethodDescriptors=Object.fromEntries(sourceContextMethods.map(name=>[name,Object.getOwnPropertyDescriptor(contextProto,name)]));
+  let sourceMethodCoverage=true;
+  for(const name of sourceContextMethods){
+    const descriptor=sourceMethodDescriptors[name];
+    if(!descriptor||typeof descriptor.value!=='function'){
+      sourceMethodCoverage=false;recordDiagnosticName(sourceMethodMissing,name,diagnosticMethodSet);
+    }else if(!(descriptor.writable||descriptor.configurable)||!native(descriptor.value)){
+      sourceMethodCoverage=false;recordDiagnosticName(sourceMethodNonNative,name,diagnosticMethodSet);
+    }
+  }
+  for(const name of sourceContextMethods)if(typeof sourceMethodDescriptors[name]?.value==='function')originals[name]=sourceMethodDescriptors[name].value;
+  const sourceStateDescriptors=Object.fromEntries(sourceStateProperties.map(name=>[name,Object.getOwnPropertyDescriptor(contextProto,name)]));
+  let sourceStateCoverage=true;
+  for(const name of sourceStateProperties){
+    const descriptor=sourceStateDescriptors[name];
+    if(!descriptor||typeof descriptor.set!=='function'){
+      sourceStateCoverage=false;recordDiagnosticName(stateSetterMissing,name,diagnosticStateSet);
+    }else if(!descriptor.configurable||!native(descriptor.set)){
+      sourceStateCoverage=false;recordDiagnosticName(stateSetterNonNative,name,diagnosticStateSet);
+    }
+  }
   const routeAllowed=()=>window.top===window&&location.hostname==='ebookjapan.yahoo.co.jp'&&/^\/viewer\/purchased\/B[0-9]+\/$/.test(location.pathname)&&!location.search&&!location.hash;
-  const states=new WeakMap(),contextRefs=new WeakMap();
+  const states=new WeakMap(),contextRefs=new WeakMap(),sourceContexts=new WeakSet(),instrumentedSourcePrototypes=new WeakSet();
+  const dynamicMethodWrappers=[],dynamicStateWrappers=[];
+  const observedCanvases=new WeakSet();
   const MAX_DRAW_CALLS=20000;
   let calls=0,overflow=false,metadataFailures=0;
-  const stateFor=canvas=>{let state=states.get(canvas);if(!state){state={drawGeneration:0,successfulDraws:0,mutationCount:0,clipCalls:0,lastFullDraw:false,lastDraw:null,resetObserved:false,contextIs2d:false};states.set(canvas,state);}return state;};
-  const drainMutations=()=>{try{for(const record of mutationObserver.takeRecords()){if(record.target instanceof HTMLCanvasElement){const state=stateFor(record.target);state.drawGeneration=0;state.mutationCount=0;state.lastFullDraw=false;state.lastDraw=null;state.resetObserved=true;}}}catch{metadataFailures+=1;}};
-  const mutationObserver=new MutationObserver(records=>{for(const record of records){if(record.target instanceof HTMLCanvasElement){const state=stateFor(record.target);state.drawGeneration=0;state.mutationCount=0;state.lastFullDraw=false;state.lastDraw=null;state.resetObserved=true;}}});
+  let offscreenContextCoverage=false,sourceContextCoverageBase=false;
+  let mutationObserver=null;
+  const invalidateTarget=(canvas,reason)=>{try{window.__ejSourceObserver?.invalidateTarget?.(canvas,reason);}catch{metadataFailures++;window.__ejSourceObserver?.recordInstrumentationFailure?.();}};
+  const markCanvasReset=(canvas,reason)=>{const state=stateFor(canvas);state.drawGeneration=0;state.mutationCount=0;
+    state.lastFullDraw=false;state.lastDraw=null;state.resetObserved=true;invalidateTarget(canvas,reason);};
+  const stateFor=canvas=>{let state=states.get(canvas);if(!state){state={drawGeneration:0,successfulDraws:0,mutationCount:0,clipCalls:0,lastFullDraw:false,lastDraw:null,resetObserved:false,contextIs2d:false};states.set(canvas,state);}
+    if(mutationObserver&&!observedCanvases.has(canvas)){observedCanvases.add(canvas);try{mutationObserver.observe(canvas,{attributes:true,attributeFilter:['width','height']});}catch{metadataFailures++;}}
+    return state;};
+  const drainMutations=()=>{try{for(const record of mutationObserver.takeRecords()){if(record.target instanceof HTMLCanvasElement)markCanvasReset(record.target,'html-canvas-attribute-reset');}}catch{metadataFailures+=1;}};
+  mutationObserver=new MutationObserver(records=>{for(const record of records){if(record.target instanceof HTMLCanvasElement)markCanvasReset(record.target,'html-canvas-attribute-reset');}});
   mutationObserver.observe(document,{subtree:true,attributes:true,attributeFilter:['width','height']});
   const fullGeometry=(receiver,args)=>{
     const source=args[0];let sw=null,sh=null,sx=0,sy=0,dx=null,dy=null,dw=null,dh=null,overload=args.length;
@@ -75,24 +154,186 @@ CAPTURE_OBSERVER_JS = r"""(() => {
       sourceRect:[sx,sy,sw,sh],destRect:[dx,dy,dw,dh],targetWidth:canvas.width,targetHeight:canvas.height,
       transform,alpha,composite};
   };
-  const wrap=(name,fn)=>function(...args){
-    const active=routeAllowed()&&(name==='getContext'?this instanceof HTMLCanvasElement:this instanceof CanvasRenderingContext2D);
-    if(!active)return Reflect.apply(originals[name],this,args);
-    if(name==='drawImage')drainMutations();
-    let result,didThrow=false,thrown;try{result=Reflect.apply(originals[name],this,args);}catch(error){didThrow=true;thrown=error;}
-    try{if(calls<MAX_DRAW_CALLS){calls++;if(name==='getContext'){const state=stateFor(this);state.contextIs2d=!didThrow&&String(args[0]).toLowerCase()==='2d'&&result instanceof CanvasRenderingContext2D;if(state.contextIs2d)contextRefs.set(this,result);}
-      else if(this.canvas instanceof HTMLCanvasElement){const state=stateFor(this.canvas);if(name==='clip'){state.clipCalls++;}
-        else if(name==='drawImage'){if(!didThrow){state.drawGeneration++;state.successfulDraws++;state.mutationCount++;state.resetObserved=false;const geometry=fullGeometry(this,args);state.lastFullDraw=geometry.eligible&&state.clipCalls===0;state.lastDraw=geometry;}}
-        else if(name==='reset'&&!didThrow){state.drawGeneration=0;state.mutationCount=0;state.clipCalls=0;state.lastFullDraw=false;state.lastDraw=null;state.resetObserved=true;}
-        else if(!didThrow){state.mutationCount++;state.lastFullDraw=false;state.lastDraw={method:name,targetWidth:this.canvas.width,targetHeight:this.canvas.height};}}
-    }else overflow=true;}catch{metadataFailures++;}
+  const wrap=(name,fn,{core=true,offscreenGetContext=false,sourceOnly=false}={})=>function(...args){
+    const offscreen=typeof OffscreenCanvas!=='undefined'&&this instanceof OffscreenCanvas;
+    const sourceContext=sourceContexts.has(this);
+    const active=routeAllowed()&&(name==='getContext'?(offscreenGetContext?offscreen:this instanceof HTMLCanvasElement)
+      :(sourceOnly?sourceContext:(this instanceof CanvasRenderingContext2D||sourceContext)));
+    if(!active)return Reflect.apply(fn,this,args);
+    const canvas=(this instanceof CanvasRenderingContext2D||sourceContext)?this.canvas:null;
+    if(name==='drawImage'&&canvas instanceof HTMLCanvasElement)drainMutations();
+    let result,didThrow=false,thrown;try{result=Reflect.apply(fn,this,args);}catch(error){didThrow=true;thrown=error;}
+    if(core&&!sourceContext&&!offscreenGetContext){
+      try{if(calls<MAX_DRAW_CALLS){calls++;if(name==='getContext'&&!offscreenGetContext){const state=stateFor(this);state.contextIs2d=!didThrow&&String(args[0]).toLowerCase()==='2d'&&result instanceof CanvasRenderingContext2D;if(state.contextIs2d)contextRefs.set(this,result);}
+        else if(canvas instanceof HTMLCanvasElement){const state=stateFor(canvas);if(name==='clip'){state.clipCalls++;invalidateTarget(canvas,'html-context-clip');}
+          else if(name==='drawImage'){if(!didThrow){state.drawGeneration++;state.successfulDraws++;state.mutationCount++;state.resetObserved=false;const geometry=fullGeometry(this,args);state.lastFullDraw=geometry.eligible&&state.clipCalls===0;state.lastDraw=geometry;}}
+          else if(name==='reset'&&!didThrow){state.drawGeneration=0;state.mutationCount=0;state.clipCalls=0;state.lastFullDraw=false;state.lastDraw=null;state.resetObserved=true;invalidateTarget(canvas,'html-context-reset');}
+          else if(!didThrow){state.mutationCount++;state.lastFullDraw=false;state.lastDraw={method:name,targetWidth:canvas.width,targetHeight:canvas.height};invalidateTarget(canvas,'html-context-mutation');}}
+      }else overflow=true;}catch{metadataFailures++;}
+    }
+    try{
+      const source=window.__ejSourceObserver;
+      if(source&&routeAllowed()){
+        if(name==='getContext'&&offscreenGetContext){
+          const exactNativeContext=!didThrow&&result&&result.canvas===this;
+          if(exactNativeContext)sourceContexts.add(result);
+          offscreenContextCoverage=!!exactNativeContext&&instrumentSourceContext(result);
+          source.setContextWrapperCoverage?.(sourceContextCoverageBase&&offscreenContextCoverage);
+          source.recordContextReturn?.(this,args,didThrow,result);
+        }
+        else if(canvas instanceof OffscreenCanvas)source.recordSourceContextCall?.(name,this,args,didThrow);
+        else if(canvas instanceof HTMLCanvasElement&&name==='drawImage')source.recordTargetDraw?.(this,args,didThrow,states.get(canvas)||null);
+      }
+    }catch{metadataFailures++;try{window.__ejSourceObserver?.recordInstrumentationFailure?.();}catch{}}
     if(didThrow)throw thrown;return result;
   };
   const wrappers={};for(const name of names){wrappers[name]=wrap(name,originals[name]);Object.defineProperty(contexts[name]||contextProto,name,{...descriptors[name],value:wrappers[name]});}
+  const sourceMethodWrappers={};
+  for(const name of sourceContextMethods){
+    const descriptor=sourceMethodDescriptors[name];
+    if(!descriptor||typeof descriptor.value!=='function'||!(descriptor.writable||descriptor.configurable)||!native(descriptor.value)){sourceMethodCoverage=false;continue;}
+    sourceMethodWrappers[name]=wrap(name,descriptor.value,{core:false,sourceOnly:true});
+    Object.defineProperty(contextProto,name,{...descriptor,value:sourceMethodWrappers[name]});
+  }
+  const sourceStateWrappers={};
+  for(const name of sourceStateProperties){
+    const descriptor=sourceStateDescriptors[name];
+    if(!descriptor?.set||!descriptor.configurable||!native(descriptor.set)){sourceStateCoverage=false;continue;}
+    sourceStateWrappers[name]=function(value){
+      let result,didThrow=false,thrown;try{result=Reflect.apply(descriptor.set,this,[value]);}catch(error){didThrow=true;thrown=error;}
+      try{if(!didThrow&&(this instanceof CanvasRenderingContext2D||sourceContexts.has(this))){const canvas=this.canvas;
+        if(canvas instanceof OffscreenCanvas)window.__ejSourceObserver?.recordStateMutation?.(this,name,false);
+        else if(canvas instanceof HTMLCanvasElement)invalidateTarget(canvas,'html-context-state-mutation');}}
+      catch{metadataFailures++;try{window.__ejSourceObserver?.recordInstrumentationFailure?.();}catch{}}
+      if(didThrow)throw thrown;return result;
+    };
+    Object.defineProperty(contextProto,name,{...descriptor,set:sourceStateWrappers[name]});
+  }
+  const instrumentSourceContext=context=>{
+    const first=Object.getPrototypeOf(context);if(!first)return false;
+    if(instrumentedSourcePrototypes.has(first))return offscreenContextCoverage;
+    instrumentedSourcePrototypes.add(first);
+    let complete=sourceMethodCoverage&&sourceStateCoverage;
+    for(let proto=first;proto&&proto!==Object.prototype;proto=Object.getPrototypeOf(proto)){
+      if(proto===contextProto)break;
+      for(const name of Object.getOwnPropertyNames(proto)){
+        if(name==='constructor')continue;
+        const descriptor=Object.getOwnPropertyDescriptor(proto,name);
+        if(typeof descriptor?.value!=='function'){
+          if(diagnosticMethodSet.has(name)){complete=false;offscreenMethodMissing.add(name);}
+          continue;
+        }
+        if(descriptor.value===wrappers[name]||descriptor.value===sourceMethodWrappers[name])continue;
+        if(!(descriptor.writable||descriptor.configurable)||!native(descriptor.value)){
+          complete=false;recordDiagnosticName(offscreenMethodNonNative,name,diagnosticMethodSet);continue;}
+        const wrapper=wrap(name,descriptor.value,{core:false,sourceOnly:true});
+        Object.defineProperty(proto,name,{...descriptor,value:wrapper});
+        dynamicMethodWrappers.push({proto,name,descriptor,wrapper});
+      }
+      for(const name of sourceStateProperties){
+        const descriptor=Object.getOwnPropertyDescriptor(proto,name);
+        if(!descriptor)continue;
+        if(!descriptor.set){complete=false;offscreenStateSetterMissing.add(name);continue;}
+        if(descriptor.set===sourceStateWrappers[name])continue;
+        if(!descriptor.configurable||!native(descriptor.set)){
+          complete=false;recordDiagnosticName(offscreenStateSetterNonNative,name,diagnosticStateSet);continue;}
+        const wrapper=function(value){
+          let result,didThrow=false,thrown;try{result=Reflect.apply(descriptor.set,this,[value]);}catch(error){didThrow=true;thrown=error;}
+          try{if(!didThrow&&sourceContexts.has(this))window.__ejSourceObserver?.recordStateMutation?.(this,name,false);}
+          catch{metadataFailures++;try{window.__ejSourceObserver?.recordInstrumentationFailure?.();}catch{}}
+          if(didThrow)throw thrown;return result;
+        };
+        Object.defineProperty(proto,name,{...descriptor,set:wrapper});
+        dynamicStateWrappers.push({proto,name,descriptor,wrapper});
+      }
+    }
+    offscreenContextCoverage=complete;
+    return complete;
+  };
+  const offscreenGetContextDescriptor=typeof OffscreenCanvas!=='undefined'?Object.getOwnPropertyDescriptor(OffscreenCanvas.prototype,'getContext'):null;
+  let offscreenGetContextWrapper=null,offscreenGetContextCoverage=!!offscreenGetContextDescriptor
+    &&typeof offscreenGetContextDescriptor.value==='function'&&(offscreenGetContextDescriptor.writable||offscreenGetContextDescriptor.configurable)
+    &&native(offscreenGetContextDescriptor.value);
+  if(!offscreenGetContextDescriptor||typeof offscreenGetContextDescriptor.value!=='function')
+    recordDiagnosticName(sourceMethodMissing,'getContext',diagnosticMethodSet);
+  else if(!(offscreenGetContextDescriptor.writable||offscreenGetContextDescriptor.configurable)||!native(offscreenGetContextDescriptor.value))
+    recordDiagnosticName(sourceMethodNonNative,'getContext',diagnosticMethodSet);
+  if(offscreenGetContextCoverage){offscreenGetContextWrapper=wrap('getContext',offscreenGetContextDescriptor.value,{core:false,offscreenGetContext:true});
+    Object.defineProperty(OffscreenCanvas.prototype,'getContext',{...offscreenGetContextDescriptor,value:offscreenGetContextWrapper});}
+  const htmlDimensionDescriptors=Object.fromEntries(['width','height'].map(name=>[name,Object.getOwnPropertyDescriptor(canvasProto,name)]));
+  const htmlDimensionWrappers={};
+  let htmlDimensionCoverage=true;
+  for(const name of ['width','height']){
+    const descriptor=htmlDimensionDescriptors[name];
+    if(!descriptor?.set||!descriptor.configurable||!native(descriptor.set)){htmlDimensionCoverage=false;continue;}
+    htmlDimensionWrappers[name]=function(value){
+      let result,didThrow=false,thrown;try{result=Reflect.apply(descriptor.set,this,[value]);}catch(error){didThrow=true;thrown=error;}
+      if(!didThrow&&routeAllowed()&&this instanceof HTMLCanvasElement)markCanvasReset(this,'html-canvas-dimension-reset');
+      if(didThrow)throw thrown;return result;
+    };
+    Object.defineProperty(canvasProto,name,{...descriptor,set:htmlDimensionWrappers[name]});
+  }
+  sourceContextCoverageBase=sourceMethodCoverage&&sourceStateCoverage&&offscreenGetContextCoverage&&htmlDimensionCoverage;
+  try{window.__ejSourceObserver?.setContextWrapperCoverage?.(false);}
+  catch{metadataFailures++;try{window.__ejSourceObserver?.recordInstrumentationFailure?.();}catch{}}
+  const sourceInstrumentationDiagnostic=()=>{
+    const mismatchedMethods=new Set(),mismatchedState=new Set(),mismatchedDimensions=new Set();
+    let otherMismatchCount=0;
+    const noteMismatch=(name,set,allowlist)=>{
+      if(allowlist.has(name))set.add(name);else if(otherMismatchCount<MAX_DIAGNOSTIC_OTHER)otherMismatchCount++;
+    };
+    for(const name of names)if((contexts[name]||contextProto)[name]!==wrappers[name])
+      noteMismatch(name,mismatchedMethods,diagnosticMethodSet);
+    for(const name of sourceContextMethods){
+      if(sourceMethodWrappers[name]&&Object.getOwnPropertyDescriptor(contextProto,name)?.value!==sourceMethodWrappers[name])
+        noteMismatch(name,mismatchedMethods,diagnosticMethodSet);
+    }
+    for(const name of sourceStateProperties){
+      if(sourceStateWrappers[name]&&Object.getOwnPropertyDescriptor(contextProto,name)?.set!==sourceStateWrappers[name])
+        noteMismatch(name,mismatchedState,diagnosticStateSet);
+    }
+    for(const entry of dynamicMethodWrappers){
+      if(Object.getOwnPropertyDescriptor(entry.proto,entry.name)?.value!==entry.wrapper)
+        noteMismatch(entry.name,mismatchedMethods,diagnosticMethodSet);
+    }
+    for(const entry of dynamicStateWrappers){
+      if(Object.getOwnPropertyDescriptor(entry.proto,entry.name)?.set!==entry.wrapper)
+        noteMismatch(entry.name,mismatchedState,diagnosticStateSet);
+    }
+    if(offscreenGetContextWrapper&&OffscreenCanvas.prototype.getContext!==offscreenGetContextWrapper)
+      noteMismatch('getContext',mismatchedMethods,diagnosticMethodSet);
+    for(const name of ['width','height']){
+      if(htmlDimensionWrappers[name]&&Object.getOwnPropertyDescriptor(canvasProto,name)?.set!==htmlDimensionWrappers[name])
+        mismatchedDimensions.add(name);
+    }
+    return {sourceMethodCoverage,sourceStateCoverage,offscreenInstall:offscreenContextCoverage,
+      currentSlotMismatch:mismatchedMethods.size+mismatchedState.size+mismatchedDimensions.size+otherMismatchCount>0,
+      sourceMethodMissing:[...sourceMethodMissing],sourceMethodNonNative:[...sourceMethodNonNative],
+      offscreenMethodMissing:[...offscreenMethodMissing],offscreenMethodNonNative:[...offscreenMethodNonNative],
+      stateSetterMissing:[...stateSetterMissing],stateSetterNonNative:[...stateSetterNonNative],
+      offscreenStateSetterMissing:[...offscreenStateSetterMissing],offscreenStateSetterNonNative:[...offscreenStateSetterNonNative],
+      slotMismatchMethods:[...mismatchedMethods],slotMismatchStateProperties:[...mismatchedState],
+      slotMismatchDimensionProperties:[...mismatchedDimensions],
+      otherMethodCount:Math.min(MAX_DIAGNOSTIC_OTHER,diagnosticOtherMethodCount+otherMismatchCount)};
+  };
+  const sourceInstrumentationIsCurrent=()=>{
+    const diagnostic=sourceInstrumentationDiagnostic();
+    return sourceContextCoverageBase&&offscreenContextCoverage&&!diagnostic.currentSlotMismatch;
+  };
   const observer={isInstalled:()=>names.every(name=>(contexts[name]||contextProto)[name]===wrappers[name]),
-    health(){return {installed:names.every(name=>(contexts[name]||contextProto)[name]===wrappers[name]),overflow,metadataFailures,callCount:calls};},
+    health(){return {installed:names.every(name=>(contexts[name]||contextProto)[name]===wrappers[name]),overflow,metadataFailures,callCount:calls,
+      sourceInstrumentationCurrent:sourceInstrumentationIsCurrent(),sourceInstrumentationDiagnostic:sourceInstrumentationDiagnostic()};},
+    sourceInstrumentationIsCurrent,
+    sourceInstrumentationDiagnostic,
     statusFor(canvas){drainMutations();if(!(canvas instanceof HTMLCanvasElement))return null;const state=states.get(canvas);return state?{drawGeneration:state.drawGeneration,successfulDraws:state.successfulDraws,mutationCount:state.mutationCount,clipCalls:state.clipCalls,lastFullDraw:state.lastFullDraw,lastDraw:state.lastDraw,resetObserved:state.resetObserved,contextIs2d:state.contextIs2d,canvasWidth:canvas.width,canvasHeight:canvas.height,overflow,metadataFailures}:null;},
-    stop(){mutationObserver.disconnect();const restored={};for(const name of names){restored[name]=false;const proto=contexts[name]||contextProto;if(proto[name]===wrappers[name]){Object.defineProperty(proto,name,descriptors[name]);restored[name]=proto[name]===originals[name];}}status({installed:false,stopped:true,restored});return {restored,callCount:calls,overflow,metadataFailures};}};
+    stop(){mutationObserver.disconnect();const restored={};for(const name of names){restored[name]=false;const proto=contexts[name]||contextProto;if(proto[name]===wrappers[name]){Object.defineProperty(proto,name,descriptors[name]);restored[name]=proto[name]===originals[name];}}
+      for(const name of sourceContextMethods){restored[`source:${name}`]=false;if(sourceMethodWrappers[name]&&contextProto[name]===sourceMethodWrappers[name]){Object.defineProperty(contextProto,name,sourceMethodDescriptors[name]);restored[`source:${name}`]=contextProto[name]===sourceMethodDescriptors[name].value;}}
+      for(const name of sourceStateProperties){restored[`state:${name}`]=false;const current=Object.getOwnPropertyDescriptor(contextProto,name);if(sourceStateWrappers[name]&&current?.set===sourceStateWrappers[name]){Object.defineProperty(contextProto,name,sourceStateDescriptors[name]);restored[`state:${name}`]=Object.getOwnPropertyDescriptor(contextProto,name)?.set===sourceStateDescriptors[name].set;}}
+      for(const entry of dynamicMethodWrappers.reverse()){restored[`dynamic:${entry.name}`]=false;if(entry.proto[entry.name]===entry.wrapper){Object.defineProperty(entry.proto,entry.name,entry.descriptor);restored[`dynamic:${entry.name}`]=entry.proto[entry.name]===entry.descriptor.value;}}
+      for(const entry of dynamicStateWrappers.reverse()){restored[`dynamic-state:${entry.name}`]=false;const current=Object.getOwnPropertyDescriptor(entry.proto,entry.name);if(current?.set===entry.wrapper){Object.defineProperty(entry.proto,entry.name,entry.descriptor);restored[`dynamic-state:${entry.name}`]=Object.getOwnPropertyDescriptor(entry.proto,entry.name)?.set===entry.descriptor.set;}}
+      if(offscreenGetContextWrapper&&OffscreenCanvas.prototype.getContext===offscreenGetContextWrapper){Object.defineProperty(OffscreenCanvas.prototype,'getContext',offscreenGetContextDescriptor);restored.offscreenGetContext=OffscreenCanvas.prototype.getContext===offscreenGetContextDescriptor.value;}
+      for(const name of ['width','height']){restored[`canvas:${name}`]=false;if(htmlDimensionWrappers[name]&&Object.getOwnPropertyDescriptor(canvasProto,name)?.set===htmlDimensionWrappers[name]){Object.defineProperty(canvasProto,name,htmlDimensionDescriptors[name]);restored[`canvas:${name}`]=Object.getOwnPropertyDescriptor(canvasProto,name)?.set===htmlDimensionDescriptors[name].set;}}
+      status({installed:false,stopped:true,restored});return {restored,callCount:calls,overflow,metadataFailures};}};
   window[key]=observer;return status({installed:true,maxCalls:MAX_DRAW_CALLS,otherPixelMutationCoverage:'partial',clipState:'tracked-conservatively'});
 })();"""
 

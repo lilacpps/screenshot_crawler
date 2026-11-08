@@ -14,6 +14,7 @@ from screenshot_crawler.site_adapters.ebookjapan.adapter import (
 from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     normalize_title,
     parse_page_counter,
+    reader_title_matches_owned_title,
 )
 
 
@@ -278,6 +279,26 @@ def test_native_page_counter_parser_is_bounded(value: str | None, expected: obje
 
 def test_title_normalization_only_folds_width_and_whitespace() -> None:
     assert normalize_title(" エンジェル伝説（１０） ") == "エンジェル伝説(10)"
+
+
+@pytest.mark.parametrize(
+    ("owned", "reader", "expected"),
+    [
+        ("漫画 2巻", "漫画(2)", True),
+        (" ＡＢＣ １０巻 ", "ABC(10)", True),
+        ("エンジェル伝説（10）", "エンジェル伝説(10)", True),
+        ("漫画 2巻", "漫画(3)", False),
+        ("漫画(2)", "漫画 2巻", False),
+        ("漫画 02巻", "漫画(2)", False),
+        ("シリーズ2 10巻", "シリーズ2(10)", False),
+        ("シリーズ 1000巻", "シリーズ(1000)", False),
+        ("漫画 2巻", "別漫画(2)", False),
+    ],
+)
+def test_reader_title_accepts_only_exact_or_observed_one_way_volume_alias(
+    owned: str, reader: str, expected: bool
+) -> None:
+    assert reader_title_matches_owned_title(owned, reader) is expected
 
 
 @pytest.mark.parametrize(
