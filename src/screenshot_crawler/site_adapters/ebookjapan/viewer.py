@@ -405,7 +405,7 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
       visibleActions,toolbarVisible:headerVisible||counterVisible,terminal:{...terminal,profile:'unknown-modal'}};
   }
   if(parts.length===0&&visibleSlots.length===0&&pageCanvasCount===0&&(activeAngelRoot||activeAngelMarker)){
-    terminal.profile='angel-dead-end';terminal.rootCount=angelRoots.length;
+    terminal.rootCount=angelRoots.length;
     const root=angelRoots.length===1?angelRoots[0]:null;
     const inners=root?[...root.querySelectorAll(':scope > .book-last-dead-end__inner')]:[];
     terminal.innerCount=inners.length;
@@ -422,6 +422,27 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
       author:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__author')):[],
       i2i:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__i2i')):[]};
     terminal.moduleCounts={review:modules.review.length,coupon:modules.coupon.length,author:modules.author.length,i2i:modules.i2i.length};
+    const viewer=layout?.closest('.comic-viewer')||null;
+    const headerRoots=viewer?[...viewer.querySelectorAll(':scope > .legacy-comic-header')]:[];
+    const header=headerRoots.length===1?headerRoots[0]:null;
+    const bars=header?[...header.querySelectorAll(':scope > .legacy-comic-header__bar')]:[];
+    const menus=bars.length===1?[...bars[0].querySelectorAll(':scope > .legacy-comic-header__menu--pc')]:[];
+    const nativeHeaderButtons=viewer?[...viewer.querySelectorAll(
+      '.legacy-comic-header button.close-button,.legacy-comic-header button.contents-button,.legacy-comic-header button.settings-button')]
+      .filter(e=>visible(e)&&rect(e).viewport):[];
+    const headerControls={
+      'close-button':bars.length===1?[...bars[0].querySelectorAll(':scope > button.close-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+      'contents-button':menus.length===1?[...menus[0].querySelectorAll(':scope > button.contents-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+      'settings-button':menus.length===1?[...menus[0].querySelectorAll(':scope > button.settings-button')].filter(e=>visible(e)&&rect(e).viewport).length:0,
+    };
+    const lotteryCandidates=inner?[...inner.querySelectorAll('button.banner__row--lottery')].filter(e=>visible(e)&&rect(e).viewport):[];
+    const lotteryButtons=modules.coupon.length===1?[...modules.coupon[0].querySelectorAll(':scope > button.banner__row.banner__row--lottery')]
+      .filter(e=>visible(e)&&rect(e).viewport):[];
+    const observedControlsVariant=lotteryCandidates.length>0||nativeHeaderButtons.length>0;
+    terminal.profile=observedControlsVariant?'angel-dead-end-observed-controls':'angel-dead-end';
+    terminal.variant=observedControlsVariant?'lottery-plus-native-header-v1':'line-coupon-only-v1';
+    terminal.headerRootCount=headerRoots.length;terminal.headerBarCount=bars.length;terminal.headerMenuCount=menus.length;
+    terminal.headerCounts=headerControls;terminal.lotteryButtonCount=lotteryButtons.length;
     terminal.markerCount=angelMarkers.length;
     const marker=angelMarkers.length===1?angelMarkers[0]:null,markerRect=marker?rect(marker):null;
     terminal.markerInsideInner=!!marker&&!!inner&&marker.parentElement===inner;
@@ -432,12 +453,25 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     if(!actionInventoryCapped&&inner&&root&&safeModules&&marker&&terminal.markerInsideInner&&terminal.markerVisible&&terminal.markerTextExact&&terminal.markerControls===0){
       for(const action of actionable){
         let category=null;
-        if(!inner.contains(action)){terminal.unknownActionCount++;continue;}
+        if(!inner.contains(action)){
+          const closeAction=action.matches('button.close-button')&&header&&headerRoots.includes(header)
+            &&header.parentElement===viewer&&bars.length===1&&action.parentElement===bars[0];
+          const contentsAction=action.matches('button.contents-button')&&header&&header.parentElement===viewer
+            &&bars.length===1&&menus.length===1&&action.parentElement===menus[0];
+          const settingsAction=action.matches('button.settings-button')&&header&&header.parentElement===viewer
+            &&bars.length===1&&menus.length===1&&action.parentElement===menus[0];
+          if(observedControlsVariant&&(closeAction||contentsAction||settingsAction))category='header';
+          else terminal.unknownActionCount++;
+          if(category)terminal.partition[category]=(terminal.partition[category]||0)+1;
+          continue;
+        }
         const review=action.closest('.review-module.book-last-dead-end__review');
         const coupon=action.closest('.banner-group.book-last-dead-end__banner-group');
         const recommendation=action.closest('.recommend-grid.book-last-dead-end__section');
         if(action.matches('button.review-module__action')&&action.parentElement===review&&modules.review.includes(review)&&review.parentElement===inner)category='review';
         else if(action.matches('button.banner__row--line-coupon')&&action.parentElement===coupon&&modules.coupon.includes(coupon)&&coupon.parentElement===inner)category='coupon';
+        else if(action.matches('button.banner__row.banner__row--lottery')
+          &&action.parentElement===coupon&&modules.coupon.includes(coupon)&&coupon.parentElement===inner)category='lottery';
         const directHeading=action.matches('a.recommend-grid__heading.recommend-grid__heading--more')&&action.parentElement===recommendation;
         const itemLink=action.matches('a.recommend-grid__link')&&action.parentElement?.matches('.recommend-grid__item')
           &&action.parentElement.parentElement?.matches('.recommend-grid__list')
@@ -452,7 +486,12 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     }
     terminal.actionPartitionComplete=!actionInventoryCapped&&terminal.unknownActionCount===0&&terminal.riskyActionCount===0
       &&Object.values(terminal.partition).reduce((sum,count)=>sum+count,0)===visibleActions;
-    if(terminal.insidePinnedLayout&&terminal.shellChainValid&&mudaRoots.length===0&&terminal.rootVisible&&terminal.innerVisible&&terminal.rootInViewport&&terminal.innerInViewport&&terminal.actionPartitionComplete&&modalCount===0){
+    const observedControlsValid=observedControlsVariant
+      &&lotteryCandidates.length===1&&lotteryButtons.length===1&&headerRoots.length===1&&header.parentElement===viewer
+      &&bars.length===1&&menus.length===1&&Object.values(headerControls).every(count=>count===1);
+    const legacyControlsValid=!observedControlsVariant&&lotteryCandidates.length===0;
+    if(terminal.insidePinnedLayout&&terminal.shellChainValid&&mudaRoots.length===0&&terminal.rootVisible&&terminal.innerVisible&&terminal.rootInViewport&&terminal.innerInViewport&&terminal.actionPartitionComplete&&modalCount===0
+      &&(observedControlsValid||legacyControlsValid)){
       return {status:'end',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,counter,counterVisible,toolbarVisible:headerVisible||counterVisible,terminal};
     }
     return {status:'unknown-terminal-marker',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,visibleActions,toolbarVisible:headerVisible||counterVisible,terminal};

@@ -60,15 +60,15 @@ def _html(
             '<canvas class="page-canvas" width="300" height="150" '
             'style="position:absolute;right:0;width:auto;height:100%"></canvas></div>'
         )
-    if terminal_profile not in {"angel", "muda"}:
+    if terminal_profile not in {"angel", "angel-observed", "muda"}:
         raise ValueError("unsupported neutral terminal profile")
-    viewer_open = '<div class="comic-viewer">' if terminal_profile == "muda" else ""
-    viewer_close = "</div>" if terminal_profile == "muda" else ""
+    viewer_open = '<div class="comic-viewer">' if terminal_profile in {"muda", "angel-observed"} else ""
+    viewer_close = "</div>" if terminal_profile in {"muda", "angel-observed"} else ""
     header_controls = (
-        '<div class="legacy-comic-header__bar is-entrance-delayed"><button class="close-button"></button>'
+        '<div class="legacy-comic-header__bar is-entrance-delayed"><button class="close-button">Close</button>'
         '<div class="legacy-comic-header__menu legacy-comic-header__menu--pc">'
-        '<button class="contents-button"></button><button class="settings-button"></button></div></div>'
-        if terminal_profile == "muda" else ""
+        '<button class="contents-button">Contents</button><button class="settings-button">Settings</button></div></div>'
+        if terminal_profile in {"muda", "angel-observed"} else ""
     )
     terminal_markup = (
         '<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none"><div class="viewer-liber__viewer-last-cell">'
@@ -85,13 +85,18 @@ def _html(
         '</div></div></div></div></div>'
         if terminal_profile == "muda" else ""
     )
-    if terminal_profile == "angel":
+    if terminal_profile in {"angel", "angel-observed"}:
+        observed_lottery = (
+            '<button class="banner__row banner__row--lottery">Lottery</button>'
+            if terminal_profile == "angel-observed" else ""
+        )
         terminal_markup = (
             '<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none"><div class="viewer-liber__viewer-last-cell">'
             '<div class="viewer-last-shell" style="display:none"><div class="book-last-dead-end" style="position:fixed;left:30vw;top:80px;width:40vw;height:300px;background:#eee">'
             '<div class="book-last-dead-end__inner">'
             '<div class="review-module book-last-dead-end__review"><button class="review-module__action">Review</button></div>'
-            '<div class="banner-group book-last-dead-end__banner-group"><button class="banner__row banner__row--line-coupon">Coupon</button></div>'
+            '<div class="banner-group book-last-dead-end__banner-group"><button class="banner__row banner__row--line-coupon">Coupon</button>'
+            f'{observed_lottery}</div>'
             '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000001/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>'
             '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>'
             '<div class="next-item book-last-dead-end__next">&#12371;&#12398;&#20316;&#21697;&#12399;&#12371;&#12371;&#12414;&#12391;&#12391;&#12377;</div>'
@@ -143,7 +148,7 @@ def _html(
           if(window.__ejFixtureMode==='delayed-terminal'){{terminalShell.style.display='none';setTimeout(()=>terminalShell.style.display='block',250);}}
           else if(window.__ejFixtureMode==='opacity-hidden-terminal'){{terminalShell.style.display='block';terminalShell.style.opacity='0';setTimeout(()=>terminalShell.style.opacity='1',250);}}
           else terminalShell.style.display='block';
-          if('{terminal_profile}'==='muda'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
+          if('{terminal_profile}'==='muda'||'{terminal_profile}'==='angel-observed'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
         }}
       }});
       </script>
@@ -490,7 +495,7 @@ async def test_core_runner_completes_neutral_owned_entry_capture_end_and_zip(
         assert sorted(archive.namelist()) == [f"page-{index:04d}.png" for index in range(1, 8)]
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
 @pytest.mark.parametrize(
     "fixture_mode", ["normal", "delayed-terminal", "opacity-hidden-terminal"]
 )
@@ -1318,7 +1323,54 @@ async def test_unknown_terminal_notice_is_not_classified_as_end(browser_page: Pa
     assert (await _frame(browser_page))["status"] == "unknown-terminal-marker"
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+async def test_angel_observed_terminal_variant_partitions_only_scoped_controls(browser_page: Page) -> None:
+    frame = await _show_terminal_profile(browser_page, "angel-observed")
+
+    assert frame["status"] == "end", json.dumps(frame.get("terminal"), sort_keys=True)
+    terminal = frame["terminal"]
+    assert terminal["profile"] == "angel-dead-end-observed-controls"
+    assert terminal["variant"] == "lottery-plus-native-header-v1"
+    assert terminal["lotteryButtonCount"] == 1
+    assert terminal["headerRootCount"] == terminal["headerBarCount"] == terminal["headerMenuCount"] == 1
+    assert terminal["headerCounts"] == {
+        "close-button": 1,
+        "contents-button": 1,
+        "settings-button": 1,
+    }
+    assert terminal["partition"] == {
+        "review": 1,
+        "coupon": 1,
+        "lottery": 1,
+        "recommendAuthor": 2,
+        "recommendI2i": 1,
+        "header": 3,
+    }
+    assert terminal["actionPartitionComplete"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "document.querySelector('.book-last-dead-end__banner-group').insertAdjacentHTML('beforeend','<button class=\"banner__row banner__row--lottery\">extra</button>')",
+        "document.querySelector('.legacy-comic-header__menu--pc').insertAdjacentHTML('beforeend','<button class=\"contents-button\">extra</button>')",
+        "document.querySelector('.legacy-comic-header').append(document.querySelector('.legacy-comic-header__menu--pc'))",
+        "document.querySelector('.book-last-dead-end__next').textContent='Unknown notice'",
+        "document.querySelector('.comic-viewer').insertAdjacentHTML('beforeend','<button class=\"close-button\" style=\"position:fixed;left:100px;top:100px\">outside</button>')",
+    ],
+    ids=["duplicate-lottery", "duplicate-header-button", "wrong-header-ancestry", "missing-marker", "fake-outside-header"],
+)
+async def test_angel_observed_terminal_variant_rejects_unobserved_control_shapes(
+    browser_page: Page, mutation: str,
+) -> None:
+    baseline = await _show_terminal_profile(browser_page, "angel-observed")
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+    await browser_page.evaluate(f"()=>{{{mutation}}}")
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker"
+
+
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
 @pytest.mark.parametrize(
     "extra_markup",
     [
@@ -1367,7 +1419,7 @@ async def test_muda_terminal_accepts_observed_author_heading_in_tall_viewport(br
     assert frame["terminal"]["partition"]["author"] == 2
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
 async def test_terminal_profile_does_not_accept_visible_page_canvas(
     browser_page: Page, terminal_profile: str,
 ) -> None:
@@ -1391,7 +1443,7 @@ async def test_terminal_profile_does_not_accept_visible_page_canvas(
     assert frame["visibleSlots"]
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "muda"])
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
 async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
     browser_page: Page, terminal_profile: str,
 ) -> None:
@@ -1437,9 +1489,11 @@ async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
     await adapter.go_next(browser_page)
     terminal_snapshot = await browser_page.evaluate(FRAME_STATE_JS, {"expectedCurrent": 2})
     assert terminal_snapshot["status"] == "end", json.dumps(terminal_snapshot.get("terminal"), sort_keys=True)
-    assert terminal_snapshot["terminal"]["profile"] == (
-        "angel-dead-end" if terminal_profile == "angel" else "muda-book-last"
-    )
+    assert terminal_snapshot["terminal"]["profile"] == {
+        "angel": "angel-dead-end",
+        "angel-observed": "angel-dead-end-observed-controls",
+        "muda": "muda-book-last",
+    }[terminal_profile]
     assert terminal_snapshot["terminal"]["visiblePageCanvasCount"] == 0
     assert adapter._capture_coverage_complete() is True
     await adapter.wait_for_change(browser_page, spread_identity)
@@ -1452,10 +1506,13 @@ async def test_adapter_traverses_all_pinned_slots_before_accepting_neutral_end(
     assert await browser_page.evaluate("window.__terminalAdvanceClicks") == clicks_at_end
 
 
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed"])
 async def test_reader_end_is_rejected_until_every_frozen_slot_was_captured(
-    browser_page: Page,
+    browser_page: Page, terminal_profile: str,
 ) -> None:
-    await _open_reader(browser_page, current=1, total=3, slot_count=3)
+    await _open_reader(
+        browser_page, current=1, total=3, slot_count=3, terminal_profile=terminal_profile
+    )
     await _draw_full_same_size(browser_page)
     adapter = EbookJapanAdapter()
     adapter._page = browser_page

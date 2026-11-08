@@ -1,6 +1,6 @@
 # 04 — Owned-only Site Policy / Batch / GUI Integration
 
-Status: **LOCAL CLI REGISTRY WIRING IMPLEMENTED / INDEPENDENT REVIEW PENDING / NOT LIVE**. Stage 03 source-research exit and the scoped D-policy gate are accepted. No live Batch execution has run.
+Status: **LOCAL CLI REGISTRY REVIEWED / LIVE BATCH ATTEMPT FAILED AT END / CLASSIFIER FIX REVIEW PENDING**. Stage 03 source-research exit and the scoped D-policy gate are accepted. The first normal live Batch saved 287 ordered D pages but failed closed before verified END; no ZIP was produced. The observed Angel terminal variant fix awaits independent review before retry. Stage 05 live E2E is not started.
 
 ## 目的と実装範囲
 
@@ -11,7 +11,7 @@ Status: **LOCAL CLI REGISTRY WIRING IMPLEMENTED / INDEPENDENT REVIEW PENDING / N
 
 ## Policy
 
-`EbookJapanSitePolicy` is registered in the CLI Batch policy registry, and the Reader adapter is registered for manual Crawl and Batch. It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The GUI policy inventory discovers the module through `__all__`, so no GUI-specific code changed. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Independent review of the registry wiring is pending, and no live Batch run has occurred.
+`EbookJapanSitePolicy` is registered in the CLI Batch policy registry, and the Reader adapter is registered for manual Crawl and Batch. It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The GUI policy inventory discovers the module through `__all__`, so no GUI-specific code changed. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Independent review of the registry wiring passed. One normal live Batch saved 287 ordered D pages, then failed closed at terminal classification without verified END or ZIP; the scoped observed Angel lottery/header variant is pending review before retry.
 
 `EbookJapanSitePolicy.site = "ebookjapan"`。
 

@@ -762,6 +762,58 @@ class EbookJapanAdapter(SiteAdapter):
                 and partition.get("recommendI2i", 0) >= 1
                 and set(modules) == {"review", "coupon", "author", "i2i"}
                 and set(partition).issubset({"review", "coupon", "recommendAuthor", "recommendI2i"})
+                and terminal.get("variant") == "line-coupon-only-v1"
+                and terminal.get("lotteryButtonCount") == 0
+                and isinstance(terminal.get("headerCounts"), Mapping)
+                and terminal["headerCounts"] == {
+                    "close-button": 0,
+                    "contents-button": 0,
+                    "settings-button": 0,
+                }
+            )
+        if profile == "angel-dead-end-observed-controls":
+            marker = frame.get("deadEnd")
+            modules = terminal.get("moduleCounts")
+            headers = terminal.get("headerCounts")
+            return (
+                isinstance(marker, list)
+                and len(marker) == 1
+                and isinstance(marker[0], Mapping)
+                and marker[0].get("visible") is True
+                and marker[0].get("textExact") is True
+                and marker[0].get("controls") == 0
+                and isinstance(marker[0].get("rect"), Mapping)
+                and marker[0]["rect"].get("viewport") is True
+                and terminal.get("variant") == "lottery-plus-native-header-v1"
+                and terminal.get("markerCount") == 1
+                and terminal.get("markerInsideInner") is True
+                and terminal.get("markerVisible") is True
+                and terminal.get("markerTextExact") is True
+                and terminal.get("markerControls") == 0
+                and terminal.get("riskyActionCount") == 0
+                and isinstance(modules, Mapping)
+                and set(modules) == {"review", "coupon", "author", "i2i"}
+                and all(type(modules.get(name)) is int and modules.get(name) == 1 for name in modules)
+                and type(terminal.get("lotteryButtonCount")) is int
+                and type(terminal.get("headerRootCount")) is int
+                and type(terminal.get("headerBarCount")) is int
+                and type(terminal.get("headerMenuCount")) is int
+                and terminal.get("lotteryButtonCount") == 1
+                and terminal.get("headerRootCount") == 1
+                and terminal.get("headerBarCount") == 1
+                and terminal.get("headerMenuCount") == 1
+                and isinstance(headers, Mapping)
+                and set(headers) == {"close-button", "contents-button", "settings-button"}
+                and all(type(headers.get(name)) is int and headers.get(name) == 1 for name in headers)
+                and partition.get("review") == 1
+                and partition.get("coupon") == 1
+                and partition.get("lottery") == 1
+                and partition.get("header") == 3
+                and partition.get("recommendAuthor", 0) >= 1
+                and partition.get("recommendI2i", 0) >= 1
+                and set(partition).issubset(
+                    {"review", "coupon", "lottery", "header", "recommendAuthor", "recommendI2i"}
+                )
             )
         if profile == "muda-book-last":
             modules = terminal.get("moduleCounts")

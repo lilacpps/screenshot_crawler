@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from collections.abc import Mapping
 
 import pytest
@@ -14,6 +15,81 @@ from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     normalize_title,
     parse_page_counter,
 )
+
+
+def _observed_angel_terminal_frame() -> dict[str, object]:
+    partition = {
+        "review": 1,
+        "coupon": 1,
+        "lottery": 1,
+        "recommendAuthor": 4,
+        "recommendI2i": 3,
+        "header": 3,
+    }
+    return {
+        "status": "end",
+        "routeStable": True,
+        "slotCount": 287,
+        "parts": [],
+        "visibleSlots": [],
+        "visibleActions": sum(partition.values()),
+        "counterVisible": True,
+        "deadEnd": [{"visible": True, "textExact": True, "controls": 0, "rect": {"viewport": True}}],
+        "terminal": {
+            "profile": "angel-dead-end-observed-controls",
+            "variant": "lottery-plus-native-header-v1",
+            "rootCount": 1,
+            "innerCount": 1,
+            "rootVisible": True,
+            "innerVisible": True,
+            "rootInViewport": True,
+            "innerInViewport": True,
+            "insidePinnedLayout": True,
+            "shellChainValid": True,
+            "visibleSlotCount": 0,
+            "visiblePageCanvasCount": 0,
+            "modalCount": 0,
+            "actionInventoryCapped": False,
+            "actionPartitionComplete": True,
+            "unknownActionCount": 0,
+            "visibleActionCount": sum(partition.values()),
+            "nativeCounterVisible": True,
+            "nativeCounter": {"current": 287, "total": 287},
+            "markerCount": 1,
+            "markerInsideInner": True,
+            "markerVisible": True,
+            "markerTextExact": True,
+            "markerControls": 0,
+            "riskyActionCount": 0,
+            "moduleCounts": {"review": 1, "coupon": 1, "author": 1, "i2i": 1},
+            "lotteryButtonCount": 1,
+            "headerRootCount": 1,
+            "headerBarCount": 1,
+            "headerMenuCount": 1,
+            "headerCounts": {"close-button": 1, "contents-button": 1, "settings-button": 1},
+            "partition": partition,
+        },
+    }
+
+
+def test_observed_angel_end_requires_exact_lottery_and_scoped_header_partition() -> None:
+    frame = _observed_angel_terminal_frame()
+    assert EbookJapanAdapter._is_verified_end_frame(frame, total=287) is True
+
+    for mutation in (
+        lambda terminal: terminal.update(lotteryButtonCount=2),
+        lambda terminal: terminal.update(headerRootCount=2),
+        lambda terminal: terminal.update(headerBarCount=2),
+        lambda terminal: terminal.update(headerMenuCount=2),
+        lambda terminal: terminal["headerCounts"].update({"settings-button": 2}),
+        lambda terminal: terminal["partition"].update(header=2),
+        lambda terminal: terminal["partition"].update(unclassified=1),
+        lambda terminal: terminal.update(variant="line-coupon-only-v1"),
+        lambda terminal: terminal["moduleCounts"].update(extra=1),
+    ):
+        forged = copy.deepcopy(frame)
+        mutation(forged["terminal"])
+        assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
 
 
 @pytest.mark.parametrize(
