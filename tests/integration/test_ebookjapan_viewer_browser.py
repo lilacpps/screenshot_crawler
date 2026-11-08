@@ -154,9 +154,20 @@ def _html(
             const counter=document.querySelector('.legacy-comic-footer__page-output');
             const controls=[...document.querySelectorAll('.legacy-comic-header button.close-button,.legacy-comic-header button.contents-button,.legacy-comic-header button.settings-button')];
             title.style.visibility='hidden';counter.style.visibility='hidden';controls.forEach(control=>control.style.visibility='hidden');
-            if(window.__ejFixtureMode==='transient-observed-terminal')setTimeout(()=>{{
-              title.style.visibility='';controls.forEach(control=>control.style.visibility='');
-            }},350);
+            const hydratingAction=document.createElement('button');
+            hydratingAction.className='fixture-hydrating-action';
+            const hydratingModule=document.querySelector('.book-last-dead-end__author');
+            const moduleParent=hydratingModule?.parentElement||null;
+            const moduleNext=hydratingModule?.nextSibling||null;
+            if(window.__ejFixtureMode==='transient-observed-terminal'){{
+              document.querySelector('.book-last-dead-end__inner').append(hydratingAction);
+              setTimeout(()=>hydratingModule?.remove(),100);
+              setTimeout(()=>{{
+                title.style.visibility='';controls.forEach(control=>control.style.visibility='');
+                if(hydratingModule&&moduleParent)moduleParent.insertBefore(hydratingModule,moduleNext);
+                hydratingAction.remove();
+              }},350);
+            }}
           }}
         }}
       }});
@@ -550,6 +561,16 @@ async def test_core_runner_waits_for_exact_hidden_angel_terminal_to_settle(
 
     monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 2_000)
     monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 20)
+    original_go_next = EbookJapanAdapter.go_next
+
+    async def seed_stale_terminal_cache(adapter, page):
+        adapter._terminal_diagnostics = {
+            "first_unknown": {"status": "identity-mismatch"},
+            "last_sample": {"status": "identity-mismatch"},
+        }
+        await original_go_next(adapter, page)
+
+    monkeypatch.setattr(EbookJapanAdapter, "go_next", seed_stale_terminal_cache)
     original_evaluate = browser_page.evaluate
     terminal_samples: list[dict[str, object]] = []
 
@@ -574,15 +595,14 @@ async def test_core_runner_waits_for_exact_hidden_angel_terminal_to_settle(
     assert len(result.pages) == 3
     assert adapter._capture_coverage_complete() is True
     assert adapter._terminal_end_verified is True
-    transient = [sample for sample in terminal_samples if sample.get("status") == "loading"]
+    transient = [sample for sample in terminal_samples if sample.get("status") == "unknown-terminal-marker"]
     settled = [sample for sample in terminal_samples if sample.get("status") == "end"]
     assert transient, json.dumps(terminal_samples, sort_keys=True)
     assert settled, json.dumps(terminal_samples, sort_keys=True)
-    loading = transient[0]
-    terminal = loading["terminal"]
-    assert loading["toolbarVisible"] is False
-    assert loading["counterVisible"] is False
-    assert loading["visibleSlots"] == []
+    unknown = transient[0]
+    terminal = unknown["terminal"]
+    assert unknown["toolbarVisible"] is False
+    assert unknown["visibleSlots"] == []
     assert terminal["nativeCounterVisible"] is False
     assert terminal["visiblePageCanvasCount"] == 0
     assert terminal["visibleSlotCount"] == 0
@@ -600,12 +620,29 @@ async def test_core_runner_waits_for_exact_hidden_angel_terminal_to_settle(
         "recommendAuthor": 2,
         "recommendI2i": 1,
     }
+    assert settled[-1]["terminal"]["partition"] == {
+        "review": 1,
+        "coupon": 1,
+        "lottery": 1,
+        "recommendAuthor": 2,
+        "recommendI2i": 1,
+        "header": 3,
+    }
     assert settled[-1]["counterVisible"] is False
     assert settled[-1]["terminal"]["headerCounts"] == {
         "close-button": 1,
         "contents-button": 1,
         "settings-button": 1,
     }
+    diagnostics = await adapter.collect_debug_metadata(browser_page)
+    terminal_wait = diagnostics["ebookjapan_terminal_wait"]
+    assert terminal_wait["first_unknown"]["status"] == "unknown-terminal-marker"
+    assert terminal_wait["first_unknown"]["unknown_outside_known_region_count"] == 0
+    assert terminal_wait["first_unknown"]["unknown_action_count"] == 1
+    assert terminal_wait["first_unknown"]["coverage_complete"] is True
+    assert any(sample["terminal"]["moduleCounts"]["author"] == 0 for sample in transient)
+    assert terminal_wait["last_sample"]["status"] == "end"
+    assert terminal_wait["last_sample"]["module_counts"]["author"] == 1
 
 
 async def test_permanently_hidden_angel_terminal_times_out_without_packaging(
@@ -1473,7 +1510,7 @@ async def test_angel_observed_terminal_variant_rejects_unobserved_control_shapes
             }"""
         )
         transient = await _frame(browser_page, current=3)
-        assert transient["status"] == "loading"
+        assert transient["status"] == "unknown-terminal-marker"
     await browser_page.evaluate(f"()=>{{{mutation}}}")
 
     frame = await _frame(browser_page, current=3)

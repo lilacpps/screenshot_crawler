@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import io
 import re
@@ -95,6 +96,80 @@ _CAPTURE_CLASS = "D"
 _FALLBACK_REASON_CODE = "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
 _CAPTURE_POLICY_REVISION = "ebookjapan-owned-rendered-png-v1-20261108"
 
+_FRAME_STATUS_ENUM = frozenset(
+    {
+        "content",
+        "partial",
+        "loading",
+        "end",
+        "identity-mismatch",
+        "slot-order-mismatch",
+        "layout-mismatch",
+        "observer-unavailable",
+        "observer-overflow",
+        "observer-metadata-failure",
+        "counter-total-mismatch",
+        "unknown-terminal-marker",
+    }
+)
+_TERMINAL_PROFILE_ENUM = frozenset(
+    {"angel-dead-end", "angel-dead-end-observed-controls", "muda-book-last", "unknown-modal"}
+)
+_TERMINAL_VARIANT_ENUM = frozenset(
+    {"line-coupon-only-v1", "lottery-plus-native-header-v1"}
+)
+_TERMINAL_MODULE_KEYS = (
+    "review",
+    "coupon",
+    "author",
+    "i2i",
+    "nextItem",
+    "cta",
+    "banner",
+    "forYou",
+)
+_TERMINAL_HEADER_KEYS = ("close-button", "contents-button", "settings-button")
+_TERMINAL_PARTITION_KEYS = (
+    "review",
+    "coupon",
+    "lottery",
+    "recommendAuthor",
+    "recommendI2i",
+    "header",
+    "nextItem",
+    "cta",
+    "banner",
+    "author",
+    "forYou",
+)
+
+
+def _safe_frame_status(value: object) -> str:
+    return value if isinstance(value, str) and value in _FRAME_STATUS_ENUM else "other"
+
+
+def _safe_count(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= 1_000_000 else None
+
+
+def _safe_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _safe_count_map(value: object, keys: tuple[str, ...]) -> dict[str, int | None] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {key: _safe_count(value.get(key)) for key in keys}
+
+
+def _safe_counter(value: object) -> dict[str, int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    current, total = _safe_count(value.get("current")), _safe_count(value.get("total"))
+    if current is None or total is None or not (1 <= current <= MAX_SLOTS and 1 <= total <= MAX_SLOTS):
+        return None
+    return {"current": current, "total": total}
+
 
 def parse_ebookjapan_product_url(url: str) -> tuple[str, str] | None:
     """Accept only a canonical Catalog product URL without query or fragment."""
@@ -157,6 +232,11 @@ class EbookJapanAdapter(SiteAdapter):
         self._transition_before_key: tuple[object, ...] | None = None
         self._transition_pending: bool = False
         self._terminal_end_verified: bool = False
+        self._terminal_diagnostics: dict[str, object] = {
+            "first_unknown": None,
+            "last_sample": None,
+        }
+        self._advance_started_at: float | None = None
 
     def get_access_profile(self) -> AccessProfile:
         return AccessProfile(
@@ -687,6 +767,163 @@ class EbookJapanAdapter(SiteAdapter):
             and self._seen_slot_ids == set(range(1, total + 1))
             and len(set(self._captured_slot_order)) == total
             and self._next_dom_ordinal == -1
+        )
+
+    def _safe_terminal_frame_sample(
+        self, frame: Mapping[str, object], *, elapsed_ms: int
+    ) -> dict[str, object]:
+        terminal = frame.get("terminal")
+        terminal_map = terminal if isinstance(terminal, Mapping) else {}
+        dead_end = frame.get("deadEnd")
+        marker = dead_end[0] if isinstance(dead_end, list) and len(dead_end) == 1 else None
+        marker_map = marker if isinstance(marker, Mapping) else {}
+        marker_rect = marker_map.get("rect")
+        marker_rect_map = marker_rect if isinstance(marker_rect, Mapping) else {}
+        native_counter_visible = _safe_bool(terminal_map.get("nativeCounterVisible"))
+        counter = (
+            _safe_counter(terminal_map.get("nativeCounter"))
+            if native_counter_visible is True
+            else None
+        )
+        status = _safe_frame_status(frame.get("status"))
+        profile = terminal_map.get("profile")
+        variant = terminal_map.get("variant")
+        parts, visible_slots = frame.get("parts"), frame.get("visibleSlots")
+        return {
+            "status": status,
+            "elapsed_ms": _safe_count(elapsed_ms),
+            "route_stable": _safe_bool(frame.get("routeStable")),
+            "slot_count": _safe_count(frame.get("slotCount")),
+            "part_count": len(parts) if isinstance(parts, list) else None,
+            "visible_slot_count": len(visible_slots) if isinstance(visible_slots, list) else None,
+            "visible_action_count": _safe_count(frame.get("visibleActions")),
+            "coverage_complete": self._capture_coverage_complete(),
+            "profile": profile if isinstance(profile, str) and profile in _TERMINAL_PROFILE_ENUM else None,
+            "variant": variant if isinstance(variant, str) and variant in _TERMINAL_VARIANT_ENUM else None,
+            "root_count": _safe_count(terminal_map.get("rootCount")),
+            "inner_count": _safe_count(terminal_map.get("innerCount")),
+            "root_visible": _safe_bool(terminal_map.get("rootVisible")),
+            "inner_visible": _safe_bool(terminal_map.get("innerVisible")),
+            "root_in_viewport": _safe_bool(terminal_map.get("rootInViewport")),
+            "inner_in_viewport": _safe_bool(terminal_map.get("innerInViewport")),
+            "inside_pinned_layout": _safe_bool(terminal_map.get("insidePinnedLayout")),
+            "shell_chain_valid": _safe_bool(terminal_map.get("shellChainValid")),
+            "marker_count": _safe_count(terminal_map.get("markerCount")),
+            "marker_inside_inner": _safe_bool(terminal_map.get("markerInsideInner")),
+            "marker_visible": _safe_bool(terminal_map.get("markerVisible")),
+            "marker_text_exact": _safe_bool(terminal_map.get("markerTextExact")),
+            "marker_controls": _safe_count(terminal_map.get("markerControls")),
+            "visible_page_canvas_count": _safe_count(terminal_map.get("visiblePageCanvasCount")),
+            "modal_count": _safe_count(terminal_map.get("modalCount")),
+            "action_inventory_capped": _safe_bool(terminal_map.get("actionInventoryCapped")),
+            "action_partition_complete": _safe_bool(terminal_map.get("actionPartitionComplete")),
+            "unknown_action_count": _safe_count(terminal_map.get("unknownActionCount")),
+            "unknown_outside_known_region_count": _safe_count(
+                terminal_map.get("unknownOutsideKnownRegionCount")
+            ),
+            "unknown_action_scope_known": _safe_bool(terminal_map.get("unknownActionScopeKnown")),
+            "risky_action_count": _safe_count(terminal_map.get("riskyActionCount")),
+            "module_counts": _safe_count_map(terminal_map.get("moduleCounts"), _TERMINAL_MODULE_KEYS),
+            "header_root_count": _safe_count(terminal_map.get("headerRootCount")),
+            "header_bar_count": _safe_count(terminal_map.get("headerBarCount")),
+            "header_menu_count": _safe_count(terminal_map.get("headerMenuCount")),
+            "header_counts": _safe_count_map(terminal_map.get("headerCounts"), _TERMINAL_HEADER_KEYS),
+            "partition": _safe_count_map(terminal_map.get("partition"), _TERMINAL_PARTITION_KEYS),
+            "native_counter_visible": native_counter_visible,
+            "native_counter": counter,
+            "marker_in_viewport": _safe_bool(marker_rect_map.get("viewport")),
+            "marker_controls_visible": _safe_count(marker_map.get("controls")),
+            "marker_text_exact_frame": _safe_bool(marker_map.get("textExact")),
+            "visible_slots_empty": visible_slots == [],
+            "parts_empty": parts == [],
+        }
+
+    def _record_terminal_frame_sample(
+        self, frame: Mapping[str, object], *, elapsed_ms: int
+    ) -> dict[str, object]:
+        sample = self._safe_terminal_frame_sample(frame, elapsed_ms=elapsed_ms)
+        self._terminal_diagnostics["last_sample"] = sample
+        status = sample["status"]
+        if (
+            status not in {"content", "partial", "loading", "end"}
+            and self._terminal_diagnostics.get("first_unknown") is None
+        ):
+            self._terminal_diagnostics["first_unknown"] = sample
+        return sample
+
+    def _remember_terminal_failure(self, sample: Mapping[str, object]) -> None:
+        if self._terminal_diagnostics.get("first_unknown") is None:
+            self._terminal_diagnostics["first_unknown"] = dict(sample)
+
+    @staticmethod
+    def _is_waitable_angel_terminal_unknown(
+        frame: Mapping[str, object], *, total: int
+    ) -> bool:
+        if (
+            frame.get("status") != "unknown-terminal-marker"
+            or frame.get("routeStable") is not True
+            or type(frame.get("slotCount")) is not int
+            or frame.get("slotCount") != total
+            or frame.get("parts") != []
+            or frame.get("visibleSlots") != []
+            or frame.get("counterVisible", False) is not False
+            or type(frame.get("visibleActions")) is not int
+        ):
+            return False
+        dead_end = frame.get("deadEnd")
+        if not isinstance(dead_end, list) or len(dead_end) != 1 or not isinstance(dead_end[0], Mapping):
+            return False
+        marker = dead_end[0]
+        marker_rect = marker.get("rect")
+        terminal = frame.get("terminal")
+        if not isinstance(terminal, Mapping):
+            return False
+        unknown_actions = terminal.get("unknownActionCount")
+        visible_actions = terminal.get("visibleActionCount")
+        outside_unknown_actions = terminal.get("unknownOutsideKnownRegionCount")
+        return (
+            terminal.get("profile") == "angel-dead-end-observed-controls"
+            and terminal.get("variant") == "lottery-plus-native-header-v1"
+            and type(terminal.get("rootCount")) is int
+            and terminal.get("rootCount") == 1
+            and type(terminal.get("innerCount")) is int
+            and terminal.get("innerCount") == 1
+            and terminal.get("rootVisible") is True
+            and terminal.get("innerVisible") is True
+            and terminal.get("rootInViewport") is True
+            and terminal.get("innerInViewport") is True
+            and terminal.get("shellChainValid") is True
+            and terminal.get("insidePinnedLayout") is True
+            and type(terminal.get("visibleSlotCount")) is int
+            and terminal.get("visibleSlotCount") == 0
+            and type(terminal.get("visiblePageCanvasCount")) is int
+            and terminal.get("visiblePageCanvasCount") == 0
+            and type(terminal.get("modalCount")) is int
+            and terminal.get("modalCount") == 0
+            and terminal.get("actionInventoryCapped") is False
+            and terminal.get("unknownActionScopeKnown") is True
+            and type(unknown_actions) is int
+            and unknown_actions >= 0
+            and type(outside_unknown_actions) is int
+            and outside_unknown_actions == 0
+            and type(visible_actions) is int
+            and visible_actions == frame.get("visibleActions")
+            and type(terminal.get("riskyActionCount")) is int
+            and terminal.get("riskyActionCount") == 0
+            and terminal.get("nativeCounterVisible") is False
+            and type(terminal.get("markerCount")) is int
+            and terminal.get("markerCount") == 1
+            and terminal.get("markerInsideInner") is True
+            and terminal.get("markerVisible") is True
+            and terminal.get("markerTextExact") is True
+            and type(terminal.get("markerControls")) is int
+            and terminal.get("markerControls") == 0
+            and marker.get("visible") is True
+            and marker.get("textExact") is True
+            and type(marker.get("controls")) is int
+            and marker.get("controls") == 0
+            and isinstance(marker_rect, Mapping)
+            and marker_rect.get("viewport") is True
         )
 
     @staticmethod
@@ -1579,6 +1816,8 @@ class EbookJapanAdapter(SiteAdapter):
             or self._last_capture_node_key is None
         ):
             raise UnknownPageStateError("ebookjapan normal advance is not ready for the captured frame")
+        self._terminal_diagnostics = {"first_unknown": None, "last_sample": None}
+        self._advance_started_at = time.monotonic()
         frame = await self._read_ready_frame(
             page,
             expected_path=reader_path,
@@ -1680,18 +1919,42 @@ class EbookJapanAdapter(SiteAdapter):
             )
             if not isinstance(frame, Mapping):
                 raise UnknownPageStateError("ebookjapan page-change state is malformed")
-            status = frame.get("status")
+            started_at = self._advance_started_at
+            elapsed_ms = max(
+                0,
+                int((time.monotonic() - started_at) * 1000),
+            ) if started_at is not None else 0
+            sample = self._record_terminal_frame_sample(frame, elapsed_ms=elapsed_ms)
+            status = sample["status"]
             if status in {
                 "identity-mismatch", "slot-order-mismatch", "layout-mismatch",
                 "observer-unavailable", "observer-overflow", "observer-metadata-failure",
-                "counter-total-mismatch", "unknown-terminal-marker",
+                "counter-total-mismatch",
             }:
                 raise UnknownPageStateError(f"ebookjapan Reader changed identity during advance ({status})")
+            if status == "unknown-terminal-marker":
+                last_capture_is_bound = (
+                    self._last_capture_node_key is not None
+                    and self._transition_before_key == self._last_capture_node_key
+                    and self._last_capture_page_id == previous_identity.page_id
+                )
+                if (
+                    not self._capture_coverage_complete()
+                    or not last_capture_is_bound
+                    or not self._is_waitable_angel_terminal_unknown(frame, total=total)
+                ):
+                    self._remember_terminal_failure(sample)
+                    raise UnknownPageStateError(
+                        "ebookjapan Reader changed identity during advance (unknown-terminal-marker)"
+                    )
+                await page.wait_for_timeout(_FRAME_POLL_MS)
+                continue
             if status == "end":
                 if (
                     not self._capture_coverage_complete()
                     or not self._is_verified_end_frame(frame, total=total)
                 ):
+                    self._remember_terminal_failure(sample)
                     raise UnknownPageStateError(
                         "ebookjapan Reader reached an unverified END or terminal notice"
                     )
@@ -1741,6 +2004,7 @@ class EbookJapanAdapter(SiteAdapter):
             "ebookjapan_derived_frame_shape": "cover" if self._expected_current == 1 else "spread",
             "ebookjapan_native_page_number": None,
             "ebookjapan_source_provenance": "UNKNOWN",
+            "ebookjapan_terminal_wait": copy.deepcopy(self._terminal_diagnostics),
         }
 
     async def _read_ready_frame(

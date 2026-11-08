@@ -92,6 +92,156 @@ def test_observed_angel_end_requires_exact_lottery_and_scoped_header_partition()
         assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
 
 
+def _observed_angel_unknown_terminal_frame() -> dict[str, object]:
+    frame = _observed_angel_terminal_frame()
+    terminal = frame["terminal"]
+    frame["status"] = "unknown-terminal-marker"
+    frame["counterVisible"] = False
+    terminal["nativeCounterVisible"] = False
+    terminal["nativeCounter"] = None
+    terminal["unknownActionCount"] = 1
+    terminal["unknownActionScopeKnown"] = True
+    terminal["unknownOutsideKnownRegionCount"] = 0
+    terminal["actionPartitionComplete"] = False
+    return frame
+
+
+def test_unknown_angel_terminal_wait_requires_complete_scoped_marker_and_safe_frame() -> None:
+    frame = _observed_angel_unknown_terminal_frame()
+    assert EbookJapanAdapter._is_waitable_angel_terminal_unknown(frame, total=287) is True
+
+    for mutation in (
+        lambda item: item["terminal"].update(unknownOutsideKnownRegionCount=1),
+        lambda item: item["terminal"].update(unknownActionScopeKnown=False),
+        lambda item: item["terminal"].update(modalCount=1),
+        lambda item: item["terminal"].update(actionInventoryCapped=True),
+        lambda item: item["terminal"].update(rootInViewport=False),
+        lambda item: item["terminal"].update(shellChainValid=False),
+        lambda item: item["terminal"].update(markerTextExact=False),
+        lambda item: item.update(counterVisible=True),
+        lambda item: item.update(visibleSlots=[1]),
+        lambda item: item.update(parts=[{}]),
+        lambda item: item.update(slotCount=286),
+        lambda item: item.update(status="end"),
+    ):
+        forged = copy.deepcopy(frame)
+        mutation(forged)
+        assert EbookJapanAdapter._is_waitable_angel_terminal_unknown(forged, total=287) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "coverage_complete"),
+    [
+        ("coverage", False),
+        ("capture-binding", True),
+        ("outside-action", True),
+        ("modal", True),
+        ("document", True),
+        ("slots", True),
+        ("layout", True),
+        ("observer", True),
+        ("malformed-end", True),
+    ],
+)
+async def test_unknown_terminal_anomalies_fail_before_another_wait(
+    monkeypatch: pytest.MonkeyPatch, failure: str, coverage_complete: bool,
+) -> None:
+    frame = _observed_angel_unknown_terminal_frame()
+    if failure == "outside-action":
+        frame["terminal"]["unknownOutsideKnownRegionCount"] = 1
+    elif failure == "modal":
+        frame["terminal"]["modalCount"] = 1
+    elif failure == "document":
+        frame["status"] = "identity-mismatch"
+    elif failure == "slots":
+        frame["status"] = "slot-order-mismatch"
+    elif failure == "layout":
+        frame["status"] = "layout-mismatch"
+    elif failure == "observer":
+        frame["status"] = "observer-overflow"
+    elif failure == "malformed-end":
+        frame["status"] = "end"
+        frame["terminal"]["headerCounts"]["settings-button"] = 0
+        frame["terminal"]["actionPartitionComplete"] = False
+
+    class Page:
+        url = "https://ebookjapan.yahoo.co.jp/viewer/purchased/B123456789012/"
+
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        async def evaluate(self, _script: str, _arg: object) -> dict[str, object]:
+            return frame
+
+        async def wait_for_timeout(self, _milliseconds: int) -> None:
+            self.wait_calls += 1
+
+    class PreviousIdentity:
+        page_id = "captured-page"
+
+    page = Page()
+    adapter = EbookJapanAdapter()
+    adapter._reader_path = "/viewer/purchased/B123456789012/"
+    adapter._reader_total = 287
+    adapter._page = page
+    adapter._transition_pending = True
+    adapter._transition_before_key = ("captured-frame",)
+    adapter._last_capture_node_key = ("captured-frame",)
+    adapter._last_capture_page_id = "captured-page"
+    if failure == "capture-binding":
+        adapter._transition_before_key = ("different-frame",)
+    monkeypatch.setattr(adapter, "_capture_coverage_complete", lambda: coverage_complete)
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.wait_for_change(page, PreviousIdentity())
+
+    assert page.wait_calls == 0
+    debug = await adapter.collect_debug_metadata(page)
+    first_unknown = debug["ebookjapan_terminal_wait"]["first_unknown"]
+    assert first_unknown is not None
+    assert first_unknown["status"] in {
+        "unknown-terminal-marker", "identity-mismatch", "slot-order-mismatch",
+        "layout-mismatch", "observer-overflow", "end",
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_debug_metadata_is_cached_sanitized_and_does_not_read_page() -> None:
+    adapter = EbookJapanAdapter()
+    frame = _observed_angel_unknown_terminal_frame()
+    frame.update(
+        {
+            "url": "https://private.example/reader?secret=sentinel-url",
+            "title": "sentinel-title",
+            "actionText": "sentinel-action",
+            "privateReaderB": "sentinel-reader-b",
+            "sourceBytes": "sentinel-source-bytes",
+            "functionSource": "sentinel-function-source",
+        }
+    )
+    frame["terminal"]["privateReaderB"] = "sentinel-terminal-private"
+    sample = adapter._safe_terminal_frame_sample(frame, elapsed_ms=14)
+    adapter._terminal_diagnostics = {"first_unknown": sample, "last_sample": sample}
+
+    class NeverReadPage:
+        url = "https://private.example/sentinel-url"
+        title = "sentinel-title"
+
+        async def evaluate(self, *_args: object, **_kwargs: object) -> None:
+            pytest.fail("collect_debug_metadata must not read a live Page")
+
+    debug = await adapter.collect_debug_metadata(NeverReadPage())
+    serialized = str(debug)
+    for sentinel in (
+        "sentinel-url", "sentinel-title", "sentinel-action", "sentinel-reader-b",
+        "sentinel-terminal-private", "sentinel-source-bytes", "sentinel-function-source",
+    ):
+        assert sentinel not in serialized
+    assert debug["ebookjapan_terminal_wait"]["first_unknown"]["status"] == "unknown-terminal-marker"
+    assert debug["ebookjapan_terminal_wait"]["first_unknown"]["native_counter"] is None
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
