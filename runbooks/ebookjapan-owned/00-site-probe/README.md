@@ -1,6 +1,6 @@
 # 00 — 実サイトProbe（一覧・権利・Viewer・画像ソース）
 
-Status: **VERIFIED / REVIEWER ACCEPTED** (2026-11-07). Listing, rights, Reader entry/transition, and the Angel 10 END profile were observed. A separate Mudazumo 1 terminal structure was observed but has not been exercised by a full Mudazumo crawl. Stage 02 is now VERIFIED / ACCEPTED for the one-work Angel 10 D baseline; bounded probe evidence is not source-provenance proof. Stage 03 remains offline preparation / live not started. This stage does not update the operational Catalog.
+Status: **VERIFIED / REVIEWER ACCEPTED** (2026-11-07). Listing, rights, Reader entry/transition, and the Angel 10 END profile were observed. A separate Mudazumo 1 terminal structure was observed but has not been exercised by a full Mudazumo crawl. Stage 02 is now VERIFIED / ACCEPTED for the one-work Angel 10 D baseline; bounded probe evidence is not source-provenance proof. Stage 03 source-research exit is accepted; a separate user-requested C RGB-tolerance proof effort has resumed, but no A/B/C method is verified or adopted. This stage does not update the operational Catalog.
 
 ## 入力・既知／未知
 

@@ -149,6 +149,15 @@ def _html(
           else if(window.__ejFixtureMode==='opacity-hidden-terminal'){{terminalShell.style.display='block';terminalShell.style.opacity='0';setTimeout(()=>terminalShell.style.opacity='1',250);}}
           else terminalShell.style.display='block';
           if('{terminal_profile}'==='muda'||'{terminal_profile}'==='angel-observed'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
+          if('{terminal_profile}'==='angel-observed'&&['transient-observed-terminal','permanent-hidden-observed-terminal'].includes(window.__ejFixtureMode)){{
+            const title=document.querySelector('.legacy-comic-header__title');
+            const counter=document.querySelector('.legacy-comic-footer__page-output');
+            const controls=[...document.querySelectorAll('.legacy-comic-header button.close-button,.legacy-comic-header button.contents-button,.legacy-comic-header button.settings-button')];
+            title.style.visibility='hidden';counter.style.visibility='hidden';controls.forEach(control=>control.style.visibility='hidden');
+            if(window.__ejFixtureMode==='transient-observed-terminal')setTimeout(()=>{{
+              title.style.visibility='';controls.forEach(control=>control.style.visibility='');
+            }},350);
+          }}
         }}
       }});
       </script>
@@ -532,6 +541,95 @@ async def test_core_runner_accepts_each_observed_book_terminal_profile(
 
     assert result.stop_state.value == "end"
     assert len(result.pages) == 3
+
+
+async def test_core_runner_waits_for_exact_hidden_angel_terminal_to_settle(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan import adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 2_000)
+    monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 20)
+    original_evaluate = browser_page.evaluate
+    terminal_samples: list[dict[str, object]] = []
+
+    async def record_terminal_samples(expression, *args, **kwargs):
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression == FRAME_STATE_JS and isinstance(result, dict):
+            terminal = result.get("terminal")
+            if isinstance(terminal, dict) and terminal.get("profile") == "angel-dead-end-observed-controls":
+                terminal_samples.append(result)
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", record_terminal_samples)
+    adapter, result = await _run_neutral_core_flow(
+        browser_page,
+        tmp_path,
+        mode="transient-observed-terminal",
+        max_pages=10,
+        terminal_profile="angel-observed",
+    )
+
+    assert result.stop_state.value == "end"
+    assert len(result.pages) == 3
+    assert adapter._capture_coverage_complete() is True
+    assert adapter._terminal_end_verified is True
+    transient = [sample for sample in terminal_samples if sample.get("status") == "loading"]
+    settled = [sample for sample in terminal_samples if sample.get("status") == "end"]
+    assert transient, json.dumps(terminal_samples, sort_keys=True)
+    assert settled, json.dumps(terminal_samples, sort_keys=True)
+    loading = transient[0]
+    terminal = loading["terminal"]
+    assert loading["toolbarVisible"] is False
+    assert loading["counterVisible"] is False
+    assert loading["visibleSlots"] == []
+    assert terminal["nativeCounterVisible"] is False
+    assert terminal["visiblePageCanvasCount"] == 0
+    assert terminal["visibleSlotCount"] == 0
+    assert terminal["lotteryButtonCount"] == 1
+    assert terminal["headerRootCount"] == terminal["headerBarCount"] == terminal["headerMenuCount"] == 1
+    assert terminal["headerCounts"] == {
+        "close-button": 0,
+        "contents-button": 0,
+        "settings-button": 0,
+    }
+    assert terminal["partition"] == {
+        "review": 1,
+        "coupon": 1,
+        "lottery": 1,
+        "recommendAuthor": 2,
+        "recommendI2i": 1,
+    }
+    assert settled[-1]["counterVisible"] is False
+    assert settled[-1]["terminal"]["headerCounts"] == {
+        "close-button": 1,
+        "contents-button": 1,
+        "settings-button": 1,
+    }
+
+
+async def test_permanently_hidden_angel_terminal_times_out_without_packaging(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan import adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 120)
+    monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 10)
+    with pytest.raises(UnknownPageStateError, match="did not produce a new full content frame"):
+        await _run_neutral_core_flow(
+            browser_page,
+            tmp_path,
+            mode="permanent-hidden-observed-terminal",
+            max_pages=10,
+            terminal_profile="angel-observed",
+        )
+
+    output = tmp_path / "catalog-isolated" / "run"
+    manifest_path = output / "manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest.get("status") != "completed"
+    assert not list(tmp_path.rglob("*.zip"))
 
 
 async def test_core_runner_waits_for_delayed_signed_in_account_shell(
@@ -1359,15 +1457,62 @@ async def test_angel_observed_terminal_variant_partitions_only_scoped_controls(b
     ],
     ids=["duplicate-lottery", "duplicate-header-button", "wrong-header-ancestry", "missing-marker", "fake-outside-header"],
 )
+@pytest.mark.parametrize("hidden_toolbar", [False, True], ids=["visible-header", "hidden-header-transient"])
 async def test_angel_observed_terminal_variant_rejects_unobserved_control_shapes(
-    browser_page: Page, mutation: str,
+    browser_page: Page, mutation: str, hidden_toolbar: bool,
 ) -> None:
     baseline = await _show_terminal_profile(browser_page, "angel-observed")
     assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+    if hidden_toolbar:
+        await browser_page.evaluate(
+            """()=>{
+              document.querySelector('.legacy-comic-header__title').style.visibility='hidden';
+              document.querySelector('.legacy-comic-footer__page-output').style.visibility='hidden';
+              document.querySelectorAll('.legacy-comic-header button.close-button,.legacy-comic-header button.contents-button,.legacy-comic-header button.settings-button')
+                .forEach(button=>button.style.visibility='hidden');
+            }"""
+        )
+        transient = await _frame(browser_page, current=3)
+        assert transient["status"] == "loading"
     await browser_page.evaluate(f"()=>{{{mutation}}}")
 
     frame = await _frame(browser_page, current=3)
     assert frame["status"] == "unknown-terminal-marker"
+
+
+@pytest.mark.parametrize("visible_header_count", [1, 2, 4])
+async def test_hidden_angel_terminal_rejects_partial_or_extra_header_controls(
+    browser_page: Page, visible_header_count: int,
+) -> None:
+    await _show_terminal_profile(browser_page, "angel-observed")
+    await browser_page.evaluate(
+        """visibleCount=>{
+          document.querySelector('.legacy-comic-header__title').style.visibility='hidden';
+          document.querySelector('.legacy-comic-footer__page-output').style.visibility='hidden';
+          const bar=document.querySelector('.legacy-comic-header__bar');
+          const buttons=[...bar.querySelectorAll('button.close-button,button.contents-button,button.settings-button')];
+          buttons.forEach(button=>button.style.visibility='hidden');
+          if(visibleCount===4){
+            const extra=document.createElement('button');extra.className='settings-button';extra.textContent='Extra';
+            extra.style.cssText='position:fixed;left:1800px;top:40px';bar.append(extra);buttons.push(extra);
+          }
+          buttons.slice(0,visibleCount).forEach(button=>button.style.visibility='');
+        }""",
+        visible_header_count,
+    )
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker"
+    if visible_header_count == 1:
+        assert frame["terminal"]["headerCounts"] == {
+            "close-button": 1, "contents-button": 0, "settings-button": 0,
+        }
+    elif visible_header_count == 2:
+        assert frame["terminal"]["headerCounts"] == {
+            "close-button": 1, "contents-button": 1, "settings-button": 0,
+        }
+    else:
+        assert frame["terminal"]["unknownActionCount"] == 1
 
 
 @pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])

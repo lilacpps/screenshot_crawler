@@ -489,6 +489,34 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     const observedControlsValid=observedControlsVariant
       &&lotteryCandidates.length===1&&lotteryButtons.length===1&&headerRoots.length===1&&header.parentElement===viewer
       &&bars.length===1&&menus.length===1&&Object.values(headerControls).every(count=>count===1);
+    const transientPartitionKeys=['coupon','lottery','recommendAuthor','recommendI2i','review'];
+    const transientPartitionValid=terminal.actionPartitionComplete
+      &&Object.keys(terminal.partition).length===transientPartitionKeys.length
+      &&transientPartitionKeys.every(key=>Object.hasOwn(terminal.partition,key))
+      &&terminal.partition.review===1&&terminal.partition.coupon===1&&terminal.partition.lottery===1
+      &&terminal.partition.recommendAuthor>=1&&terminal.partition.recommendI2i>=1
+      &&terminal.visibleActionCount===1+1+1+terminal.partition.recommendAuthor+terminal.partition.recommendI2i;
+    const transientHiddenHeaderLoading=observedControlsVariant
+      &&terminal.profile==='angel-dead-end-observed-controls'
+      &&terminal.variant==='lottery-plus-native-header-v1'
+      &&terminal.rootCount===1&&terminal.innerCount===1&&terminal.shellChainValid===true
+      &&terminal.insidePinnedLayout===true&&terminal.rootVisible===true&&terminal.innerVisible===true
+      &&terminal.rootInViewport===true&&terminal.innerInViewport===true
+      &&mudaRoots.length===0&&safeModules&&terminal.markerCount===1&&terminal.markerInsideInner===true
+      &&terminal.markerVisible===true&&terminal.markerTextExact===true&&terminal.markerControls===0
+      &&lotteryCandidates.length===1&&lotteryButtons.length===1&&lotteryCandidates[0]===lotteryButtons[0]
+      &&headerRoots.length===1&&header.parentElement===viewer&&bars.length===1&&menus.length===1
+      &&nativeHeaderButtons.length===0&&Object.values(headerControls).every(count=>count===0)
+      &&transientPartitionValid&&terminal.unknownActionCount===0&&terminal.riskyActionCount===0
+      &&terminal.actionInventoryCapped===false&&terminal.modalCount===0
+      &&terminal.visibleSlotCount===0&&terminal.visiblePageCanvasCount===0
+      &&visibleSlots.length===0&&parts.length===0&&dead.length===1&&dead[0].visible===true
+      &&dead[0].textExact===true&&dead[0].controls===0
+      &&titleVisible===false&&counterVisible===false;
+    if(transientHiddenHeaderLoading){
+      return {status:'loading',routeStable:true,slotCount:slots.length,visibleSlots,parts:[],deadEnd:dead,
+        visibleActions,counter:null,counterVisible:false,toolbarVisible:false,terminal};
+    }
     const legacyControlsValid=!observedControlsVariant&&lotteryCandidates.length===0;
     if(terminal.insidePinnedLayout&&terminal.shellChainValid&&mudaRoots.length===0&&terminal.rootVisible&&terminal.innerVisible&&terminal.rootInViewport&&terminal.innerInViewport&&terminal.actionPartitionComplete&&modalCount===0
       &&(observedControlsValid||legacyControlsValid)){

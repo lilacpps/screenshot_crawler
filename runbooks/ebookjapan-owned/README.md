@@ -1,6 +1,6 @@
 # ebookjapan — 購入済み書籍限定 Site Adapter 実装 Runbook
 
-Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 source-research exit accepted; A/B/C unverified** (2026-11-08 Asia/Tokyo). The accepted Angel 10 run reached actual END after 287 ordered pages and produced an isolated ZIP with the exact prepackage manifest retained. Current source results, limits, and evidence paths are maintained in [`PROGRESS.md`](PROGRESS.md). The scoped D policy is independently reviewed and accepted after one bounded production Muda 16 cover capture passed artifact and visual QA; this is not a full-book Muda 16 verification.
+Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 source-research exit accepted; A/B/C unverified; user-requested C RGB-tolerance proof is separate** (2026-11-08 Asia/Tokyo). The accepted Angel 10 run reached actual END after 287 ordered pages and produced an isolated ZIP with the exact prepackage manifest retained. Current source results, limits, and evidence paths are maintained in [`PROGRESS.md`](PROGRESS.md). The scoped D policy is independently reviewed and accepted after one bounded production Muda 16 cover capture passed artifact and visual QA; this is not a full-book Muda 16 verification.
 
 ## 目的・完了定義
 

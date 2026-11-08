@@ -1,6 +1,6 @@
 # 03 — 原画像 / source-native Capture を最大限追求する
 
-Status: **SOURCE RESEARCH EXIT ACCEPTED; SCOPED D POLICY ADOPTED; A/B/C NOT VERIFIED; source-native class UNASSIGNED** (2026-11-08 Asia/Tokyo). Multiple source-derived candidates and decoder paths differ from stable D samples; evidence, limits, and bounded unknowns are summarized in [`../PROGRESS.md`](../PROGRESS.md) and the sanitized [`source-native-evidence.json`](../../../output/ebookjapan_experiment/phase03/source-native-evidence.json). The scoped D policy passed independent review and one bounded production Muda 16 cover capture with artifact/visual QA; this does not establish full-book END/ZIP behavior or any A/B/C source method.
+Status: **SOURCE RESEARCH EXIT ACCEPTED; SCOPED D POLICY ADOPTED; A/B/C NOT VERIFIED; source-native class UNASSIGNED** (2026-11-08 Asia/Tokyo). Multiple source-derived candidates and decoder paths differ from stable D samples; evidence, limits, and bounded unknowns are summarized in [`../PROGRESS.md`](../PROGRESS.md) and the sanitized [`source-native-evidence.json`](../../../output/ebookjapan_experiment/phase03/source-native-evidence.json). The scoped D policy passed independent review and one bounded production Muda 16 cover capture with artifact/visual QA; this does not establish full-book END/ZIP behavior or any A/B/C source method. The user-requested C RGB-tolerance proof effort has resumed separately; alpha and dimensions remain exact and every RGB channel must differ by at most 2, but source ROI and draw/mutation proof remain open.
 
 ## 目的（品質要件）
 

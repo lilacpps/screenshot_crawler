@@ -1,6 +1,6 @@
 # 02 — Owned Viewer baseline / ページ完全性と安全な閲覧
 
-Status: **ONE-WORK D BASELINE VERIFIED / ACCEPTED; LOCAL ENTRY + D CAPTURE/TRAVERSAL ACCEPTED** (2026-11-08 Asia/Tokyo). Angel 10 reached actual END after 287 ordered D pages and produced an isolated ZIP with its exact prepackage manifest retained; audit passed 20 artifact checks and 9 visual samples. Stage 03 source-research exit is accepted, while A/B/C remain unverified; the scoped D policy is independently reviewed and accepted, including one bounded Muda 16 cover capture; full-book Muda 16 END/ZIP behavior is not established. See [`../PROGRESS.md`](../PROGRESS.md) for current research outcomes. This does not adopt D as source-native proof or a general policy beyond the observed scope.
+Status: **ONE-WORK D BASELINE VERIFIED / ACCEPTED; LOCAL ENTRY + D CAPTURE/TRAVERSAL ACCEPTED** (2026-11-08 Asia/Tokyo). Angel 10 reached actual END after 287 ordered D pages and produced an isolated ZIP with its exact prepackage manifest retained; audit passed 20 artifact checks and 9 visual samples. Stage 03 source-research exit is accepted; a separate user-requested C RGB-tolerance proof effort has resumed, while A/B/C remain unverified and the scoped D policy is independently reviewed and accepted, including one bounded Muda 16 cover capture; full-book Muda 16 END/ZIP behavior is not established. See [`../PROGRESS.md`](../PROGRESS.md) for current research outcomes. This does not adopt D as source-native proof or a general policy beyond the observed scope.
 
 ## 目的 / 設計
 

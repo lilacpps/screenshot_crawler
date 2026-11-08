@@ -1,6 +1,6 @@
 # 04 — Owned-only Site Policy / Batch / GUI Integration
 
-Status: **LOCAL CLI REGISTRY REVIEWED / LIVE BATCH ATTEMPT FAILED AT END / CLASSIFIER FIX REVIEW PENDING**. Stage 03 source-research exit and the scoped D-policy gate are accepted. The first normal live Batch saved 287 ordered D pages but failed closed before verified END; no ZIP was produced. The observed Angel terminal variant fix awaits independent review before retry. Stage 05 live E2E is not started.
+Status: **LOCAL CLI REGISTRY REVIEWED / TWO LIVE BATCH ATTEMPTS FAILED AT TERMINAL / TRANSIENT-FRAME FIX REVIEW PENDING**. Stage 03 source-research exit and the scoped D-policy gate are accepted. Both normal live Batch attempts saved all 287 ordered D pages but failed closed before verified END; neither produced a ZIP. The latest bounded timeline showed the exact hidden-header Angel terminal frame at 0/196 ms and the existing verified lottery/header END partition by 446 ms; the native counter stayed hidden. A narrow local change classifies only that exact complete transient as LOADING; the existing coverage and END verifier are unchanged. Independent review is pending before retry. Stage 05 live E2E is not started.
 
 ## 目的と実装範囲
 
