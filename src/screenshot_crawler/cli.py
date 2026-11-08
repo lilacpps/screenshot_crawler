@@ -70,6 +70,7 @@ from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
     ComicFuzSitePolicy,
+    EbookJapanSitePolicy,
     JumpPlusSitePolicy,
     KadocomiSitePolicy,
     MagapokeSitePolicy,
@@ -496,6 +497,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
+    from screenshot_crawler.site_adapters.ebookjapan import EbookJapanAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
@@ -512,6 +514,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    registry.register("ebookjapan", EbookJapanAdapter)
     comicfuz_work_url = env_value("COMICFUZ_WORK_URL", values or {})
     registry.register(
         "comicfuz",
@@ -536,6 +539,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
+    from screenshot_crawler.site_adapters.ebookjapan import EbookJapanAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
@@ -558,6 +562,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    registry.register("ebookjapan", EbookJapanAdapter)
     comicfuz_work_url = env_value("COMICFUZ_WORK_URL", values)
     registry.register(
         "comicfuz",
@@ -613,6 +618,7 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("mangaone", MangaOneSitePolicy)
     registry.register("zeblack", ZeblackSitePolicy)
     registry.register("comicfuz", ComicFuzSitePolicy)
+    registry.register("ebookjapan", EbookJapanSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
     from screenshot_crawler.site_policies.yanmaga import YanmagaSitePolicy

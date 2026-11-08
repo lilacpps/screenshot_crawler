@@ -818,6 +818,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "bookwalker",
         "comicdays",
         "comicfuz",
+        "ebookjapan",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -836,6 +837,9 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     )
     assert grant_only.grant_only == "work_ticket"
     assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
+    ebookjapan_policy = cli._batch_policy_registry().create("ebookjapan")
+    assert ebookjapan_policy.supported_access_resources() == ()
+    assert ebookjapan_policy.grant_only_supported_access_resources() == ()
     younganimal_policy = cli._batch_policy_registry().create("younganimal")
     assert younganimal_policy.supported_access_resources() == ("work_ticket",)
     assert younganimal_policy.grant_only_supported_access_resources() == ("work_ticket",)
@@ -860,6 +864,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "bookwalker",
         "comicdays",
         "comicfuz",
+        "ebookjapan",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -874,6 +879,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "bookwalker",
         "comicdays",
         "comicfuz",
+        "ebookjapan",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -909,8 +915,10 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "comicfuz" in cli._batch_policy_registry().sites()
     assert cli._registry().create("kadocomi").__class__.__name__ == "KadocomiAdapter"
     assert cli._registry().create("yanmaga").__class__.__name__ == "YanmagaAdapter"
+    assert cli._registry().create("ebookjapan").__class__.__name__ == "EbookJapanAdapter"
     assert cli._batch_adapter_registry({}).create("kadocomi").__class__.__name__ == "KadocomiAdapter"
     assert cli._batch_adapter_registry({}).create("yanmaga").__class__.__name__ == "YanmagaAdapter"
+    assert cli._batch_adapter_registry({}).create("ebookjapan").__class__.__name__ == "EbookJapanAdapter"
     # Both adapters must keep the current Kadocomi entry contract when a new site is added.
     kadocomi_url = (
         "https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000700021_E"
@@ -919,6 +927,11 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         assert registry.create("kadocomi").resolve_initial_navigation_url(
             kadocomi_url
         ) == kadocomi_url
+    ebookjapan_url = "https://ebookjapan.yahoo.co.jp/books/134336/A000083590/"
+    for registry in (cli._registry(), cli._batch_adapter_registry({})):
+        assert registry.create("ebookjapan").resolve_initial_navigation_url(
+            ebookjapan_url
+        ) == "https://ebookjapan.yahoo.co.jp/books/all/134336/"
     comicfuz_batch_adapter = cli._batch_adapter_registry(
         {"COMICFUZ_WORK_URL": "https://comic-fuz.com/manga/1970?position=thumbnail"}
     ).create("comicfuz")

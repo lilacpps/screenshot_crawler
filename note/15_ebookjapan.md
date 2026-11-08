@@ -1,6 +1,6 @@
 # ebookjapan purchased-only Discovery - current implementation
 
-> **Current status (2026-11-08):** Stage 00/01 are accepted. Stage 02 is VERIFIED / ACCEPTED for the one-work Angel 10 D baseline `core-run-angel10-20261107-215910-399914`: actual native END after 287 ordered pages, retained exact prepackage manifest, isolated ZIP, 20 artifact checks and 9 visual samples. Stage 03 source-research exit is accepted and the scoped D rendered-PNG policy is adopted under revision `ebookjapan-owned-rendered-png-v1-20261108`. The adopted rendered capture class is `D`; source-native A/B/C remain `NOT_VERIFIED`, with source-native class `UNASSIGNED`. The Muda 16 live validation was one cover capture only, not a full-book run. Toolbar hiding remains supported only at the observed 1906x986 viewport with exact backing/rect pairs for Angel 10 (816x1200), Muda 1 (1088x1600), and Muda 16 (1120x1600); other geometry fails closed. Stage 04 is offline policy preparation only / not integrated / not live; Stage 05 live E2E is not started.
+> **Current status (2026-11-08):** Stage 00/01 are accepted. Stage 02 is VERIFIED / ACCEPTED for the one-work Angel 10 D baseline `core-run-angel10-20261107-215910-399914`: actual native END after 287 ordered pages, retained exact prepackage manifest, isolated ZIP, 20 artifact checks and 9 visual samples. Stage 03 source-research exit is accepted and the scoped D rendered-PNG policy is adopted under revision `ebookjapan-owned-rendered-png-v1-20261108`. The adopted rendered capture class is `D`; source-native A/B/C remain `NOT_VERIFIED`, with source-native class `UNASSIGNED`. The Muda 16 live validation was one cover capture only, not a full-book run. Toolbar hiding remains supported only at the observed 1906x986 viewport with exact backing/rect pairs for Angel 10 (816x1200), Muda 1 (1088x1600), and Muda 16 (1120x1600); other geometry fails closed. Stage 04 CLI registry wiring is implemented locally and awaiting independent review; no live Batch run has started. Stage 05 live E2E is not started.
 >
 > Five Pillow page-part samples across four profiles differ from stable D outputs: Muda 1 cover 822,567/max delta 2; Muda 1 middle 88,953 and 87,501/max delta 2; Angel 10 cover 510,602/max delta 2; Muda 16 cover 318,401/max delta 2. On Angel 10 cover, RGB atlas copy and default Blob -> `createImageBitmap` -> `VideoFrame` replay matched the Pillow candidate, not D (510,602/max delta 2). The current-realm ImageDecoder I420-to-RGBA candidate differed by 675,038/max delta 44; cause unknown. Literal HTMLImage replay raised `EncodingError` before copy; phase and cause were not recorded. The Pillow fallback differed by 510,602/max delta 2. Exact PNG/VP8L roundtrips establish encoding only.
 >
@@ -10,7 +10,7 @@
 >
 > Two earlier probe-harness attempts produced no PNG and are not production-capture failures or passes. The first wrote the 1906x986 viewport before Reader initialization, observed DPR change from 1.5 to 1.0 and 840x1200 backing, then stopped on a harness check reading layout fields from the wrong frame projection; the quality cause is unknown and no 840x1200 profile was accepted. The second used the natural DPR/backing and production capture returned valid bytes, but the harness incorrectly expected a visible top-level counter after toolbar hide and did not retain the PNG. The corrected run above preserves `None` for the hidden live counter and `1` in the cached pre-hide part metadata.
 >
-> Stage 04 remains offline policy prepared / not integrated / not live. Stage 05 has offline audit preparation only; live E2E remains not started.
+> Stage 04 CLI registry wiring is implemented locally and awaits independent review; no live Batch run has started. Stage 05 has offline audit preparation only; live E2E remains not started.
 
 ## Scope
 
@@ -168,7 +168,7 @@ It is a D compositor control for one cover only, not full-book coverage, END,
 or A/B/C source proof. The viewport was restored and the owned Reader closed at
 its anchored 1/193 entry.
 
-The final Stage 02 runtime/test tree passed 115 affected tests (24 adapter unit + 91 local Chromium Viewer/Runner), 0 skipped. An independent Reviewer passed 37 browser and 4 geometry cases; runtime/test review is VERIFIED / BLOCKING 0. The finite-outline refinement remains a bounded supported Chromium case, not a universal paint proof, and the prior IMG rejection has not been explained. The accepted production result is the one-work Angel 10 D baseline recorded below; A/B/C remain unproven and CLI/Batch registration remains incomplete.
+The final Stage 02 runtime/test tree passed 115 affected tests (24 adapter unit + 91 local Chromium Viewer/Runner), 0 skipped. An independent Reviewer passed 37 browser and 4 geometry cases; runtime/test review is VERIFIED / BLOCKING 0. The finite-outline refinement remains a bounded supported Chromium case, not a universal paint proof, and the prior IMG rejection has not been explained. At that Stage 02 checkpoint, the accepted production result was the one-work Angel 10 D baseline recorded below; A/B/C remained unproven and Stage 04 CLI/Batch registration had not started.
 
 The first isolated production-adapter live attempt used the phase01 Catalog read-only
 and a new shared-CDP Page. The canonical series listing returned HTTP 200, with
@@ -248,18 +248,9 @@ A separate owned Angel 10 normal-navigation probe reached one exact viewport-vis
 A separate owned Mudazumo 1 probe reached 193/193, made one validated normal edge advance, then remained `loading` for its 20-second bound with route stable, zero visible slots, and toolbar visible. A metadata-only snapshot found a distinct `.book-last` root with review, next-item, CTA, banner, and recommendation modules. Twelve visible actions were recorded; no CTA or recommendation was clicked; fresh entry restored 1/193. The local implementation has a separate scoped classifier for this observed profile. This was a terminal research probe, not a full Mudazumo capture/Batch run. No Batch, repeated Full Discovery, or Stage 05 live E2E is claimed.
 
 
-## Stage 04 offline Site Policy preparation
+## Stage 04 CLI registry wiring and Site Policy
 
-`EbookJapanSitePolicy` and focused policy/planner tests are prepared locally.
-The GUI policy inventory discovers the module through `__all__`, but CLI/Batch
-registration and Batch execution are not complete or verified. It plans `direct` only when the source is for
-`ebookjapan`, `available=True`, and `access_mode=owned`; all other states are
-ineligible. It declares no quota/resource or grant-only path. This is Catalog
-planning eligibility only: the live adapter must recheck current owned rights
-before Reader entry. The focused test module passed 12 tests with 0 skips. Stage
-04 remains **OFFLINE POLICY PREPARED / NOT INTEGRATED / NOT LIVE**. The scoped
-Stage 03 D policy is accepted; Stage 04 registry/Batch integration and live
-Batch verification have not started.
+`EbookJapanSitePolicy` is registered in the CLI Batch policy registry and remains a Catalog planning filter, not proof of current rights. It plans `direct` with `consumes_quota=False` only for `site=ebookjapan`, `available=True`, and `access_mode=owned`; all other states are ineligible, with no quota/resource or grant-only path. The live adapter still rechecks the exact owned book before Reader entry. The GUI policy inventory already discovers the class through `site_policies.__all__`; no GUI-specific registration change was needed. Manual Crawl and Batch adapter registries now include `EbookJapanAdapter`, while Discovery remains separately registered. The affected local CLI/policy/inventory/worker/presenter/GUI selection passed 207 tests with 0 skips. Stage 04 status is **LOCAL CLI REGISTRY WIRING IMPLEMENTED / INDEPENDENT REVIEW PENDING / NOT LIVE**; no Batch execution has run.
 
 ## Stage 05 offline E2E audit preparation
 

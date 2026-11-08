@@ -1,6 +1,6 @@
 # 04 — Owned-only Site Policy / Batch / GUI Integration
 
-Status: **OFFLINE POLICY PREPARED / NOT INTEGRATED / NOT LIVE**. Stage 03 source-research exit and the scoped D-policy gate are accepted; Stage 04 registry/Batch integration and live execution have not started.
+Status: **LOCAL CLI REGISTRY WIRING IMPLEMENTED / INDEPENDENT REVIEW PENDING / NOT LIVE**. Stage 03 source-research exit and the scoped D-policy gate are accepted. No live Batch execution has run.
 
 ## 目的と実装範囲
 
@@ -11,7 +11,7 @@ Status: **OFFLINE POLICY PREPARED / NOT INTEGRATED / NOT LIVE**. Stage 03 source
 
 ## Policy
 
-Offline preparation exists in `src/screenshot_crawler/site_policies/ebookjapan.py` with focused policy/planner tests (12 passed, 0 skipped). It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The GUI policy inventory discovers the module through `__all__`, but CLI/Batch registration and a Batch run are not complete or verified. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Stage 04 integration remains **NOT STARTED** pending the production D review/live gate and subsequent Batch integration.
+`EbookJapanSitePolicy` is registered in the CLI Batch policy registry, and the Reader adapter is registered for manual Crawl and Batch. It plans an available `ebookjapan` source marked `owned` as `direct` with no quota consumption; every other state is ineligible. The GUI policy inventory discovers the module through `__all__`, so no GUI-specific code changed. This Catalog planning filter is not proof of current ownership; the adapter must revalidate rights before Reader entry. Independent review of the registry wiring is pending, and no live Batch run has occurred.
 
 `EbookJapanSitePolicy.site = "ebookjapan"`。
 

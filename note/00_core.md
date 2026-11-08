@@ -3398,3 +3398,16 @@ unavailable or does not match, the ordinary exact native artifact path remains
 the fallback. Screen dimensions, filenames, timing, and source/JPEG similarity
 are never attribution evidence. Unknown or unstable artifacts remain content,
 and existing END/final-navigation checks remain authoritative.
+
+## ebookjapan CLI registry wiring (2026-11-08)
+
+The ebookjapan purchased-only Reader adapter is registered in the manual Crawl
+and Batch adapter registries, and `EbookJapanSitePolicy` is registered in the
+CLI Batch policy registry. Discovery was already registered separately. The
+policy module is also exported through `site_policies.__all__`, so the existing
+GUI policy inventory sees it without GUI-specific code. This is site-local
+registry wiring only: no Core branch or Catalog schema change was made. The
+direct-only policy is a Catalog planning filter; the Reader adapter still
+rechecks current owned rights. Local CLI, policy, inventory parity, worker,
+presenter, and GUI tests passed (207 passed, 0 skipped); independent review and
+a live Batch run are still pending.
