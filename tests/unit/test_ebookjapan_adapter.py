@@ -436,110 +436,42 @@ def test_reader_title_accepts_only_exact_or_observed_one_way_volume_alias(
     assert reader_title_matches_owned_title(owned, reader) is expected
 
 
-@pytest.mark.parametrize(
-    ("name", "backing", "rect"),
-    [
-        (
-            "angel10-cover-816x1200",
-            (816, 1200),
-            (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
-        ),
-        (
-            "muda1-cover-1088x1600",
-            (1088, 1600),
-            (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
-        ),
-        (
-            "muda16-cover-1120x1600",
-            (1120, 1600),
-            (
-                262.8020935058594,
-                953.0000305175781,
-                0.0,
-                986.0,
-                690.1979370117188,
-                986.0,
-            ),
-        ),
-    ],
-)
-def test_toolbar_hide_profiles_require_observed_viewport_backing_and_rect(
-    name: str,
-    backing: tuple[int, int],
-    rect: tuple[float, float, float, float, float, float],
-) -> None:
-    css_rect = dict(
-        zip(("left", "right", "top", "bottom", "width", "height"), rect, strict=True)
-    )
+def test_toolbar_shortcut_frame_guard_binds_viewport_nodes_and_paint() -> None:
     frame = {
-        "viewport": {"width": 1906, "height": 986},
+        "status": "content",
+        "routeStable": True,
+        "viewport": {"width": 1537, "height": 877},
         "parts": [
             {
-                "backingWidth": backing[0],
-                "backingHeight": backing[1],
-                "cssRect": {"viewport": True, **css_rect},
+                "slotId": 41,
+                "canvasId": 42,
+                "slotOrdinal": 9,
+                "canvasIndex": 0,
+                "backingWidth": 934,
+                "backingHeight": 1500,
+                "cssRect": {"viewport": True, "left": 301.5, "top": 0, "width": 467, "height": 750},
+                "drawGeneration": 3,
+                "successfulDraws": 3,
+                "mutationCount": 7,
+                "drawReady": True,
             }
         ],
     }
+    adapter = EbookJapanAdapter()
+    assert adapter._same_toolbar_reader_frame(frame, copy.deepcopy(frame)) is True
 
-    assert EbookJapanAdapter._observed_toolbar_hide_geometry_profile(frame) == (
-        name,
-        backing,
-        rect,
+    mutations = (
+        lambda value: value["viewport"].update(width=1538),
+        lambda value: value["parts"][0].update(slotId=43),
+        lambda value: value["parts"][0]["cssRect"].update(left=302),
+        lambda value: value["parts"][0].update(drawGeneration=4),
+        lambda value: value.update(status="partial"),
+        lambda value: value.update(routeStable=False),
     )
-
-
-@pytest.mark.parametrize(
-    ("backing", "base_rect", "rect_delta", "viewport"),
-    [
-        (
-            (1120, 1600),
-            (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
-            0.0,
-            (1906, 986),
-        ),
-        (
-            (1088, 1600),
-            (262.8020935058594, 953.0000305175781, 0.0, 986.0, 690.1979370117188, 986.0),
-            0.0,
-            (1906, 986),
-        ),
-        (
-            (1120, 1600),
-            (262.8020935058594, 953.0000305175781, 0.0, 986.0, 690.1979370117188, 986.0),
-            1.01,
-            (1906, 986),
-        ),
-        (
-            (1120, 1600),
-            (262.8020935058594, 953.0000305175781, 0.0, 986.0, 690.1979370117188, 986.0),
-            0.0,
-            (1907, 986),
-        ),
-    ],
-)
-def test_toolbar_hide_rejects_unobserved_backing_rect_or_viewport(
-    backing: tuple[int, int],
-    base_rect: tuple[float, float, float, float, float, float],
-    rect_delta: float,
-    viewport: tuple[int, int],
-) -> None:
-    rect = (base_rect[0] + rect_delta, *base_rect[1:])
-    css_rect = dict(
-        zip(("left", "right", "top", "bottom", "width", "height"), rect, strict=True)
-    )
-    frame = {
-        "viewport": {"width": viewport[0], "height": viewport[1]},
-        "parts": [
-            {
-                "backingWidth": backing[0],
-                "backingHeight": backing[1],
-                "cssRect": {"viewport": True, **css_rect},
-            }
-        ],
-    }
-
-    assert EbookJapanAdapter._observed_toolbar_hide_geometry_profile(frame) is None
+    for mutate in mutations:
+        changed = copy.deepcopy(frame)
+        mutate(changed)
+        assert adapter._same_toolbar_reader_frame(frame, changed) is False
 
 
 @pytest.mark.asyncio

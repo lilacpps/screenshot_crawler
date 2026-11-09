@@ -107,6 +107,9 @@ def _html(
       .legacy-comic-header,.legacy-comic-footer{{position:fixed;left:0;width:100%;height:24px;z-index:20;background:#ddd}}
       .legacy-comic-header{{top:0}} .legacy-comic-footer{{bottom:0}}
       .book-last__author{{margin-top:1050px}}
+      body.toolbar-hidden .legacy-comic-header,
+      body.toolbar-hidden .legacy-comic-footer,
+      body.toolbar-hidden .seekbar__slider{{display:none}}
       {'.book-last__author{margin-top:0}' if terminal_profile == 'muda' else ''}
       </style></head><body>
       {viewer_open}
@@ -119,6 +122,16 @@ def _html(
       <input type="range" class="seekbar__slider" min="0" max="{total - 1}" value="0" style="position:fixed;left:0;top:650px">
       <script>
       let fixtureCurrent={current};
+      window.__ejToggleKeyCount=0;
+      document.addEventListener('keydown',event=>{{
+        if(event.key.toLowerCase()!=='i')return;
+        window.__ejToggleKeyCount++;
+        if(window.__ejIgnoreToggle||event.target!==document.body)return;
+        const hidden=document.body.classList.toggle('toolbar-hidden');
+        document.querySelector('.legacy-comic-header').hidden=hidden;
+        document.querySelector('.legacy-comic-footer').hidden=hidden;
+        document.querySelector('.seekbar__slider').style.display=hidden?'none':'';
+      }});
       document.addEventListener('click',event=>{{
         if(!(event.target instanceof HTMLCanvasElement))return;
         const header=document.querySelector('.legacy-comic-header'),footer=document.querySelector('.legacy-comic-footer');
@@ -150,7 +163,7 @@ def _html(
           if(window.__ejFixtureMode==='delayed-terminal'){{terminalShell.style.display='none';setTimeout(()=>terminalShell.style.display='block',250);}}
           else if(window.__ejFixtureMode==='opacity-hidden-terminal'){{terminalShell.style.display='block';terminalShell.style.opacity='0';setTimeout(()=>terminalShell.style.opacity='1',250);}}
           else terminalShell.style.display='block';
-          if('{terminal_profile}'==='muda'||'{terminal_profile}'==='angel-observed'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
+          if('{terminal_profile}'==='muda'||'{terminal_profile}'==='angel-observed'){{document.body.classList.remove('toolbar-hidden');document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
           if('{terminal_profile}'==='muda'&&window.__ejFixtureMode==='muda-transient-header'){{
             const header=document.querySelector('.legacy-comic-header'),footer=document.querySelector('.legacy-comic-footer');
             const parent=header.parentNode,next=header.nextSibling,title=header.querySelector('.legacy-comic-header__title');
@@ -244,6 +257,24 @@ async def _redraw_on_resize(page: Page) -> None:
 
 async def _frame(page: Page, *, current: int = 1) -> dict[str, object]:
     return await page.evaluate(FRAME_STATE_JS, {"expectedCurrent": current})
+
+
+async def _toolbar_shortcut_fixture(page: Page) -> tuple[EbookJapanAdapter, dict[str, object]]:
+    await _open_reader(page, current=1, total=3, slot_count=3)
+    await _draw_full_same_size(page)
+    adapter = EbookJapanAdapter()
+    adapter._page = page
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 3
+    adapter._last_native_counter = 1
+    await adapter._pin_reader_anchor(
+        page, expected_path=READER_PATH, expected_current=1, expected_total=3
+    )
+    return adapter, await _frame(page)
 
 
 async def _capture_neutral_cover(page: Page) -> tuple[EbookJapanAdapter, object]:
@@ -395,6 +426,10 @@ def _runner_seven_slot_reader_html(*, mode: str = "normal") -> str:
       const counter=document.querySelector('.legacy-comic-footer__page-output');
       const dead=document.querySelector('.book-last-dead-end');
       const slots=[...root.querySelectorAll('.comic-viewer__page-slot')];
+      document.addEventListener('keydown',event=>{
+        if(event.key!=='i'||event.target!==document.body)return;
+        document.body.classList.add('toolbar-hidden');
+      });
       function render(){
         const active=current===1?[1]:current<4?[2,3]:current<6?[4,5]:current===6?[6,7]:[];
         for(const slot of slots){
@@ -947,68 +982,208 @@ async def test_viewport_fit_rejects_canvas_reset_without_redraw(
     assert adapter._captured_slot_order == []
 
 
-async def test_capture_hides_toolbar_before_fitting_and_keeps_the_entry_slot(
+@pytest.mark.parametrize(
+    ("viewport", "device_scale_factor", "width", "height", "series_id", "external_id"),
+    [
+        ((1904, 985), 1, 816, 1200, "134336", "A000083590"),
+        ((1440, 900), 1.5, 1088, 1600, "115888", "A000039104"),
+        ((1280, 720), 1.5, 1120, 1600, "115888", "A001574536"),
+        ((1537, 877), 1.5, 934, 1500, "134336", "A000083590"),
+    ],
+    ids=["angel-dpr1", "muda1-dpr1_5", "muda16-dpr1_5", "other-shape-dpr1_5"],
+)
+async def test_capture_hides_toolbar_with_native_shortcut_across_viewports_and_dpr(
+    integration_browser: Browser,
+    viewport: tuple[int, int],
+    device_scale_factor: float,
+    width: int,
+    height: int,
+    series_id: str,
+    external_id: str,
+) -> None:
+    context = await integration_browser.new_context(
+        viewport={"width": viewport[0], "height": viewport[1]},
+        device_scale_factor=device_scale_factor,
+    )
+    page = await context.new_page()
+    try:
+        await _open_reader(page, current=1, total=3, slot_count=3)
+        await _draw_full_same_size(page, width=width, height=height)
+        initial_dpr = await page.evaluate("() => devicePixelRatio")
+        adapter = EbookJapanAdapter()
+        adapter._page = page
+        adapter._owned_title = TITLE
+        adapter._series_id = series_id
+        adapter._external_id = external_id
+        adapter._work_key = "neutral-work"
+        adapter._reader_path = READER_PATH
+        adapter._reader_total = 3
+        adapter._last_native_counter = 1
+        await page.evaluate(
+            """()=>{
+              window.__ejMouseClickCount=0;
+              document.addEventListener('click',()=>window.__ejMouseClickCount++);
+            }"""
+        )
+        await adapter._pin_reader_anchor(
+            page, expected_path=READER_PATH, expected_current=1, expected_total=3
+        )
+        before = await _frame(page)
+        assert before["viewport"] == {"width": viewport[0], "height": viewport[1]}
+        assert before["parts"][0]["drawReady"] is True
+        identity = await adapter.get_content_identity(page)
+
+        captures = await adapter.capture_page(page)
+        after = await _frame(page)
+        counter_text = await page.locator(
+            ".legacy-comic-footer__page-output"
+        ).text_content()
+        assert captures is not None and len(captures) == 1
+        image = Image.open(io.BytesIO(captures[0].data)).convert("RGBA")
+
+        assert identity.source_id == external_id
+        assert image.size == (width, height)
+        assert image.getpixel((0, 0)) == (0, 0, 0, 255)
+        assert after["status"] == "content"
+        assert after["toolbarVisible"] is False
+        assert after["viewport"] == {"width": width * 2, "height": height}
+        assert after["parts"][0]["slotId"] == before["parts"][0]["slotId"]
+        assert (after["parts"][0]["backingWidth"], after["parts"][0]["backingHeight"]) == (width, height)
+        assert counter_text == "1 / 3"
+        assert await page.evaluate("() => window.__ejToggleKeyCount") == 1
+        assert await page.evaluate("() => window.__ejMouseClickCount") == 0
+        assert await page.evaluate("() => devicePixelRatio") == initial_dpr == device_scale_factor
+        assert adapter._last_capture_parts[0]["capture_class"] == "D"
+        assert adapter._last_capture_parts[0]["source_provenance"] == "UNKNOWN"
+        assert adapter._seen_slot_ids == {before["parts"][0]["slotId"]}
+    finally:
+        await page.close()
+        await context.close()
+
+
+async def test_toolbar_shortcut_blurs_only_the_verified_native_range(
     browser_page: Page,
 ) -> None:
-    await _open_reader(browser_page, current=1, total=3, slot_count=3)
-    await _draw_full_same_size(browser_page)
-    adapter = EbookJapanAdapter()
-    adapter._page = browser_page
-    adapter._owned_title = TITLE
-    adapter._series_id = "134336"
-    adapter._external_id = "A000083590"
-    adapter._work_key = "neutral-work"
-    adapter._reader_path = READER_PATH
-    adapter._reader_total = 3
-    adapter._last_native_counter = 1
-    await browser_page.evaluate("() => {window.__ejCenterClickAdvances=true}")
-    await adapter._pin_reader_anchor(
-        browser_page, expected_path=READER_PATH, expected_current=1, expected_total=3
+    adapter, frame = await _toolbar_shortcut_fixture(browser_page)
+    slider = browser_page.locator(".seekbar__slider")
+    await slider.focus()
+    assert await browser_page.evaluate("() => document.activeElement.className") == "seekbar__slider"
+
+    hidden = await adapter._hide_toolbar_for_capture(
+        browser_page, frame=frame, expected_path=READER_PATH, current=1, total=3
     )
-    before = await _frame(browser_page)
-    assert before["viewport"] == {"width": 1906, "height": 986}
-    assert before["parts"][0]["cssRect"]["left"] == pytest.approx(282.52, abs=1)
-    assert before["parts"][0]["cssRect"]["width"] == pytest.approx(670.48, abs=1)
-    assert before["parts"][0]["drawReady"] is True
-    identity = await adapter.get_content_identity(browser_page)
 
-    captures = await adapter.capture_page(browser_page)
-    after = await _frame(browser_page)
-    counter_text = await browser_page.locator(
-        ".legacy-comic-footer__page-output"
-    ).text_content()
+    assert hidden["toolbarVisible"] is False
+    assert await browser_page.evaluate("() => document.activeElement === document.body") is True
+    assert await browser_page.evaluate("() => window.__ejToggleKeyCount") == 1
+    assert adapter._seen_slot_ids == set()
 
-    assert identity.source_id == "A000083590"
-    assert len(captures) == 1
-    assert (captures[0].width, captures[0].height) == (816, 1200)
-    assert after["status"] == "content"
-    assert after["toolbarVisible"] is False
-    assert after["viewport"] == {"width": 1632, "height": 1200}
-    assert after["parts"][0]["slotId"] == before["parts"][0]["slotId"]
-    assert counter_text == "1 / 3"
-    assert adapter._seen_slot_ids == {before["parts"][0]["slotId"]}
+
+@pytest.mark.parametrize("unsafe_state", ["textarea", "contenteditable", "button", "modal"])
+async def test_toolbar_shortcut_rejects_unsafe_initial_focus_or_modal(
+    browser_page: Page, unsafe_state: str
+) -> None:
+    adapter, frame = await _toolbar_shortcut_fixture(browser_page)
+    await browser_page.evaluate(
+        """state=>{
+          if(state==='textarea'){
+            const node=document.createElement('textarea');node.style.cssText='position:fixed;left:-100px;top:0';
+            document.body.append(node);node.focus();
+          }else if(state==='contenteditable'){
+            document.body.contentEditable='true';document.body.focus();
+          }else if(state==='button'){
+            const node=document.createElement('button');node.textContent='focus';
+            node.style.cssText='position:fixed;left:0;top:40px';document.body.append(node);node.focus();
+          }else{
+            const node=document.createElement('div');node.setAttribute('role','dialog');
+            node.style.cssText='position:fixed;left:20px;top:30px;width:100px;height:100px;background:white';
+            document.body.append(node);
+          }
+        }""",
+        unsafe_state,
+    )
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter._hide_toolbar_for_capture(
+            browser_page, frame=frame, expected_path=READER_PATH, current=1, total=3
+        )
+
+    assert await browser_page.evaluate("() => window.__ejToggleKeyCount") == 0
+    assert adapter._seen_slot_ids == set()
+
+
+@pytest.mark.parametrize("drift", ["focus", "modal"])
+async def test_toolbar_shortcut_rechecks_body_after_final_frame_read(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    adapter, frame = await _toolbar_shortcut_fixture(browser_page)
+    original_read_ready_frame = adapter._read_ready_frame
+    ready_reads = 0
+
+    async def inject_drift_after_ready_read(
+        page: Page, *, expected_path: str, current: int, total: int
+    ) -> dict[str, object]:
+        nonlocal ready_reads
+        result = await original_read_ready_frame(
+            page, expected_path=expected_path, current=current, total=total
+        )
+        ready_reads += 1
+        if ready_reads == 2:
+            await page.evaluate(
+                """drift=>{
+                  if(drift==='focus'){
+                    const node=document.createElement('textarea');
+                    node.style.cssText='position:fixed;left:-100px;top:0';document.body.append(node);node.focus();
+                  }else{
+                    const node=document.createElement('div');node.setAttribute('role','dialog');
+                    node.style.cssText='position:fixed;left:20px;top:30px;width:100px;height:100px;background:white';
+                    document.body.append(node);
+                  }
+                }""",
+                drift,
+            )
+        return result
+
+    monkeypatch.setattr(adapter, "_read_ready_frame", inject_drift_after_ready_read)
+    with pytest.raises(UnknownPageStateError, match="unsafe BODY focus or modal state before shortcut"):
+        await adapter._hide_toolbar_for_capture(
+            browser_page, frame=frame, expected_path=READER_PATH, current=1, total=3
+        )
+
+    assert ready_reads == 2
+    assert await browser_page.evaluate("() => window.__ejToggleKeyCount") == 0
+    assert adapter._seen_slot_ids == set()
+
+
+async def test_toolbar_shortcut_fails_closed_when_native_key_is_ignored(
+    browser_page: Page,
+) -> None:
+    adapter, frame = await _toolbar_shortcut_fixture(browser_page)
+    await browser_page.evaluate("() => {window.__ejIgnoreToggle=true}")
+
+    with pytest.raises(UnknownPageStateError, match="did not hide within the bounded shortcut wait"):
+        await adapter._hide_toolbar_for_capture(
+            browser_page, frame=frame, expected_path=READER_PATH, current=1, total=3
+        )
+
+    assert await browser_page.evaluate("() => window.__ejToggleKeyCount") == 1
+    assert (await _frame(browser_page))["toolbarVisible"] is True
+    assert adapter._seen_slot_ids == set()
 
 
 @pytest.mark.parametrize(
-    ("width", "external_id", "profile_name", "expected_left", "expected_width"),
+    ("width", "external_id"),
     [
-        (1088, "A000039104", "muda1-cover-1088x1600", 282.5208, 670.4792),
-        (
-            1120,
-            "A001574536",
-            "muda16-cover-1120x1600",
-            262.8020935058594,
-            690.1979370117188,
-        ),
+        (1088, "A000039104"),
+        (1120, "A001574536"),
     ],
 )
-async def test_capture_hides_observed_mudazumo_cover_before_native_fit(
+async def test_capture_hides_toolbar_and_fits_mudazumo_cover_dimensions(
     browser_page: Page,
     width: int,
     external_id: str,
-    profile_name: str,
-    expected_left: float,
-    expected_width: float,
 ) -> None:
     await _open_reader(browser_page)
     await _draw_full_same_size(browser_page, width=width, height=1600)
@@ -1026,11 +1201,7 @@ async def test_capture_hides_observed_mudazumo_cover_before_native_fit(
     )
     before = await _frame(browser_page)
     before_part = before["parts"][0]
-    assert before["viewport"] == {"width": 1906, "height": 986}
     assert (before_part["backingWidth"], before_part["backingHeight"]) == (width, 1600)
-    assert before_part["cssRect"]["left"] == pytest.approx(expected_left, abs=1)
-    assert before_part["cssRect"]["right"] == pytest.approx(953.0, abs=1)
-    assert before_part["cssRect"]["width"] == pytest.approx(expected_width, abs=1)
     assert before_part["drawReady"] is True
     identity = await adapter.get_content_identity(browser_page)
 
@@ -1054,11 +1225,10 @@ async def test_capture_hides_observed_mudazumo_cover_before_native_fit(
     assert debug["capture_class"] == "D"
     assert debug["fallback_reason_code"] == "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
     assert debug["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-rendered-png-v1-20261108"
-    assert adapter._observed_toolbar_hide_geometry_profile(before)[0] == profile_name
     assert debug["ebookjapan_capture_parts"][0]["source_provenance"] == "UNKNOWN"
 
 
-async def test_fitted_cover_center_is_a_page_turn_region_in_the_neutral_fixture(
+async def test_fitted_cover_center_can_advance_in_the_neutral_fixture(
     browser_page: Page,
 ) -> None:
     await _open_reader(browser_page, current=1, total=3, slot_count=3)
@@ -1080,14 +1250,7 @@ async def test_fitted_cover_center_is_a_page_turn_region_in_the_neutral_fixture(
         browser_page, expected_path=READER_PATH, current=1, total=3
     )
     assert fitted["viewport"] == {"width": 1632, "height": 1200}
-    with pytest.raises(UnknownPageStateError, match="unverified at this viewport geometry"):
-        await adapter._hide_toolbar_for_capture(
-            browser_page,
-            frame=fitted,
-            expected_path=READER_PATH,
-            current=1,
-            total=3,
-        )
+    assert fitted["toolbarVisible"] is True
     assert await browser_page.locator(
         ".legacy-comic-footer__page-output"
     ).text_content() == "1 / 3"

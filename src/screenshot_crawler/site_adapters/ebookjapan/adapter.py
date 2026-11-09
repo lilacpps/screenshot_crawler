@@ -92,36 +92,9 @@ _SURFACE_CDP_CLEANUP_TIMEOUT_SECONDS = 0.5
 _MAX_SURFACE_OPACITY_CANDIDATES = 8
 _INIT_BUDGET_MS = 120_000
 _RANGE_SELECTOR = "input[type='range'].seekbar__slider"
-# These are the only observed toolbar-center action profiles. The click must
-# happen at the original viewport and match a unique backing-size/rect pair;
-# fitting first can put the same center inside the page-turn region.
-_OBSERVED_CENTER_ACTION_VIEWPORT = (1906, 986)
-_OBSERVED_CENTER_ACTION_RECT_TOLERANCE = 1.0
-_OBSERVED_CENTER_ACTION_PROFILES: tuple[
-    tuple[str, tuple[int, int], tuple[float, float, float, float, float, float]], ...
-] = (
-    (
-        "angel10-cover-816x1200",
-        (816, 1200),
-        (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
-    ),
-    (
-        "muda1-cover-1088x1600",
-        (1088, 1600),
-        (282.5208, 953.0, 0.0, 986.0, 670.4792, 986.0),
-    ),
-    (
-        "muda16-cover-1120x1600",
-        (1120, 1600),
-        (
-            262.8020935058594,
-            953.0000305175781,
-            0.0,
-            986.0,
-            690.1979370117188,
-            986.0,
-        ),
-    ),
+_TOOLBAR_BLOCKING_OVERLAY_SELECTOR = (
+    'dialog,[role="dialog"],[aria-modal="true"],.intro-modal,.intro-modal__box,'
+    '.book-last,.book-last-dead-end,[popover]'
 )
 _CAPTURE_CLASS = "D"
 _FALLBACK_REASON_CODE = "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
@@ -2501,148 +2474,190 @@ class EbookJapanAdapter(SiteAdapter):
             return frame
         if frame.get("toolbarVisible") is not True:
             raise UnknownPageStateError("ebookjapan Reader toolbar visibility is unknown")
-        await self._require_reader_content(page, expected_path=expected_path)
-        profile = self._observed_toolbar_hide_geometry_profile(frame)
-        if profile is None:
-            raise UnknownPageStateError(
-                "ebookjapan center toolbar action is unverified at this viewport geometry"
-            )
-        _profile_name, expected_backing, expected_rect = profile
-        parts = frame.get("parts")
-        if not isinstance(parts, list) or not parts or not isinstance(parts[0], Mapping):
-            raise UnknownPageStateError("ebookjapan cannot locate a safe normal toolbar control area")
-        part = parts[0]
-        locator = await self._pinned_canvas_locator(page, part)
-        geometry = await locator.evaluate(
-            """canvas=>{
-              const r=canvas.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
-              const hit=document.elementFromPoint(x,y);
-              return {connected:canvas.isConnected,viewport:{width:innerWidth,height:innerHeight},
-                backing:{width:canvas.width,height:canvas.height},
-                rect:{left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height},
-                center:{x,y},hit:hit===canvas||canvas.contains(hit)};
-            }"""
+        fresh = await self._read_ready_frame(
+            page,
+            expected_path=expected_path,
+            current=current,
+            total=total,
         )
-        if not isinstance(geometry, Mapping) or geometry.get("connected") is not True:
-            raise UnknownPageStateError("ebookjapan selected page bounds are unavailable")
-        live_viewport = geometry.get("viewport")
-        live_backing = geometry.get("backing")
-        rect = geometry.get("rect")
-        center = geometry.get("center")
         if (
-            not isinstance(live_viewport, Mapping)
-            or (live_viewport.get("width"), live_viewport.get("height"))
-            != _OBSERVED_CENTER_ACTION_VIEWPORT
-            or not isinstance(live_backing, Mapping)
-            or (live_backing.get("width"), live_backing.get("height")) != expected_backing
-            or not isinstance(rect, Mapping)
-            or any(
-                type(value) not in (int, float)
-                or abs(float(value) - expected) > _OBSERVED_CENTER_ACTION_RECT_TOLERANCE
-                for value, expected in zip(
-                    (rect.get(key) for key in ("left", "right", "top", "bottom", "width", "height")),
-                    expected_rect,
-                    strict=True,
-                )
-            )
-            or not isinstance(center, Mapping)
-            or type(center.get("x")) not in (int, float)
-            or type(center.get("y")) not in (int, float)
-            or geometry.get("hit") is not True
+            fresh.get("toolbarVisible") is not True
+            or not self._same_toolbar_reader_frame(frame, fresh)
+            or fresh.get("title") != frame.get("title")
+            or self._native_counter(fresh) != self._native_counter(frame)
         ):
-            raise UnknownPageStateError(
-                "ebookjapan toolbar action bounds changed after the verified frame sample"
-            )
-        x, y = float(center["x"]), float(center["y"])
-        identity_key = self._frame_nodes_key(frame)
-        paint_signature = self._frame_paint_signature(frame)
-        native_counter_before = self._native_counter(frame)
+            raise UnknownPageStateError("ebookjapan Reader changed before its toolbar shortcut")
+
+        await self._prepare_toolbar_shortcut_focus(page, total=total)
+        ready = await self._read_ready_frame(
+            page,
+            expected_path=expected_path,
+            current=current,
+            total=total,
+        )
+        if (
+            ready.get("toolbarVisible") is not True
+            or not self._same_toolbar_reader_frame(fresh, ready)
+            or ready.get("title") != fresh.get("title")
+            or self._native_counter(ready) != self._native_counter(fresh)
+        ):
+            raise UnknownPageStateError("ebookjapan Reader changed before its toolbar shortcut")
+        # The final frame read can yield to site code. Recheck BODY focus and
+        # modal state after it, immediately before sending the shortcut.
+        await self._require_toolbar_shortcut_body_focus(page, stage="before shortcut")
+
         await asyncio.wait_for(
-            page.mouse.click(x, y),
+            page.keyboard.press("i"),
             timeout=_READER_NAVIGATION_WAIT_MS / 1000,
         )
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             changed = await page.evaluate(FRAME_STATE_JS, {"expectedCurrent": current})
             if not isinstance(changed, Mapping):
-                raise UnknownPageStateError("ebookjapan toolbar state after center action is malformed")
+                raise UnknownPageStateError("ebookjapan toolbar state after its shortcut is malformed")
             if changed.get("status") in {
                 "identity-mismatch", "slot-order-mismatch", "layout-mismatch",
                 "observer-unavailable", "observer-overflow", "observer-metadata-failure",
                 "counter-total-mismatch", "end",
             }:
-                raise UnknownPageStateError("ebookjapan center action changed the pinned Reader state")
+                raise UnknownPageStateError("ebookjapan toolbar shortcut changed the pinned Reader state")
             if changed.get("status") == "content":
-                if (
-                    changed.get("toolbarVisible") is False
-                    and self._frame_nodes_key(changed) == identity_key
-                    and self._frame_paint_signature(changed) == paint_signature
-                    and self._reader_path == expected_path
-                ):
+                if not self._same_toolbar_reader_frame(ready, changed):
+                    raise UnknownPageStateError("ebookjapan toolbar shortcut changed the pinned Reader frame")
+                if changed.get("toolbarVisible") is False:
                     counter = changed.get("counter")
                     if changed.get("counterVisible") is True and (
                         not isinstance(counter, Mapping)
                         or counter.get("total") != total
-                        or (native_counter_before is not None and counter.get("current") != native_counter_before)
-                        or (native_counter_before is None and (
-                            (current == 1 and counter.get("current") != 1)
-                            or (current != 1 and (type(counter.get("current")) is not int or counter.get("current") < 2))
-                        ))
+                        or counter.get("current") != current
                     ):
-                        raise UnknownPageStateError("ebookjapan center action changed the native page counter")
+                        raise UnknownPageStateError("ebookjapan toolbar shortcut changed the native page counter")
+                    if changed.get("counterVisible") is not False and changed.get("counterVisible") is not True:
+                        raise UnknownPageStateError("ebookjapan toolbar shortcut left counter visibility unknown")
+                    controls = await self._reader_controls(page, expected_path=expected_path)
+                    if (
+                        controls.get("documentMatches") is not True
+                        or controls.get("layoutMatchesAnchor") is not True
+                        or controls.get("path") != expected_path
+                    ):
+                        raise UnknownPageStateError("ebookjapan Reader identity changed after its toolbar shortcut")
+                    await self._require_toolbar_shortcut_body_focus(page, stage="after shortcut")
                     await self._require_safe_capture_surface(page, changed)
                     return changed
                 if changed.get("toolbarVisible") is True:
-                    raise UnknownPageStateError("ebookjapan observed center action did not hide the Reader toolbar")
-            elif changed.get("status") not in {"partial", "loading"}:
-                raise UnknownPageStateError("ebookjapan center action entered an unsupported state")
-            await page.wait_for_timeout(_FRAME_POLL_MS)
-        raise UnknownPageStateError("ebookjapan toolbar did not hide within the bounded center action wait") from None
+                    await page.wait_for_timeout(_FRAME_POLL_MS)
+                    continue
+            raise UnknownPageStateError("ebookjapan toolbar shortcut entered an unsupported Reader state")
+        raise UnknownPageStateError("ebookjapan toolbar did not hide within the bounded shortcut wait") from None
 
-    @staticmethod
-    def _has_observed_toolbar_hide_geometry(frame: Mapping[str, object]) -> bool:
-        return EbookJapanAdapter._observed_toolbar_hide_geometry_profile(frame) is not None
-
-    @staticmethod
-    def _observed_toolbar_hide_geometry_profile(
-        frame: Mapping[str, object],
-    ) -> tuple[str, tuple[int, int], tuple[float, float, float, float, float, float]] | None:
-        viewport = frame.get("viewport")
-        parts = frame.get("parts")
-        if (
-            not isinstance(viewport, Mapping)
-            or (viewport.get("width"), viewport.get("height")) != _OBSERVED_CENTER_ACTION_VIEWPORT
-            or not isinstance(parts, list)
-            or len(parts) != 1
-            or not isinstance(parts[0], Mapping)
-        ):
-            return None
-        part = parts[0]
-        backing_width, backing_height = part.get("backingWidth"), part.get("backingHeight")
-        rect = part.get("cssRect")
-        if (
-            type(backing_width) is not int
-            or type(backing_height) is not int
-            or not isinstance(rect, Mapping)
-            or rect.get("viewport") is not True
-        ):
-            return None
-        backing = (backing_width, backing_height)
-        observed = tuple(
-            rect.get(key)
-            for key in ("left", "right", "top", "bottom", "width", "height")
-        )
-        matches = [
-            profile
-            for profile in _OBSERVED_CENTER_ACTION_PROFILES
-            if profile[1] == backing
+    def _same_toolbar_reader_frame(
+        self, expected: Mapping[str, object], actual: Mapping[str, object]
+    ) -> bool:
+        expected_viewport = expected.get("viewport")
+        actual_viewport = actual.get("viewport")
+        return (
+            actual.get("status") == "content"
+            and actual.get("routeStable") is True
+            and isinstance(expected_viewport, Mapping)
+            and isinstance(actual_viewport, Mapping)
             and all(
-                type(value) in (int, float)
-                and abs(float(value) - expected) <= _OBSERVED_CENTER_ACTION_RECT_TOLERANCE
-                for value, expected in zip(observed, profile[2], strict=True)
+                type(expected_viewport.get(key)) is int
+                and type(actual_viewport.get(key)) is int
+                and expected_viewport.get(key) == actual_viewport.get(key)
+                for key in ("width", "height")
             )
-        ]
-        return matches[0] if len(matches) == 1 else None
+            and self._frame_nodes_key(actual) == self._frame_nodes_key(expected)
+            and self._frame_paint_signature(actual) == self._frame_paint_signature(expected)
+        )
+
+    async def _prepare_toolbar_shortcut_focus(self, page: Page, *, total: int) -> None:
+        focus = await page.evaluate(
+            """({expectedTotal,overlaySelector})=>{
+              const body=document.body,active=document.activeElement;
+              const visible=element=>{
+                if(!element||!element.isConnected||element.getClientRects().length===0)return false;
+                for(let node=element;node;node=node.parentElement){
+                  const style=getComputedStyle(node);
+                  if(node.hidden||style.display==='none'||style.visibility==='hidden'
+                    ||style.visibility==='collapse'||Number(style.opacity)===0)return false;
+                }
+                const rect=element.getBoundingClientRect();
+                return rect.right>0&&rect.left<innerWidth&&rect.bottom>0&&rect.top<innerHeight;
+              };
+              const modalVisible=[...document.querySelectorAll(overlaySelector)].some(visible);
+              const ranges=[...document.querySelectorAll("input[type='range'].seekbar__slider")];
+              const range=ranges.length===1?ranges[0]:null;
+              const min=range?Number(range.min):NaN,max=range?Number(range.max):NaN,value=range?Number(range.value):NaN;
+              const rangeValid=range instanceof HTMLInputElement&&range.type==='range'&&min===0
+                &&max===expectedTotal-1&&Number.isFinite(value)&&Number.isInteger(value)
+                &&value>=min&&value<=max&&!range.disabled&&visible(range);
+              return {
+                bodyFocused:active===body,
+                bodyEditable:!!body?.isContentEditable||document.designMode.toLowerCase()==='on',
+                activeNativeRange:!!rangeValid&&active===range,
+                modalVisible,
+              };
+            }""",
+            {"expectedTotal": total, "overlaySelector": _TOOLBAR_BLOCKING_OVERLAY_SELECTOR},
+        )
+        if (
+            not isinstance(focus, Mapping)
+            or focus.get("bodyEditable") is not False
+            or focus.get("modalVisible") is not False
+        ):
+            raise UnknownPageStateError("ebookjapan toolbar shortcut focus or modal state is unsafe")
+        if focus.get("bodyFocused") is True:
+            return
+        if focus.get("activeNativeRange") is not True:
+            raise UnknownPageStateError("ebookjapan toolbar shortcut has an unknown focused element")
+
+        range_control = page.locator(_RANGE_SELECTOR)
+        if await range_control.count() != 1:
+            raise UnknownPageStateError("ebookjapan focused native Reader range is missing or ambiguous")
+        if await range_control.evaluate(
+            """(range,expectedTotal)=>{
+              const min=Number(range.min),max=Number(range.max),value=Number(range.value);
+              return document.activeElement===range&&range instanceof HTMLInputElement&&range.type==='range'
+                &&min===0&&max===expectedTotal-1&&Number.isInteger(value)&&value>=min&&value<=max
+                &&!range.disabled&&range.getClientRects().length>0;
+            }""",
+            total,
+        ) is not True:
+            raise UnknownPageStateError("ebookjapan focused element is not the verified native Reader range")
+        await range_control.blur()
+        await self._require_toolbar_shortcut_body_focus(page, stage="after native range blur")
+
+    async def _require_toolbar_shortcut_body_focus(self, page: Page, *, stage: str) -> None:
+        state = await page.evaluate(
+            """overlaySelector=>{
+              const body=document.body;
+              const visible=element=>{
+                if(!element||!element.isConnected||element.getClientRects().length===0)return false;
+                for(let node=element;node;node=node.parentElement){
+                  const style=getComputedStyle(node);
+                  if(node.hidden||style.display==='none'||style.visibility==='hidden'
+                    ||style.visibility==='collapse'||Number(style.opacity)===0)return false;
+                }
+                const rect=element.getBoundingClientRect();
+                return rect.right>0&&rect.left<innerWidth&&rect.bottom>0&&rect.top<innerHeight;
+              };
+              return {
+                bodyFocused:document.activeElement===body,
+                bodyEditable:!!body?.isContentEditable||document.designMode.toLowerCase()==='on',
+                modalVisible:[...document.querySelectorAll(overlaySelector)].some(visible),
+              };
+            }""",
+            _TOOLBAR_BLOCKING_OVERLAY_SELECTOR,
+        )
+        if (
+            not isinstance(state, Mapping)
+            or state.get("bodyFocused") is not True
+            or state.get("bodyEditable") is not False
+            or state.get("modalVisible") is not False
+        ):
+            raise UnknownPageStateError(
+                f"ebookjapan toolbar shortcut has unsafe BODY focus or modal state {stage}"
+            )
 
     async def _require_safe_capture_surface(
         self, page: Page, frame: Mapping[str, object]

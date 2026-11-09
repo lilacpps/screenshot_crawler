@@ -89,6 +89,20 @@ three-argument `drawImage` transfer and complete visible part shape. Scaled or
 cropped overloads and changes to title, route, document, slots, layout,
 observer state, native canvas reset or canvas dimensions fail closed.
 
+Normal rendered capture hides the toolbar with the public Reader `i` shortcut.
+Before pressing it, the adapter pins a fresh content frame and verifies the
+current Reader identity, route, viewport, slot/canvas identities, and complete
+paint signature. The active element must be BODY with no editable mode or
+visible modal. A focused range is blurred only when it is the exact validated
+native seekbar; after the final frame read the adapter requires BODY again
+without another focus change. After the shortcut it requires the same pinned
+frame and checks any still-visible native counter; a hidden counter remains unknown.
+It then applies the existing D
+surface and two-sample capture checks. Unknown focus, modal UI, ignored keys,
+or any frame drift fails closed before coverage is committed. The action does
+not depend on a fixed entry viewport, DPR, canvas backing size, or canvas rect;
+the existing fit still derives its Page viewport from the live canvas.
+
 This observed mutation set is conservative, not a proof that every possible pixel mutation or clipping operation was observed. `capture_page()` first attempts the bounded source ROI comparison. It returns C only when every part passes current document/Image/response/transfer/target binding, complete integer ROI coverage, two exact same-frame D references, exact dimensions and alpha, the v2 RGB outlier rule, and exact lossless output roundtrip. For each D reference independently, a pixel is an outlier when any RGB channel delta exceeds 2; C is allowed only when `outlier_pixels * 10000 <= width * height`. There is no mean-delta or cluster-shape gate. An expected proof-unavailable result captures a fresh full D spread using the existing compositor guards: guarded toolbar hide, clipped/off-viewport/transform/opacity/filter/mask/blend rejection, bounded painted-DOM inventory, and two CSS-scale samples. Fatal rights, route, layout, access, reset, context-loss, or internal errors propagate without D fallback. Per-capture metadata includes run-local slot/part IDs, method/class/revision, safe source-response and ROI facts, source epoch/encoded dimensions, target canvas/token/reset/draw generation, output RGBA hash and separate D-reference hashes, and per-reference outlier counts/total/bounding boxes; it omits raw URLs, response body bytes, pixels, and Playwright objects. `source_epoch` and `source_width`/`source_height` describe source-side ROI input; `width`/`height`, target IDs/tokens and D draw generation describe the emitted target part. The selected Muda 2 history profile remains incomplete and is identified as limited; C proof rests on source lineage and per-part full-pixel comparison, not complete paint-history observation. `native_page_number=None`; generic Core locator fallback remains blocked.
 
 `go_next()` binds the observed non-interactive left-edge hit to the last committed canvas/frozen slot, paint/geometry state and current frame before clicking. Muda END is scoped to the pinned seven-module `.book-last` layout. The terminal classifier recognizes only the observed single `a.matilda-banner` under its exact banner module; it reports `loading` through bounded header/control hydration only while all visible actions remain classified and no outside/modal/risky action appears. END requires the complete three-control header and exact required action partition after full ordered coverage. Missing modules, malformed/duplicate anchors, unknown/outside actions and persistent partial hydration remain fail-closed.

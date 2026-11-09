@@ -209,6 +209,11 @@ def _reader_html(
         window.__fixtureDrawComplete=true;
       }}).catch(error=>window.__fixtureError=String(error?.name||'decode-failed'));
       document.addEventListener('keydown',event=>{{
+        if(event.key==='i'&&event.target===document.body){{
+          document.querySelector('.legacy-comic-header').hidden=true;
+          document.querySelector('.legacy-comic-footer').hidden=true;
+          document.querySelector('.seekbar__slider').style.display='none';return;
+        }}
         if(event.key!=='End')return;
         document.querySelector('.seekbar__slider').value='0';
         document.querySelector('.legacy-comic-footer__page-output').textContent='1 / 2';
@@ -294,7 +299,15 @@ def _runner_end_reader_html(
         const bitmap=offscreen.transferToImageBitmap();canvas.getContext('2d').drawImage(bitmap,0,0);
         window.__fixtureDrawComplete=true;
       }}).catch(error=>window.__fixtureError=String(error?.name||'decode-failed'));
-      document.addEventListener('keydown',event=>{{if(event.key==='End')document.querySelector('.legacy-comic-footer__page-output').textContent='1 / 1';}});
+      document.addEventListener('keydown',event=>{{
+        if(event.key==='i'&&event.target===document.body){{
+          window.__fixtureToolbarHidden=true;
+          document.querySelector('.legacy-comic-header').hidden=true;
+          document.querySelector('.legacy-comic-footer').hidden=true;
+          document.querySelector('.seekbar__slider').style.display='none';return;
+        }}
+        if(event.key==='End')document.querySelector('.legacy-comic-footer__page-output').textContent='1 / 1';
+      }});
       document.addEventListener('click',event=>{{
         if(!(event.target instanceof HTMLCanvasElement))return;
         const header=document.querySelector('.legacy-comic-header'),footer=document.querySelector('.legacy-comic-footer');
