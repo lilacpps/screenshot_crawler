@@ -420,6 +420,59 @@ async def _open_owned_reader(
     return adapter
 
 
+async def _load_duplicate_source(page: Page, webp_bytes: bytes) -> None:
+    """A real second Image/Request/Response, without touching the selected draw."""
+    pattern = f"https://{CACHE_SOURCE_HOST}/generated-c2-fixture.webp**"
+    await page.unroute(pattern)
+    await page.route(
+        pattern,
+        lambda route: route.fulfill(
+            status=200, content_type="image/webp",
+            headers={"cache-control": "no-store", "access-control-allow-origin": "*"}, body=webp_bytes,
+        ),
+    )
+    await page.evaluate(
+        """async url => {const image=new Image();image.crossOrigin='anonymous';image.src=url;await image.decode();}""",
+        SOURCE_URL,
+    )
+
+
+@pytest.mark.parametrize("duplicate_kind", ["identical", "wrong-pixels", "equivalent-pixels"])
+async def test_public_capture_verifies_multiple_real_image_responses(
+    c2_browser: Page, duplicate_kind: str,
+) -> None:
+    original = _generated_vp8_webp()
+    adapter = await _open_owned_reader(c2_browser, original)
+    duplicate = original
+    if duplicate_kind == "wrong-pixels":
+        buffer = io.BytesIO()
+        Image.new("RGB", (SOURCE_WIDTH, SOURCE_HEIGHT), "black").save(buffer, format="WEBP", quality=100)
+        duplicate = buffer.getvalue()
+    elif duplicate_kind == "equivalent-pixels":
+        duplicate += b"JUNK\x02\x00\x00\x00xx"
+        duplicate = duplicate[:4] + (len(duplicate) - 8).to_bytes(4, "little") + duplicate[8:]
+    await _load_duplicate_source(c2_browser, duplicate)
+    await c2_browser.wait_for_function("window.__fixtureDrawComplete===true")
+    await adapter.get_content_identity(c2_browser)
+    assert len(adapter._source_request_ledger._requests) == 2
+    captures = await adapter.capture_page(c2_browser)
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+    assert len(captures) == 1 and captures[0].mime_type == "image/webp"
+    assert metadata["ebookjapan_source_capture_attempt"]["status"] == "C_VERIFIED"
+    proof = metadata["ebookjapan_capture_parts"][0]["source_roi_proof"]
+    response = proof["source_response"]
+    assert response["candidate_count"] == 2
+    assert response["verified_candidate_count"] == (1 if duplicate_kind == "wrong-pixels" else 2)
+    assert response["selection_status"] == {
+        "identical": "equivalent_bytes",
+        "wrong-pixels": "unique_verified_candidate",
+        "equivalent-pixels": "equivalent_verified_pixels",
+    }[duplicate_kind]
+    assert proof["source_encoded_sha256"] == hashlib.sha256(original).hexdigest()
+    assert proof["comparison_passed"] and proof["output_roundtrip_exact"]
+    assert SOURCE_URL not in json.dumps(metadata)
+
+
 @pytest.mark.parametrize(
     "source_host",
     [CACHE_SOURCE_HOST, PRODUCTION_SOURCE_HOST],
@@ -547,21 +600,24 @@ async def test_public_capture_adopts_only_the_complete_verified_source_spread(
 
 
 @pytest.mark.parametrize(
-    ("clip_second_source", "outlier_count"),
-    [(False, 0), (True, 0), (False, 175)],
-    ids=("two-part-C-atomic", "one-part-source-failure-whole-D", "one-part-outlier-failure-whole-D"),
+    ("clip_second_source", "outlier_count", "duplicate_source"),
+    [(False, 0, False), (True, 0, False), (False, 175, False), (False, 0, True)],
+    ids=("two-part-C-atomic", "one-part-source-failure-whole-D", "one-part-outlier-failure-whole-D", "duplicate-two-part-C"),
 )
 async def test_public_capture_keeps_two_part_source_spread_atomic(
     c2_browser: Page,
     monkeypatch: pytest.MonkeyPatch,
     clip_second_source: bool,
     outlier_count: int,
+    duplicate_source: bool,
 ) -> None:
     adapter = await _open_owned_reader(
         c2_browser,
         _generated_vp8_webp(),
         clip_second_source=clip_second_source,
     )
+    if duplicate_source:
+        await _load_duplicate_source(c2_browser, _generated_vp8_webp())
     await c2_browser.evaluate(
         """()=>{
           const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];

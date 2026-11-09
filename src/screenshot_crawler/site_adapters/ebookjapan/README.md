@@ -115,9 +115,39 @@ This observed mutation set is conservative, not a proof that every possible pixe
 
 ## Stage 03 source-native research update
 
+### Current same-URL response selection (2026-11-10)
+
+The capture path freezes up to four already-loaded, same-document Image
+Request/Response pairs for the current Image's exact `currentSrc`. Multiple
+requests alone no longer force D. Every pair must retain its exact object
+identities, HTTP 200/non-redirect WebP metadata and body-read eligibility.
+An old-document, pending, incomplete or invalid member prevents adoption.
+The cohort shares an 8 MiB encoded-byte budget and a five-second body-read
+budget; each response body is read once and no extra request is issued.
+
+Identical bodies are compared once. Distinct bodies are independently decoded
+at the observed source dimensions, reconstructed with the current complete
+ROI geometry, and compared to both exact same-frame D references using the
+unchanged v2 RGB/alpha rule. C requires either one passing candidate or exact
+RGBA equality across every passing reconstructed part. Merely falling within
+the same tolerance does not make two differing outputs equivalent. No match,
+conflicting passing output, exceeded bounds, or unavailable proof returns the
+complete fresh D spread. Existing frame/source/target drift and access-stop
+errors remain fatal. The frozen cohort and every held response are checked
+again after asynchronous work; late requests invalidate that attempt without
+retrying it. Each spread part must pass independently.
+
+Safe `source_roi_proof.source_response` metadata adds `candidate_count`,
+`verified_candidate_count`, `selection_status` (`unique_request`,
+`unique_verified_candidate`, `equivalent_bytes`, `equivalent_verified_pixels`)
+and `candidate_policy_revision=ebookjapan-response-candidates-v1-20261110`.
+The selected response is a verified input for the C output, not a claim that
+one particular equivalent HTTP event supplied the Image. This does not promote
+C to original-byte A/B capture. The source ROI pixel policy revision stays v2.
+
 The seven earlier C3 candidate-comparison cases across eleven parts remain `NOT_VERIFIED` / `UNASSIGNED`; the two latest final comparisons passed independent Reviewer B0 but did not by themselves establish source provenance. An earlier Muda 1 final metadata candidate remained UNKNOWN at a 320 x 49 div; the later Stage 05 Muda 1 Run 2 failure after 191 C pages is separate, stopped on an unsafe intersecting DIV, and has an unknown cause. A separate actual-source v5 pilot independently accepted one Muda 2 cover under conditional C. These samples do not generalize to all 17 works.
 
-The source helper has 35 B0-accepted tests. The Page-only `__ejSourceObserver` hook joins generated Offscreen ROI/transfer records to the existing D callback; 31 local generated-Chromium cases pass, including reset, unknown-mutation, stale-bitmap, bounded-eviction, and source-instrumentation diagnostics. The same `_research_compare_source_capture(page)` pipeline now serves public `capture_page()` and generated fixtures: it binds the current document image `currentSrc` to one unique non-redirected 200 response, reads the body once within fixed size/time limits, replays source ROIs, compares each reconstructed part against two exact same-frame D references, then verifies a lossless output roundtrip. The local independent audit verified 256 ROIs at 1088 x 1600, exact D references, RGB max 0, alpha exact, and exact lossless WebP roundtrip. C1 Muda 2 `current` remains false; v3 diagnostics report install-unknown 1/current-slot-unknown 0, so the accepted Muda 2 limited-history profile does not assert complete paint history. Immediately before result, each part rechecks current source context/dimensions, latest transfer, source and target own-dimension absence, reset sequence, source identity and target binding; final same-dimension reset, source width shadow and context-loss races fail fatally. Raw URL/body/pixels and Playwright objects are never projected. No live page/body or shared Chrome was used for the local generated-browser checks. Full affected test and audit details are in the [owned progress ledger](../../../../runbooks/ebookjapan-owned/PROGRESS.md).
+The source helper has 35 B0-accepted tests. The Page-only `__ejSourceObserver` hook joins generated Offscreen ROI/transfer records to the existing D callback; 31 local generated-Chromium cases pass, including reset, unknown-mutation, stale-bitmap, bounded-eviction, and source-instrumentation diagnostics. The same `_research_compare_source_capture(page)` pipeline now serves public `capture_page()` and generated fixtures: it binds the current document image `currentSrc` to a frozen bounded cohort of non-redirected 200 responses, reads each body once within shared size/time limits, selects a uniquely verified or exact-output-equivalent candidate as described above, replays source ROIs, compares each reconstructed part against two exact same-frame D references, then verifies a lossless output roundtrip. The local independent audit verified 256 ROIs at 1088 x 1600, exact D references, RGB max 0, alpha exact, and exact lossless WebP roundtrip. C1 Muda 2 `current` remains false; v3 diagnostics report install-unknown 1/current-slot-unknown 0, so the accepted Muda 2 limited-history profile does not assert complete paint history. Immediately before result, each part rechecks current source context/dimensions, latest transfer, source and target own-dimension absence, reset sequence, source identity and target binding; final same-dimension reset, source width shadow and context-loss races fail fatally. Raw URL/body/pixels and Playwright objects are never projected. No live page/body or shared Chrome was used for the local generated-browser checks. Full affected test and audit details are in the [owned progress ledger](../../../../runbooks/ebookjapan-owned/PROGRESS.md).
 
 **Source-host and actual capture evidence:** A metadata-only normal-owned Muda 2 observation established `prod-contents-br-page.akamaized.net` as an exact currentSrc host with stable natural size 1280 x 1792, one exact current-document Request match and no overflow; it read no body or pixels. Evidence: `output/ebookjapan_experiment/e2e-validation/source-url-metadata-20261109/source-url-metadata-live-v1.json` (SHA-256 `58cd4c442f4160cb39ba0e74752760ba006a95b4de054967991e8ecd2b5f7487`). Host matching is exact; suffixes and wildcards are not accepted. The later actual-source v5 pilot passed for one Muda 2 cover: `output/ebookjapan_experiment/e2e-validation/source-c2-pilot-20261109/source-c2-pilot-live-v5-schema-correct.json` (SHA-256 `E96C58A2CE0B691455310912C946521E73F0CEA1A939703D39456D917A540D76`), with 256 ROIs, 1088 x 1600 output, two exact D references, RGB maxima [1,1,2], alpha mismatch 0 and exact lossless WebP roundtrip. This single verified capture is distinct from the earlier seven C3 candidate records, which remain unassigned.
 

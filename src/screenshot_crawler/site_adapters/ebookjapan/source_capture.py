@@ -7,11 +7,12 @@ exist only in the per-run in-memory ledger and are omitted from safe projections
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 from urllib.parse import urlsplit
 
@@ -19,18 +20,29 @@ from playwright.async_api import Response
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.site_adapters.ebookjapan.source_observer import (
+    MAX_RESPONSE_BODY_BYTES,
     BoundSourceResponse,
+    LoadedSourceBody,
     RequestResponseObservation,
     SourceObserverProofError,
     bind_unique_current_response,
+    read_bound_response_body_once,
 )
 from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
     RGB_OUTLIER_LIMIT_DENOMINATOR,
+    CandidatePixels,
     EncodedCandidate,
     PixelComparisonProof,
+    ReferencePixels,
+    SourcePixelProofError,
+    compare_candidate_rgba,
+    decode_webp_source,
+    reconstruct_roi_part,
 )
 
 MAX_TRACKED_IMAGE_REQUESTS: Final = 4096
+MAX_SOURCE_RESPONSE_CANDIDATES: Final = 4
+SOURCE_CANDIDATE_POLICY_REVISION: Final = "ebookjapan-response-candidates-v1-20261110"
 SOURCE_IMAGE_HOSTS: Final = frozenset(
     {
         "cache2-ebookjapan.akamaized.net",
@@ -85,6 +97,89 @@ class BoundResponseFacts:
     request_response_identity_matches: bool
     current_document_matches: bool
     current_src_matches: bool
+    candidate_count: int = 1
+    verified_candidate_count: int = 1
+    selection_status: str = "unique_request"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceResponseCohort:
+    """Frozen same-URL request cohort; bodies exist only during this capture."""
+
+    entries: tuple[tuple[BoundSourceResponse, BoundResponseFacts, LoadedSourceBody], ...] = field(repr=False)
+
+    def validate(self, ledger: SourceRequestLedger, current_src: str) -> None:
+        request_ids = tuple(facts.request_id for _, facts, _ in self.entries)
+        for binding, facts, _ in self.entries:
+            ledger.validate_held_binding(
+                current_src,
+                request_id=facts.request_id,
+                response_id=facts.response_id,
+                request_object=binding.request_object,
+                response_object=binding.response_object,
+                document_token=binding.document_token,
+                candidate_request_ids=request_ids,
+            )
+
+
+def select_source_roi_candidate(
+    cohort: SourceResponseCohort,
+    *,
+    expected_dimensions: tuple[int, int],
+    target_dimensions: tuple[object, object],
+    rois: object,
+    first_reference: ReferencePixels,
+    second_reference: ReferencePixels,
+) -> tuple[CandidatePixels, PixelComparisonProof, BoundResponseFacts]:
+    """Verify every distinct body; multiple passing outputs must be byte-exact RGBA.
+
+    URL/timing/order never chooses a differing candidate. This proves a source
+    ROI-derived output, not which equivalent HTTP event supplied the Image.
+    """
+
+    selected: tuple[CandidatePixels, PixelComparisonProof, BoundResponseFacts] | None = None
+    verified_count = 0
+    seen: dict[bytes, bool] = {}
+    for _binding, facts, loaded in cohort.entries:
+        if loaded.data in seen:
+            verified_count += int(seen[loaded.data])
+            continue
+        try:
+            decoded = decode_webp_source(
+                loaded.data, source_mime=loaded.mime_type,
+                expected_dimensions=expected_dimensions,
+            )
+            candidate = reconstruct_roi_part(decoded, target_dimensions=target_dimensions, rois=rois)
+            comparison = compare_candidate_rgba(candidate, first_reference, second_reference, tolerance=2)
+        except SourcePixelProofError:
+            if len(cohort.entries) == 1:
+                raise
+            seen[loaded.data] = False
+            continue
+        # Keep historical single-response diagnostics, including a failed comparison.
+        if len(cohort.entries) == 1:
+            return candidate, comparison, facts
+        seen[loaded.data] = comparison.passed
+        if not comparison.passed:
+            continue
+        verified_count += 1
+        if selected is None:
+            selected = candidate, comparison, facts
+        elif candidate.rgba != selected[0].rgba:
+            raise SourceCaptureProofError("source-candidate-output-ambiguous")
+    if selected is None:
+        raise SourceCaptureProofError("source-pixel-equivalence-failed")
+    candidate, comparison, facts = selected
+    return candidate, comparison, replace(
+        facts,
+        candidate_count=len(cohort.entries),
+        verified_candidate_count=verified_count,
+        selection_status=(
+            "unique_verified_candidate" if verified_count == 1
+            else "equivalent_bytes" if len(seen) == 1
+            else "equivalent_verified_pixels"
+        ),
+    )
 
 
 class SourceRequestLedger:
@@ -257,6 +352,15 @@ class SourceRequestLedger:
         tracked.declared_length = declared_length
 
     def bind_current_src(self, current_src: str) -> tuple[BoundSourceResponse, BoundResponseFacts]:
+        """Legacy strict single-response binding; capture uses the bounded cohort API."""
+        candidates = self.bind_current_src_candidates(current_src)
+        if len(candidates) != 1:
+            raise SourceObserverProofError("source-request-ambiguous")
+        return candidates[0]
+
+    def bind_current_src_candidates(
+        self, current_src: str,
+    ) -> tuple[tuple[BoundSourceResponse, BoundResponseFacts], ...]:
         if self._access_stop_status in (403, 429):
             raise SourceObserverProofError("source-access-stop")
         if self._overflowed:
@@ -268,13 +372,19 @@ class SourceRequestLedger:
         matching_requests = [
             tracked for tracked in self._requests if tracked.request_url == current_src
         ]
-        if len(matching_requests) != 1:
-            raise SourceObserverProofError(
-                "source-request-unmatched"
-                if not matching_requests
-                else "source-request-ambiguous"
-            )
-        tracked = matching_requests[0]
+        if not matching_requests:
+            raise SourceObserverProofError("source-request-unmatched")
+        if len(matching_requests) > MAX_SOURCE_RESPONSE_CANDIDATES:
+            raise SourceObserverProofError("source-candidate-limit-exceeded")
+        # Old in-flight requests are intentionally retained across navigation;
+        # never silently filter them out to make the current cohort look unique.
+        if any(item.request_document_token is not self._document_token for item in matching_requests):
+            raise SourceObserverProofError("source-request-ambiguous")
+        return tuple(self._bind_tracked(tracked, current_src) for tracked in matching_requests)
+
+    def _bind_tracked(
+        self, tracked: _TrackedRequest, current_src: str,
+    ) -> tuple[BoundSourceResponse, BoundResponseFacts]:
         if tracked.response_object is None:
             raise SourceObserverProofError("source-response-not-loaded")
         if tracked.response_id is None or tracked.status is None or tracked.redirected is None:
@@ -323,6 +433,25 @@ class SourceRequestLedger:
         )
         return binding, facts
 
+    async def load_current_src_candidates(self, current_src: str) -> SourceResponseCohort:
+        candidates = self.bind_current_src_candidates(current_src)
+        # Total encoded memory and body-wait budget are per URL cohort, not
+        # multiplied by the number of duplicate requests. No additional fetch.
+        if sum(binding.declared_length for binding, _ in candidates) > MAX_RESPONSE_BODY_BYTES:
+            raise SourceObserverProofError("source-candidate-byte-limit-exceeded")
+        entries = []
+        try:
+            async with asyncio.timeout(5.0):
+                for binding, facts in candidates:
+                    self.mark_body_attempted(facts.request_id)
+                    loaded = await read_bound_response_body_once(binding, timeout_seconds=5.0)
+                    entries.append((binding, facts, loaded))
+        except TimeoutError:
+            raise SourceObserverProofError("source-response-body-timeout") from None
+        cohort = SourceResponseCohort(tuple(entries))
+        cohort.validate(self, current_src)
+        return cohort
+
     def mark_body_attempted(self, request_id: int) -> None:
         for tracked in self._requests:
             if tracked.request_id == request_id:
@@ -341,8 +470,9 @@ class SourceRequestLedger:
         request_object: object,
         response_object: object,
         document_token: object,
+        candidate_request_ids: tuple[int, ...] | None = None,
     ) -> BoundResponseFacts:
-        """Recheck uniqueness and exact held identities after asynchronous work."""
+        """Recheck the frozen request cohort and held identities after awaits."""
 
         if self._access_stop_status in (403, 429):
             raise SourceObserverProofError("source-access-stop")
@@ -353,11 +483,17 @@ class SourceRequestLedger:
         if not self._source_image_url_allowed(current_src):
             raise SourceObserverProofError("source-current-src-host-unobserved")
         matching = [item for item in self._requests if item.request_url == current_src]
-        if len(matching) != 1:
+        if (
+            candidate_request_ids is None and len(matching) != 1
+            or candidate_request_ids is not None
+            and tuple(item.request_id for item in matching) != candidate_request_ids
+        ):
             raise SourceObserverProofError(
                 "source-response-unmatched" if not matching else "source-response-ambiguous"
             )
-        tracked = matching[0]
+        tracked = next((item for item in matching if item.request_id == request_id), None)
+        if tracked is None:
+            raise SourceObserverProofError("source-response-binding-stale")
         if (
             tracked.request_id != request_id
             or tracked.response_id != response_id
@@ -481,6 +617,10 @@ class SourceResearchPartProof:
                 "request_response_identity_matches": self.source_response.request_response_identity_matches,
                 "current_document_matches": self.source_response.current_document_matches,
                 "current_src_matches": self.source_response.current_src_matches,
+                "candidate_count": self.source_response.candidate_count,
+                "verified_candidate_count": self.source_response.verified_candidate_count,
+                "selection_status": self.source_response.selection_status,
+                "candidate_policy_revision": SOURCE_CANDIDATE_POLICY_REVISION,
             },
             "source_epoch": self.source_epoch,
             "source_reset_sequence": self.source_reset_sequence,

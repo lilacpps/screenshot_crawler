@@ -1,5 +1,75 @@
 # ebookjapan purchased-only Discovery - current implementation
 
+## Current same-URL source candidate selection (2026-11-10)
+
+Normal capture now validates multiple source responses instead of rejecting
+their count before image comparison. The production path uses
+`SourceRequestLedger.load_current_src_candidates()` to freeze a cohort of at
+most four requests for the current source Image's exact `currentSrc`. Each
+request and response must belong to the current document, have exact held
+object identity, and meet the existing loaded HTTP 200/non-redirect WebP
+contract. A retained old-document request, unfinished response, duplicate
+response event, body failure, AccessGuard stop or navigation cannot be silently
+discarded to manufacture a unique match. Up to 8 MiB encoded bytes and five
+seconds total body-read time are allowed per URL cohort; each body is attempted
+once and no network fetch/retry is introduced. At most two URL cohorts are
+needed for a spread. Existing per-source/target pixel and ROI limits remain.
+
+Identical body bytes share one decode/ROI/comparison. Distinct bodies are
+decoded sequentially and reconstructed with the current source dimensions and
+complete current part ROI rows, then checked against both exact D references.
+One passing candidate may be adopted. If several pass, their reconstructed
+output RGBA must be exactly equal; different outputs that both satisfy the v2
+tolerance remain ambiguous (`source-candidate-output-ambiguous`). Exact output
+equality is per selected part and does not claim equality of unused atlas
+pixels. No passing candidate returns `source-pixel-equivalence-failed`.
+Expected unavailable/ambiguous/over-budget proof retains atomic fresh D spread
+fallback. Each part is verified separately; a failure never emits a partial C
+spread. Route/document/source/target/reset/access fatal gates remain in force.
+The exact request cohort and each held response binding are revalidated after
+body reads, after D capture and before C return. A late new request invalidates
+the attempt without trying to chase an expanding cohort.
+
+The per-part safe response proof now includes `candidate_count`,
+`verified_candidate_count`, `selection_status` (`unique_request`,
+`unique_verified_candidate`, `equivalent_bytes`, `equivalent_verified_pixels`),
+and `candidate_policy_revision=ebookjapan-response-candidates-v1-20261110`.
+No URLs, body bytes or pixels are persisted in these fields. This is C / source
+ROI-derived output evidence; the selected request ID identifies its verified
+input and does not assert which equivalent HTTP event populated the Image.
+The v2 pixel policy and lossless roundtrip remain unchanged. No CLI/config or
+Core/Batch/Catalog change is required. The old strict single-request binding
+helper remains available, but normal capture uses the cohort API.
+
+The user's 2026-11-10 06:11 run remains a historical failed run with 281 C and
+six D parts (sequences 8–13, `source-request-ambiguous`); its files/classification
+are unchanged. Bounded normal Runner live verification on that same owned
+Angel 10 saved 15/15 C/WebP parts, including sequences 8–13, and stopped at the
+unchanged `max_pages=15` guard. The independent saved-output decode/dimension
+and RGBA-hash checks passed for all 15. This live attempt had one request per
+selected source, so it did not reproduce the historical duplicate condition;
+multiple real Image requests are verified by generated-browser tests instead.
+There were no Catalog writes, and the owned Page closed with the shared page
+count restored. Evidence: `output/ej-candidate-fix-20261110/live-report.json`.
+This establishes neither full-book END nor ZIP completion. The existing user's
+Catalog, Watchlist and original output are not rewritten by this verification.
+
+Validation for this change: 129 Unit cases passed across the adapter,
+source-capture, source-observer and source-pixels files; 239 browser Integration
+cases passed across source-capture, source-hook and Viewer files, zero skipped.
+The generated browser tests exercise real same-URL Image Request/Response
+duplicates, distinct rejected bodies, byte-different exact-pixel equivalents,
+and an atomic two-part spread. Unit cases additionally reject differing
+within-tolerance passing outputs, late cohort/response changes, old documents,
+unfinished responses and candidate/byte-budget overflow; candidate order is
+tested both ways. Ruff (`src tests`) and whitespace checks on changed files
+pass. The first broad Integration attempt had 29 temporary-directory setup
+errors; the complete rerun with an isolated workspace `--basetemp` passed all
+239 cases. Logs: `output/ej-candidate-fix-20261110/pytest-unit-v1.log` and
+`pytest-integration-v1.log` in the same directory. Full pytest and a full-book
+END/ZIP rerun were not performed: this is a site-local capture-selection change,
+covered by the affected Unit/Integration group and the bounded live check.
+
 > **Current source ROI comparison policy (revision `ebookjapan-owned-source-roi-v2-20261109`):** Each of the two exact D RGBA references is checked independently. A pixel is over tolerance if any RGB component differs by more than 2; the count passes only when `outlier_pixels * 10000 <= width * height` (equality accepted). Counts are union pixels, not channel counts or summed RGB deltas. Safe per-part proof includes both reference counts, total page pixels, half-open over-tolerance bounding boxes, the denominator/expression and max channel delta. There is no mean-error or cluster/location threshold. Exact alpha and dimension equality, exact D-reference-pair equality, source/response/ROI binding, and exact lossless roundtrip remain required. The reconstructed source/output RGBA is never edited to remove outliers. A failing part returns the complete fresh D spread. Root's separate offline saved-buffer V2 replay passed Run 8 sequences 54 and 55; sequence 54 had max channel delta 249 with 8/1,740,800 over-tolerance pixels and sequence 55 had max [1,1,2] with zero. Both preserved source/output RGBA and exact lossless roundtrip. Report: `output/ebookjapan_experiment/e2e-validation/outlier-policy-v2-20261109/actual-run8-pixel-replay-v2.json` (SHA-256 `F7E586F3FCA52F3594E731ACEEB5CA6639950A7EDDD83B347143D031ED0DAE7F`). Run 8 remains historical V1 C191/D2 and its files/classification were not rewritten; this offline two-part replay is not a new live or full-book V2 pass.
 
 > **Current status (2026-11-10):** Stage 00/01 remain accepted. Stage 02 remains accepted for the one-work Angel 10 D baseline. Stage 03 conditionally adopts source ROI C after one actual-source Muda 2 cover passed independent pixel audit; Muda 2 limited-history observations, seven earlier C3 cases (`NOT_VERIFIED` / `UNASSIGNED`), and earlier Muda 1 candidate observations remain bounded. Muda 2 C1 health remains `current=false`; C proof relies on source lineage and complete per-part ROI reconstruction/comparison, not complete paint-history observation. Full owned listings and the 17-item Plan are verified. The user-approved two-representative scope, Angel 10 and Muda 1 DP1, is complete: Angel 10 remains accepted at strict END/ZIP; Muda 1 Run 8 reached strict END at 193/193 with 191 C/WebP and 2 D/PNG parts. Both Items are complete. Current Catalog: 2 completed / 15 pending, 2 successful Runs / 6 failed Runs, 2 Artifacts. Root's final artifact identity/visual/numeric audit passed; Independent Reviewer B0 accepted Run 8's strict 13-check archive audit and the final artifact identity/visual/numeric evidence. The other 15 Muda Items were intentionally excluded, so Full 17 capture is not claimed. Run 8 ZIP, manifest, strict audit, final identity audit and pixel report are listed below.
@@ -130,7 +200,7 @@ The ordinary scratch API descriptor probe used blank 1x1 contexts and read no pi
 
 The Page-only `__ejSourceObserver` runtime hook records bounded source ROI/transfer metadata and joins it through the existing D HTML draw callback. Source-state and clip history survive transfer batch resets until native context or dimension reset. Non-string `getContext` arguments are not re-coerced, `stop()` restores only hook-owned descriptors, and non-default filter values are projected only as a fixed marker. Diagnostics expose fixed method/state enums and up to eight opaque descriptor summaries; raw property names, values, source text, URLs and pixel bytes are never projected. The Muda 2 v3 evidence remains `current=false` with one install-unknown callable and zero current-slot unknowns. The accepted actual C capture therefore uses the explicit `muda2-install-unknown-callable-v3` limited-history profile and records `paint_history_complete=false` with `proof_basis=source-lineage+fullpixelcompare`.
 
-The public C path reuses the source/currentSrc/unique-Response/one-body-read/ROI reconstruction pipeline and existing D reference renderer. It emits only a manual safe per-part projection in `ebookjapan_capture_parts[].source_roi_proof`; the projection includes six-integer ROI rows/hash, encoded source format/length/hash, source response opaque IDs/status/MIME/current-document match facts, source epoch/context/canvas and reset/transfer facts, target canvas/binding token/reset/draw and existing D draw generation, context/draw attributes, source/output RGBA hashes, two separate D-reference RGBA hashes, comparison maxima/tolerance, per-reference outlier counts/total/bbox/policy, alpha/dimension facts, output format/encoded hash, and exact roundtrip state. `source_epoch` and `source_width`/`source_height` describe the source-side ROI input; `width`/`height`, target canvas/token/reset/draw fields describe the output part. The output RGBA hash is separate from the D compositor hash and each reference hash. Top-level `ebookjapan_source_capture_attempt` records status, fixed failure reason if D fallback occurred, limited-history profile and proof basis. No raw URL, body, pixel buffer, capture object or Playwright object is retained in debug metadata. C is adopted only conditionally; C1 current remains false and full paint history is not claimed.
+The public C path reuses the source/currentSrc/frozen-response-cohort/one-read-per-body/ROI reconstruction pipeline and existing D reference renderer. It emits only a manual safe per-part projection in `ebookjapan_capture_parts[].source_roi_proof`; the projection includes six-integer ROI rows/hash, encoded source format/length/hash, source response opaque IDs/status/MIME/current-document match facts, source epoch/context/canvas and reset/transfer facts, target canvas/binding token/reset/draw and existing D draw generation, context/draw attributes, source/output RGBA hashes, two separate D-reference RGBA hashes, comparison maxima/tolerance, per-reference outlier counts/total/bbox/policy, alpha/dimension facts, output format/encoded hash, and exact roundtrip state. `source_epoch` and `source_width`/`source_height` describe the source-side ROI input; `width`/`height`, target canvas/token/reset/draw fields describe the output part. The output RGBA hash is separate from the D compositor hash and each reference hash. Top-level `ebookjapan_source_capture_attempt` records status, fixed failure reason if D fallback occurred, limited-history profile and proof basis. No raw URL, body, pixel buffer, capture object or Playwright object is retained in debug metadata. C is adopted only conditionally; C1 current remains false and full paint history is not claimed.
 
 Independent actual v5 pilot evidence for one Muda 2 cover: `output/ebookjapan_experiment/e2e-validation/source-c2-pilot-20261109/source-c2-pilot-live-v5-schema-correct.json` (SHA-256 `E96C58A2CE0B691455310912C946521E73F0CEA1A939703D39456D917A540D76`), 256 ROIs, 1088 x 1600, two exact references, RGB maxima [1,1,2], alpha mismatch 0, and exact lossless WebP roundtrip. The separate generated-browser integration verifies the normal Core Runner/title-alias/END/manifest/ZIP flow for C, plus whole-spread D fallback, multi-part atomicity and fatal final reset/own-shadow/context-loss races. No live/browser operation was performed by this implementation turn; the actual v5 pilot was separately operated and accepted before promotion. The affected EbookJapan selection and validation results are recorded in `runbooks/ebookjapan-owned/PROGRESS.md`.
 

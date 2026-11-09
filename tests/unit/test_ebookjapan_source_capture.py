@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import io
+
 import pytest
+from PIL import Image
 
 from screenshot_crawler.site_adapters.ebookjapan.adapter import EbookJapanAdapter
 from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
     LIMITED_HISTORY_PROFILE,
+    MAX_SOURCE_RESPONSE_CANDIDATES,
+    SourceCaptureProofError,
     SourceRequestLedger,
     limited_history_profile_matches,
+    select_source_roi_candidate,
 )
 from screenshot_crawler.site_adapters.ebookjapan.source_observer import SourceObserverProofError
+from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
+    ReferencePixels,
+    decode_webp_source,
+)
 
 READER_URL = "https://ebookjapan.yahoo.co.jp/viewer/purchased/B123456789012/"
 CACHE_SOURCE_URL = "https://cache2-ebookjapan.akamaized.net/fixture-atlas.webp"
@@ -337,3 +347,117 @@ def test_source_request_during_pending_navigation_is_not_adopted() -> None:
     _add_image_response(ledger, frame)
     with pytest.raises(SourceObserverProofError, match="source-document-navigation-pending"):
         ledger.bind_current_src(SOURCE_URL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["late-request", "duplicate-event", "navigation", "access-stop"])
+async def test_loaded_cohort_rejects_late_unsafe_changes(mutation: str) -> None:
+    ledger, frame = _ledger()
+    for _ in range(2):
+        _request, response = _add_image_response(ledger, frame)
+        async def body():
+            return b"x" * 128
+        response.body = body
+    cohort = await ledger.load_current_src_candidates(SOURCE_URL)
+    cohort.validate(ledger, SOURCE_URL)
+    if mutation == "late-request":
+        _add_image_response(ledger, frame)
+    elif mutation == "duplicate-event":
+        ledger.response_received(response, main_frame=frame)
+    elif mutation == "navigation":
+        ledger.main_frame_committed(frame, main_frame=frame)
+    else:
+        _add_image_response(ledger, frame, url=PRODUCTION_SOURCE_URL, status=429)
+    with pytest.raises(SourceObserverProofError):
+        cohort.validate(ledger, SOURCE_URL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["count", "bytes", "pending", "old-document", "body-failed"])
+async def test_candidate_loading_remains_bounded_and_fail_closed(failure: str) -> None:
+    ledger, frame = _ledger()
+    if failure == "old-document":
+        old = _Request(frame, SOURCE_URL)
+        ledger.request_started(old, main_frame=frame, reader_url=READER_URL)
+        ledger.main_frame_committed(frame, main_frame=frame)
+    reads = 0
+
+    async def body():
+        nonlocal reads
+        reads += 1
+        if failure == "body-failed":
+            raise RuntimeError("private response details")
+        return b"x" * 128
+
+    for _ in range(MAX_SOURCE_RESPONSE_CANDIDATES + 1 if failure == "count" else 2):
+        _request, response = _add_image_response(ledger, frame)
+        response.body = body
+        if failure == "bytes":
+            ledger._requests[-1].declared_length = 8 * 1024 * 1024
+    if failure == "pending":
+        pending = _Request(frame, SOURCE_URL)
+        ledger.request_started(pending, main_frame=frame, reader_url=READER_URL)
+    with pytest.raises(SourceObserverProofError):
+        await ledger.load_current_src_candidates(SOURCE_URL)
+    assert reads == (1 if failure == "body-failed" else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("colors", "distinct_bytes", "status", "verified_count"),
+    [
+        ([100, 100], False, "equivalent_bytes", 2),
+        ([100, 100], True, "equivalent_verified_pixels", 2),
+        ([220, 100], False, "unique_verified_candidate", 1),
+        ([100, 220], False, "unique_verified_candidate", 1),
+        ([100, 101], False, "source-candidate-output-ambiguous", None),
+        ([220, 230], False, "source-pixel-equivalence-failed", None),
+    ],
+)
+async def test_multiple_response_candidates_are_proved_instead_of_chosen_by_order(
+    colors: list[int], distinct_bytes: bool, status: str, verified_count: int | None,
+) -> None:
+    ledger, frame = _ledger()
+    bodies = []
+    reads = []
+    for index, color in enumerate(colors):
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 16), (color,) * 3).save(buffer, format="WEBP", quality=100)
+        data = buffer.getvalue()
+        if index and distinct_bytes:
+            data += b"JUNK\x02\x00\x00\x00xx"
+            data = data[:4] + (len(data) - 8).to_bytes(4, "little") + data[8:]
+        bodies.append(data)
+        _request, response = _add_image_response(ledger, frame)
+        response.headers["content-length"] = str(len(data))
+        ledger._requests[-1].declared_length = len(data)
+
+        async def body(data=data, index=index):
+            reads.append(index)
+            return data
+
+        response.body = body
+    cohort = await ledger.load_current_src_candidates(SOURCE_URL)
+    assert reads == [0, 1]
+    baseline = next((data for color, data in zip(colors, bodies, strict=True) if color == 100), bodies[0])
+    rgba = decode_webp_source(baseline, source_mime="image/webp", expected_dimensions=(16, 16)).rgba
+    if verified_count is None and status == "source-pixel-equivalence-failed":
+        rgba = bytes([100, 100, 100, 255]) * 256
+    reference = ReferencePixels(16, 16, rgba)
+    kwargs = {
+        "expected_dimensions": (16, 16), "target_dimensions": (16, 16),
+        "rois": [[0, 0, 16, 16, 0, 0, 16, 16]],
+        "first_reference": reference, "second_reference": reference,
+    }
+    if verified_count is None:
+        with pytest.raises(SourceCaptureProofError, match=status):
+            select_source_roi_candidate(cohort, **kwargs)
+    else:
+        candidate, comparison, facts = select_source_roi_candidate(cohort, **kwargs)
+        assert comparison.passed
+        assert candidate.rgba == rgba
+        assert facts.candidate_count == 2
+        assert facts.verified_candidate_count == verified_count
+        assert facts.selection_status == status
+    cohort.validate(ledger, SOURCE_URL)
+    assert reads == [0, 1]  # validation never rereads a body

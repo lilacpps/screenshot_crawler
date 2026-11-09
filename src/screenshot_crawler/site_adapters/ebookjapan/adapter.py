@@ -40,26 +40,23 @@ from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
     LIMITED_HISTORY_PROFILE,
     SOURCE_IMAGE_HOSTS,
     SOURCE_POLICY_REVISION,
-    BoundResponseFacts,
     SourceCaptureProofError,
     SourceRequestLedger,
     SourceResearchOutcome,
     SourceResearchPartProof,
+    SourceResponseCohort,
     comparison_proof_fields,
     limited_history_profile_matches,
+    select_source_roi_candidate,
 )
 from screenshot_crawler.site_adapters.ebookjapan.source_hook import SOURCE_OBSERVER_JS
 from screenshot_crawler.site_adapters.ebookjapan.source_observer import (
     SourceObserverProofError,
-    read_bound_response_body_once,
 )
 from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
     ReferencePixels,
     SourcePixelProofError,
-    compare_candidate_rgba,
-    decode_webp_source,
     encode_lossless_candidate,
-    reconstruct_roi_part,
 )
 from screenshot_crawler.site_adapters.ebookjapan.viewer import (
     ANCHOR_READER_JS,
@@ -2080,7 +2077,7 @@ class EbookJapanAdapter(SiteAdapter):
         identity_key = self._frame_nodes_key(before)
         if identity_key != self._pending_identity_key:
             raise UnknownPageStateError("ebookjapan visible page changed before source comparison")
-        before_signature = self._frame_paint_signature(before)
+        self._frame_paint_signature(before)
         parts = before.get("parts")
         if not isinstance(parts, list) or not 1 <= len(parts) <= 2:
             raise UnknownPageStateError("ebookjapan current spread layout is incomplete")
@@ -2097,8 +2094,7 @@ class EbookJapanAdapter(SiteAdapter):
         pre_entries: list[dict[str, object]] = []
         source_failure: str | None = None
         limited_profile: str | None = None
-        loaded_by_request: dict[int, tuple[object, BoundResponseFacts, object, str]] = {}
-        loaded_request_by_src: dict[str, int] = {}
+        loaded_by_src: dict[str, SourceResponseCohort] = {}
         comparison_parts: list[SourceResearchPartProof] = []
         d_captures: tuple[CaptureResult, ...] | None = None
         try:
@@ -2129,46 +2125,15 @@ class EbookJapanAdapter(SiteAdapter):
                     limited_profile = LIMITED_HISTORY_PROFILE
                     lineage = entry["image"]
                     current_src = str(lineage["currentSrc"])
-                    if current_src in loaded_request_by_src:
-                        request_id = loaded_request_by_src[current_src]
-                        loaded, response_facts, response_binding, _bound_src = loaded_by_request[request_id]
-                    else:
-                        response_binding, response_facts = self._source_request_ledger.bind_current_src(
+                    if current_src not in loaded_by_src:
+                        loaded_by_src[current_src] = await self._source_request_ledger.load_current_src_candidates(
                             current_src
                         )
-                        request_id = response_facts.request_id
-                        self._source_request_ledger.mark_body_attempted(request_id)
-                        loaded = await read_bound_response_body_once(
-                            response_binding, timeout_seconds=5.0
-                        )
-                        self._source_request_ledger.validate_held_binding(
-                            current_src,
-                            request_id=request_id,
-                            response_id=response_facts.response_id,
-                            request_object=response_binding.request_object,
-                            response_object=response_binding.response_object,
-                            document_token=response_binding.document_token,
-                        )
-                        loaded_by_request[request_id] = (
-                            loaded,
-                            response_facts,
-                            response_binding,
-                            current_src,
-                        )
-                        loaded_request_by_src[current_src] = request_id
-                    entry["response_facts"] = response_facts
-                    entry["response_request_id"] = request_id
+                    entry["response_src"] = current_src
                 if self._source_request_ledger.overflowed:
                     raise SourceObserverProofError("source-response-tracker-overflow")
-                for _loaded, facts, held_binding, current_src in loaded_by_request.values():
-                    self._source_request_ledger.validate_held_binding(
-                        current_src,
-                        request_id=facts.request_id,
-                        response_id=facts.response_id,
-                        request_object=held_binding.request_object,
-                        response_object=held_binding.response_object,
-                        document_token=held_binding.document_token,
-                    )
+                for current_src, cohort in loaded_by_src.items():
+                    cohort.validate(self._source_request_ledger, current_src)
             except SourceObserverProofError as exc:
                 if exc.reason_code == "source-access-stop":
                     raise UnknownPageStateError(
@@ -2204,16 +2169,9 @@ class EbookJapanAdapter(SiteAdapter):
                     "ebookjapan Reader navigation is pending after D capture"
                 )
             if source_failure is None:
-                for _loaded, facts, held_binding, current_src in loaded_by_request.values():
+                for current_src, cohort in loaded_by_src.items():
                     try:
-                        self._source_request_ledger.validate_held_binding(
-                            current_src,
-                            request_id=facts.request_id,
-                            response_id=facts.response_id,
-                            request_object=held_binding.request_object,
-                            response_object=held_binding.response_object,
-                            document_token=held_binding.document_token,
-                        )
+                        cohort.validate(self._source_request_ledger, current_src)
                     except SourceObserverProofError as exc:
                         if exc.reason_code in {
                             "source-access-stop",
@@ -2279,7 +2237,6 @@ class EbookJapanAdapter(SiteAdapter):
             ):
                 raise UnknownPageStateError("ebookjapan frame changed after the D reference pair")
 
-            decoded_by_request: dict[int, object] = {}
             for entry in post_entries:
                 private = entry["post_private"]
                 source, binding, target, context_attributes, draw_attributes = self._research_candidate_snapshot(private)
@@ -2294,32 +2251,21 @@ class EbookJapanAdapter(SiteAdapter):
                     or safe_source_images[0].get("height") != source_image.get("height")
                 ):
                     raise UnknownPageStateError("ebookjapan source image dimensions no longer match the captured ROI")
-                request_id = entry.get("response_request_id")
-                response_facts = entry.get("response_facts")
-                if type(request_id) is not int or not isinstance(response_facts, BoundResponseFacts):
+                current_src = entry.get("response_src")
+                if not isinstance(current_src, str) or current_src not in loaded_by_src:
                     raise SourceCaptureProofError("source-response-binding-unavailable")
-                if request_id not in decoded_by_request:
-                    loaded = loaded_by_request[request_id][0]
-                    decoded_by_request[request_id] = decode_webp_source(
-                        loaded.data,
-                        source_mime=loaded.mime_type,
-                        expected_dimensions=(source_image["naturalWidth"], source_image["naturalHeight"]),
-                    )
-                candidate = reconstruct_roi_part(
-                    decoded_by_request[request_id],
-                    target_dimensions=(target.get("width"), target.get("height")),
-                    rois=source.get("roiRows"),
-                )
                 part_index = entry["part_index"]
                 if type(part_index) is not int or part_index >= len(d_captures):
                     raise SourceCaptureProofError("source-part-order-invalid")
                 first_reference = self._decode_research_reference(d_captures[part_index])
                 second_reference = self._decode_research_reference(d_references[part_index])
-                comparison = compare_candidate_rgba(
-                    candidate,
-                    first_reference,
-                    second_reference,
-                    tolerance=2,
+                candidate, comparison, response_facts = select_source_roi_candidate(
+                    loaded_by_src[current_src],
+                    expected_dimensions=(source_image["naturalWidth"], source_image["naturalHeight"]),
+                    target_dimensions=(target.get("width"), target.get("height")),
+                    rois=source.get("roiRows"),
+                    first_reference=first_reference,
+                    second_reference=second_reference,
                 )
                 encoded = encode_lossless_candidate(candidate)
                 target_binding = {
@@ -2383,16 +2329,9 @@ class EbookJapanAdapter(SiteAdapter):
                 raise UnknownPageStateError(
                     "ebookjapan source request received an AccessGuard stop response"
                 )
-            for _loaded, facts, held_binding, current_src in loaded_by_request.values():
+            for current_src, cohort in loaded_by_src.items():
                 try:
-                    self._source_request_ledger.validate_held_binding(
-                        current_src,
-                        request_id=facts.request_id,
-                        response_id=facts.response_id,
-                        request_object=held_binding.request_object,
-                        response_object=held_binding.response_object,
-                        document_token=held_binding.document_token,
-                    )
+                    cohort.validate(self._source_request_ledger, current_src)
                 except SourceObserverProofError as exc:
                     if exc.reason_code in {
                         "source-access-stop",
@@ -2481,11 +2420,8 @@ class EbookJapanAdapter(SiteAdapter):
         finally:
             self._research_capture_active = False
             self._last_d_reference_captures = ()
-            loaded_by_request.clear()
-            loaded_request_by_src.clear()
+            loaded_by_src.clear()
             pre_entries.clear()
-            if "decoded_by_request" in locals():
-                decoded_by_request.clear()
 
     async def _hide_toolbar_for_capture(
         self,
