@@ -64,14 +64,15 @@ def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_oth
     assert settings.for_site("bookwalker").page_turn_delay_ms == 200
 
 
-def test_piccoma_runtime_settings_allow_explicit_zero_override(tmp_path: Path) -> None:
+@pytest.mark.parametrize("site", ["piccoma", "ebookjapan"])
+def test_runtime_settings_allow_explicit_zero_override(tmp_path: Path, site: str) -> None:
     path = tmp_path / "crawler.yaml"
     path.write_text(
-        "sites:\n  piccoma:\n    page_turn_delay_ms: 0\n",
+        f"sites:\n  {site}:\n    page_turn_delay_ms: 0\n",
         encoding="utf-8",
     )
 
-    assert load_runtime_settings(path).for_site("piccoma").page_turn_delay_ms == 0
+    assert load_runtime_settings(path).for_site(site).page_turn_delay_ms == 0
 
 
 @pytest.mark.parametrize(

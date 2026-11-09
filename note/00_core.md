@@ -3050,6 +3050,11 @@ rootの`crawler.yaml`は`runtime_settings.py`が読み込み、`SiteRuntimeSetti
 不正なdelay（負数、bool、文字列、float）は明示的に失敗し、0はoperator overrideとして有効である。
 CrawlerRunnerはYAMLを読まず、CLI/Batchがresolved値を`RunConfig`またはBatch orchestrationへ渡す。
 
+同梱`crawler.yaml`はebookjapanの`page_turn_delay_ms=0`を明示する（2026-11-10）。
+source/D比較とreadiness確認にかかる時間とは別の、保存後の固定1秒だけを除くoperator設定である。
+`inter_candidate_delay_ms=3000`、access-stop flags、Coreの未設定時1000ms defaultは維持する。
+ebookjapanの有界計測と実サイト確認範囲は`note/15_ebookjapan.md`を参照する。
+
 正常なCONTENT captureでは、logical page/spreadの全artifactをsaveした後にmanifest/progressを一括persistし、
 `page_turn_delay_ms`を1回だけ待ってからinitial `adapter.go_next()`、`adapter.wait_for_change()`を呼ぶ。
 delayはadapter timeout/grace/retry budgetの外側で、AD、loading polling、same-content wait、entry clickには適用しない。

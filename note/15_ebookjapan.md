@@ -1,5 +1,53 @@
 # ebookjapan purchased-only Discovery - current implementation
 
+## Page-turn pacing and bounded performance measurement (2026-11-10)
+
+The distributed `crawler.yaml` explicitly sets `sites.ebookjapan.page_turn_delay_ms=0`.
+This removes only the extra post-save fixed delay (previously the missing-site
+default of 1000 ms per logical page/spread). Source/ROI proof, paired D
+screenshots, readiness, frame/identity/surface guards, navigation-change wait,
+retry/timeout/max-pages guards and access-stop behavior are unchanged.
+The inter-candidate delay remains 3000 ms. Other site settings and the shared
+missing-site default remain unchanged. A separately supplied runtime file or
+explicit CLI override may still select a different delay.
+
+The original bounded normal Runner measurement used the owned Angel 10 cover
+and three spreads (seven pages) at native initial 1904 x 985 / DPR 1. All
+seven outputs were C/WebP; all output hashes, decoded dimensions/RGBA and
+recorded C proofs passed independent checks. Three spreads averaged 2.603 s
+inside `capture_page`: 0.824 s for four Locator screenshots, 0.104 s for PNG
+decode, 0.119 s for source body/decode/ROI, 0.161 s for full-pixel comparison,
+0.424 s for lossless WebP encode/roundtrip and 0.971 s for remaining checks and
+waits. These categories are disjoint; the state-check value is a residual,
+not a dedicated wait timer. The extra fixed delay averaged 1.003 s and
+normal advance/change wait 0.268 s per spread outside capture. These are
+small-sample timings, not full-book throughput guarantees. Evidence:
+`output/ej-performance-20261110/run-072620/summary.json` and `report.json`.
+Timers forward original calls in a separate probe process; no Catalog writes
+occurred and only the owned Page was closed. This result measured the old
+1000 ms setting.
+
+The zero-delay normal Runner check subsequently passed for the same seven
+pages, all C/WebP and all seven byte-identical to the earlier run. Independent
+hash/decode/dimension/source-RGBA/proof checks passed 7/7. Four post-save pacing
+calls totaled 43 ms at the configured zero delay (browser round trips remain),
+compared with 4020 ms previously. The two measured normal-spread capture-start
+intervals were 2.404 and 2.903 s. The complete bounded Runner took 17.302 s
+including entry, versus 26.515 s previously; this total difference also
+includes initialization/cache/capture variability and is not all attributable
+to pacing. Evidence: `output/ej-performance-20261110/run-073505/summary.json`
+and `report.json`. This is first-seven-page evidence only, not END/ZIP or a
+full-book timing guarantee. No Catalog writes occurred; the owned Page closed,
+existing Pages remained open and adapter source hashes were unchanged.
+
+Targeted validation: eight runtime configuration tests (explicit zero for
+ebookjapan/Piccoma, defaults and invalid delays) and two Runner pacing/stop
+tests passed; zero skipped, 45 unrelated cases deselected. The first pytest
+attempt hit eight temporary-directory setup errors; rerunning with an isolated
+workspace `--basetemp` passed. Ruff on the changed test and diff whitespace
+checks passed. Full pytest and generated-browser Integration were not rerun
+for this configuration-only change; bounded actual-site verification is above.
+
 ## Current same-URL source candidate selection (2026-11-10)
 
 Normal capture now validates multiple source responses instead of rejecting
