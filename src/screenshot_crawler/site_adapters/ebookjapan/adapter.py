@@ -6,9 +6,11 @@ import asyncio
 import copy
 import hashlib
 import io
+import math
 import re
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from urllib.parse import urlsplit
 
 from PIL import Image
@@ -84,6 +86,9 @@ _INTRO_READY_WAIT_MS = 8_000
 _READER_ROUTE_WAIT_MS = 20_000
 _FRAME_READY_WAIT_MS = 20_000
 _FRAME_POLL_MS = 150
+_SURFACE_CDP_TIMEOUT_SECONDS = 2.0
+_SURFACE_CDP_CLEANUP_TIMEOUT_SECONDS = 0.5
+_MAX_SURFACE_OPACITY_CANDIDATES = 8
 _INIT_BUDGET_MS = 120_000
 _RANGE_SELECTOR = "input[type='range'].seekbar__slider"
 # These are the only observed toolbar-center action profiles. The click must
@@ -164,6 +169,7 @@ _TERMINAL_PARTITION_KEYS = (
     "nextItem",
     "cta",
     "banner",
+    "matildaBanner",
     "author",
     "forYou",
 )
@@ -259,6 +265,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._last_d_reference_captures: tuple[CaptureResult, ...] = ()
         self._last_source_capture_attempt: dict[str, object] | None = None
         self._research_capture_active = False
+        self._surface_cdp_sequence = 0
         self._transition_before_key: tuple[object, ...] | None = None
         self._transition_pending: bool = False
         self._terminal_end_verified: bool = False
@@ -862,6 +869,7 @@ class EbookJapanAdapter(SiteAdapter):
             "root_in_viewport": _safe_bool(terminal_map.get("rootInViewport")),
             "inner_in_viewport": _safe_bool(terminal_map.get("innerInViewport")),
             "inside_pinned_layout": _safe_bool(terminal_map.get("insidePinnedLayout")),
+            "viewer_identity_valid": _safe_bool(terminal_map.get("viewerIdentityValid")),
             "shell_chain_valid": _safe_bool(terminal_map.get("shellChainValid")),
             "marker_count": _safe_count(terminal_map.get("markerCount")),
             "marker_inside_inner": _safe_bool(terminal_map.get("markerInsideInner")),
@@ -880,6 +888,7 @@ class EbookJapanAdapter(SiteAdapter):
             "risky_action_count": _safe_count(terminal_map.get("riskyActionCount")),
             "module_counts": _safe_count_map(terminal_map.get("moduleCounts"), _TERMINAL_MODULE_KEYS),
             "header_root_count": _safe_count(terminal_map.get("headerRootCount")),
+            "header_global_count": _safe_count(terminal_map.get("headerGlobalCount")),
             "header_bar_count": _safe_count(terminal_map.get("headerBarCount")),
             "header_menu_count": _safe_count(terminal_map.get("headerMenuCount")),
             "header_counts": _safe_count_map(terminal_map.get("headerCounts"), _TERMINAL_HEADER_KEYS),
@@ -1114,24 +1123,46 @@ class EbookJapanAdapter(SiteAdapter):
                 "review", "nextItem", "cta", "banner", "i2i", "author", "forYou"
             }
             required_headers = {"close-button", "contents-button", "settings-button"}
+            matilda_count = partition.get("matildaBanner", 0)
             return (
                 isinstance(modules, Mapping)
                 and set(modules) == required_modules
-                and all(modules.get(name) == 1 for name in required_modules)
+                and all(type(modules.get(name)) is int and modules.get(name) == 1 for name in required_modules)
+                and type(terminal.get("moduleChildCount")) is int
                 and terminal.get("moduleChildCount") == 7
+                and terminal.get("viewerIdentityValid") is True
                 and isinstance(headers, Mapping)
                 and set(headers) == required_headers
-                and all(headers.get(name) == 1 for name in required_headers)
-                and terminal.get("moduleChildCount") == 7
+                and all(type(headers.get(name)) is int and headers.get(name) == 1 for name in required_headers)
+                and type(terminal.get("headerRootCount")) is int
+                and terminal.get("headerRootCount") == 1
+                and type(terminal.get("headerGlobalCount")) is int
+                and terminal.get("headerGlobalCount") == 1
                 and terminal.get("headerBarCount") == 1
                 and terminal.get("headerMenuCount") == 1
+                and terminal.get("unknownActionScopeKnown") is True
+                and type(terminal.get("unknownOutsideKnownRegionCount")) is int
+                and terminal.get("unknownOutsideKnownRegionCount") == 0
                 and terminal.get("riskyActionCount") == 0
+                and type(matilda_count) is int
+                and matilda_count in (0, 1)
+                and type(partition.get("review")) is int
                 and partition.get("review") == 1
+                and type(partition.get("nextItem")) is int
                 and partition.get("nextItem") == 1
+                and type(partition.get("cta")) is int
                 and partition.get("cta") == 1
+                and type(partition.get("banner")) is int
                 and partition.get("banner") == 2
+                and type(partition.get("header")) is int
                 and partition.get("header") == 3
-                and set(partition).issubset(required_modules | {"header"})
+                and type(partition.get("author", 0)) is int
+                and partition.get("author", 0) >= 1
+                and type(partition.get("i2i", 0)) is int
+                and partition.get("i2i", 0) >= 1
+                and type(partition.get("forYou", 0)) is int
+                and partition.get("forYou", 0) >= 1
+                and set(partition).issubset(required_modules | {"header", "matildaBanner"})
             )
         return False
 
@@ -1634,7 +1665,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._last_native_counter = self._native_counter(before)
         if self._frame_nodes_key(before) != identity_key:
             raise UnknownPageStateError("ebookjapan selected page nodes changed during compositor setup")
-        self._require_safe_capture_surface(before)
+        await self._require_safe_capture_surface(page, before)
         parts = before.get("parts")
         if not isinstance(parts, list) or not parts:
             raise UnknownPageStateError("ebookjapan has no complete visible page parts to capture")
@@ -1658,7 +1689,7 @@ class EbookJapanAdapter(SiteAdapter):
                 or self._frame_nodes_key(current_frame) != identity_key
             ):
                 raise UnknownPageStateError("ebookjapan frame changed before a D compositor sample")
-            self._require_safe_capture_surface(current_frame)
+            await self._require_safe_capture_surface(page, current_frame)
             png = await locator.screenshot(animations="disabled", scale="css")
             pixel_hash, png_width, png_height = self._decode_png(png)
             if (png_width, png_height) != (width, height):
@@ -1669,7 +1700,7 @@ class EbookJapanAdapter(SiteAdapter):
         middle = await self._read_ready_frame(page, expected_path=reader_path, current=current, total=total)
         if self._frame_paint_signature(middle) != frame_signature:
             raise UnknownPageStateError("ebookjapan frame or native draw generation changed during D capture")
-        self._require_safe_capture_surface(middle)
+        await self._require_safe_capture_surface(page, middle)
 
         second_pngs: list[tuple[bytes, int, int, str]] = []
         for part in parts:
@@ -1682,7 +1713,7 @@ class EbookJapanAdapter(SiteAdapter):
                 or self._frame_nodes_key(current_frame) != identity_key
             ):
                 raise UnknownPageStateError("ebookjapan frame changed before the repeated D sample")
-            self._require_safe_capture_surface(current_frame)
+            await self._require_safe_capture_surface(page, current_frame)
             locator = await self._pinned_canvas_locator(page, part)
             png = await locator.screenshot(animations="disabled", scale="css")
             pixel_hash, png_width, png_height = self._decode_png(png)
@@ -1693,7 +1724,7 @@ class EbookJapanAdapter(SiteAdapter):
         after = await self._read_ready_frame(page, expected_path=reader_path, current=current, total=total)
         if self._frame_paint_signature(after) != frame_signature:
             raise UnknownPageStateError("ebookjapan frame changed after the second D compositor sample")
-        self._require_safe_capture_surface(after)
+        await self._require_safe_capture_surface(page, after)
         if len(first_pngs) != len(second_pngs) or any(
             first[1:] != second[1:] for first, second in zip(first_pngs, second_pngs, strict=True)
         ):
@@ -2558,7 +2589,7 @@ class EbookJapanAdapter(SiteAdapter):
                         ))
                     ):
                         raise UnknownPageStateError("ebookjapan center action changed the native page counter")
-                    self._require_safe_capture_surface(changed)
+                    await self._require_safe_capture_surface(page, changed)
                     return changed
                 if changed.get("toolbarVisible") is True:
                     raise UnknownPageStateError("ebookjapan observed center action did not hide the Reader toolbar")
@@ -2612,24 +2643,272 @@ class EbookJapanAdapter(SiteAdapter):
         ]
         return matches[0] if len(matches) == 1 else None
 
-    @staticmethod
-    def _require_safe_capture_surface(frame: Mapping[str, object]) -> None:
+    async def _require_safe_capture_surface(
+        self, page: Page, frame: Mapping[str, object]
+    ) -> None:
         if frame.get("toolbarVisible") is not False:
             raise UnknownPageStateError("ebookjapan Reader chrome is visible during D capture")
         parts = frame.get("parts")
         if not isinstance(parts, list) or not parts:
             raise UnknownPageStateError("ebookjapan D capture has no verified page surface")
-        unsafe = [
-            str(part.get("captureSurfaceReason") or "unknown")
-            if isinstance(part, Mapping)
-            else "malformed"
-            for part in parts
-            if not isinstance(part, Mapping) or part.get("captureSurfaceSafe") is not True
-        ]
+        candidate_targets: dict[tuple[int, int], list[dict[str, object]]] = {}
+        unsafe: list[str] = []
+        for part in parts:
+            if not isinstance(part, Mapping):
+                unsafe.append("malformed")
+                continue
+            if part.get("captureSurfaceSafe") is True:
+                continue
+            if part.get("captureSurfaceReason") != "opacity-shadow-proof-required":
+                unsafe.append(str(part.get("captureSurfaceReason") or "unknown"))
+                continue
+            candidates = part.get("captureSurfaceCandidates")
+            rect = part.get("cssRect")
+            slot_ordinal, canvas_index, canvas_id = (
+                part.get("slotOrdinal"), part.get("canvasIndex"), part.get("canvasId")
+            )
+            if (
+                not isinstance(candidates, list)
+                or not candidates
+                or len(candidates) > _MAX_SURFACE_OPACITY_CANDIDATES
+                or not isinstance(rect, Mapping)
+                or type(slot_ordinal) is not int
+                or slot_ordinal < 0
+                or type(canvas_index) is not int
+                or canvas_index < 0
+                or type(canvas_id) is not int
+                or canvas_id < 1
+            ):
+                unsafe.append("opacity-candidate-binding-invalid")
+                continue
+            target_rect: dict[str, int | float] = {}
+            for key in ("left", "right", "top", "bottom", "width", "height"):
+                value = rect.get(key)
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    unsafe.append("opacity-candidate-geometry-invalid")
+                    break
+                target_rect[key] = value
+            else:
+                target = {
+                    "slotOrdinal": slot_ordinal,
+                    "canvasIndex": canvas_index,
+                    "canvasId": canvas_id,
+                    "rect": target_rect,
+                }
+                for candidate in candidates:
+                    if not isinstance(candidate, Mapping):
+                        unsafe.append("opacity-candidate-binding-invalid")
+                        continue
+                    candidate_id, frame_epoch = candidate.get("candidateId"), candidate.get("frameEpoch")
+                    if (
+                        type(candidate_id) is not int
+                        or not 1 <= candidate_id <= _MAX_SURFACE_OPACITY_CANDIDATES
+                        or type(frame_epoch) is not int
+                        or frame_epoch < 1
+                    ):
+                        unsafe.append("opacity-candidate-binding-invalid")
+                        continue
+                    candidate_targets.setdefault((candidate_id, frame_epoch), []).append(target)
+        if len(candidate_targets) > _MAX_SURFACE_OPACITY_CANDIDATES:
+            unsafe.append("opacity-candidate-limit")
         if unsafe:
             raise UnknownPageStateError(
                 "ebookjapan D canvas surface is unsafe (" + ",".join(sorted(set(unsafe))) + ")"
             )
+        if candidate_targets:
+            expected_path = self._reader_path
+            if expected_path is None:
+                raise UnknownPageStateError("ebookjapan D canvas surface is unsafe (opacity-candidate-route-unknown)")
+            if not await self._prove_opacity_candidate_shadows_absent(
+                page, expected_path=expected_path, candidates=candidate_targets
+            ):
+                raise UnknownPageStateError(
+                    "ebookjapan D canvas surface is unsafe (opacity-shadow-proof-unavailable)"
+                )
+
+    async def _prove_opacity_candidate_shadows_absent(
+        self,
+        page: Page,
+        *,
+        expected_path: str,
+        candidates: Mapping[tuple[int, int], list[dict[str, object]]],
+    ) -> bool:
+        """Prove a conditional aggregate candidate has no open or closed shadow tree."""
+
+        session = None
+        object_group = f"ebookjapan-opacity-surface-{self._surface_cdp_sequence}"
+        self._surface_cdp_sequence += 1
+        deadline = asyncio.get_running_loop().time() + _SURFACE_CDP_TIMEOUT_SECONDS
+
+        async def send(method: str, params: dict[str, object] | None = None) -> object:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError
+            return await asyncio.wait_for(session.send(method, params or {}), timeout=remaining)
+
+        try:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            session = await asyncio.wait_for(
+                page.context.new_cdp_session(page), timeout=remaining
+            )
+            await send("Runtime.enable")
+            await send("DOM.enable")
+            anchor_response = await send(
+                "Runtime.evaluate",
+                {
+                    "expression": "window.__ejReaderAnchor",
+                    "objectGroup": object_group,
+                    "returnByValue": False,
+                },
+            )
+            anchor_result = anchor_response.get("result") if isinstance(anchor_response, Mapping) else None
+            anchor_object_id = anchor_result.get("objectId") if isinstance(anchor_result, Mapping) else None
+            if not isinstance(anchor_object_id, str) or not anchor_object_id:
+                return False
+            resolve_function = """function(candidateId,frameEpoch,targets,expectedPath){
+              const a=this;
+              if(!a||a.document!==document||a.pathname!==location.pathname||location.pathname!==expectedPath
+                ||location.hostname!=='ebookjapan.yahoo.co.jp'||location.search||location.hash
+                ||a.opacityCandidateFrameEpoch!==frameEpoch||typeof a.opacityCandidateCheck!=='function')return null;
+              const element=a.opacityCandidateRefs?.get(candidateId)?.deref();
+              if(!element||!a.opacityCandidateCheck(candidateId,frameEpoch,targets,element))return null;
+              return element;
+            }"""
+            validate_function = """function(candidateId,frameEpoch,targets,expectedPath,expectedCandidate){
+              const a=this;
+              if(!a||a.document!==document||a.pathname!==location.pathname||location.pathname!==expectedPath
+                ||location.hostname!=='ebookjapan.yahoo.co.jp'||location.search||location.hash
+                ||a.opacityCandidateFrameEpoch!==frameEpoch||typeof a.opacityCandidateCheck!=='function')return false;
+              const element=a.opacityCandidateRefs?.get(candidateId)?.deref();
+              return !!element&&element===expectedCandidate&&a.opacityCandidateCheck(candidateId,frameEpoch,targets,element);
+            }"""
+            for (candidate_id, frame_epoch), targets in candidates.items():
+                arguments_ = [
+                    {"value": candidate_id},
+                    {"value": frame_epoch},
+                    {"value": targets},
+                    {"value": expected_path},
+                ]
+                candidate_response = await send(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": anchor_object_id,
+                        "functionDeclaration": resolve_function,
+                        "arguments": arguments_,
+                        "objectGroup": object_group,
+                    },
+                )
+                candidate_result = (
+                    candidate_response.get("result")
+                    if isinstance(candidate_response, Mapping)
+                    else None
+                )
+                candidate_object_id = (
+                    candidate_result.get("objectId")
+                    if isinstance(candidate_result, Mapping)
+                    else None
+                )
+                if (
+                    not isinstance(candidate_result, Mapping)
+                    or candidate_result.get("subtype") != "node"
+                    or not isinstance(candidate_object_id, str)
+                    or not candidate_object_id
+                ):
+                    return False
+                described = await send(
+                    "DOM.describeNode",
+                    {"objectId": candidate_object_id, "depth": 64, "pierce": False},
+                )
+                described_node = described.get("node") if isinstance(described, Mapping) else None
+                if not self._cdp_light_tree_is_complete_and_shadow_free(described_node):
+                    return False
+                validation = await send(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": anchor_object_id,
+                        "functionDeclaration": validate_function,
+                        "arguments": [
+                            {"value": candidate_id},
+                            {"value": frame_epoch},
+                            {"value": targets},
+                            {"value": expected_path},
+                            {"objectId": candidate_object_id},
+                        ],
+                        "objectGroup": object_group,
+                        "returnByValue": True,
+                    },
+                )
+                validation_result = validation.get("result") if isinstance(validation, Mapping) else None
+                if not (
+                    isinstance(validation_result, Mapping)
+                    and validation_result.get("type") == "boolean"
+                    and validation_result.get("value") is True
+                ):
+                    return False
+            return bool(candidates)
+        except Exception:  # noqa: BLE001 - protocol/API uncertainty stays fail-closed
+            return False
+        finally:
+            if session is not None:
+                with suppress(Exception):
+                    await asyncio.wait_for(
+                        session.send("Runtime.releaseObjectGroup", {"objectGroup": object_group}),
+                        timeout=_SURFACE_CDP_CLEANUP_TIMEOUT_SECONDS,
+                    )
+                with suppress(Exception):
+                    await asyncio.wait_for(
+                        session.detach(), timeout=_SURFACE_CDP_CLEANUP_TIMEOUT_SECONDS
+                    )
+
+    @staticmethod
+    def _cdp_light_tree_is_complete_and_shadow_free(root: object) -> bool:
+        allowed_fields = {
+            "nodeId", "backendNodeId", "nodeType", "nodeName", "localName", "nodeValue",
+            "childNodeCount", "children", "attributes", "shadowRoots", "pseudoElements",
+            "contentDocument", "templateContent", "importedDocument", "distributedNodes",
+            "isSVG", "frameId", "compatibilityMode", "shadowRootType", "isScrollable", "parentId",
+        }
+        if not isinstance(root, Mapping):
+            return False
+        pending: list[tuple[Mapping[str, object], int]] = [(root, 0)]
+        visited = 0
+        while pending:
+            node, depth = pending.pop()
+            visited += 1
+            if visited > 512 or depth > 64 or set(node) - allowed_fields:
+                return False
+            node_type = node.get("nodeType")
+            if type(node_type) is not int or node_type not in {1, 3, 8}:
+                return False
+            for key in ("shadowRoots", "pseudoElements", "distributedNodes"):
+                value = node.get(key, [])
+                if not isinstance(value, list) or value:
+                    return False
+            for key in ("contentDocument", "templateContent", "importedDocument", "frameId", "shadowRootType"):
+                if node.get(key) is not None:
+                    return False
+            if node_type == 1 and "childNodeCount" not in node:
+                return False
+            child_count = node.get("childNodeCount", 0)
+            if type(child_count) is not int or child_count < 0:
+                return False
+            if node_type == 1 and "children" not in node and child_count != 0:
+                return False
+            children = node.get("children", [])
+            if (
+                not isinstance(children, list)
+                or child_count != len(children)
+            ):
+                return False
+            if depth == 64 and children:
+                return False
+            for child in children:
+                if not isinstance(child, Mapping):
+                    return False
+                pending.append((child, depth + 1))
+        return True
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         if self._reader_path is None or self._reader_total is None or self._external_id is None:

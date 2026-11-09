@@ -1,12 +1,12 @@
 # ebookjapan — 購入済み書籍限定 Site Adapter 実装 Runbook
 
-Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 conditionally adopts C from verified source ROI when complete per-part proof passes / Stage 04 run 4 END+ZIP accepted at Reviewer B0 / Stage 05 current representative capture scope accepted for Angel 10 by independent Reviewer B0; broader Full 17 capture not claimed** (2026-11-09 Asia/Tokyo). Angel 10 reached strict END with 287/287 C/WebP pages, no fallback, and an audited ZIP. The final isolated Catalog has 1 completed Item and 16 pending; the other 15 Muda Items were intentionally not captured, and Muda 1 remains incomplete. Full listings for both works and the 17-item Plan passed. C remains limited-history source ROI proof; whole-source/A-byte capture and complete paint history are not claimed. Exact evidence and the Muda run history are maintained in [`PROGRESS.md`](PROGRESS.md).
+Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 conditionally adopts C from verified source ROI when complete per-part proof passes / Stage 04 run 4 END+ZIP accepted at Reviewer B0 / Stage 05 two-representative scope COMPLETE: Angel 10 + Muda 1 DP1; Full 17 capture not claimed; final Run 8 archive and artifact review accepted at Reviewer B0** (2026-11-09 Asia/Tokyo). Full owned listings for both works and the 17-item Plan are verified. Final isolated Catalog: 2 completed Items, 15 pending, 2 successful Runs, 6 failed Runs and 2 Artifacts. Muda Run 8 passed strict END and the strict 13-check archive audit at 193/193 pages; Root's final ZIP identity/visual/numeric audit passed. The other 15 Muda Items were intentionally excluded. Exact hashes and historical Run 7 failure are in [`PROGRESS.md`](PROGRESS.md). C remains limited-history source ROI proof; whole-source/A-byte capture and complete paint history are not claimed.
 
 ## 目的・完了定義
 
 `screenshot_crawler` に `site=ebookjapan` を追加し、作品一覧URLのWatchlist登録 → **Full Discovery（購入済みのみ）** → Catalog → Batch Plan → Batch Run → 画像取得 → Manifest/ZIP → Item completed までを、既存のGUI/CLIで利用できるようにする。
 
-The user-approved final capture scope is one representative owned work, Angel 10. Its normal owned/direct Batch, strict END, C/D ZIP audit, independent RAM witnesses, and Reviewer B0 gate passed. The original broader two-work / Full 17 capture plan below is future scope; it is not the current acceptance target and is not reported as complete.
+The user-approved final capture scope is two representative owned works: Angel 10 and Muda 1 DP1, and both are complete. Angel 10's normal owned/direct Batch, strict END, C/D ZIP audit, independent RAM witnesses, and Reviewer B0 gate passed. Muda Run 8 reached strict END at 193/193, emitted 191 C/WebP and 2 D/PNG pages, and passed the strict 13-check archive audit; Root's final byte-identity/visual/numeric audit passed. The other 15 Muda Items are intentionally excluded. Full owned listings and the 17-item Plan passed, but Full 17 capture is not reported as complete. Final Reviewer B0 accepted the Run 8 strict audit and artifact identity/visual/numeric evidence.
 
 | 作品 / 正規入力URL | 購入済みの期待値 | E2E期待値 |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ The user-approved final capture scope is one representative owned work, Angel 10
 | 02 | [Viewer baseline](02-viewer-baseline/README.md) | 対象1冊の先頭→本文→ENDを、ページ欠損なく安全に検証 |
 | 03 | [原画像・source-native取得研究と実装](03-source-native-capture/README.md) | **A/B/Cを実測で評価**、適用可能な最高忠実度経路を実装。非採用理由の台帳必須 |
 | 04 | [Owned-only Batch/GUI統合](04-batch-integration/README.md) | `owned/direct`のみ、通常Batch/ZIP/状態更新、他サイト回帰なし |
-| 05 | [Representative E2E audit](05-e2e/README.md) | The user-approved Angel 10 representative run passed independent Reviewer B0; Full 17-item capture is unperformed and not claimed. |
+| 05 | [Representative E2E audit](05-e2e/README.md) | The earlier Angel-only checkpoint passed independent Reviewer B0; the current two-representative scope is complete, Full 17-item capture is unperformed and not claimed. |
 
 各Stageは実装・証拠・テストを [PROGRESS](PROGRESS.md) に記録してから次へ進む。P0で調査できなかった箇所は `UNKNOWN` のまま保持し、憶測で本番有効化しない。
 

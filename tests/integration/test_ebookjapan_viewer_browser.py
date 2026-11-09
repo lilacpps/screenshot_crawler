@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import zipfile
@@ -78,7 +79,7 @@ def _html(
         '<div class="review-module book-last__review"><button class="review-module__action">Review</button></div>'
         '<div class="next-item book-last__next"><div class="next-item__outline"><button class="next-item__rating">Rate</button></div></div>'
         '<div class="cta-button book-last__cta"><div class="cta-button__row"><div class="cta-button__primary"><button class="cta-button__read-btn">Read</button></div></div></div>'
-        '<div class="banner-group book-last__banner-group"><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>'
+        '<div class="banner-group book-last__banner-group"><div class="matilda-module"><a class="matilda-banner" href="/books/134336/A000000005/" target="_blank">Offer</a></div><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>'
         '<section class="recommend-grid book-last__section book-last__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000001/">Related</a></li></ul></section>'
         '<section class="recommend-grid book-last__section book-last__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>'
         '<section class="recommend-grid book-last__section book-last__for-you"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>'
@@ -106,6 +107,7 @@ def _html(
       .legacy-comic-header,.legacy-comic-footer{{position:fixed;left:0;width:100%;height:24px;z-index:20;background:#ddd}}
       .legacy-comic-header{{top:0}} .legacy-comic-footer{{bottom:0}}
       .book-last__author{{margin-top:1050px}}
+      {'.book-last__author{margin-top:0}' if terminal_profile == 'muda' else ''}
       </style></head><body>
       {viewer_open}
       <header class="legacy-comic-header"><span class="legacy-comic-header__title">{TITLE}</span>{header_controls}</header>
@@ -149,6 +151,20 @@ def _html(
           else if(window.__ejFixtureMode==='opacity-hidden-terminal'){{terminalShell.style.display='block';terminalShell.style.opacity='0';setTimeout(()=>terminalShell.style.opacity='1',250);}}
           else terminalShell.style.display='block';
           if('{terminal_profile}'==='muda'||'{terminal_profile}'==='angel-observed'){{document.querySelector('.legacy-comic-header').hidden=false;document.querySelector('.legacy-comic-footer').hidden=false;}}
+          if('{terminal_profile}'==='muda'&&window.__ejFixtureMode==='muda-transient-header'){{
+            const header=document.querySelector('.legacy-comic-header'),footer=document.querySelector('.legacy-comic-footer');
+            const parent=header.parentNode,next=header.nextSibling,title=header.querySelector('.legacy-comic-header__title');
+            const counter=footer.querySelector('.legacy-comic-footer__page-output');
+            const controls=[...header.querySelectorAll('button.close-button,button.contents-button,button.settings-button')];
+            header.remove();footer.hidden=true;
+            setTimeout(()=>{{parent.insertBefore(header,next);header.hidden=false;footer.hidden=false;
+              title.style.visibility='hidden';counter.style.visibility='hidden';controls.forEach(button=>button.style.visibility='hidden');}},260);
+            setTimeout(()=>{{title.style.visibility='';counter.style.visibility='';controls.forEach(button=>button.style.visibility='');}},650);
+          }}
+          if('{terminal_profile}'==='muda'&&window.__ejFixtureMode==='muda-persistent-partial-header'){{
+            const settings=document.querySelector('.legacy-comic-header button.settings-button');
+            if(settings)settings.style.visibility='hidden';
+          }}
           if('{terminal_profile}'==='angel-observed'&&['transient-observed-terminal','permanent-hidden-observed-terminal'].includes(window.__ejFixtureMode)){{
             const title=document.querySelector('.legacy-comic-header__title');
             const counter=document.querySelector('.legacy-comic-footer__page-output');
@@ -1230,6 +1246,22 @@ async def test_capture_page_is_atomic_when_one_spread_part_is_not_ready(
         "img-outline-pseudo",
         "svg-image-outline",
         "outlined-div",
+        "aggregate-visible-text-media",
+        "aggregate-sampled-visible-overlay",
+        "aggregate-direct-text",
+        "aggregate-visible-media",
+        "aggregate-own-background",
+        "aggregate-own-pseudo",
+        "aggregate-own-effect",
+        "aggregate-visibility-hidden-visible-override",
+        "aggregate-node-overflow",
+        "aggregate-candidate-overflow",
+        "aggregate-ancestor-overflow",
+        "aggregate-unknown-shadow",
+        "aggregate-open-shadow",
+        "aggregate-closed-shadow",
+        "aggregate-nested-closed-shadow",
+        "aggregate-declarative-closed-shadow",
     ],
 )
 async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_commit(
@@ -1256,6 +1288,29 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
     )
     await browser_page.evaluate(
         """async issue=>{
+          const betweenSampleStyle=()=>{
+            const r=document.querySelector('.page-canvas').getBoundingClientRect();
+            return `position:fixed;left:${r.left+r.width*.12}px;top:${r.top+r.height*.944}px;width:${r.width*.03}px;height:${r.height*.031}px;pointer-events:none`;
+          };
+          const makeAggregateContainer=()=>{
+            const container=document.createElement('div');container.id='aggregate-container';
+            container.style.cssText=betweenSampleStyle();
+            document.body.append(container);return container;
+          };
+          const appendSvgMedia=parent=>{
+            const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+            svg.setAttribute('width','8');svg.setAttribute('height','8');
+            const image=document.createElementNS('http://www.w3.org/2000/svg','image');
+            image.setAttribute('width','8');image.setAttribute('height','8');
+            image.setAttribute('href','data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');
+            svg.append(image);parent.append(svg);
+          };
+          const appendOpacitySuppressedAggregate=container=>{
+            const suppressed=document.createElement('div');suppressed.id='suppressed-aggregate';
+            suppressed.style.opacity='0';
+            const text=document.createElement('span');text.textContent='suppressed child label';
+            appendSvgMedia(suppressed);suppressed.append(text);container.append(suppressed);
+          };
           if(issue==='opaque-overlay'){
             const overlay=document.createElement('div');overlay.id='opaque-overlay';
             overlay.style='position:fixed;inset:0;z-index:99999;background:rgb(255,0,0)';
@@ -1349,6 +1404,78 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
             image.setAttribute('href','data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');svg.append(image);document.body.append(svg);
           }else if(issue==='outlined-div'){
             const div=document.createElement('div');div.style.cssText='position:fixed;left:calc(50vw + 100px);top:100px;width:24px;height:24px;outline:solid 1px red';document.body.append(div);
+          }else if(issue==='aggregate-visible-text-media'){
+            const container=makeAggregateContainer(),text=document.createElement('span');
+            text.textContent='visible child label';container.append(text);appendSvgMedia(container);
+          }else if(issue==='aggregate-sampled-visible-overlay'){
+            const container=document.createElement('div'),r=document.querySelector('.page-canvas').getBoundingClientRect();
+            container.style.cssText=`position:fixed;left:${r.left+r.width*.1-2}px;top:${r.top+r.height*.1-2}px;width:12px;height:12px`;
+            container.append(document.createTextNode('sampled visible overlay'));document.body.append(container);
+          }else if(issue==='aggregate-direct-text'){
+            const container=makeAggregateContainer();container.append(document.createTextNode('direct visible label'));
+          }else if(issue==='aggregate-visible-media'){
+            const container=makeAggregateContainer(),image=document.createElement('img');
+            image.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+            image.style.cssText='width:8px;height:8px';container.append(image);
+          }else if(issue==='aggregate-own-background'||issue==='aggregate-own-effect'||issue==='aggregate-own-pseudo'){
+            const container=makeAggregateContainer();container.append(document.createTextNode('own-style-risk'));
+            if(issue==='aggregate-own-background')container.style.backgroundColor='rgb(255,0,0)';
+            else if(issue==='aggregate-own-effect')container.style.boxShadow='0 0 2px rgb(255,0,0)';
+            else{
+              container.classList.add('aggregate-own-pseudo');
+              const style=document.createElement('style');
+              style.textContent='.aggregate-own-pseudo::before{content:"paint";position:absolute;inset:0;color:red}';
+              document.head.append(style);
+            }
+          }else if(issue==='aggregate-visibility-hidden-visible-override'){
+            const container=makeAggregateContainer(),hidden=document.createElement('div');
+            hidden.style.visibility='hidden';
+            const text=document.createElement('span');text.style.visibility='visible';
+            text.textContent='visible override';hidden.append(text);container.append(hidden);
+          }else if(issue==='aggregate-node-overflow'){
+            const container=makeAggregateContainer(),suppressed=document.createElement('div');
+            suppressed.style.opacity='0';container.append(suppressed);
+            for(let index=0;index<513;index++){const child=document.createElement('span');child.textContent='x';suppressed.append(child);}
+          }else if(issue==='aggregate-candidate-overflow'){
+            for(let index=0;index<9;index++){
+              const container=makeAggregateContainer();container.id='aggregate-candidate-'+index;
+              const child=document.createElement('span');child.style.opacity='0';
+              child.textContent='suppressed candidate '+index;container.append(child);
+            }
+          }else if(issue==='aggregate-ancestor-overflow'){
+            let root=null,parent=null;
+            for(let index=0;index<66;index++){
+              const wrapper=document.createElement('div');
+              wrapper.style.cssText=betweenSampleStyle();
+              if(parent)parent.append(wrapper);else root=wrapper;
+              parent=wrapper;
+            }
+            document.body.append(root);
+            const container=document.createElement('div');container.style.cssText='width:20px;height:20px';
+            const text=document.createElement('span');text.textContent='deep visible label';container.append(text);parent.append(container);
+          }else if(issue==='aggregate-unknown-shadow'){
+            const container=makeAggregateContainer(),text=document.createElement('span');
+            text.textContent='unknown shadow host';container.append(text);
+            const custom=document.createElement('x-unknown-content');custom.attachShadow({mode:'open'});
+            custom.shadowRoot.innerHTML='<span>shadow content</span>';container.append(custom);
+          }else if(issue==='aggregate-open-shadow'||issue==='aggregate-closed-shadow'){
+            const container=makeAggregateContainer(),child=document.createElement('span');
+            child.style.opacity='0';child.textContent='suppressed light text';container.append(child);
+            const shadow=container.attachShadow({mode:issue==='aggregate-open-shadow'?'open':'closed'});
+            shadow.append(document.createElement('slot'));
+            const paint=document.createElement('div');paint.style.cssText='position:absolute;inset:0;background:red';shadow.append(paint);
+          }else if(issue==='aggregate-nested-closed-shadow'){
+            const container=makeAggregateContainer(),nested=document.createElement('span');
+            nested.style.opacity='0';nested.textContent='nested suppressed label';
+            const shadow=nested.attachShadow({mode:'closed'});
+            shadow.append(document.createElement('slot'));
+            const paint=document.createElement('div');paint.style.cssText='position:absolute;inset:0;background:red';shadow.append(paint);
+            container.append(nested);
+          }else if(issue==='aggregate-declarative-closed-shadow'){
+            const container=makeAggregateContainer(),hidden=document.createElement('div');hidden.style.opacity='0';
+            if(typeof hidden.setHTMLUnsafe!=='function')throw new Error('declarative shadow fixture unavailable');
+            hidden.setHTMLUnsafe('<template shadowrootmode="closed"><div style="width:100%;height:100%;background:red"></div></template>');
+            const child=document.createElement('span');child.textContent='suppressed light text';hidden.append(child);container.append(hidden);
           }else{
             document.querySelector('.comic-viewer__page-slot').style.transform='rotate(180deg)';
           }
@@ -1356,8 +1483,222 @@ async def test_capture_rejects_occluded_or_clipped_surfaces_without_coverage_com
         surface_issue,
     )
 
+    if surface_issue in {
+        "aggregate-closed-shadow",
+        "aggregate-nested-closed-shadow",
+        "aggregate-declarative-closed-shadow",
+    }:
+        expected_reason = "opacity-shadow-proof-unavailable"
+        diagnostic_frame = await _frame(browser_page)
+        diagnostic_part = diagnostic_frame["parts"][0]
+        assert diagnostic_part["captureSurfaceReason"] == "opacity-shadow-proof-required", {
+            "reason": diagnostic_part["captureSurfaceReason"],
+            "candidate_count": len(diagnostic_part.get("captureSurfaceCandidates", [])),
+        }
+    else:
+        expected_reason = None
+    with pytest.raises(UnknownPageStateError) as error:
+        await adapter.capture_page(browser_page)
+    if expected_reason is not None:
+        assert expected_reason in str(error.value)
+    assert adapter._seen_slot_ids == set()
+    assert adapter._captured_slot_order == []
+
+
+async def _prepare_opacity_candidate_capture(page: Page) -> EbookJapanAdapter:
+    await _open_reader(page)
+    await _draw_full_same_size(page)
+    adapter = EbookJapanAdapter()
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 1
+    adapter._last_native_counter = 1
+    await _redraw_on_resize(page)
+    await adapter._pin_reader_anchor(
+        page, expected_path=READER_PATH, expected_current=1, expected_total=1
+    )
+    await adapter.get_content_identity(page)
+    frame = await _frame(page)
+    await adapter._hide_toolbar_for_capture(
+        page, frame=frame, expected_path=READER_PATH, current=1, total=1
+    )
+    await page.evaluate(
+        """()=>{
+          const r=document.querySelector('.page-canvas').getBoundingClientRect();
+          const container=document.createElement('div');container.id='aggregate-container';
+          container.style.cssText=`position:fixed;left:${r.left+r.width*.12}px;top:${r.top+r.height*.944}px;width:${r.width*.03}px;height:${r.height*.031}px;pointer-events:none`;
+          const suppressed=document.createElement('div');suppressed.id='suppressed-aggregate';suppressed.style.opacity='0';
+          const text=document.createElement('span');text.textContent='suppressed child label';
+          const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('width','8');svg.setAttribute('height','8');
+          const image=document.createElementNS('http://www.w3.org/2000/svg','image');image.setAttribute('width','8');image.setAttribute('height','8');
+          image.setAttribute('href','data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');
+          svg.append(image);suppressed.append(text,svg);container.append(suppressed);document.body.append(container);
+        }"""
+    )
+    return adapter
+
+
+async def test_capture_accepts_aggregate_text_and_svg_media_only_when_zero_opacity_suppressed(
+    browser_page: Page,
+) -> None:
+    adapter = await _prepare_opacity_candidate_capture(browser_page)
+
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 1
+    assert adapter._seen_slot_ids == {1}
+    assert adapter._captured_slot_order == [1]
+
+
+@pytest.mark.parametrize("failure_mode", ["unavailable", "timeout", "partial", "mutated"])
+async def test_opacity_shadow_proof_failures_do_not_commit_coverage(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+) -> None:
+    adapter = await _prepare_opacity_candidate_capture(browser_page)
+    context = browser_page.context
+    original_factory = context.new_cdp_session
+
+    if failure_mode == "unavailable":
+
+        async def unavailable(_page):
+            raise RuntimeError("synthetic protocol unavailable")
+
+        monkeypatch.setattr(context, "new_cdp_session", unavailable)
+    else:
+
+        async def instrumented_factory(page):
+            session = await original_factory(page)
+            original_send = session.send
+
+            async def send(method: str, params: dict[str, object] | None = None):
+                if method == "DOM.describeNode" and failure_mode == "timeout":
+                    await asyncio.sleep(2.2)
+                result = await original_send(method, params or {})
+                if method == "DOM.describeNode" and failure_mode == "partial":
+                    node = result.get("node")
+                    assert isinstance(node, dict)
+                    node["childNodeCount"] = node.get("childNodeCount", 0) + 1
+                if method == "DOM.describeNode" and failure_mode == "mutated":
+                    await page.evaluate(
+                        "() => { document.querySelector('#suppressed-aggregate').style.opacity='1'; }"
+                    )
+                return result
+
+            session.send = send
+            return session
+
+        monkeypatch.setattr(context, "new_cdp_session", instrumented_factory)
+
+    with pytest.raises(UnknownPageStateError, match="opacity-shadow-proof-unavailable"):
+        await adapter.capture_page(browser_page)
+    assert adapter._seen_slot_ids == set()
+    assert adapter._captured_slot_order == []
+
+
+async def test_normal_capture_does_not_open_a_cdp_session_for_unconditional_surfaces(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _open_reader(browser_page)
+    await _draw_full_same_size(browser_page)
+    adapter = EbookJapanAdapter()
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 1
+    adapter._last_native_counter = 1
+    await _redraw_on_resize(browser_page)
+    await adapter._pin_reader_anchor(
+        browser_page, expected_path=READER_PATH, expected_current=1, expected_total=1
+    )
+    await adapter.get_content_identity(browser_page)
+    frame = await _frame(browser_page)
+    await adapter._hide_toolbar_for_capture(
+        browser_page, frame=frame, expected_path=READER_PATH, current=1, total=1
+    )
+    calls = 0
+    original_factory = browser_page.context.new_cdp_session
+
+    async def counted_factory(page):
+        nonlocal calls
+        calls += 1
+        return await original_factory(page)
+
+    monkeypatch.setattr(browser_page.context, "new_cdp_session", counted_factory)
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 1
+    assert calls == 0
+
+
+async def test_capture_rechecks_opacity_suppressed_aggregate_after_first_reference(
+    browser_page: Page,
+) -> None:
+    await _open_reader(browser_page)
+    await _draw_full_same_size(browser_page)
+    adapter = EbookJapanAdapter()
+    adapter._owned_title = TITLE
+    adapter._series_id = "134336"
+    adapter._external_id = "A000083590"
+    adapter._work_key = "neutral-work"
+    adapter._reader_path = READER_PATH
+    adapter._reader_total = 1
+    adapter._last_native_counter = 1
+    await _redraw_on_resize(browser_page)
+    await adapter._pin_reader_anchor(
+        browser_page, expected_path=READER_PATH, expected_current=1, expected_total=1
+    )
+    await adapter.get_content_identity(browser_page)
+    frame = await _frame(browser_page)
+    await adapter._hide_toolbar_for_capture(
+        browser_page, frame=frame, expected_path=READER_PATH, current=1, total=1
+    )
+    await browser_page.evaluate(
+        """()=>{
+          const r=document.querySelector('.page-canvas').getBoundingClientRect();
+          const container=document.createElement('div');container.id='aggregate-container';
+          container.style.cssText=`position:fixed;left:${r.left+r.width*.12}px;top:${r.top+r.height*.944}px;width:${r.width*.03}px;height:${r.height*.031}px;pointer-events:none`;
+          const suppressed=document.createElement('div');suppressed.id='suppressed-aggregate';suppressed.style.opacity='0';
+          const text=document.createElement('span');text.textContent='suppressed child label';
+          const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('width','8');svg.setAttribute('height','8');
+          const image=document.createElementNS('http://www.w3.org/2000/svg','image');image.setAttribute('width','8');image.setAttribute('height','8');
+          image.setAttribute('href','data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');
+          svg.append(image);suppressed.append(text,svg);container.append(suppressed);document.body.append(container);
+        }"""
+    )
+    original_pinned_canvas_locator = adapter._pinned_canvas_locator
+    revealed = False
+
+    class RevealAfterFirstScreenshot:
+        def __init__(self, locator):
+            self.locator = locator
+
+        async def is_visible(self):
+            return await self.locator.is_visible()
+
+        async def screenshot(self, *args, **kwargs):
+            nonlocal revealed
+            data = await self.locator.screenshot(*args, **kwargs)
+            if not revealed:
+                revealed = True
+                await browser_page.evaluate(
+                    "() => { document.querySelector('#suppressed-aggregate').style.opacity='1'; }"
+                )
+            return data
+
+    async def reveal_after_first_reference(page: Page, part):
+        locator = await original_pinned_canvas_locator(page, part)
+        return RevealAfterFirstScreenshot(locator)
+
+    adapter._pinned_canvas_locator = reveal_after_first_reference
     with pytest.raises(UnknownPageStateError):
         await adapter.capture_page(browser_page)
+    assert revealed is True
     assert adapter._seen_slot_ids == set()
     assert adapter._captured_slot_order == []
 
@@ -1589,6 +1930,123 @@ async def test_muda_terminal_rejects_purchase_action_inside_known_module(browser
     assert frame["status"] == "unknown-terminal-marker"
     assert frame["terminal"]["unknownActionCount"] == 1
     assert frame["terminal"]["actionPartitionComplete"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "document.querySelector('.matilda-module').insertAdjacentHTML('beforeend','<a class=\"matilda-banner\" href=\"/books/134336/A000000006/\" target=\"_blank\">Duplicate</a>')",
+        "document.querySelector('.matilda-banner').target='_self'",
+        "document.querySelector('.matilda-banner').removeAttribute('href')",
+        "document.querySelector('.matilda-banner').parentElement.className='unknown-banner-parent'",
+        "document.body.insertAdjacentHTML('beforeend','<a class=\"matilda-banner\" href=\"/books/134336/A000000006/\" target=\"_blank\" style=\"position:fixed;left:40px;top:40px\">Outside</a>')",
+        "document.querySelector('.book-last__banner-group').insertAdjacentHTML('beforeend','<a class=\"unknown-banner-action\" href=\"/books/134336/A000000006/\" style=\"display:block;width:100px;height:20px\">Unknown</a>')",
+    ],
+    ids=["duplicate", "wrong-target", "missing-href", "wrong-parent", "outside", "unknown-banner-action"],
+)
+async def test_muda_terminal_rejects_unobserved_matilda_or_banner_actions(
+    browser_page: Page, mutation: str,
+) -> None:
+    baseline = await _show_terminal_profile(browser_page, "muda")
+    assert baseline["status"] == "end", json.dumps(baseline.get("terminal"), sort_keys=True)
+    assert baseline["terminal"]["partition"]["matildaBanner"] == 1
+    await browser_page.evaluate(f"()=>{{{mutation}}}")
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker", json.dumps(frame.get("terminal"), sort_keys=True)
+    assert frame["terminal"]["actionPartitionComplete"] is False
+
+
+@pytest.mark.parametrize("pending_shape", ["header-absent", "header-controls-hidden", "partial-header", "missing-rating-action"])
+async def test_muda_partial_terminal_hydration_is_loading_not_end(
+    browser_page: Page, pending_shape: str,
+) -> None:
+    baseline = await _show_terminal_profile(browser_page, "muda")
+    assert baseline["status"] == "end"
+    if pending_shape == "header-absent":
+        await browser_page.evaluate(
+            "document.querySelector('.legacy-comic-header').remove();document.querySelector('.legacy-comic-footer').remove()"
+        )
+    elif pending_shape == "header-controls-hidden":
+        await browser_page.evaluate(
+            """()=>{document.querySelector('.legacy-comic-header__title').style.visibility='hidden';
+              document.querySelector('.legacy-comic-footer__page-output').style.visibility='hidden';
+              document.querySelectorAll('.legacy-comic-header button').forEach(button=>button.style.visibility='hidden');} """
+        )
+    elif pending_shape == "partial-header":
+        await browser_page.evaluate(
+            """()=>{document.querySelector('.legacy-comic-header__menu--pc button.settings-button').style.visibility='hidden';} """
+        )
+    else:
+        await browser_page.evaluate(
+            "document.querySelector('.book-last__next-item .next-item__rating')?.remove()"
+        )
+        await browser_page.evaluate("document.querySelector('.next-item__rating').remove()")
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "loading", json.dumps(frame.get("terminal"), sort_keys=True)
+    assert frame["terminal"]["profile"] == "muda-book-last"
+    assert frame["terminal"]["actionPartitionComplete"] is True
+    assert EbookJapanAdapter._is_verified_end_frame(frame, total=3) is False
+
+
+async def test_muda_core_waits_for_header_and_known_actions_before_end(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan import adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 1_500)
+    monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 20)
+    original_evaluate = browser_page.evaluate
+    samples: list[dict[str, object]] = []
+
+    async def collect_frames(expression, *args, **kwargs):
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression == FRAME_STATE_JS and isinstance(result, dict):
+            samples.append(result)
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", collect_frames)
+    adapter, result = await _run_neutral_core_flow(
+        browser_page, tmp_path, mode="muda-transient-header", max_pages=10, terminal_profile="muda",
+    )
+    assert result.stop_state.value == "end"
+    assert len(result.pages) == 3
+    assert adapter._capture_coverage_complete() is True
+    assert adapter._terminal_end_verified is True
+    transient = [sample for sample in samples if sample.get("status") == "loading"]
+    assert any(sample["terminal"].get("headerRootCount") == 0 for sample in transient)
+    assert any(
+        sample["terminal"].get("headerRootCount") == 1
+        and sample["terminal"].get("headerCounts") == {
+            "close-button": 0, "contents-button": 0, "settings-button": 0,
+        }
+        for sample in transient
+    )
+    settled = [sample for sample in samples if sample.get("status") == "end"]
+    assert settled
+    assert settled[-1]["terminal"]["partition"]["matildaBanner"] == 1
+    assert settled[-1]["terminal"]["headerCounts"] == {
+        "close-button": 1, "contents-button": 1, "settings-button": 1,
+    }
+
+
+async def test_muda_persistent_partial_header_times_out_without_end_or_zip(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.ebookjapan import adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "_FRAME_READY_WAIT_MS", 180)
+    monkeypatch.setattr(adapter_module, "_FRAME_POLL_MS", 10)
+    with pytest.raises(UnknownPageStateError, match="did not produce a new full content frame"):
+        await _run_neutral_core_flow(
+            browser_page,
+            tmp_path,
+            mode="muda-persistent-partial-header",
+            max_pages=10,
+            terminal_profile="muda",
+        )
+    assert not list(tmp_path.rglob("*.zip"))
 
 
 async def test_muda_terminal_accepts_observed_author_heading_in_tall_viewport(browser_page: Page) -> None:

@@ -18,6 +18,61 @@ from screenshot_crawler.site_adapters.ebookjapan.viewer import (
 )
 
 
+@pytest.mark.parametrize(
+    ("node", "expected"),
+    [
+        ({"nodeType": 1, "nodeName": "DIV", "localName": "div", "nodeValue": ""}, False),
+        (
+            {
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "childNodeCount": 0,
+            },
+            True,
+        ),
+        (
+            {
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "childNodeCount": 1,
+            },
+            False,
+        ),
+        (
+            {
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [{"nodeType": 3, "nodeName": "#text", "nodeValue": "text"}],
+            },
+            True,
+        ),
+        (
+            {
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "childNodeCount": 0,
+                "children": [],
+            },
+            True,
+        ),
+        ({"nodeType": 3, "nodeName": "#text", "nodeValue": "text"}, True),
+    ],
+)
+def test_cdp_tree_requires_explicit_element_child_count(
+    node: dict[str, object], expected: bool
+) -> None:
+    assert EbookJapanAdapter._cdp_light_tree_is_complete_and_shadow_free(node) is expected
+
+
 def _observed_angel_terminal_frame() -> dict[str, object]:
     partition = {
         "review": 1,
@@ -91,6 +146,86 @@ def test_observed_angel_end_requires_exact_lottery_and_scoped_header_partition()
         forged = copy.deepcopy(frame)
         mutation(forged["terminal"])
         assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
+
+
+def _observed_muda_terminal_frame() -> dict[str, object]:
+    partition = {
+        "review": 1,
+        "nextItem": 1,
+        "cta": 1,
+        "banner": 2,
+        "matildaBanner": 1,
+        "i2i": 1,
+        "author": 2,
+        "forYou": 1,
+        "header": 3,
+    }
+    return {
+        "status": "end",
+        "routeStable": True,
+        "slotCount": 193,
+        "parts": [],
+        "visibleSlots": [],
+        "visibleActions": sum(partition.values()),
+        "counterVisible": False,
+        "deadEnd": [],
+        "terminal": {
+            "profile": "muda-book-last",
+            "rootCount": 1,
+            "innerCount": 1,
+            "rootVisible": True,
+            "innerVisible": True,
+            "rootInViewport": True,
+            "innerInViewport": True,
+            "insidePinnedLayout": True,
+            "viewerIdentityValid": True,
+            "shellChainValid": True,
+            "visibleSlotCount": 0,
+            "visiblePageCanvasCount": 0,
+            "modalCount": 0,
+            "actionInventoryCapped": False,
+            "actionPartitionComplete": True,
+            "unknownActionCount": 0,
+            "unknownOutsideKnownRegionCount": 0,
+            "unknownActionScopeKnown": True,
+            "visibleActionCount": sum(partition.values()),
+            "nativeCounterVisible": False,
+            "nativeCounter": None,
+            "moduleCounts": {
+                "review": 1, "nextItem": 1, "cta": 1, "banner": 1,
+                "i2i": 1, "author": 1, "forYou": 1,
+            },
+            "moduleChildCount": 7,
+            "headerRootCount": 1,
+            "headerGlobalCount": 1,
+            "headerBarCount": 1,
+            "headerMenuCount": 1,
+            "headerCounts": {"close-button": 1, "contents-button": 1, "settings-button": 1},
+            "riskyActionCount": 0,
+            "partition": partition,
+        },
+    }
+
+
+def test_muda_end_requires_pinned_layout_full_header_and_observed_matilda_action() -> None:
+    frame = _observed_muda_terminal_frame()
+    assert EbookJapanAdapter._is_verified_end_frame(frame, total=193) is True
+
+    for mutation in (
+        lambda terminal: terminal["partition"].update(matildaBanner=2),
+        lambda terminal: terminal["partition"].update(nextItem=0),
+        lambda terminal: terminal["partition"].update(header=2),
+        lambda terminal: terminal.update(headerRootCount=0),
+        lambda terminal: terminal.update(headerGlobalCount=2),
+        lambda terminal: terminal.update(headerCounts={"close-button": 1, "contents-button": 1, "settings-button": 0}),
+        lambda terminal: terminal.update(viewerIdentityValid=False),
+        lambda terminal: terminal.update(unknownOutsideKnownRegionCount=1),
+    ):
+        forged = copy.deepcopy(frame)
+        mutation(forged["terminal"])
+        forged["visibleActions"] = sum(forged["terminal"]["partition"].values())
+        forged["terminal"]["visibleActionCount"] = forged["visibleActions"]
+        assert EbookJapanAdapter._is_verified_end_frame(forged, total=193) is False
 
 
 def _observed_angel_unknown_terminal_frame() -> dict[str, object]:
