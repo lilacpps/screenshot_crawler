@@ -25,6 +25,7 @@ from screenshot_crawler.site_adapters.ebookjapan.source_observer import (
     bind_unique_current_response,
 )
 from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
+    RGB_OUTLIER_LIMIT_DENOMINATOR,
     EncodedCandidate,
     PixelComparisonProof,
 )
@@ -39,7 +40,7 @@ SOURCE_IMAGE_HOSTS: Final = frozenset(
 )
 LIMITED_HISTORY_PROFILE: Final = "muda2-install-unknown-callable-v3"
 SOURCE_METHOD: Final = "C_source_roi_lossless"
-SOURCE_POLICY_REVISION: Final = "ebookjapan-owned-source-roi-v1-20261109"
+SOURCE_POLICY_REVISION: Final = "ebookjapan-owned-source-roi-v2-20261109"
 
 ComparisonStatus = Literal["C_VERIFIED", "D_FALLBACK"]
 
@@ -442,6 +443,13 @@ class SourceResearchPartProof:
     comparison_passed: bool
     max_rgb_delta_by_channel: tuple[int, int, int]
     rgb_tolerance: int
+    rgb_pixels_over_tolerance_by_reference: tuple[int, int]
+    rgb_pixels_total: int
+    rgb_pixels_over_tolerance_bbox_by_reference: tuple[
+        tuple[int, int, int, int] | None,
+        tuple[int, int, int, int] | None,
+    ]
+    rgb_outlier_limit_denominator: int
     alpha_mismatch_pixels: int
     dimensions_exact: bool
     output_format: str
@@ -517,6 +525,27 @@ class SourceResearchPartProof:
             "comparison_passed": self.comparison_passed,
             "max_rgb_delta_by_channel": list(self.max_rgb_delta_by_channel),
             "rgb_tolerance": self.rgb_tolerance,
+            "rgb_outlier_policy": {
+                "qualifying_pixel": "any RGB channel delta greater than tolerance",
+                "counting": "union pixels per exact D reference",
+                "maximum_fraction": {
+                    "numerator": 1,
+                    "denominator": self.rgb_outlier_limit_denominator,
+                },
+                "acceptance": "outlier_pixels * denominator <= total_pixels",
+                "per_reference": [
+                    {
+                        "outlier_pixels": count,
+                        "total_pixels": self.rgb_pixels_total,
+                        "bbox_xyxy": list(bbox) if bbox is not None else None,
+                    }
+                    for count, bbox in zip(
+                        self.rgb_pixels_over_tolerance_by_reference,
+                        self.rgb_pixels_over_tolerance_bbox_by_reference,
+                        strict=True,
+                    )
+                ],
+            },
             "alpha_mismatch_pixels": self.alpha_mismatch_pixels,
             "dimensions_exact": self.dimensions_exact,
             "output_format": self.output_format,
@@ -711,6 +740,16 @@ def comparison_proof_fields(
         comparison_passed=comparison.passed,
         max_rgb_delta_by_channel=max_delta,
         rgb_tolerance=comparison.tolerance,
+        rgb_pixels_over_tolerance_by_reference=(
+            first.rgb_pixels_over_tolerance,
+            second.rgb_pixels_over_tolerance,
+        ),
+        rgb_pixels_total=candidate.width * candidate.height,
+        rgb_pixels_over_tolerance_bbox_by_reference=(
+            first.rgb_pixels_over_tolerance_bbox,
+            second.rgb_pixels_over_tolerance_bbox,
+        ),
+        rgb_outlier_limit_denominator=RGB_OUTLIER_LIMIT_DENOMINATOR,
         alpha_mismatch_pixels=max(
             first.alpha_mismatch_pixels, second.alpha_mismatch_pixels
         ),

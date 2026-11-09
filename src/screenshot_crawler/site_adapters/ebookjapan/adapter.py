@@ -39,6 +39,7 @@ from screenshot_crawler.site_adapters.ebookjapan.discovery import (
 from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
     LIMITED_HISTORY_PROFILE,
     SOURCE_IMAGE_HOSTS,
+    SOURCE_POLICY_REVISION,
     BoundResponseFacts,
     SourceCaptureProofError,
     SourceRequestLedger,
@@ -1588,7 +1589,7 @@ class EbookJapanAdapter(SiteAdapter):
                     {
                         "capture_method": "C_source_roi_lossless",
                         "capture_class": "C",
-                        "ebookjapan_capture_policy_revision": "ebookjapan-owned-source-roi-v1-20261109",
+                        "ebookjapan_capture_policy_revision": SOURCE_POLICY_REVISION,
                         "source_provenance": "VERIFIED_SOURCE_ROI",
                         "source_roi_proof": proof_projection,
                     }
@@ -3142,7 +3143,7 @@ class EbookJapanAdapter(SiteAdapter):
             "capture_method": "C_source_roi_lossless" if c_verified else "D_compositor_png",
             "capture_class": "C" if c_verified else _CAPTURE_CLASS,
             "ebookjapan_capture_policy_revision": (
-                "ebookjapan-owned-source-roi-v1-20261109" if c_verified else _CAPTURE_POLICY_REVISION
+                SOURCE_POLICY_REVISION if c_verified else _CAPTURE_POLICY_REVISION
             ),
             "ebookjapan_capture_parts": copy.deepcopy(list(self._last_capture_parts)),
             "ebookjapan_native_counter": self._last_native_counter,

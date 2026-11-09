@@ -11,6 +11,7 @@ from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.site_adapters.ebookjapan.source_pixels import (
     MAX_ROI_OPERATIONS,
     MAX_SOURCE_BODY_BYTES,
+    RGB_OUTLIER_LIMIT_DENOMINATOR,
     CandidatePixels,
     DecodedWebPSource,
     EncodedCandidate,
@@ -245,6 +246,7 @@ def test_rgb_tolerance_is_per_channel_and_alpha_remains_exact() -> None:
     assert proof.first_reference.max_rgb_delta_by_channel == (2, 2, 2)
     assert proof.first_reference.rgb_pixels_changed == 1
     assert proof.first_reference.rgb_pixels_over_tolerance == 0
+    assert proof.first_reference.rgb_pixels_over_tolerance_bbox is None
     assert proof.first_reference.alpha_mismatch_pixels == 0
     rejected_rgba = bytearray(candidate.rgba)
     rejected_rgba[0] += 3
@@ -254,6 +256,57 @@ def test_rgb_tolerance_is_per_channel_and_alpha_remains_exact() -> None:
         rgba_sha256=hashlib.sha256(rejected_rgba).hexdigest(),
     )
     assert compare_candidate_rgba(rejected, reference, reference).passed is False
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "allowed_outliers"),
+    [(100, 100, 1), (1088, 1600, 174)],
+)
+def test_rgb_outlier_allowance_uses_exact_union_pixel_ratio_and_preserves_candidate(
+    width: int,
+    height: int,
+    allowed_outliers: int,
+) -> None:
+    pixel_count = width * height
+    reference_rgba = bytes((6, 6, 6, 255)) * pixel_count
+    reference = ReferencePixels(width, height, reference_rgba)
+    base = _candidate()
+    original_rgba = bytes((6, 6, 6, 255)) * pixel_count
+
+    def candidate_with_outliers(outlier_count: int) -> CandidatePixels:
+        rgba = bytearray(original_rgba)
+        for pixel_index in range(outlier_count):
+            rgba[pixel_index * 4] = 255  # A 249-value error in one RGB component.
+        return replace(
+            base,
+            width=width,
+            height=height,
+            rgba=bytes(rgba),
+            rgba_sha256=hashlib.sha256(rgba).hexdigest(),
+        )
+
+    allowed = candidate_with_outliers(allowed_outliers)
+    allowed_original = allowed.rgba
+    accepted = compare_candidate_rgba(allowed, reference, reference)
+    assert accepted.passed is True
+    assert accepted.outlier_limit_denominator == RGB_OUTLIER_LIMIT_DENOMINATOR == 10_000
+    assert accepted.first_reference.max_rgb_delta_by_channel == (249, 0, 0)
+    assert accepted.first_reference.rgb_pixels_over_tolerance == allowed_outliers
+    assert accepted.first_reference.rgb_pixels_over_tolerance_bbox == (
+        0,
+        0,
+        allowed_outliers,
+        1,
+    )
+    assert allowed.rgba == allowed_original
+
+    rejected = compare_candidate_rgba(
+        candidate_with_outliers(allowed_outliers + 1),
+        reference,
+        reference,
+    )
+    assert rejected.passed is False
+    assert rejected.first_reference.rgb_pixels_over_tolerance == allowed_outliers + 1
 
 
 def test_comparison_sees_rgb_differences_under_zero_alpha_and_rejects_alpha_change() -> None:

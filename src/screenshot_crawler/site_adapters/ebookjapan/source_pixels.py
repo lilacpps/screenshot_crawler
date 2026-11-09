@@ -26,6 +26,7 @@ MAX_ROI_OPERATIONS: Final = 512
 WEBP_LOSSLESS_METHOD: Final = 4
 WEBP_LOSSLESS_QUALITY: Final = 80
 MAX_DIMENSION: Final = 16_384
+RGB_OUTLIER_LIMIT_DENOMINATOR: Final = 10_000
 
 
 class SourcePixelProofError(ValueError):
@@ -149,6 +150,7 @@ class PerReferenceComparison:
     max_rgb_delta_by_channel: tuple[int, int, int]
     rgb_pixels_changed: int
     rgb_pixels_over_tolerance: int
+    rgb_pixels_over_tolerance_bbox: tuple[int, int, int, int] | None
     alpha_mismatch_pixels: int
     mean_absolute_rgb_delta: float
     alpha_exact: bool
@@ -160,6 +162,7 @@ class PixelComparisonProof:
     width: int
     height: int
     tolerance: int
+    outlier_limit_denominator: int
     candidate_rgba_sha256: str
     reference_rgba_sha256: tuple[str, str]
     reference_pair_exact: bool
@@ -573,6 +576,7 @@ def _pixel_difference(
                 [0 if value <= tolerance else 255 for value in range(256)]
             )
             over_pixels = over_mask.histogram()[255]
+            over_bbox = over_mask.getbbox()
             alpha_mismatches = sum(alpha.histogram()[1:])
             mean_delta = sum(ImageStat.Stat(channel).mean[0] for channel in channels) / 3
             alpha_exact = alpha.getextrema() == (0, 0)
@@ -580,10 +584,12 @@ def _pixel_difference(
                 max_rgb_delta_by_channel=max_deltas,  # type: ignore[arg-type]
                 rgb_pixels_changed=changed_pixels,
                 rgb_pixels_over_tolerance=over_pixels,
+                rgb_pixels_over_tolerance_bbox=over_bbox,
                 alpha_mismatch_pixels=alpha_mismatches,
                 mean_absolute_rgb_delta=float(mean_delta),
                 alpha_exact=alpha_exact,
-                within_tolerance=max(max_deltas) <= tolerance,
+                within_tolerance=over_pixels * RGB_OUTLIER_LIMIT_DENOMINATOR
+                <= width * height,
             )
     except Exception as exc:
         raise SourcePixelProofError("pixel-comparison-failed") from exc
@@ -659,6 +665,7 @@ def compare_candidate_rgba(
         width=candidate.width,
         height=candidate.height,
         tolerance=tolerance,
+        outlier_limit_denominator=RGB_OUTLIER_LIMIT_DENOMINATOR,
         candidate_rgba_sha256=candidate.rgba_sha256,
         reference_rgba_sha256=(
             hashlib.sha256(first_reference.rgba).hexdigest(),

@@ -17,7 +17,11 @@ from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.site_adapters.ebookjapan.adapter import EbookJapanAdapter
-from screenshot_crawler.site_adapters.ebookjapan.source_capture import SourceResearchOutcome
+from screenshot_crawler.site_adapters.ebookjapan.source_capture import (
+    SOURCE_POLICY_REVISION,
+    SourceResearchOutcome,
+)
+from screenshot_crawler.site_adapters.ebookjapan.source_pixels import ReferencePixels
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -33,6 +37,37 @@ SOURCE_WIDTH = 1088
 SOURCE_HEIGHT = 1600
 ROIS_X = 16
 ROIS_Y = 16
+OUTLIER_POLICY_DENOMINATOR = 10_000
+
+
+def _patch_d_reference_outliers(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outlier_count: int,
+    skip_reference_count: int = 0,
+) -> None:
+    original = EbookJapanAdapter._decode_research_reference
+    decoded_count = 0
+
+    def decode_with_outliers(capture: CaptureResult) -> ReferencePixels:
+        nonlocal decoded_count
+        reference = original(capture)
+        should_mutate = decoded_count >= skip_reference_count
+        decoded_count += 1
+        if not should_mutate or outlier_count == 0:
+            return reference
+        rgba = bytearray(reference.rgba)
+        for pixel_index in range(outlier_count):
+            offset = pixel_index * 4
+            channel = rgba[offset]
+            rgba[offset] = channel + 100 if channel <= 155 else channel - 100
+        return ReferencePixels(reference.width, reference.height, bytes(rgba))
+
+    monkeypatch.setattr(
+        EbookJapanAdapter,
+        "_decode_research_reference",
+        staticmethod(decode_with_outliers),
+    )
 
 
 @pytest_asyncio.fixture(loop_scope="module")
@@ -364,7 +399,7 @@ async def test_generated_title_alias_rewind_and_source_roi_comparison(
     assert len(outcome.captures) == 1
     assert outcome.fallback_captures == ()
     assert projection["capture_method"] == "C_source_roi_lossless"
-    assert projection["capture_policy_revision"] == "ebookjapan-owned-source-roi-v1-20261109"
+    assert projection["capture_policy_revision"] == SOURCE_POLICY_REVISION
     assert projection["provenance"] == "VERIFIED_SOURCE_ROI"
     assert projection["runtime_adoption_status"] == "NOT_ADOPTED"
     assert projection["paint_history_complete"] is False
@@ -385,6 +420,14 @@ async def test_generated_title_alias_rewind_and_source_roi_comparison(
     assert part["source_response"]["current_src_matches"] is True
     assert part["d_reference_pair_exact"] is True
     assert part["max_rgb_delta_by_channel"] <= [2, 2, 2]
+    assert part["rgb_outlier_policy"]["maximum_fraction"] == {
+        "numerator": 1,
+        "denominator": OUTLIER_POLICY_DENOMINATOR,
+    }
+    assert part["rgb_outlier_policy"]["per_reference"] == [
+        {"outlier_pixels": 0, "total_pixels": SOURCE_WIDTH * SOURCE_HEIGHT, "bbox_xyxy": None},
+        {"outlier_pixels": 0, "total_pixels": SOURCE_WIDTH * SOURCE_HEIGHT, "bbox_xyxy": None},
+    ]
     assert part["alpha_mismatch_pixels"] == 0
     assert part["dimensions_exact"] is True
     assert part["output_roundtrip_exact"] is True
@@ -429,7 +472,7 @@ async def test_public_capture_adopts_only_the_complete_verified_source_spread(
     assert (captures[0].width, captures[0].height) == (SOURCE_WIDTH, SOURCE_HEIGHT)
     assert metadata["capture_method"] == "C_source_roi_lossless"
     assert metadata["capture_class"] == "C"
-    assert metadata["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-source-roi-v1-20261109"
+    assert metadata["ebookjapan_capture_policy_revision"] == SOURCE_POLICY_REVISION
     assert metadata["ebookjapan_source_provenance"] == "VERIFIED_SOURCE_ROI"
     assert metadata["ebookjapan_native_page_number"] is None
     attempt = metadata["ebookjapan_source_capture_attempt"]
@@ -447,6 +490,9 @@ async def test_public_capture_adopts_only_the_complete_verified_source_spread(
     assert part["source_roi_proof"]["source_encoded_sha256"] == hashlib.sha256(webp_bytes).hexdigest()
     assert part["source_roi_proof"]["d_reference_pair_exact"] is True
     assert part["source_roi_proof"]["alpha_mismatch_pixels"] == 0
+    assert part["source_roi_proof"]["rgb_outlier_policy"]["acceptance"] == (
+        "outlier_pixels * denominator <= total_pixels"
+    )
     assert "compositor_pixel_sha256" in part
     assert "output_rgba_sha256" in part["source_roi_proof"]
     assert SOURCE_URL not in serialized
@@ -455,13 +501,15 @@ async def test_public_capture_adopts_only_the_complete_verified_source_spread(
 
 
 @pytest.mark.parametrize(
-    "clip_second_source",
-    [False, True],
-    ids=("two-part-C-atomic", "one-part-failure-whole-D"),
+    ("clip_second_source", "outlier_count"),
+    [(False, 0), (True, 0), (False, 175)],
+    ids=("two-part-C-atomic", "one-part-source-failure-whole-D", "one-part-outlier-failure-whole-D"),
 )
 async def test_public_capture_keeps_two_part_source_spread_atomic(
     c2_browser: Page,
+    monkeypatch: pytest.MonkeyPatch,
     clip_second_source: bool,
+    outlier_count: int,
 ) -> None:
     adapter = await _open_owned_reader(
         c2_browser,
@@ -493,16 +541,29 @@ async def test_public_capture_keeps_two_part_source_spread_atomic(
     # Model the post-cover sequence cursor so this local fixture can isolate
     # atomic spread output without also exercising the separate navigation test.
     adapter._next_dom_ordinal = parts[0]["slotOrdinal"]
+    if outlier_count:
+        # The first part remains exact. Only the two D references for the
+        # second part receive 175 high-delta pixels (>174 allowed at 1088x1600).
+        _patch_d_reference_outliers(
+            monkeypatch,
+            outlier_count=outlier_count,
+            skip_reference_count=2,
+        )
 
     captures = await adapter.capture_page(c2_browser)
     metadata = await adapter.collect_debug_metadata(c2_browser)
 
     assert captures is not None and len(captures) == 2
-    if clip_second_source:
+    if clip_second_source or outlier_count:
         assert all(capture.mime_type == "image/png" for capture in captures)
         assert metadata["capture_method"] == "D_compositor_png"
         assert metadata["ebookjapan_source_capture_attempt"]["status"] == "D_FALLBACK"
-        assert metadata["ebookjapan_source_capture_attempt"]["failure_reason_code"] == "source-paint-state-unsupported"
+        expected_failure = (
+            "source-paint-state-unsupported"
+            if clip_second_source
+            else "source-pixel-equivalence-failed"
+        )
+        assert metadata["ebookjapan_source_capture_attempt"]["failure_reason_code"] == expected_failure
         assert all("source_roi_proof" not in part for part in metadata["ebookjapan_capture_parts"])
     else:
         assert all(capture.mime_type == "image/webp" for capture in captures)
@@ -604,12 +665,18 @@ async def test_fatal_before_new_d_capture_does_not_emit_previous_c_proof(
     )
 
 
-@pytest.mark.parametrize("clip_source", [False, True], ids=("verified-C", "proof-unavailable-D"))
+@pytest.mark.parametrize(
+    "capture_case",
+    ("verified-C", "proof-unavailable-D", "few-high-outliers-C", "over-limit-outliers-D"),
+)
 async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
     isolated_runner_page: Page,
     tmp_path: Path,
-    clip_source: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capture_case: str,
 ) -> None:
+    clip_source = capture_case == "proof-unavailable-D"
+    outlier_count = 8 if capture_case == "few-high-outliers-C" else 175 if capture_case == "over-limit-outliers-D" else 0
     webp_bytes = _generated_vp8_webp()
     source_url = f"https://{PRODUCTION_SOURCE_HOST}/generated-c2-fixture.webp?fixture=runner-proof"
     source_requests: list[str] = []
@@ -658,6 +725,8 @@ async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
         })()"""
     )
     adapter = EbookJapanAdapter()
+    if outlier_count:
+        _patch_d_reference_outliers(monkeypatch, outlier_count=outlier_count)
     await adapter.configure_target_identity(PRODUCT_ID, "generated-work")
     output = tmp_path / "isolated-catalog" / "run"
     result = await CrawlerRunner(
@@ -680,18 +749,24 @@ async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     page_entry = manifest["pages"][0]
     metadata = page_entry["metadata"]
-    expected_extension = ".png" if clip_source else ".webp"
-    expected_mime = "image/png" if clip_source else "image/webp"
+    expected_d = clip_source or capture_case == "over-limit-outliers-D"
+    expected_extension = ".png" if expected_d else ".webp"
+    expected_mime = "image/png" if expected_d else "image/webp"
     assert page_entry["file"] == f"page-0001{expected_extension}", metadata
     assert page_entry["mime_type"] == expected_mime
     assert (page_entry["width"], page_entry["height"]) == (SOURCE_WIDTH, SOURCE_HEIGHT)
     attempt = metadata["ebookjapan_source_capture_attempt"]
-    if clip_source:
+    if expected_d:
         assert metadata["capture_method"] == "D_compositor_png"
         assert metadata["capture_class"] == "D"
         assert metadata["ebookjapan_source_provenance"] == "UNKNOWN"
         assert attempt["status"] == "D_FALLBACK"
-        assert attempt["failure_reason_code"] == "source-paint-state-unsupported"
+        expected_failure = (
+            "source-paint-state-unsupported"
+            if clip_source
+            else "source-pixel-equivalence-failed"
+        )
+        assert attempt["failure_reason_code"] == expected_failure
         assert attempt["runtime_adoption_status"] == "NOT_APPLIED"
         assert "source_roi_proof" not in metadata["ebookjapan_capture_parts"][0]
     else:
@@ -704,6 +779,21 @@ async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
         assert proof["roi_count"] == 256
         assert proof["source_encoded_sha256"] == hashlib.sha256(webp_bytes).hexdigest()
         assert proof["output_encoded_sha256"] == hashlib.sha256((output / page_entry["file"]).read_bytes()).hexdigest()
+        if outlier_count:
+            assert proof["max_rgb_delta_by_channel"][0] > 2
+            assert proof["output_rgba_sha256"] == proof["source_rgba_sha256"]
+            assert proof["rgb_outlier_policy"]["per_reference"] == [
+                {
+                    "outlier_pixels": outlier_count,
+                    "total_pixels": SOURCE_WIDTH * SOURCE_HEIGHT,
+                    "bbox_xyxy": [0, 0, outlier_count, 1],
+                },
+                {
+                    "outlier_pixels": outlier_count,
+                    "total_pixels": SOURCE_WIDTH * SOURCE_HEIGHT,
+                    "bbox_xyxy": [0, 0, outlier_count, 1],
+                },
+            ]
     assert source_url not in json.dumps(metadata, sort_keys=True)
 
     expected_image = (output / page_entry["file"]).read_bytes()
