@@ -1,12 +1,12 @@
 # ebookjapan — 購入済み書籍限定 Site Adapter 実装 Runbook
 
-Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 conditionally adopts C from verified source ROI when the complete per-part proof passes / Stage 04 run 4 END+ZIP accepted at Reviewer B0 / Stage 05 Full 17 + Plan 17 preflight passed; full capture remains pending** (2026-11-09 Asia/Tokyo). An independent actual-source pilot accepted one Muda 2 cover at C; it does not establish all 17 volumes or complete paint-history observation. C is emitted only when source lineage, complete ROI mapping, current source/target bindings, two exact D references, pixel tolerance, and lossless roundtrip all pass for every spread part; otherwise the adapter returns a complete fresh D spread. Stage 04 run 4 remains the accepted 287-page D ZIP. Stage 05 has not completed production E2E. Current evidence and history are maintained in [`PROGRESS.md`](PROGRESS.md).
+Status: **Stage 00 VERIFIED / Stage 01 ACCEPTED / Stage 02 VERIFIED for the one-work Angel 10 D baseline / Stage 03 conditionally adopts C from verified source ROI when complete per-part proof passes / Stage 04 run 4 END+ZIP accepted at Reviewer B0 / Stage 05 current representative capture scope accepted for Angel 10 by independent Reviewer B0; broader Full 17 capture not claimed** (2026-11-09 Asia/Tokyo). Angel 10 reached strict END with 287/287 C/WebP pages, no fallback, and an audited ZIP. The final isolated Catalog has 1 completed Item and 16 pending; the other 15 Muda Items were intentionally not captured, and Muda 1 remains incomplete. Full listings for both works and the 17-item Plan passed. C remains limited-history source ROI proof; whole-source/A-byte capture and complete paint history are not claimed. Exact evidence and the Muda run history are maintained in [`PROGRESS.md`](PROGRESS.md).
 
 ## 目的・完了定義
 
 `screenshot_crawler` に `site=ebookjapan` を追加し、作品一覧URLのWatchlist登録 → **Full Discovery（購入済みのみ）** → Catalog → Batch Plan → Batch Run → 画像取得 → Manifest/ZIP → Item completed までを、既存のGUI/CLIで利用できるようにする。
 
-User-requested targets: Stage 01 ownership/order checks passed; Stage 04 completed one owned/direct Angel 10 Batch; Stage 05 Full/Plan preflight passed in a fresh isolated environment. Full two-work capture/E2E remains incomplete:
+The user-approved final capture scope is one representative owned work, Angel 10. Its normal owned/direct Batch, strict END, C/D ZIP audit, independent RAM witnesses, and Reviewer B0 gate passed. The original broader two-work / Full 17 capture plan below is future scope; it is not the current acceptance target and is not reported as complete.
 
 | 作品 / 正規入力URL | 購入済みの期待値 | E2E期待値 |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ User-requested targets: Stage 01 ownership/order checks passed; Stage 04 complet
 | 02 | [Viewer baseline](02-viewer-baseline/README.md) | 対象1冊の先頭→本文→ENDを、ページ欠損なく安全に検証 |
 | 03 | [原画像・source-native取得研究と実装](03-source-native-capture/README.md) | **A/B/Cを実測で評価**、適用可能な最高忠実度経路を実装。非採用理由の台帳必須 |
 | 04 | [Owned-only Batch/GUI統合](04-batch-integration/README.md) | `owned/direct`のみ、通常Batch/ZIP/状態更新、他サイト回帰なし |
-| 05 | [E2E・独立評価](05-e2e/README.md) | 2作品、再Discovery、owned剥奪・ログアウト、archive_order、原画像監査、独立Tester/Reviewer PASS |
+| 05 | [Representative E2E audit](05-e2e/README.md) | The user-approved Angel 10 representative run passed independent Reviewer B0; Full 17-item capture is unperformed and not claimed. |
 
 各Stageは実装・証拠・テストを [PROGRESS](PROGRESS.md) に記録してから次へ進む。P0で調査できなかった箇所は `UNKNOWN` のまま保持し、憶測で本番有効化しない。
 
@@ -61,7 +61,7 @@ User-requested targets: Stage 01 ownership/order checks passed; Stage 04 complet
 - A bounded source-lineage attempt saw no main-frame `createImageBitmap` call; the hook recorded no `Response.blob` conversion call, so its body-to-Blob path remains unknown. The same Reader Page had 10 natural `image/avif` and 1 `image/webp` HTTP 200 responses from the observed ebookjapan Akamai host, but no response was joined by identity to the selected drawn ImageBitmap and no response body was read. The response metadata listener hit its 512-event cap, and worker processing was not observed. A remains unproven; these network response types are not treated as source candidates without an identity chain.
 - A later OffscreenCanvas probe matched ephemeral ImageBitmap ID 8 from one `transferToImageBitmap()` output to a draw into the selected main-target canvas ID 1. The OffscreenCanvas itself was ID 5 in a separate ID space. The draw observer had reached its 64-call cap before the source draw; source image/currentSrc/response bytes remain unknown. This identity edge does not prove A, B or C.
 - The partial site-local implementation now includes owned Reader entry, route/title/slot pinning, bounded rewind, D compositor capture, normal left-edge advance, contiguous slot coverage and a coverage-gated END state. The D capture hides the toolbar with one guarded observed center action, inventories painted DOM overlap independent of pointer-events, rejects clipping/transform/compositing effects, and remains only a D method with source provenance UNKNOWN.
-- Stage 02 passed 115 tests (24 adapter unit + 91 local Chromium), 0 skipped; independent review passed 37 browser and 4 geometry cases. The accepted Angel 10 D baseline is one-work evidence only. Stage 04 run 4 separately passed strict END/ZIP audit and Reviewer B0; the affected adapter/Viewer suite passed 162/0 skipped (158 warnings), independent validation passed 35/0 skipped, and Ruff passed. Stage 05 Full 17 / Plan 17 preflight passed in a fresh isolated environment, but no capture ran. Broad full-suite evidence remains incomplete as recorded below.
+- Stage 02 passed 115 tests (24 adapter unit + 91 local Chromium), 0 skipped; independent review passed 37 browser and 4 geometry cases. The accepted Angel 10 D baseline is one-work evidence only. Stage 04 run 4 separately passed strict END/ZIP audit and Reviewer B0; the affected adapter/Viewer suite passed 162/0 skipped (158 warnings), independent validation passed 35/0 skipped, and Ruff passed. Stage 05 Full 17 / Plan 17 preflight passed in a fresh isolated environment; at that checkpoint capture had not run. The later single-work Angel 10 result is recorded below. Broad full-suite evidence remains incomplete as recorded below.
 
 ## 原画像・忠実度の共通定義
 
