@@ -31,6 +31,13 @@ READER_URL = f"https://ebookjapan.yahoo.co.jp{READER_PATH}"
 TITLE = "Neutral Fixture Volume"
 PRODUCT_URL = "https://ebookjapan.yahoo.co.jp/books/134336/A000083590/"
 LISTING_URL = "https://ebookjapan.yahoo.co.jp/books/all/134336/"
+NEW_ARRIVAL_MARKUP = (
+    '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__new-arrival">'
+    '<a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000011/">More</a>'
+    '<ul class="recommend-grid__list"><li class="recommend-grid__item">'
+    '<a class="recommend-grid__link" href="/books/134336/A000000012/">Related</a>'
+    '</li></ul></section>'
+)
 
 
 @pytest_asyncio.fixture(loop_scope="module")
@@ -61,7 +68,7 @@ def _html(
             '<canvas class="page-canvas" width="300" height="150" '
             'style="position:absolute;right:0;width:auto;height:100%"></canvas></div>'
         )
-    if terminal_profile not in {"angel", "angel-observed", "muda"}:
+    if terminal_profile not in {"angel", "angel-observed", "angel-new-arrival", "muda"}:
         raise ValueError("unsupported neutral terminal profile")
     viewer_open = '<div class="comic-viewer">' if terminal_profile in {"muda", "angel-observed"} else ""
     viewer_close = "</div>" if terminal_profile in {"muda", "angel-observed"} else ""
@@ -86,11 +93,12 @@ def _html(
         '</div></div></div></div></div>'
         if terminal_profile == "muda" else ""
     )
-    if terminal_profile in {"angel", "angel-observed"}:
+    if terminal_profile in {"angel", "angel-observed", "angel-new-arrival"}:
         observed_lottery = (
             '<button class="banner__row banner__row--lottery">Lottery</button>'
             if terminal_profile == "angel-observed" else ""
         )
+        new_arrival = NEW_ARRIVAL_MARKUP if terminal_profile == "angel-new-arrival" else ""
         terminal_markup = (
             '<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none"><div class="viewer-liber__viewer-last-cell">'
             '<div class="viewer-last-shell" style="display:none"><div class="book-last-dead-end" style="position:fixed;left:30vw;top:80px;width:40vw;height:300px;background:#eee">'
@@ -100,6 +108,7 @@ def _html(
             f'{observed_lottery}</div>'
             '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000001/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>'
             '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>'
+            f'{new_arrival}'
             '<div class="next-item book-last-dead-end__next">&#12371;&#12398;&#20316;&#21697;&#12399;&#12371;&#12371;&#12414;&#12391;&#12391;&#12377;</div>'
             '</div></div></div></div></div>'
         )
@@ -566,7 +575,7 @@ async def test_core_runner_completes_neutral_owned_entry_capture_end_and_zip(
         assert sorted(archive.namelist()) == [f"page-{index:04d}.png" for index in range(1, 8)]
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "angel-new-arrival", "muda"])
 @pytest.mark.parametrize(
     "fixture_mode", ["normal", "delayed-terminal", "opacity-hidden-terminal"]
 )
@@ -603,6 +612,19 @@ async def test_core_runner_accepts_each_observed_book_terminal_profile(
 
     assert result.stop_state.value == "end"
     assert len(result.pages) == 3
+    if terminal_profile == "angel-new-arrival":
+        output = tmp_path / "catalog-isolated" / "run"
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        assert [page["sequence"] for page in manifest["pages"]] == [1, 2, 3]
+        packaged = package_crawl_output(
+            output,
+            {"title": TITLE, "genre": "neutral-test"},
+            library_dir=tmp_path / "library-isolated",
+        )
+        assert packaged.archive_path.is_file()
+        assert json.loads(packaged.status_path.read_text(encoding="utf-8"))["status"] == "completed"
+        with zipfile.ZipFile(packaged.archive_path) as archive:
+            assert sorted(archive.namelist()) == [f"page-{index:04d}.png" for index in range(1, 4)]
 
 
 async def test_core_runner_waits_for_exact_hidden_angel_terminal_to_settle(
@@ -1962,6 +1984,65 @@ async def test_unknown_terminal_notice_is_not_classified_as_end(browser_page: Pa
     assert (await _frame(browser_page))["status"] == "unknown-terminal-marker"
 
 
+@pytest.mark.parametrize("profile", ["angel", "angel-observed"])
+async def test_angel_optional_new_arrival_requires_exact_two_action_shape(
+    browser_page: Page, profile: str,
+) -> None:
+    baseline = await _show_terminal_profile(browser_page, profile)
+    assert baseline["status"] == "end"
+    assert EbookJapanAdapter._is_verified_end_frame(baseline, total=3) is True
+    await browser_page.evaluate(
+        """markup=>document.querySelector('.book-last-dead-end__next')
+          .insertAdjacentHTML('beforebegin',markup)""",
+        NEW_ARRIVAL_MARKUP,
+    )
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "end", json.dumps(frame.get("terminal"), sort_keys=True)
+    terminal = frame["terminal"]
+    assert terminal["moduleCounts"]["newArrival"] == 1
+    assert terminal["newArrivalShapeValid"] is True
+    assert terminal["partition"]["recommendNewArrival"] == 2
+    assert terminal["actionPartitionComplete"] is True
+    assert EbookJapanAdapter._is_verified_end_frame(frame, total=3) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "module.querySelector('.recommend-grid__heading--more').remove()",
+        "module.querySelector('.recommend-grid__list').remove()",
+        "module.querySelector('ul').append(module.querySelector('li').cloneNode(true))",
+        "module.querySelector('ul').replaceWith(Object.assign(document.createElement('div'),{innerHTML:module.querySelector('ul').outerHTML}))",
+        "module.append(document.createElement('button'))",
+        "module.querySelector('.recommend-grid__link').style.display='none'",
+        "document.querySelector('.book-last-dead-end__next').before(module.cloneNode(true))",
+        "module.closest('.book-last-dead-end__inner').querySelector('.book-last-dead-end__author').append(module)",
+        "module.outerHTML=module.outerHTML.replace('<section','<div').replace('</section>','</div>')",
+    ],
+    ids=[
+        "missing-heading", "missing-list", "duplicate-item", "nested-list-wrapper",
+        "extra-action", "incomplete-visible-actions", "duplicate-module", "wrong-parent",
+        "wrong-module-tag",
+    ],
+)
+async def test_angel_new_arrival_rejects_unobserved_structure(
+    browser_page: Page, mutation: str,
+) -> None:
+    await _show_terminal_profile(browser_page, "angel")
+    await browser_page.evaluate(
+        """markup=>document.querySelector('.book-last-dead-end__next')
+          .insertAdjacentHTML('beforebegin',markup)""",
+        NEW_ARRIVAL_MARKUP,
+    )
+    await browser_page.evaluate(
+        f"""()=>{{const module=document.querySelector('.book-last-dead-end__new-arrival');{mutation}}}"""
+    )
+
+    frame = await _frame(browser_page, current=3)
+    assert frame["status"] == "unknown-terminal-marker", json.dumps(frame.get("terminal"), sort_keys=True)
+
+
 async def test_angel_observed_terminal_variant_partitions_only_scoped_controls(browser_page: Page) -> None:
     frame = await _show_terminal_profile(browser_page, "angel-observed")
 
@@ -2056,7 +2137,7 @@ async def test_hidden_angel_terminal_rejects_partial_or_extra_header_controls(
         assert frame["terminal"]["unknownActionCount"] == 1
 
 
-@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "muda"])
+@pytest.mark.parametrize("terminal_profile", ["angel", "angel-observed", "angel-new-arrival", "muda"])
 @pytest.mark.parametrize(
     "extra_markup",
     [

@@ -117,7 +117,8 @@ def _observed_angel_terminal_frame() -> dict[str, object]:
             "markerTextExact": True,
             "markerControls": 0,
             "riskyActionCount": 0,
-            "moduleCounts": {"review": 1, "coupon": 1, "author": 1, "i2i": 1},
+            "moduleCounts": {"review": 1, "coupon": 1, "author": 1, "i2i": 1, "newArrival": 0},
+            "newArrivalShapeValid": True,
             "lotteryButtonCount": 1,
             "headerRootCount": 1,
             "headerBarCount": 1,
@@ -126,6 +127,30 @@ def _observed_angel_terminal_frame() -> dict[str, object]:
             "partition": partition,
         },
     }
+
+
+def _legacy_angel_terminal_frame() -> dict[str, object]:
+    frame = _observed_angel_terminal_frame()
+    partition = {
+        "review": 1,
+        "coupon": 1,
+        "recommendAuthor": 4,
+        "recommendI2i": 3,
+    }
+    frame["visibleActions"] = sum(partition.values())
+    terminal = frame["terminal"]
+    terminal.update(
+        profile="angel-dead-end",
+        variant="line-coupon-only-v1",
+        visibleActionCount=sum(partition.values()),
+        lotteryButtonCount=0,
+        headerRootCount=0,
+        headerBarCount=0,
+        headerMenuCount=0,
+        headerCounts={"close-button": 0, "contents-button": 0, "settings-button": 0},
+        partition=partition,
+    )
+    return frame
 
 
 def test_observed_angel_end_requires_exact_lottery_and_scoped_header_partition() -> None:
@@ -145,6 +170,45 @@ def test_observed_angel_end_requires_exact_lottery_and_scoped_header_partition()
     ):
         forged = copy.deepcopy(frame)
         mutation(forged["terminal"])
+        assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
+
+
+@pytest.mark.parametrize("frame_factory", [_legacy_angel_terminal_frame, _observed_angel_terminal_frame])
+def test_angel_end_accepts_only_absent_or_exact_new_arrival_shape_and_partition(frame_factory) -> None:
+    frame = frame_factory()
+    assert EbookJapanAdapter._is_verified_end_frame(frame, total=287) is True
+
+    with_new_arrival = copy.deepcopy(frame)
+    with_new_arrival["terminal"]["moduleCounts"]["newArrival"] = 1
+    with_new_arrival["terminal"]["partition"]["recommendNewArrival"] = 2
+    with_new_arrival["visibleActions"] += 2
+    with_new_arrival["terminal"]["visibleActionCount"] += 2
+    assert EbookJapanAdapter._is_verified_end_frame(with_new_arrival, total=287) is True
+
+    def add_partition_action(item: dict[str, object], count: int) -> None:
+        item["terminal"]["partition"]["recommendNewArrival"] = count
+        item["visibleActions"] += count
+        item["terminal"]["visibleActionCount"] += count
+
+    mutations = (
+        lambda item: item["terminal"]["moduleCounts"].update(newArrival=True),
+        lambda item: item["terminal"]["moduleCounts"].update(newArrival=2),
+        lambda item: item["terminal"].update(newArrivalShapeValid=False),
+        lambda item: item["terminal"]["moduleCounts"].update(newArrival=1),
+        lambda item: add_partition_action(item, 2),
+        lambda item: item["terminal"]["partition"].update(recommendNewArrival=0),
+    )
+    for mutation in mutations:
+        forged = copy.deepcopy(frame)
+        mutation(forged)
+        assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
+
+    for count in (1, 3):
+        forged = copy.deepcopy(with_new_arrival)
+        forged["terminal"]["partition"]["recommendNewArrival"] = count
+        delta = count - 2
+        forged["visibleActions"] += delta
+        forged["terminal"]["visibleActionCount"] += delta
         assert EbookJapanAdapter._is_verified_end_frame(forged, total=287) is False
 
 

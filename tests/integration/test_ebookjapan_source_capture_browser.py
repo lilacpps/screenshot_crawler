@@ -38,6 +38,13 @@ SOURCE_HEIGHT = 1600
 ROIS_X = 16
 ROIS_Y = 16
 OUTLIER_POLICY_DENOMINATOR = 10_000
+NEW_ARRIVAL_MARKUP = (
+    '<section class="recommend-grid book-last-dead-end__section book-last-dead-end__new-arrival">'
+    '<a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000011/">More</a>'
+    '<ul class="recommend-grid__list"><li class="recommend-grid__item">'
+    '<a class="recommend-grid__link" href="/books/134336/A000000012/">Related</a>'
+    '</li></ul></section>'
+)
 
 
 def _patch_d_reference_outliers(
@@ -234,6 +241,7 @@ def _runner_end_reader_html(
     source_url: str = SOURCE_URL,
     *,
     clip_source: bool = False,
+    include_angel_new_arrival: bool = False,
 ) -> str:
     reader_title = _reader_html().split(
         '<span class="legacy-comic-header__title">', 1
@@ -243,6 +251,42 @@ def _runner_end_reader_html(
         if clip_source
         else ""
     )
+    if include_angel_new_arrival:
+        terminal_markup = f"""<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none">
+          <div class="viewer-liber__viewer-last-cell"><div class="viewer-last-shell" style="display:none">
+            <div class="book-last-dead-end" style="position:fixed;left:30vw;top:80px;width:40vw;height:800px;background:#eee">
+              <div class="book-last-dead-end__inner">
+                <div class="review-module book-last-dead-end__review"><button class="review-module__action">Review</button></div>
+                <div class="banner-group book-last-dead-end__banner-group">
+                  <button class="banner__row banner__row--line-coupon">Coupon</button>
+                  <button class="banner__row banner__row--lottery">Lottery</button>
+                </div>
+                <section class="recommend-grid book-last-dead-end__section book-last-dead-end__author">
+                  <a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a>
+                  <ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul>
+                </section>
+                <section class="recommend-grid book-last-dead-end__section book-last-dead-end__i2i">
+                  <ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul>
+                </section>
+                {NEW_ARRIVAL_MARKUP}
+                <div class="next-item book-last-dead-end__next">この作品はここまでです</div>
+              </div>
+            </div>
+          </div></div>
+        </div>"""
+    else:
+        terminal_markup = """<div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none">
+          <div class="viewer-liber__viewer-last-cell"><div class="viewer-last-shell" style="display:none">
+            <div class="book-last"><div class="book-last__inner">
+              <div class="review-module book-last__review"><button class="review-module__action">Review</button></div>
+              <div class="next-item book-last__next"><div class="next-item__outline"><button class="next-item__rating">Rate</button></div></div>
+              <div class="cta-button book-last__cta"><div class="cta-button__row"><div class="cta-button__primary"><button class="cta-button__read-btn">Read</button></div></div></div>
+              <div class="banner-group book-last__banner-group"><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>
+              <section class="recommend-grid book-last__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000001/">Related</a></li></ul></section>
+              <section class="recommend-grid book-last__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>
+              <section class="recommend-grid book-last__for-you"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>
+            </div></div></div></div>
+        </div>"""
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
       html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
       .comic-viewer__scroll-container{{position:fixed;inset:0;direction:rtl}}
@@ -250,7 +294,7 @@ def _runner_end_reader_html(
       .page-canvas{{position:absolute;right:0;width:auto;height:100%;display:block}}
       .legacy-comic-header,.legacy-comic-footer{{position:fixed;left:0;width:100%;height:24px;z-index:20;background:#ddd}}
       .legacy-comic-header{{top:0}} .legacy-comic-footer{{bottom:0}}
-      .book-last{{position:fixed;left:30vw;top:80px;width:40vw;height:1400px;overflow:auto;background:#eee}}
+      .book-last,.book-last-dead-end{{position:fixed;left:30vw;top:80px;width:40vw;height:1400px;overflow:auto;background:#eee}}
       </style></head><body><div class="comic-viewer">
       <header class="legacy-comic-header">
         <span class="legacy-comic-header__title">{reader_title}</span>
@@ -263,18 +307,7 @@ def _runner_end_reader_html(
       <footer class="legacy-comic-footer"><span class="legacy-comic-footer__page-output">1 / 1</span></footer>
       <div class="comic-viewer__scroll-container comic-viewer__scroll-container--horizontal-rtl comic-viewer__scroll-container--spread">
         <div class="comic-viewer__page-slot" data-page="1"><canvas class="page-canvas" width="300" height="150"></canvas></div>
-        <div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none">
-          <div class="viewer-liber__viewer-last-cell"><div class="viewer-last-shell" style="display:none">
-            <div class="book-last"><div class="book-last__inner">
-              <div class="review-module book-last__review"><button class="review-module__action">Review</button></div>
-              <div class="next-item book-last__next"><div class="next-item__outline"><button class="next-item__rating">Rate</button></div></div>
-              <div class="cta-button book-last__cta"><div class="cta-button__row"><div class="cta-button__primary"><button class="cta-button__read-btn">Read</button></div></div></div>
-              <div class="banner-group book-last__banner-group"><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>
-              <section class="recommend-grid book-last__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000001/">Related</a></li></ul></section>
-              <section class="recommend-grid book-last__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>
-              <section class="recommend-grid book-last__for-you"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>
-            </div></div></div></div>
-        </div>
+        {terminal_markup}
       </div>
       <input class="seekbar__slider" type="range" min="0" max="0" value="0">
       <script>
@@ -680,7 +713,7 @@ async def test_fatal_before_new_d_capture_does_not_emit_previous_c_proof(
 
 @pytest.mark.parametrize(
     "capture_case",
-    ("verified-C", "proof-unavailable-D", "few-high-outliers-C", "over-limit-outliers-D"),
+    ("verified-C", "verified-C-new-arrival", "proof-unavailable-D", "few-high-outliers-C", "over-limit-outliers-D"),
 )
 async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
     isolated_runner_page: Page,
@@ -703,7 +736,11 @@ async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
             await route.fulfill(
                 status=200,
                 content_type="text/html; charset=utf-8",
-                body=_runner_end_reader_html(source_url, clip_source=clip_source),
+                body=_runner_end_reader_html(
+                    source_url,
+                    clip_source=clip_source,
+                    include_angel_new_arrival=capture_case == "verified-C-new-arrival",
+                ),
             )
         else:
             unexpected_requests.append(url)

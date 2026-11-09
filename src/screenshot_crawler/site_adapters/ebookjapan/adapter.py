@@ -127,6 +127,7 @@ _TERMINAL_MODULE_KEYS = (
     "coupon",
     "author",
     "i2i",
+    "newArrival",
     "nextItem",
     "cta",
     "banner",
@@ -139,6 +140,7 @@ _TERMINAL_PARTITION_KEYS = (
     "lottery",
     "recommendAuthor",
     "recommendI2i",
+    "recommendNewArrival",
     "header",
     "nextItem",
     "cta",
@@ -853,6 +855,7 @@ class EbookJapanAdapter(SiteAdapter):
             "visible_page_canvas_count": _safe_count(terminal_map.get("visiblePageCanvasCount")),
             "modal_count": _safe_count(terminal_map.get("modalCount")),
             "action_inventory_capped": _safe_bool(terminal_map.get("actionInventoryCapped")),
+            "new_arrival_shape_valid": _safe_bool(terminal_map.get("newArrivalShapeValid")),
             "action_partition_complete": _safe_bool(terminal_map.get("actionPartitionComplete")),
             "unknown_action_count": _safe_count(terminal_map.get("unknownActionCount")),
             "unknown_outside_known_region_count": _safe_count(
@@ -1011,6 +1014,8 @@ class EbookJapanAdapter(SiteAdapter):
         if profile == "angel-dead-end":
             marker = frame.get("deadEnd")
             modules = terminal.get("moduleCounts")
+            new_arrival_count = modules.get("newArrival") if isinstance(modules, Mapping) else None
+            new_arrival_actions = partition.get("recommendNewArrival", 0)
             return (
                 isinstance(marker, list)
                 and len(marker) == 1
@@ -1027,16 +1032,25 @@ class EbookJapanAdapter(SiteAdapter):
                 and terminal.get("markerControls") == 0
                 and terminal.get("riskyActionCount") == 0
                 and isinstance(modules, Mapping)
-                and modules.get("review") == 1
-                and modules.get("coupon") == 1
-                and modules.get("author") == 1
-                and modules.get("i2i") == 1
+                and all(
+                    type(modules.get(name)) is int and modules.get(name) == 1
+                    for name in ("review", "coupon", "author", "i2i")
+                )
+                and type(new_arrival_count) is int
+                and new_arrival_count in (0, 1)
+                and terminal.get("newArrivalShapeValid") is True
+                and (
+                    (new_arrival_count == 0 and "recommendNewArrival" not in partition)
+                    or (new_arrival_count == 1 and type(new_arrival_actions) is int and new_arrival_actions == 2)
+                )
                 and partition.get("review") == 1
                 and partition.get("coupon") == 1
                 and partition.get("recommendAuthor", 0) >= 1
                 and partition.get("recommendI2i", 0) >= 1
-                and set(modules) == {"review", "coupon", "author", "i2i"}
-                and set(partition).issubset({"review", "coupon", "recommendAuthor", "recommendI2i"})
+                and set(modules) == {"review", "coupon", "author", "i2i", "newArrival"}
+                and set(partition).issubset(
+                    {"review", "coupon", "recommendAuthor", "recommendI2i", "recommendNewArrival"}
+                )
                 and terminal.get("variant") == "line-coupon-only-v1"
                 and terminal.get("lotteryButtonCount") == 0
                 and isinstance(terminal.get("headerCounts"), Mapping)
@@ -1050,6 +1064,8 @@ class EbookJapanAdapter(SiteAdapter):
             marker = frame.get("deadEnd")
             modules = terminal.get("moduleCounts")
             headers = terminal.get("headerCounts")
+            new_arrival_count = modules.get("newArrival") if isinstance(modules, Mapping) else None
+            new_arrival_actions = partition.get("recommendNewArrival", 0)
             return (
                 isinstance(marker, list)
                 and len(marker) == 1
@@ -1067,8 +1083,18 @@ class EbookJapanAdapter(SiteAdapter):
                 and terminal.get("markerControls") == 0
                 and terminal.get("riskyActionCount") == 0
                 and isinstance(modules, Mapping)
-                and set(modules) == {"review", "coupon", "author", "i2i"}
-                and all(type(modules.get(name)) is int and modules.get(name) == 1 for name in modules)
+                and set(modules) == {"review", "coupon", "author", "i2i", "newArrival"}
+                and all(
+                    type(modules.get(name)) is int and modules.get(name) == 1
+                    for name in ("review", "coupon", "author", "i2i")
+                )
+                and type(new_arrival_count) is int
+                and new_arrival_count in (0, 1)
+                and terminal.get("newArrivalShapeValid") is True
+                and (
+                    (new_arrival_count == 0 and "recommendNewArrival" not in partition)
+                    or (new_arrival_count == 1 and type(new_arrival_actions) is int and new_arrival_actions == 2)
+                )
                 and type(terminal.get("lotteryButtonCount")) is int
                 and type(terminal.get("headerRootCount")) is int
                 and type(terminal.get("headerBarCount")) is int
@@ -1087,7 +1113,7 @@ class EbookJapanAdapter(SiteAdapter):
                 and partition.get("recommendAuthor", 0) >= 1
                 and partition.get("recommendI2i", 0) >= 1
                 and set(partition).issubset(
-                    {"review", "coupon", "lottery", "header", "recommendAuthor", "recommendI2i"}
+                    {"review", "coupon", "lottery", "header", "recommendAuthor", "recommendI2i", "recommendNewArrival"}
                 )
             )
         if profile == "muda-book-last":

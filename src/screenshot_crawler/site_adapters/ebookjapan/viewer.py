@@ -784,7 +784,7 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
   const isUnder=(element,root)=>!!element&&!!root&&root.contains(element);
   const terminal={profile:null,rootCount:0,innerCount:0,rootVisible:false,innerVisible:false,rootInViewport:false,innerInViewport:false,insidePinnedLayout:false,visibleSlotCount:visibleSlots.length,
     visiblePageCanvasCount:pageCanvasCount,visibleActionCount:visibleActions,actionInventoryCapped,modalCount,unknownActionCount:0,
-    unknownOutsideKnownRegionCount:0,unknownActionScopeKnown:false,riskyActionCount:0,partition:{},moduleCounts:{},headerCounts:{},nativeCounterVisible:counterVisible,nativeCounter:counter};
+    unknownOutsideKnownRegionCount:0,unknownActionScopeKnown:false,riskyActionCount:0,partition:{},moduleCounts:{},newArrivalShapeValid:false,headerCounts:{},nativeCounterVisible:counterVisible,nativeCounter:counter};
   const angelRoots=[...document.querySelectorAll('.book-last-dead-end')];
   const angelMarkers=[...document.querySelectorAll('.next-item.book-last-dead-end__next')];
   const mudaRoots=[...document.querySelectorAll('.book-last')];
@@ -812,8 +812,22 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     const modules={review:inner?[...inner.children].filter(e=>e.matches('.review-module.book-last-dead-end__review')):[],
       coupon:inner?[...inner.children].filter(e=>e.matches('.banner-group.book-last-dead-end__banner-group')):[],
       author:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__author')):[],
-      i2i:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__i2i')):[]};
-    terminal.moduleCounts={review:modules.review.length,coupon:modules.coupon.length,author:modules.author.length,i2i:modules.i2i.length};
+      i2i:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__i2i')):[],
+      newArrival:inner?[...inner.children].filter(e=>e.matches('.recommend-grid.book-last-dead-end__section.book-last-dead-end__new-arrival')):[]};
+    terminal.moduleCounts={review:modules.review.length,coupon:modules.coupon.length,author:modules.author.length,i2i:modules.i2i.length,newArrival:modules.newArrival.length};
+    const newArrivalShapeValid=modules.newArrival.length===0||(()=>{
+      if(modules.newArrival.length!==1)return false;
+      const module=modules.newArrival[0];
+      if(module.tagName!=='SECTION')return false;
+      const headings=[...module.children].filter(e=>e.matches('a.recommend-grid__heading.recommend-grid__heading--more'));
+      const lists=[...module.children].filter(e=>e.matches('ul.recommend-grid__list'));
+      if(module.children.length!==2||headings.length!==1||lists.length!==1)return false;
+      const items=[...lists[0].children];
+      if(items.length!==1||!items[0].matches('li.recommend-grid__item'))return false;
+      const links=[...items[0].children].filter(e=>e.matches('a.recommend-grid__link'));
+      return items[0].children.length===1&&links.length===1;
+    })();
+    terminal.newArrivalShapeValid=newArrivalShapeValid;
     const viewer=layout?.closest('.comic-viewer')||null;
     const headerRoots=viewer?[...viewer.querySelectorAll(':scope > .legacy-comic-header')]:[];
     const header=headerRoots.length===1?headerRoots[0]:null;
@@ -845,7 +859,8 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
     terminal.markerVisible=!!marker&&visible(marker)&&markerRect.viewport;
     terminal.markerTextExact=!!marker&&marker.tagName==='DIV'&&normalize(marker.innerText||marker.textContent)==='\u3053\u306e\u4f5c\u54c1\u306f\u3053\u3053\u307e\u3067\u3067\u3059';
     terminal.markerControls=marker?[...marker.querySelectorAll('a,button,[role="button"],input,select,textarea,[contenteditable="true"]')].filter(visible).length:null;
-    const safeModules=modules.review.length===1&&modules.coupon.length===1&&modules.author.length===1&&modules.i2i.length===1;
+    const safeModules=modules.review.length===1&&modules.coupon.length===1&&modules.author.length===1
+      &&modules.i2i.length===1&&newArrivalShapeValid;
     if(!actionInventoryCapped&&inner&&root&&safeModules&&marker&&terminal.markerInsideInner&&terminal.markerVisible&&terminal.markerTextExact&&terminal.markerControls===0){
       for(const action of actionable){
         let category=null;
@@ -875,12 +890,17 @@ FRAME_STATE_JS = r"""({expectedCurrent})=>{
         if(!category&&(directHeading||itemLink)&&recommendation?.parentElement===inner){
           if(modules.author.includes(recommendation))category='recommendAuthor';
           else if(modules.i2i.includes(recommendation))category='recommendI2i';
+          else if(modules.newArrival.includes(recommendation))category='recommendNewArrival';
         }
         if(!category){terminal.unknownActionCount++;continue;}
         terminal.partition[category]=(terminal.partition[category]||0)+1;
       }
     }
+    const newArrivalActionCount=terminal.partition.recommendNewArrival||0;
+    const newArrivalPartitionValid=(modules.newArrival.length===0&&!Object.prototype.hasOwnProperty.call(terminal.partition,'recommendNewArrival'))
+      ||(modules.newArrival.length===1&&newArrivalActionCount===2);
     terminal.actionPartitionComplete=!actionInventoryCapped&&terminal.unknownActionCount===0&&terminal.riskyActionCount===0
+      &&newArrivalPartitionValid
       &&Object.values(terminal.partition).reduce((sum,count)=>sum+count,0)===visibleActions;
     const observedControlsValid=observedControlsVariant
       &&lotteryCandidates.length===1&&lotteryButtons.length===1&&headerRoots.length===1&&header.parentElement===viewer
