@@ -3,14 +3,21 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import zipfile
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from PIL import Image, ImageDraw
 from playwright.async_api import Browser, Page
 
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.core.models import RunConfig
+from screenshot_crawler.core.packaging import package_crawl_output
+from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.site_adapters.ebookjapan.adapter import EbookJapanAdapter
+from screenshot_crawler.site_adapters.ebookjapan.source_capture import SourceResearchOutcome
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -30,6 +37,20 @@ ROIS_Y = 16
 
 @pytest_asyncio.fixture(loop_scope="module")
 async def c2_browser(integration_browser: Browser) -> Page:
+    context = await integration_browser.new_context(
+        viewport={"width": 1906, "height": 986},
+        device_scale_factor=1,
+    )
+    page = await context.new_page()
+    try:
+        yield page
+    finally:
+        await page.close()
+        await context.close()
+
+
+@pytest_asyncio.fixture(loop_scope="module")
+async def isolated_runner_page(integration_browser: Browser) -> Page:
     context = await integration_browser.new_context(
         viewport={"width": 1906, "height": 986},
         device_scale_factor=1,
@@ -85,10 +106,20 @@ def _listing_html() -> str:
     </body></html>"""
 
 
-def _reader_html(*, clip_source: bool = False, source_url: str = SOURCE_URL) -> str:
+def _reader_html(
+    *,
+    clip_source: bool = False,
+    clip_second_source: bool = False,
+    source_url: str = SOURCE_URL,
+) -> str:
     clip_statement = (
         "context.beginPath();context.rect(0,0,1088,1600);context.clip();"
         if clip_source
+        else ""
+    )
+    clip_second_statement = (
+        "context.beginPath();context.rect(0,0,1088,1600);context.clip();"
+        if clip_second_source
         else ""
     )
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -123,12 +154,13 @@ def _reader_html(*, clip_source: bool = False, source_url: str = SOURCE_URL) -> 
       window.__fixtureDrawComplete=false;
       window.__fixtureSources=[];
       const image=new Image();window.__fixtureImage=image;image.src=sourceUrl;
-      const drawCanvas=canvas=>{{
+      const drawCanvas=(canvas,partIndex)=>{{
         canvas.width={SOURCE_WIDTH};canvas.height={SOURCE_HEIGHT};
         const offscreen=new OffscreenCanvas({SOURCE_WIDTH},{SOURCE_HEIGHT});
         window.__fixtureSources.push(offscreen);
         const context=offscreen.getContext('2d');
         {clip_statement}
+        if(partIndex===1){{{clip_second_statement}}}
         for(let row=0;row<{ROIS_Y};row++)for(let column=0;column<{ROIS_X};column++){{
           const sx=column*{SOURCE_WIDTH // ROIS_X},sy=row*{SOURCE_HEIGHT // ROIS_Y};
           context.drawImage(image,sx,sy,{SOURCE_WIDTH // ROIS_X},{SOURCE_HEIGHT // ROIS_Y},
@@ -138,7 +170,7 @@ def _reader_html(*, clip_source: bool = False, source_url: str = SOURCE_URL) -> 
         canvas.getContext('2d').drawImage(bitmap,0,0);
       }};
       image.decode().then(()=>{{
-        for(const canvas of document.querySelectorAll('.page-canvas'))drawCanvas(canvas);
+        for(const [index,canvas] of [...document.querySelectorAll('.page-canvas')].entries())drawCanvas(canvas,index);
         window.__fixtureDrawComplete=true;
       }}).catch(error=>window.__fixtureError=String(error?.name||'decode-failed'));
       document.addEventListener('keydown',event=>{{
@@ -158,11 +190,99 @@ def _reader_html(*, clip_source: bool = False, source_url: str = SOURCE_URL) -> 
     </body></html>"""
 
 
+def _runner_end_reader_html(
+    source_url: str = SOURCE_URL,
+    *,
+    clip_source: bool = False,
+) -> str:
+    reader_title = _reader_html().split(
+        '<span class="legacy-comic-header__title">', 1
+    )[1].split("</span>", 1)[0]
+    clip_statement = (
+        "context.beginPath();context.rect(0,0,1088,1600);context.clip();"
+        if clip_source
+        else ""
+    )
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+      html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
+      .comic-viewer__scroll-container{{position:fixed;inset:0;direction:rtl}}
+      .comic-viewer__page-slot{{position:fixed;top:0;left:0;width:50vw;height:100vh}}
+      .page-canvas{{position:absolute;right:0;width:auto;height:100%;display:block}}
+      .legacy-comic-header,.legacy-comic-footer{{position:fixed;left:0;width:100%;height:24px;z-index:20;background:#ddd}}
+      .legacy-comic-header{{top:0}} .legacy-comic-footer{{bottom:0}}
+      .book-last{{position:fixed;left:30vw;top:80px;width:40vw;height:1400px;overflow:auto;background:#eee}}
+      </style></head><body><div class="comic-viewer">
+      <header class="legacy-comic-header">
+        <span class="legacy-comic-header__title">{reader_title}</span>
+        <div class="legacy-comic-header__bar"><button class="close-button">Close</button>
+          <div class="legacy-comic-header__menu legacy-comic-header__menu--pc">
+            <button class="contents-button">Contents</button><button class="settings-button">Settings</button>
+          </div>
+        </div>
+      </header>
+      <footer class="legacy-comic-footer"><span class="legacy-comic-footer__page-output">1 / 1</span></footer>
+      <div class="comic-viewer__scroll-container comic-viewer__scroll-container--horizontal-rtl comic-viewer__scroll-container--spread">
+        <div class="comic-viewer__page-slot" data-page="1"><canvas class="page-canvas" width="300" height="150"></canvas></div>
+        <div class="comic-viewer__custom-cell comic-viewer__custom-cell--interactive" style="display:none">
+          <div class="viewer-liber__viewer-last-cell"><div class="viewer-last-shell" style="display:none">
+            <div class="book-last"><div class="book-last__inner">
+              <div class="review-module book-last__review"><button class="review-module__action">Review</button></div>
+              <div class="next-item book-last__next"><div class="next-item__outline"><button class="next-item__rating">Rate</button></div></div>
+              <div class="cta-button book-last__cta"><div class="cta-button__row"><div class="cta-button__primary"><button class="cta-button__read-btn">Read</button></div></div></div>
+              <div class="banner-group book-last__banner-group"><button class="banner__row--lottery">Lottery</button><button class="banner__row--line-coupon">Coupon</button></div>
+              <section class="recommend-grid book-last__i2i"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000001/">Related</a></li></ul></section>
+              <section class="recommend-grid book-last__author"><a class="recommend-grid__heading recommend-grid__heading--more" href="/books/134336/A000000004/">More</a><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000002/">Related</a></li></ul></section>
+              <section class="recommend-grid book-last__for-you"><ul class="recommend-grid__list"><li class="recommend-grid__item"><a class="recommend-grid__link" href="/books/134336/A000000003/">Related</a></li></ul></section>
+            </div></div></div></div>
+        </div>
+      </div>
+      <input class="seekbar__slider" type="range" min="0" max="0" value="0">
+      <script>
+      const sourceUrl={json.dumps(source_url)};
+      const htmlContextPrototype=CanvasRenderingContext2D.prototype;
+      const arcDescriptor=Object.getOwnPropertyDescriptor(htmlContextPrototype,'arc');
+      Object.defineProperty(htmlContextPrototype,'arc',{{...arcDescriptor,value:function fixtureLateArc(){{}}}});
+      const imageDataDescriptor=Object.getOwnPropertyDescriptor(htmlContextPrototype,'getImageData');
+      Object.defineProperty(htmlContextPrototype,'getImageData',{{...imageDataDescriptor,value:undefined}});
+      const image=new Image();window.__fixtureImage=image;image.src=sourceUrl;
+      window.__fixtureSources=[];window.__fixtureDrawComplete=false;
+      image.decode().then(()=>{{
+        const canvas=document.querySelector('.page-canvas');
+        canvas.width={SOURCE_WIDTH};canvas.height={SOURCE_HEIGHT};
+        const offscreen=new OffscreenCanvas({SOURCE_WIDTH},{SOURCE_HEIGHT});window.__fixtureSources.push(offscreen);
+        const context=offscreen.getContext('2d');
+        {clip_statement}
+        for(let row=0;row<{ROIS_Y};row++)for(let column=0;column<{ROIS_X};column++){{
+          const sx=column*{SOURCE_WIDTH // ROIS_X},sy=row*{SOURCE_HEIGHT // ROIS_Y};
+          context.drawImage(image,sx,sy,{SOURCE_WIDTH // ROIS_X},{SOURCE_HEIGHT // ROIS_Y},sx,sy,{SOURCE_WIDTH // ROIS_X},{SOURCE_HEIGHT // ROIS_Y});
+        }}
+        const bitmap=offscreen.transferToImageBitmap();canvas.getContext('2d').drawImage(bitmap,0,0);
+        window.__fixtureDrawComplete=true;
+      }}).catch(error=>window.__fixtureError=String(error?.name||'decode-failed'));
+      document.addEventListener('keydown',event=>{{if(event.key==='End')document.querySelector('.legacy-comic-footer__page-output').textContent='1 / 1';}});
+      document.addEventListener('click',event=>{{
+        if(!(event.target instanceof HTMLCanvasElement))return;
+        const header=document.querySelector('.legacy-comic-header'),footer=document.querySelector('.legacy-comic-footer');
+        if(!window.__fixtureToolbarHidden){{
+          window.__fixtureToolbarHidden=true;header.hidden=true;footer.hidden=true;
+          document.querySelector('.seekbar__slider').style.display='none';return;
+        }}
+        if(event.clientX<=16){{
+          document.querySelector('.comic-viewer__page-slot').hidden=true;
+          document.querySelector('.comic-viewer__custom-cell--interactive').style.display='block';
+          document.querySelector('.viewer-last-shell').style.display='block';
+          header.hidden=false;footer.hidden=true;
+        }}
+      }});
+      </script></div></body></html>"""
+
+
 async def _open_owned_reader(
     page: Page,
     webp_bytes: bytes,
     *,
     clip_source: bool = False,
+    clip_second_source: bool = False,
     source_host: str = CACHE_SOURCE_HOST,
 ) -> EbookJapanAdapter:
     # Model only the exact v3 profile admitted for comparison. This is a local
@@ -195,7 +315,11 @@ async def _open_owned_reader(
         lambda route: route.fulfill(
             status=200,
             content_type="text/html",
-            body=_reader_html(clip_source=clip_source, source_url=source_url),
+            body=_reader_html(
+                clip_source=clip_source,
+                clip_second_source=clip_second_source,
+                source_url=source_url,
+            ),
         ),
     )
     await page.route(
@@ -288,12 +412,317 @@ async def test_source_clip_keeps_the_complete_capture_on_d(c2_browser: Page) -> 
     assert outcome.safe_projection()["provenance"] == "NOT_ESTABLISHED"
 
 
+async def test_public_capture_adopts_only_the_complete_verified_source_spread(
+    c2_browser: Page,
+) -> None:
+    webp_bytes = _generated_vp8_webp()
+    adapter = await _open_owned_reader(c2_browser, webp_bytes)
+    await adapter.get_content_identity(c2_browser)
+
+    captures = await adapter.capture_page(c2_browser)
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+    serialized = json.dumps(metadata, sort_keys=True)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/webp"
+    assert captures[0].file_extension == ".webp"
+    assert (captures[0].width, captures[0].height) == (SOURCE_WIDTH, SOURCE_HEIGHT)
+    assert metadata["capture_method"] == "C_source_roi_lossless"
+    assert metadata["capture_class"] == "C"
+    assert metadata["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-source-roi-v1-20261109"
+    assert metadata["ebookjapan_source_provenance"] == "VERIFIED_SOURCE_ROI"
+    assert metadata["ebookjapan_native_page_number"] is None
+    attempt = metadata["ebookjapan_source_capture_attempt"]
+    assert attempt["status"] == "C_VERIFIED"
+    assert attempt["failure_reason_code"] is None
+    assert attempt["runtime_adoption_status"] == "ADOPTED_CONDITIONAL"
+    assert attempt["paint_history_complete"] is False
+    assert attempt["proof_basis"] == "source-lineage+fullpixelcompare"
+    part = metadata["ebookjapan_capture_parts"][0]
+    assert part["capture_class"] == "C"
+    assert part["source_provenance"] == "VERIFIED_SOURCE_ROI"
+    assert part["source_roi_proof"]["roi_count"] == 256
+    assert part["source_roi_proof"]["runtime_adoption_status"] == "ADOPTED_CONDITIONAL"
+    assert part["source_roi_proof"]["proof_basis"] == "source-lineage+fullpixelcompare"
+    assert part["source_roi_proof"]["source_encoded_sha256"] == hashlib.sha256(webp_bytes).hexdigest()
+    assert part["source_roi_proof"]["d_reference_pair_exact"] is True
+    assert part["source_roi_proof"]["alpha_mismatch_pixels"] == 0
+    assert "compositor_pixel_sha256" in part
+    assert "output_rgba_sha256" in part["source_roi_proof"]
+    assert SOURCE_URL not in serialized
+    assert "fixturePrivateCallable" not in serialized
+    assert "逕滓・菴懷刀" not in serialized
+
+
+@pytest.mark.parametrize(
+    "clip_second_source",
+    [False, True],
+    ids=("two-part-C-atomic", "one-part-failure-whole-D"),
+)
+async def test_public_capture_keeps_two_part_source_spread_atomic(
+    c2_browser: Page,
+    clip_second_source: bool,
+) -> None:
+    adapter = await _open_owned_reader(
+        c2_browser,
+        _generated_vp8_webp(),
+        clip_second_source=clip_second_source,
+    )
+    await c2_browser.evaluate(
+        """()=>{
+          const slots=[...document.querySelectorAll('.comic-viewer__page-slot')];
+          slots.forEach(slot=>{slot.hidden=false;slot.style.display='block';});
+          document.querySelector('.legacy-comic-footer__page-output').textContent='2 / 2';
+          document.querySelector('.seekbar__slider').value='0';
+              document.querySelector('.legacy-comic-header').hidden=true;
+              document.querySelector('.legacy-comic-footer').hidden=true;
+              document.querySelector('.seekbar__slider').style.display='none';
+        }"""
+    )
+    adapter._expected_current = 2
+    identity = await adapter.get_content_identity(c2_browser)
+    assert identity.page_id.endswith("slots:2,1")
+    frame = await adapter._read_ready_frame(
+        c2_browser,
+        expected_path=adapter._reader_path or "",
+        current=2,
+        total=2,
+    )
+    parts = frame.get("parts")
+    assert isinstance(parts, list) and len(parts) == 2 and isinstance(parts[0], dict)
+    # Model the post-cover sequence cursor so this local fixture can isolate
+    # atomic spread output without also exercising the separate navigation test.
+    adapter._next_dom_ordinal = parts[0]["slotOrdinal"]
+
+    captures = await adapter.capture_page(c2_browser)
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+
+    assert captures is not None and len(captures) == 2
+    if clip_second_source:
+        assert all(capture.mime_type == "image/png" for capture in captures)
+        assert metadata["capture_method"] == "D_compositor_png"
+        assert metadata["ebookjapan_source_capture_attempt"]["status"] == "D_FALLBACK"
+        assert metadata["ebookjapan_source_capture_attempt"]["failure_reason_code"] == "source-paint-state-unsupported"
+        assert all("source_roi_proof" not in part for part in metadata["ebookjapan_capture_parts"])
+    else:
+        assert all(capture.mime_type == "image/webp" for capture in captures)
+        assert metadata["capture_method"] == "C_source_roi_lossless"
+        proofs = [part["source_roi_proof"] for part in metadata["ebookjapan_capture_parts"]]
+        assert [proof["part_index"] for proof in proofs] == [0, 1]
+        assert all(proof["d_reference_pair_exact"] for proof in proofs)
+        assert all(proof["output_roundtrip_exact"] for proof in proofs)
+        assert proofs[0]["target_canvas_object_id"] != proofs[1]["target_canvas_object_id"]
+        assert proofs[0]["source_canvas_object_id"] != proofs[1]["source_canvas_object_id"]
+
+
+async def test_public_capture_source_proof_failure_returns_fresh_d_without_c_proof(
+    c2_browser: Page,
+) -> None:
+    adapter = await _open_owned_reader(
+        c2_browser,
+        _generated_vp8_webp(),
+        clip_source=True,
+    )
+    await adapter.get_content_identity(c2_browser)
+
+    captures = await adapter.capture_page(c2_browser)
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/png"
+    assert captures[0].file_extension == ".png"
+    assert metadata["capture_method"] == "D_compositor_png"
+    assert metadata["capture_class"] == "D"
+    assert metadata["ebookjapan_capture_policy_revision"] == "ebookjapan-owned-rendered-png-v1-20261108"
+    assert metadata["ebookjapan_source_provenance"] == "UNKNOWN"
+    assert metadata["fallback_reason_code"] == "SOURCE_NATIVE_PROOF_NOT_ESTABLISHED"
+    attempt = metadata["ebookjapan_source_capture_attempt"]
+    assert attempt["status"] == "D_FALLBACK"
+    assert attempt["failure_reason_code"] == "source-paint-state-unsupported"
+    assert attempt["runtime_adoption_status"] == "NOT_APPLIED"
+    assert "source_roi_proof" not in metadata["ebookjapan_capture_parts"][0]
+    assert metadata["ebookjapan_capture_parts"][0]["capture_class"] == "D"
+
+
+async def test_next_d_fallback_clears_previous_c_part_projection(
+    c2_browser: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = await _open_owned_reader(c2_browser, _generated_vp8_webp())
+    await adapter.get_content_identity(c2_browser)
+    c_capture = await adapter.capture_page(c2_browser)
+    assert c_capture is not None and c_capture[0].mime_type == "image/webp"
+
+    d_capture = CaptureResult(
+        data=b"generated-D-fallback",
+        width=SOURCE_WIDTH,
+        height=SOURCE_HEIGHT,
+    )
+
+    async def fresh_d_fallback(_page: Page) -> SourceResearchOutcome:
+        return SourceResearchOutcome(
+            status="D_FALLBACK",
+            failure_reason="source-paint-state-unsupported",
+            limited_history_profile="v3-install-unknown-callable-1",
+            paint_history_complete=False,
+            parts=(),
+            captures=(d_capture,),
+            fallback_captures=(d_capture,),
+        )
+
+    monkeypatch.setattr(adapter, "_research_compare_source_capture", fresh_d_fallback)
+    captures = await adapter.capture_page(c2_browser)
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+
+    assert captures == (d_capture,)
+    assert metadata["capture_method"] == "D_compositor_png"
+    assert metadata["capture_class"] == "D"
+    assert metadata["ebookjapan_capture_parts"][0]["capture_class"] == "D"
+    assert metadata["ebookjapan_capture_parts"][0]["source_provenance"] == "UNKNOWN"
+    assert "source_roi_proof" not in metadata["ebookjapan_capture_parts"][0]
+    assert metadata["ebookjapan_source_capture_attempt"]["failure_reason_code"] == "source-paint-state-unsupported"
+
+
+async def test_fatal_before_new_d_capture_does_not_emit_previous_c_proof(
+    c2_browser: Page,
+) -> None:
+    adapter = await _open_owned_reader(c2_browser, _generated_vp8_webp())
+    await adapter.get_content_identity(c2_browser)
+    captures = await adapter.capture_page(c2_browser)
+    assert captures is not None and captures[0].mime_type == "image/webp"
+
+    with pytest.raises(UnknownPageStateError, match="identity was not read"):
+        await adapter.capture_page(c2_browser)
+
+    metadata = await adapter.collect_debug_metadata(c2_browser)
+    assert metadata["capture_method"] == "D_compositor_png"
+    assert metadata["capture_class"] == "D"
+    assert metadata["ebookjapan_source_provenance"] == "UNKNOWN"
+    assert all(
+        "source_roi_proof" not in part and part["capture_class"] == "D"
+        for part in metadata["ebookjapan_capture_parts"]
+    )
+
+
+@pytest.mark.parametrize("clip_source", [False, True], ids=("verified-C", "proof-unavailable-D"))
+async def test_core_runner_manifest_and_zip_keep_one_complete_capture(
+    isolated_runner_page: Page,
+    tmp_path: Path,
+    clip_source: bool,
+) -> None:
+    webp_bytes = _generated_vp8_webp()
+    source_url = f"https://{PRODUCTION_SOURCE_HOST}/generated-c2-fixture.webp?fixture=runner-proof"
+    source_requests: list[str] = []
+    unexpected_requests: list[str] = []
+
+    async def route_owned_fixture(route) -> None:
+        url = route.request.url
+        if url == LISTING_URL:
+            await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=_listing_html())
+        elif url == READER_URL:
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=_runner_end_reader_html(source_url, clip_source=clip_source),
+            )
+        else:
+            unexpected_requests.append(url)
+            await route.abort()
+
+    async def route_generated_source(route) -> None:
+        if route.request.url != source_url:
+            unexpected_requests.append(route.request.url)
+            await route.abort()
+            return
+        source_requests.append(route.request.url)
+        await route.fulfill(
+            status=200,
+            content_type="image/webp",
+            headers={"cache-control": "no-store"},
+            body=webp_bytes,
+        )
+
+    async def abort_unexpected(route) -> None:
+        unexpected_requests.append(route.request.url)
+        await route.abort()
+
+    await isolated_runner_page.route("**/*", abort_unexpected)
+    await isolated_runner_page.route("https://ebookjapan.yahoo.co.jp/**", route_owned_fixture)
+    await isolated_runner_page.route(f"https://{PRODUCTION_SOURCE_HOST}/**", route_generated_source)
+    await isolated_runner_page.add_init_script(
+        """(()=>{
+          const canvas=new OffscreenCanvas(1,1),prototype=Object.getPrototypeOf(canvas.getContext('2d'));
+          Object.defineProperty(prototype,'getImageData',{configurable:true,writable:true,value:undefined});
+          Object.defineProperty(prototype,'arc',{configurable:true,writable:true,value:function fixtureArc(){}});
+          Object.defineProperty(prototype,'fixturePrivateCallable',{configurable:true,writable:true,enumerable:true,value:function fixturePrivateCallable(){}});
+        })()"""
+    )
+    adapter = EbookJapanAdapter()
+    await adapter.configure_target_identity(PRODUCT_ID, "generated-work")
+    output = tmp_path / "isolated-catalog" / "run"
+    result = await CrawlerRunner(
+        RunConfig(
+            site="ebookjapan",
+            source_url=PRODUCT_URL,
+            output_dir=output,
+            diagnostics_dir=tmp_path / "isolated-diagnostics",
+            access_strategy="direct",
+            page_turn_delay_ms=0,
+            max_pages=3,
+            page_change_timeout_ms=1_000,
+        )
+    ).run(isolated_runner_page, adapter)
+
+    assert source_requests == [source_url]
+    assert unexpected_requests == []
+    assert result.stop_state.value == "end"
+    assert len(result.pages) == 1
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    page_entry = manifest["pages"][0]
+    metadata = page_entry["metadata"]
+    expected_extension = ".png" if clip_source else ".webp"
+    expected_mime = "image/png" if clip_source else "image/webp"
+    assert page_entry["file"] == f"page-0001{expected_extension}", metadata
+    assert page_entry["mime_type"] == expected_mime
+    assert (page_entry["width"], page_entry["height"]) == (SOURCE_WIDTH, SOURCE_HEIGHT)
+    attempt = metadata["ebookjapan_source_capture_attempt"]
+    if clip_source:
+        assert metadata["capture_method"] == "D_compositor_png"
+        assert metadata["capture_class"] == "D"
+        assert metadata["ebookjapan_source_provenance"] == "UNKNOWN"
+        assert attempt["status"] == "D_FALLBACK"
+        assert attempt["failure_reason_code"] == "source-paint-state-unsupported"
+        assert attempt["runtime_adoption_status"] == "NOT_APPLIED"
+        assert "source_roi_proof" not in metadata["ebookjapan_capture_parts"][0]
+    else:
+        assert metadata["capture_method"] == "C_source_roi_lossless"
+        assert metadata["capture_class"] == "C"
+        assert metadata["ebookjapan_source_provenance"] == "VERIFIED_SOURCE_ROI"
+        assert attempt["status"] == "C_VERIFIED"
+        assert attempt["runtime_adoption_status"] == "ADOPTED_CONDITIONAL"
+        proof = metadata["ebookjapan_capture_parts"][0]["source_roi_proof"]
+        assert proof["roi_count"] == 256
+        assert proof["source_encoded_sha256"] == hashlib.sha256(webp_bytes).hexdigest()
+        assert proof["output_encoded_sha256"] == hashlib.sha256((output / page_entry["file"]).read_bytes()).hexdigest()
+    assert source_url not in json.dumps(metadata, sort_keys=True)
+
+    expected_image = (output / page_entry["file"]).read_bytes()
+    packaged = package_crawl_output(
+        output,
+        {"title": "Generated Fixture Work", "genre": "neutral-test"},
+        library_dir=tmp_path / "isolated-library",
+    )
+    with zipfile.ZipFile(packaged.archive_path) as archive:
+        assert archive.namelist() == [f"page-0001{expected_extension}"]
+        assert archive.read(f"page-0001{expected_extension}") == expected_image
+
+
 async def test_late_duplicate_image_request_keeps_the_complete_capture_on_d(
     c2_browser: Page,
 ) -> None:
     adapter = await _open_owned_reader(c2_browser, _generated_vp8_webp())
     await adapter.get_content_identity(c2_browser)
-    native_capture = adapter.capture_page
+    native_capture = adapter._capture_rendered_page
 
     async def duplicate_before_d(page: Page):
         duplicate_request = type("DuplicateRequest", (), {})()
@@ -319,7 +748,7 @@ async def test_late_duplicate_image_request_keeps_the_complete_capture_on_d(
         ledger.response_received(duplicate_response, main_frame=page.main_frame)
         return await native_capture(page)
 
-    adapter.capture_page = duplicate_before_d  # type: ignore[method-assign]
+    adapter._capture_rendered_page = duplicate_before_d  # type: ignore[method-assign]
     outcome = await adapter._research_compare_source_capture(c2_browser)
 
     assert outcome.status == "D_FALLBACK"
@@ -334,7 +763,7 @@ async def test_source_image_identity_race_during_d_capture_is_fatal(
 ) -> None:
     adapter = await _open_owned_reader(c2_browser, _generated_vp8_webp())
     await adapter.get_content_identity(c2_browser)
-    native_capture = adapter.capture_page
+    native_capture = adapter._capture_rendered_page
 
     async def change_source_during_d(page: Page):
         result = await native_capture(page)
@@ -347,7 +776,7 @@ async def test_source_image_identity_race_during_d_capture_is_fatal(
         )
         return result
 
-    adapter.capture_page = change_source_during_d  # type: ignore[method-assign]
+    adapter._capture_rendered_page = change_source_during_d  # type: ignore[method-assign]
     with pytest.raises(UnknownPageStateError, match="source image identity"):
         await adapter._research_compare_source_capture(c2_browser)
 
@@ -355,7 +784,7 @@ async def test_source_image_identity_race_during_d_capture_is_fatal(
 async def test_source_dimension_reset_during_d_capture_is_fatal(c2_browser: Page) -> None:
     adapter = await _open_owned_reader(c2_browser, _generated_vp8_webp())
     await adapter.get_content_identity(c2_browser)
-    native_capture = adapter.capture_page
+    native_capture = adapter._capture_rendered_page
 
     async def reset_source_during_d(page: Page):
         result = await native_capture(page)
@@ -366,7 +795,7 @@ async def test_source_dimension_reset_during_d_capture_is_fatal(c2_browser: Page
         )
         return result
 
-    adapter.capture_page = reset_source_during_d  # type: ignore[method-assign]
+    adapter._capture_rendered_page = reset_source_during_d  # type: ignore[method-assign]
     with pytest.raises(UnknownPageStateError, match="source canvas reset"):
         await adapter._research_compare_source_capture(c2_browser)
 

@@ -257,6 +257,7 @@ class EbookJapanAdapter(SiteAdapter):
         self._last_capture_ordinals: tuple[int, ...] = ()
         self._last_capture_part_count: int = 0
         self._last_d_reference_captures: tuple[CaptureResult, ...] = ()
+        self._last_source_capture_attempt: dict[str, object] | None = None
         self._research_capture_active = False
         self._transition_before_key: tuple[object, ...] | None = None
         self._transition_pending: bool = False
@@ -1508,6 +1509,110 @@ class EbookJapanAdapter(SiteAdapter):
         raise UnknownPageStateError("ebookjapan unverified D capture is disabled")
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        """Return one complete C spread when proved, otherwise one fresh D spread."""
+
+        self._clear_previous_source_capture_projection()
+        self._last_source_capture_attempt = None
+        if self._source_request_ledger is None:
+            captures = await self._capture_rendered_page(page)
+            self._last_source_capture_attempt = {
+                "status": "D_FALLBACK",
+                "failure_reason_code": "source-response-tracker-unavailable",
+                "runtime_adoption_status": "NOT_APPLIED",
+                "limited_history_profile": None,
+                "paint_history_complete": False,
+                "proof_basis": "source-lineage+fullpixelcompare",
+            }
+            return captures
+
+        outcome = await self._research_compare_source_capture(page)
+        if outcome.status == "C_VERIFIED":
+            if (
+                not outcome.parts
+                or len(outcome.parts) != len(outcome.captures)
+                or len(outcome.parts) != len(self._last_capture_parts)
+                or any(
+                    proof.part_index != index
+                    or (proof.width, proof.height)
+                    != (outcome.captures[index].width, outcome.captures[index].height)
+                    for index, proof in enumerate(outcome.parts)
+                )
+            ):
+                raise UnknownPageStateError(
+                    "ebookjapan verified source proof does not align with captured parts"
+                )
+            projected_parts: list[dict[str, object]] = []
+            for d_part, proof in zip(self._last_capture_parts, outcome.parts, strict=True):
+                projected = copy.deepcopy(d_part)
+                projected.pop("fallback_reason_code", None)
+                proof_projection = proof.safe_projection()
+                proof_projection.update(
+                    {
+                        "runtime_adoption_status": "ADOPTED_CONDITIONAL",
+                        "limited_history_profile": outcome.limited_history_profile,
+                        "proof_basis": "source-lineage+fullpixelcompare",
+                    }
+                )
+                projected.update(
+                    {
+                        "capture_method": "C_source_roi_lossless",
+                        "capture_class": "C",
+                        "ebookjapan_capture_policy_revision": "ebookjapan-owned-source-roi-v1-20261109",
+                        "source_provenance": "VERIFIED_SOURCE_ROI",
+                        "source_roi_proof": proof_projection,
+                    }
+                )
+                projected_parts.append(projected)
+            self._last_capture_parts = tuple(projected_parts)
+            self._last_source_capture_attempt = {
+                "status": "C_VERIFIED",
+                "failure_reason_code": None,
+                "runtime_adoption_status": "ADOPTED_CONDITIONAL",
+                "limited_history_profile": outcome.limited_history_profile,
+                "paint_history_complete": outcome.paint_history_complete,
+                "proof_basis": "source-lineage+fullpixelcompare",
+            }
+            return outcome.captures
+
+        if outcome.status != "D_FALLBACK" or not outcome.fallback_captures:
+            raise UnknownPageStateError("ebookjapan source comparison returned an invalid outcome")
+        if len(outcome.fallback_captures) != len(self._last_capture_parts):
+            raise UnknownPageStateError("ebookjapan D fallback is not a complete visible spread")
+        self._last_source_capture_attempt = {
+            "status": "D_FALLBACK",
+            "failure_reason_code": outcome.failure_reason,
+            "runtime_adoption_status": "NOT_APPLIED",
+            "limited_history_profile": outcome.limited_history_profile,
+            "paint_history_complete": outcome.paint_history_complete,
+            "proof_basis": "source-lineage+fullpixelcompare",
+        }
+        return outcome.fallback_captures
+
+    def _clear_previous_source_capture_projection(self) -> None:
+        """Keep navigation geometry but prevent a prior C proof leaking into this call."""
+
+        if (
+            self._last_source_capture_attempt is None
+            or self._last_source_capture_attempt.get("status") != "C_VERIFIED"
+        ):
+            return
+        cleared_parts: list[dict[str, object]] = []
+        for part in self._last_capture_parts:
+            d_projection = copy.deepcopy(part)
+            d_projection.pop("source_roi_proof", None)
+            d_projection.update(
+                {
+                    "capture_method": "D_compositor_png",
+                    "capture_class": _CAPTURE_CLASS,
+                    "fallback_reason_code": _FALLBACK_REASON_CODE,
+                    "ebookjapan_capture_policy_revision": _CAPTURE_POLICY_REVISION,
+                    "source_provenance": "UNKNOWN",
+                }
+            )
+            cleared_parts.append(d_projection)
+        self._last_capture_parts = tuple(cleared_parts)
+
+    async def _capture_rendered_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         self._last_d_reference_captures = ()
         reader_path = self._reader_path
         total = self._reader_total
@@ -2052,7 +2157,7 @@ class EbookJapanAdapter(SiteAdapter):
             # fallback when C proof is unavailable.
             self._research_capture_active = True
             try:
-                d_captures = await self.capture_page(page)
+                d_captures = await self._capture_rendered_page(page)
                 d_references = self._last_d_reference_captures
             finally:
                 self._research_capture_active = False
@@ -2750,18 +2855,30 @@ class EbookJapanAdapter(SiteAdapter):
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, object]:
         del page
-        return {
-            "capture_method": "D_compositor_png",
-            "capture_class": _CAPTURE_CLASS,
-            "fallback_reason_code": _FALLBACK_REASON_CODE,
-            "ebookjapan_capture_policy_revision": _CAPTURE_POLICY_REVISION,
-            "ebookjapan_capture_parts": [dict(part) for part in self._last_capture_parts],
+        c_verified = (
+            self._last_source_capture_attempt is not None
+            and self._last_source_capture_attempt.get("status") == "C_VERIFIED"
+        )
+        metadata: dict[str, object] = {
+            "capture_method": "C_source_roi_lossless" if c_verified else "D_compositor_png",
+            "capture_class": "C" if c_verified else _CAPTURE_CLASS,
+            "ebookjapan_capture_policy_revision": (
+                "ebookjapan-owned-source-roi-v1-20261109" if c_verified else _CAPTURE_POLICY_REVISION
+            ),
+            "ebookjapan_capture_parts": copy.deepcopy(list(self._last_capture_parts)),
             "ebookjapan_native_counter": self._last_native_counter,
             "ebookjapan_derived_frame_shape": "cover" if self._expected_current == 1 else "spread",
             "ebookjapan_native_page_number": None,
-            "ebookjapan_source_provenance": "UNKNOWN",
+            "ebookjapan_source_provenance": "VERIFIED_SOURCE_ROI" if c_verified else "UNKNOWN",
             "ebookjapan_terminal_wait": copy.deepcopy(self._terminal_diagnostics),
         }
+        if not c_verified:
+            metadata["fallback_reason_code"] = _FALLBACK_REASON_CODE
+        if self._last_source_capture_attempt is not None:
+            metadata["ebookjapan_source_capture_attempt"] = copy.deepcopy(
+                self._last_source_capture_attempt
+            )
+        return metadata
 
     async def _read_ready_frame(
         self,

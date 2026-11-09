@@ -1,8 +1,8 @@
-"""Private, bounded research comparison for EbookJapan source ROI captures.
+"""Private, bounded source ROI comparison used by conditional EbookJapan C capture.
 
-This module does not change the adapter's default D compositor capture. URLs,
-Playwright objects, and source bytes exist only in the per-run in-memory ledger
-and are omitted from every safe projection.
+The adapter accepts C only after complete per-part lineage and pixel proof;
+otherwise it uses a fresh D spread. URLs, Playwright objects, and source bytes
+exist only in the per-run in-memory ledger and are omitted from safe projections.
 """
 
 from __future__ import annotations
