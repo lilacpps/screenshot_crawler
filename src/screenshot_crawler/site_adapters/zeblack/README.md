@@ -30,12 +30,27 @@ predecessors produce an NG without acquiring rights; manual handling is indicate
 where access is required.
 
 Rereading rewinds to page_0, advances to verified END/NEXT_CONTENT, and closes
-with the observed native `button.sc-bEHKTb`. It never clicks next-story, captures
+with the observed native `button.sc-hUsbtx` (2026-11-11), retaining the older
+`button.sc-bEHKTb` version. Exactly one matching, visible, enabled, empty button
+without child elements or an aria-label is required across both versions;
+unknown or ambiguous controls stop. It never clicks next-story, captures
 content or creates acquisition state. Limits are 100 content images, 120 reverse
 and 120 forward operations, and 180 seconds overall. Existing runtime content
 pacing and AccessGuard remain active. The explicit final list reload alone
 provides the prepared entry document; cached native return requires no API event.
 There is no new CLI/configuration flag and manual quota entry is unchanged.
+
+The 2026-11-11 failure was reproduced on title 71629 / chapter 830723 after
+verified reading reached the terminal card: the frontend had renamed the close
+component, so the old-only selector stopped before returning to chapter/list.
+With the updated selector the same production reread returned to the exact
+same-title list and a fresh protobuf/document observation succeeded. No ticket
+was clicked or consumed, no content was captured, and no Catalog state was
+written during verification. Synthetic browser tests cover both component
+versions through final-document handoff and one ticket entry, and reject unknown,
+duplicate, mixed-version, disabled, hidden and structurally changed controls.
+Generated class names remain a site-update dependency; unknown versions fail
+closed. Evidence: `output/zeblack-close-fix-20261111/before.json` and `after.json`.
 
 An isolated production resolver/Executor run on title 7 reread chapter 100 and
 restored ticket availability for pending chapter 101; the final same-document

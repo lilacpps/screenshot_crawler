@@ -6,7 +6,7 @@ import pytest
 from playwright.async_api import Page
 
 from screenshot_crawler.batch import BatchCandidate
-from screenshot_crawler.core.errors import PageChangeTimeoutError
+from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
 from screenshot_crawler.site_adapters.zeblack.adapter import ZeblackAdapter
 from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import ConsumptionStatus as Status
 from screenshot_crawler.site_adapters.zeblack.live_access import ZeblackLiveAccessError
@@ -19,6 +19,7 @@ PREVIOUS = ROOT + "/title/5123/chapter/100/viewer"
 TARGET = ROOT + "/title/5123/chapter/900/viewer"
 API = "https://api2.zebrack-comic.com/api/v3/title_chapter_list"
 GIF = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+CURRENT_CLOSE = '<button data-fixture-close class="sc-hUsbtx"></button>'
 
 
 def _varint(value):
@@ -55,11 +56,11 @@ def _candidate():
     )
 
 
-def _viewer(*, start=0, broken=False):
+def _viewer(*, start=0, broken=False, close_controls=CURRENT_CLOSE):
     return f"""<meta charset="utf-8"><style>
       img {{width:70px;height:100px}} #ad,#final {{display:none;width:300px;height:200px}}
-      button.sc-bEHKTb {{width:40px;height:40px}}
-    </style><button class="sc-bEHKTb"></button><div id="body"></div>
+      button[data-fixture-close] {{width:40px;height:40px}}
+    </style>{close_controls}<div id="body"></div>
     <div id="ad" class="-KWKsa_spread"><iframe srcdoc="fixture"></iframe></div>
     <div id="final"><button id="next-story">次の話を読む</button></div>
     <script>
@@ -89,16 +90,17 @@ def _viewer(*, start=0, broken=False):
         render();
       }});
       document.querySelector('#next-story').onclick=()=>console.log('fixture-next-click');
-      document.querySelector('button.sc-bEHKTb').onclick=async()=>{{
+      document.querySelectorAll('button[data-fixture-close]').forEach(button=>button.onclick=async()=>{{
         if(stage!==4) throw Error('premature close');
         await fetch('/fixture-closed');location.assign('{LIST}');
-      }};
+      }});
     </script>"""
 
 
 async def _install(
     page, *, predecessor=Status.RENTAL, remaining=10000, stock=1,
     restored=True, older_available=False, start=0, bad_order=False, broken=False,
+    close_controls=CURRENT_CLOSE,
 ):
     state = {"closed": 0, "list_loads": 0, "viewers": [], "stages": [], "next_clicks": 0}
 
@@ -150,7 +152,10 @@ async def _install(
                                   content_type="text/html")
         elif url == PREVIOUS:
             state["viewers"].append(url)
-            await request.fulfill(body=_viewer(start=start, broken=broken), content_type="text/html")
+            await request.fulfill(
+                body=_viewer(start=start, broken=broken, close_controls=close_controls),
+                content_type="text/html",
+            )
         elif url == ROOT + "/fixture-closed":
             state["closed"] += 1
             await request.fulfill(body="ok")
@@ -162,10 +167,14 @@ async def _install(
 
 
 @pytest.mark.parametrize("older_available,start", [(False, 0), (True, 1)])
+@pytest.mark.parametrize("close_class", ["sc-bEHKTb", "sc-hUsbtx"], ids=["legacy", "current"])
 async def test_recovery_rereads_from_start_then_reuses_final_document_for_ticket_entry(
-    browser_page: Page, older_available, start,
+    browser_page: Page, older_available, start, close_class,
 ):
-    state = await _install(browser_page, older_available=older_available, start=start)
+    state = await _install(
+        browser_page, older_available=older_available, start=start,
+        close_controls=f'<button data-fixture-close class="{close_class}"></button>',
+    )
     adapter = ZeblackAdapter()
     budget = adapter.configure_access_resource_resolution(timeout_ms=15000, page_turn_delay_ms=0)
     assert budget == 180000
@@ -184,6 +193,30 @@ async def test_recovery_rereads_from_start_then_reuses_final_document_for_ticket
     assert adapter.get_access_consumption().consumed is True
     assert await browser_page.evaluate("window.ticketClicks") == 1
     assert state["list_loads"] == 4
+
+
+@pytest.mark.parametrize("close_controls", [
+    '<button data-fixture-close class="unknown"></button>',
+    CURRENT_CLOSE * 2,
+    CURRENT_CLOSE + '<button data-fixture-close class="sc-bEHKTb"></button>',
+    '<button data-fixture-close class="sc-hUsbtx" disabled></button>',
+    '<button data-fixture-close class="sc-hUsbtx" style="display:none"></button>',
+    '<button data-fixture-close class="sc-hUsbtx">閉じる</button>',
+    '<button data-fixture-close class="sc-hUsbtx"><span></span></button>',
+    '<button data-fixture-close class="sc-hUsbtx" aria-label="次の話"></button>',
+], ids=["unknown", "duplicate", "mixed-versions", "disabled", "hidden", "text", "child", "aria"])
+async def test_recovery_rejects_unrecognized_ambiguous_or_changed_close_control(
+    browser_page, close_controls,
+):
+    state = await _install(browser_page, close_controls=close_controls)
+    adapter = ZeblackAdapter()
+    adapter.configure_access_resource_resolution(timeout_ms=15000, page_turn_delay_ms=0)
+    with pytest.raises(UnknownPageStateError, match="prerequisite close control"):
+        await adapter.resolve_access_resource_candidates(browser_page, (_candidate(),), "work_ticket")
+    assert state["stages"] == [0, 1, 2, 3, 4]
+    assert state["closed"] == 0 and state["next_clicks"] == 0
+    assert state["viewers"] == [PREVIOUS]
+    assert adapter.get_access_consumption().consumed is False
 
 
 @pytest.mark.parametrize("status,remaining,stock,blocked,reason", [

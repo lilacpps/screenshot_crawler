@@ -216,9 +216,10 @@ async def reread_predecessor(
     else:
         raise PageChangeTimeoutError("Zeblack prerequisite reading exceeded its step limit")
 
-    # Supported native close component observed 2026-10-29. Never choose a
-    # generic first button, next-story control or arbitrary link as fallback.
-    close = page.locator("button.sc-bEHKTb")
+    # Native close component observed 2026-10-29 and renamed by the frontend
+    # as live-verified 2026-11-11. Require one match across both known versions;
+    # never choose a generic empty button, next-story control or arbitrary link.
+    close = page.locator("button.sc-bEHKTb, button.sc-hUsbtx")
     if await close.count() != 1 or not await close.is_visible() or not await close.is_enabled():
         raise UnknownPageStateError("Zeblack prerequisite close control is unavailable")
     if not await close.evaluate(

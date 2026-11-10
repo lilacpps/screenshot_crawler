@@ -148,10 +148,51 @@ Catalog calls. `ArrowRight` rewinds strictly backward to page_0 and the existing
 END/NEXT_CONTENT. It never clicks next-story. Content is capped at 100 images,
 rewind and forward at 120 operations each, with a 180-second overall deadline.
 Runtime `page_turn_delay_ms` applies to content turns/rewinding outside each
-page-change wait. The observed native close component is one visible enabled
-empty `button.sc-bEHKTb`; changed/ambiguous controls stop safely. Return is
+page-change wait. The observed native close component is `button.sc-hUsbtx`
+(live-verified 2026-11-11), with the older `button.sc-bEHKTb` version retained.
+Exactly one match across both versions must be visible, enabled and empty,
+with no child elements or aria-label; unknown/changed/ambiguous controls stop
+safely. There is no generic empty-button or next-story fallback. Return is
 validated by the exact same-title list URL, without requiring a new load event
 or API request from a cached native return.
+
+The 2026-11-11 reported metrics
+`output/metrics/20261111T072106811587+0900-zeblack-grant-only-af9f1d329b5840bcae76d162dc895a5d.jsonl`
+show title `71629` / predecessor `830723` reaching the last-page API before
+resolver failure. A bounded shared-CDP probe reproduced the exact
+`Zeblack prerequisite close control is unavailable` error: the old class had
+no match and the current native close was an enabled, empty `sc-hUsbtx` button.
+The site's read history can already restore eligibility before this UI cleanup
+failure, explaining why a subsequent invocation can consume the ticket.
+After the selector correction, production `reread_predecessor` on the same
+live RENTAL chapter returned to `/title/71629/chapter/list`; the explicit fresh
+protobuf observation included `830726` as TICKET_AVAILABLE and retained a
+connected prepared document. This establishes the repaired close/list boundary,
+not a new ticket-consumption verification. The probe clicked no ticket control,
+called no capture hook and wrote no Catalog/Watchlist state; observed API POSTs
+were only `chapter_viewer` and `manga_chapter_viewer_last_page`. Its owned Page
+closed and the shared Chrome remained running. Metadata-only evidence is in
+`output/zeblack-close-fix-20261111/{before,after}.json`.
+
+Artificial browser coverage reproduces the old-only-selector failure with the
+current class, exercises both observed versions through reread/final-document
+handoff and exactly one ticket action, and rejects unknown, duplicate,
+mixed-version, disabled, hidden, nonempty, child-bearing and aria-labelled
+controls without close or ticket consumption. Generated component classes remain
+a known maintenance dependency: a future unobserved rename stops safely.
+No shared/Core, access-resource, pacing, CLI/configuration or schema contract
+changed; all reading limits, rights checks and final fresh-list handoff remain.
+
+Validation for this close correction: **193 passed, 0 failed, 0 skipped** across
+Zeblack adapter/resolver/live-access/policy Unit and recovery/access-entry/viewer
+browser Integration (`pytest-final.log` in the same evidence directory).
+The earlier affected run had 173 passes and 20 setup errors caused by the
+default pytest temporary-directory permissions; the complete rerun used a new
+isolated `--basetemp` and passed. Existing pytest-asyncio/Python deprecation
+warnings remain (526). `ruff check src tests` and changed-file `git diff --check`
+passed. Research tests and full suite were not run because no probe helper,
+shared contract or other site changed. Live consumption remains untested for
+this correction; the artificial handoff/entry tests verify a single ticket use.
 
 The explicit final list reload uses the production protobuf observer, which now
 accepts only matching requests issued after its listeners attach. Late responses
@@ -183,7 +224,7 @@ uses URL validation and explicit fresh observation instead. Those failed probes
 did not consume tickets. Real expired/paid predecessor cases were not available;
 their no-open/no-consumption behavior is covered by artificial browser tests.
 
-Validation on the final implementation: **470 passed, 0 skipped** in two
+Original 2026-10-29 implementation validation: **470 passed, 0 skipped** in two
 non-overlapping affected selections. Zeblack resolver/live observation/adapter/
 Discovery/policy Unit and recovery/entry/viewer browser Integration: **218
 passed**. Shared Executor, CLI and deferred grant Unit: **252 passed**. Coverage
