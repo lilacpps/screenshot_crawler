@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from dataclasses import replace
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -65,6 +66,54 @@ PAGE_COLOR = (16, 40, 80)
 NATIVE_WIDTH = 844
 NATIVE_HEIGHT = 1200
 NATIVE_SOURCE_URL = "https://pcm.kakaocdn.net/dna/a/b/c/i123.jpg?token=fixture"
+CENTERED_1342 = {
+    902: (809.234375, 1204), 903: (809.46875, 1203),
+    904: (809.015625, 1201), 905: (809.234375, 1200),
+    906: (809.453125, 1199), 907: (809, 1197),
+    908: (809.203125, 1196), 909: (809.421875, 1195),
+    910: (809.640625, 1194),
+}
+# Independent measured and synthetic expectations for actual-frame selection.
+DYNAMIC_DISPLAYS = {
+    (898, 1342, 807): (807.65625, 1207),
+    (900, 1342, 807): (807.4375, 1204),
+    (901, 1342, 807): (807, 1202),
+    (902, 1342, 807): (807.21875, 1201),
+    (903, 1342, 807): (807.4375, 1200),
+    (904, 1342, 807): (807.671875, 1199),
+    (906, 1342, 807): (807.421875, 1196),
+    (904, 1342, 808): (808.34375, 1200),
+    (920, 1360, 811): (811.078125, 1199),
+    (1000, 1540, 779): (779.21875, 1200),
+    (1000, 1420, 845): (845.0625, 1200),
+    (1341, 2086, 774): (774.640625, 1205),
+    (883, 1342, 793): (793.515625, 1206),
+    (884, 1342, 793): (793.09375, 1204),
+    (885, 1342, 793): (793.328125, 1203),
+    (886, 1342, 793): (793.5625, 1202),
+    (887, 1342, 793): (793.140625, 1200),
+    (888, 1342, 793): (793.375, 1199),
+    (896, 1342, 793): (793.171875, 1188),
+    (897, 1342, 793): (793.390625, 1187),
+    (898, 1342, 793): (793.609375, 1186),
+    (899, 1342, 793): (793.15625, 1184),
+    (900, 1342, 793): (793.359375, 1183),
+    (901, 1342, 793): (793.578125, 1182),
+    (902, 1342, 793): (793.109375, 1180),
+    (880, 1342, 793): (793.4375, 1210),
+    (900, 1334, 809): (809.59375, 1200),
+    (1500, 3000, 600): (600, 1200),
+    (2500, 1500, 1600): (1600, 960),
+    (1900, 2850, 800): (800, 1200),
+    (549, 834, 791): (791.234375, 1202),
+    (550, 834, 791): (791.359375, 1200),
+    (551, 834, 791): (791.484375, 1198),
+    (552, 834, 791): (791.59375, 1196),
+    (200, 300, 800): (800, 1200),
+    (20, 30, 800): (800, 1200),
+    (844, 1200, 800): (800.390625, 1138),
+    (1128, 1600, 844): (844.578125, 1198),
+}
 BATCH_NOW = datetime(2026, 10, 9, 12, tzinfo=JST)
 
 
@@ -291,14 +340,24 @@ def _native_viewer_html(
     left_offset: float = 0,
     transition_delay_ms: int | None = None,
     overscan: bool | None = None,
+    scaled_frame_width: int | None = None,
 ) -> str:
     columns = (width + 49) // 50
     draw_count = columns * ((height + 49) // 50)
-    scaled = (width, height) in {(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819)}
+    # A permutation must cover every source tile even for newly admitted grids.
+    # In particular, stride 5 repeats columns in a 20-column fixture.
+    top_stride = next(n for n in (37, 31, 17, 7, 1) if math.gcd(n, draw_count - columns) == 1)
+    bottom_stride = next(n for n in (5, 7, 11, 1) if math.gcd(n, columns) == 1)
+    centered = scaled_frame_width is not None or (height == 1342 and width in CENTERED_1342)
+    scaled = centered or (width, height) in {(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819)}
     overscan = (width, height) == (763, 1200) if overscan is None else overscan
     frame_width, frame_height = (764, 1200) if overscan else (843, 1200) if scaled else (width, height)
     display_width, display_height = (764.265625, 1202) if overscan else (843.046875, 1199) if scaled else (width, height)
-    if (width, height) == (1441, 2048):
+    if centered:
+        frame_width = scaled_frame_width if scaled_frame_width is not None else 809
+        display_width, display_height = (DYNAMIC_DISPLAYS[(width, height, frame_width)]
+                                         if scaled_frame_width is not None else CENTERED_1342[width])
+    elif (width, height) == (1441, 2048):
         frame_width, display_width, display_height = 844, 844.328125, 1200
     elif (width, height) == (1884, 2819):
         frame_width, display_width, display_height = 801, 801.3125, 1199
@@ -306,6 +365,8 @@ def _native_viewer_html(
         # CSS layout quantizes this fixture to 1/64 px; choose the nearest
         # representable width inside the live profile's existing 0.01px band.
         frame_width, display_width, display_height = 845, 845.296875, 1199
+    top_offset = (-1 if overscan else (1200 - display_height) / 2 if centered
+                  else 0.5 if scaled and height != 2048 else 0)
     canvas_markup = '<canvas width="300" height="150"></canvas>'
     if scaled or overscan:
         canvas_markup = '<div class="PCM-viewer2_zoomPageContent"><div class="PCM-viewer2_canvas_wrap">' + canvas_markup + '</div></div>'
@@ -329,7 +390,7 @@ def _native_viewer_html(
       .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
       .PCM-viewer2_pageWrapper.current {{ display:block; }}
       .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{frame_width}px; height:{frame_height}px; }}
-      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{-1 if overscan else 0.5 if scaled and height != 2048 else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{top_offset}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
       .PCM-viewer2_zoomPageContent,.PCM-viewer2_canvas_wrap {{ width:{frame_width}px;height:{display_height}px; }}
       .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{display_width}px; height:{display_height}px; }}
       .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
@@ -369,8 +430,8 @@ def _native_viewer_html(
           {extra}
           for(let destination=0;destination<{draw_count};destination++){{
             const source={str(scaled).lower()} ? (destination < {draw_count-columns}
-              ? (destination*37)%{draw_count-columns}
-              : {draw_count-columns} + ((destination-{draw_count-columns})*5)%{columns})
+              ? (destination*{top_stride})%{draw_count-columns}
+              : {draw_count-columns} + ((destination-{draw_count-columns})*{bottom_stride})%{columns})
               : (destination*37)%{draw_count};
             const dc=destination%{columns}, dr=Math.floor(destination/{columns});
             const sc=source%{columns}, sr=Math.floor(source/{columns});
@@ -483,6 +544,7 @@ async def _start_native_fixture(
     left_offset: float = 0,
     transition_delay_ms: int | None = None,
     overscan: bool | None = None,
+    scaled_frame_width: int | None = None,
 ) -> None:
     body = _synthetic_tile_jpeg(width=width, height=height)
 
@@ -505,6 +567,7 @@ async def _start_native_fixture(
                     left_offset=left_offset,
                     transition_delay_ms=transition_delay_ms,
                     overscan=overscan,
+                    scaled_frame_width=scaled_frame_width,
                 ),
                 content_type="text/html; charset=utf-8",
             )  # type: ignore[attr-defined]
@@ -527,12 +590,13 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
 
 
 @pytest.mark.parametrize("delay", [700, -1])
-@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048)])
+@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (902, 1342), (905, 1342), (907, 1342), (910, 1342), (898, 1342), (887, 1342), (901, 1342), (550, 834), (552, 834)])
 async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnostics(
     browser_page: Page, tmp_path: Path, delay: int, width: int, height: int
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, width=width, height=height, transition_delay_ms=delay)
+    await _start_native_fixture(adapter, browser_page, width=width, height=height, transition_delay_ms=delay,
+                                scaled_frame_width=807 if width == 898 else 793 if width in {887, 901} else 791 if width in {550, 552} else None)
     adapter.page_change_timeout_ms = 1200
     previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
@@ -565,7 +629,7 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
         # failure-time samples must remain unchanged and reach metadata.json.
         await browser_page.locator("#p2").evaluate("node=>node.style.transform='none'")
         settled = await adapter._reader_snapshot(browser_page)
-        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width != 763)
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 898, 901, 902, 910})
         await write_diagnostics(
             browser_page, tmp_path, metadata={"adapter_debug": metadata}, error=error.value
         )
@@ -575,29 +639,38 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
     else:
         await adapter.wait_for_change(browser_page, previous)
         settled = await adapter._reader_snapshot(browser_page)
-        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width != 763)
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 898, 901, 902, 910})
     assert (await adapter.get_content_identity(browser_page)).page_id == "p2"
     assert "piccoma_body_wait_failure" not in await adapter.collect_debug_metadata(browser_page)
     assert await browser_page.evaluate("window.forbiddenClicks") == 1
 
 
-@pytest.mark.parametrize(("width", "height", "fault"), [
+@pytest.mark.parametrize(("width", "height", "fault", "scaled_frame_width"), [
+    (w, h, fault, None) for w, h, fault in [
     (width, height, fault)
-    for width, height in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (763, 1200))
+    for width, height in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (763, 1200), (902, 1342), (905, 1342), (907, 1342), (910, 1342))
     for fault in (None, "observed_left_offset", "unknown_left_offset", "async_left_offset", "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted")
-    if width != 763 or fault not in {"observed_left_offset", "async_left_offset"}
-] + [(width, height, fault) for width, height in ((763, 1200), (1128, 1600), (1441, 2048), (1884, 2819))
-     for fault in ("missing_source", "late_source_ambiguity")] + [(1128, 1600, "extra_paint"), (1441, 2048, "extra_paint"), (1884, 2819, "extra_paint")])
+    if width not in {763, 902} or fault not in {"observed_left_offset", "async_left_offset"}
+] + [(width, height, fault) for width, height in ((763, 1200), (1128, 1600), (1441, 2048), (1884, 2819), (902, 1342), (905, 1342), (907, 1342), (910, 1342))
+     for fault in ("missing_source", "late_source_ambiguity")] + [(1128, 1600, "extra_paint"), (1441, 2048, "extra_paint"), (1884, 2819, "extra_paint"), (902, 1342, "extra_paint")] + [(width, 1342, None) for width in (903, 904, 906, 908, 909)]
+] + [
+    (w, h, fault, frame) for w, h, frame in DYNAMIC_DISPLAYS
+    for fault in ((None, "missing_source", "late_source_ambiguity", "extra_paint",
+                   "encoder_failure", "source_budget_exhausted", "paint_gap",
+                   "async_paint_change", "wrong_scale", "frame_change")
+                  if (w, h, frame) in {(898, 1342, 807), (903, 1342, 807), (887, 1342, 793), (901, 1342, 793), (550, 834, 791), (552, 834, 791)}
+                  else (None,))
+])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None,
-    width: int, height: int,
+    width: int, height: int, scaled_frame_width: int | None,
 ) -> None:
     adapter = PiccomaAdapter()
     if width == 1884:
         monkeypatch.setitem(globals(), "NATIVE_SOURCE_URL", NATIVE_SOURCE_URL.replace(".jpg?", ".jpeg?"))
     await _start_native_fixture(adapter, browser_page, width=width, height=height,
-                                extra_paint=fault == "extra_paint")
-    if width in {763, 1128, 1441, 1884} and fault not in {None, "encoder_failure"}:
+                                extra_paint=fault == "extra_paint", scaled_frame_width=scaled_frame_width)
+    if (scaled_frame_width is not None or width in {763, 1128, 1441, 1884, *CENTERED_1342}) and fault not in {None, "encoder_failure"}:
         async def forbidden_screenshot(_target):
             raise AssertionError("native-only pages must never use screenshot fallback")
         monkeypatch.setattr(piccoma_adapter_module, "capture_locator", forbidden_screenshot)
@@ -615,10 +688,12 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         if fault == "source_budget_exhausted"
         else 0 if width == 763 else piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES
     )
-    if fault == "unknown_paint_role":
+    if fault == "frame_change":
+        await browser_page.locator("#js_frame").evaluate("n=>n.style.width='808px'")
+    elif fault == "unknown_paint_role":
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.className='unknown'")
     elif fault == "paint_gap":
-        await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
+        await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='800px'")
     elif fault == "wrong_scale":
         await browser_page.locator("canvas").evaluate("n=>n.style.height='1198px'")
     elif fault in {"async_paint_change", "async_left_offset"}:
@@ -629,7 +704,7 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
                 if fault == "async_left_offset":
                     await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate("n=>n.style.left='0px'")
                 else:
-                    await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
+                    await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='800px'")
             return result
         monkeypatch.setattr(piccoma_native_capture_module, "_bounded_evaluate", mutate_after_replay)
     elif fault == "encoder_failure":
@@ -698,14 +773,15 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
-@pytest.mark.parametrize(("width", "height"), [(763, 1200), (775, 1200), (1128, 1600), (1441, 2048), (1884, 2819)])
+@pytest.mark.parametrize(("width", "height"), [(763, 1200), (775, 1200), (1128, 1600), (1441, 2048), (1884, 2819), (902, 1342), (907, 1342), (898, 1342), (887, 1342), (550, 834)])
 async def test_piccoma_native_only_core_fallback_never_saves_a_screenshot(
     browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool, width: int, height: int
 ) -> None:
     import screenshot_crawler.core.runner as runner_module
     from screenshot_crawler.core.models import RunConfig
 
-    await _start_native_fixture(PiccomaAdapter(), browser_page, width=width, height=height)
+    await _start_native_fixture(PiccomaAdapter(), browser_page, width=width, height=height,
+                                scaled_frame_width=807 if width == 898 else 793 if width == 887 else 791 if width == 550 else None)
     adapter = PiccomaAdapter()
     await adapter.configure_target_identity(f"{PRODUCT_ID}:{EPISODE_ID}", WORK_KEY)
 

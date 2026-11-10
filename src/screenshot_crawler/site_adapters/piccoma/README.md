@@ -22,7 +22,34 @@ Phases 03 and 04 passed independent review with BLOCKING 0. Phase 05 independent
 
 The Phase 06-B/Tester PNG checkpoints are historical. Phase 06-D code review and independent live Tester verification passed with BLOCKING 0. The standard Batch-to-ZIP route produced 24 and 15 lossless WebP pages for the two selected products, with exact VP8L validation and no fallback. See the current live evidence and limits below and [runbook progress](../../../../runbooks/piccoma-free/PROGRESS.md).
 
-The scaled native profiles explicitly support 1125x1600 / 1128x1600 (736 draws each),
+Additional scaled capture supports both enlargement and reduction from
+the actual episode frame, without native source-size or measured-display
+allowlists. Positive integer dimensions select a complete ceil(width/50) by
+ceil(height/50) candidate grid only if three setup events plus all draws
+fit2169 events (at most5,415,000 native pixels). The actual integer frame width
+must fit the1904px viewport. Display follows the site's
+`ceil(frame_width / width * height)` order, aspect-derived canvas width
+quantized down to1/64 CSS px, and centered top. The raw full-height episode
+frame is bound after p1 and cannot drift.
+
+Source dimensions alone do not select native-only scaling: it requires
+the actual1200px-high reader frame. Existing small1:1 layouts retain their
+Locator-PNG behavior, and ordinary/dedicated profiles retain their contracts.
+Complete source/image/load/response/grid/paint, geometry/generation and
+lossless RGBA proof remains mandatory. Additional full-height scaled layouts
+cannot fall back to a display screenshot, including after Core timeout.
+Native pixels are saved at their original dimensions without resizing to
+the viewer's enlarged or reduced presentation. All budgets remain unchanged.
+See the [current note](../../../../note/09_piccoma.md#bounded-scaled-capture-from-the-actual-episode-frame-2026-11-10).
+
+This fixes Item/Source46258 (`436:28660`), whose native549..552x834 images
+are enlarged in a791px frame. The normal CLI saved all35 pages through END
+and standard ZIP packaging. Native dimensions, lossless VP8L, ordered/unique
+members and CRC passed in isolated output, without normal Catalog/library
+writes. Previous live evidence covers the three `281` episodes (54/28/26
+pages); their143 combined paint/display records match the current rules.
+
+The other scaled native profiles explicitly support 1125x1600 / 1128x1600 (736 draws each),
 1350x1920 (1053 draws), 1441x2048 (1189 draws), and 1884x2819 (2166 draws), preserving full RGBA pixels in lossless WebP at the
 backing dimensions. They require the observed scaled display/frame/paint path
 and unchanged source, generation, output and geometry proof described below.
@@ -51,7 +78,7 @@ the measured 845.2916870117188x1199 display, 845x1200 frame, +0.5 top offset
 and discrete left offsets 0/-1/3 within 0.01 CSS px. It has the same complete
 23x32 / 739-event tile protocol as 1125x1600 but a separate display/paint
 profile. Source, paint, generation and lossless RGBA proof remain mandatory;
-there is no unproven screenshot fallback, neighboring-size inference or
+there is no unproven screenshot fallback, dimension-only attribution or
 budget increase. The normal CLI saved all 17 pages at native dimensions
 through END and ZIP; CRC, member order, lossless format and selected-probe
 byte equality passed. See [the current note](../../../../note/09_piccoma.md#1128x1600-scaled-canvas-support-2026-11-05).
@@ -86,8 +113,8 @@ Scaled capture includes the exact backing/grid pair:
 It requires display 844+1/3 by 1200 within 0.01 CSS px, frame 844x1200, top
 offset 0 and the existing discrete left offsets 0 or -1/3. The 1125x1600 and
 1350x1920 profiles retain their previous 843.046875x1199 presentation,
-843x1200 frame and +0.5 top offset. Neighboring backing sizes and other
-presentation variants remain unsupported. This profile introduced a 1192-event
+843x1200 frame and +0.5 top offset. Other backing sizes require the bounded actual-frame protocol above;
+this dedicated profile's presentation remains strict. This profile introduced a 1192-event
 target budget; current capacity is 2169 for the separately verified 1884x2819
 profile above. Global/retained/transport/traversal/source and timeout budgets
 are unchanged. Overflow still discards heavy proof and fails closed. A single
@@ -155,8 +182,8 @@ the special 763px overscan/alpha profile have not been generalized. Additional
 ordinary widths must prove display dimensions equal backing dimensions within
 0.01 CSS px, besides the existing in-frame/viewport/DPR/visibility checks.
 Non-finite paint rectangles are rejected. Native admission outside the ordinary
-757..844x1200 envelope or the existing discrete high-resolution profiles is
-still unavailable. This is a bounded protocol proof, not automatic registration
+757..844x1200 envelope, the bounded actual-frame scaled protocol and the
+existing dedicated profiles remains unavailable. This is a bounded protocol proof, not automatic registration
 or source attribution by dimensions. No resize/crop/resampling, looser output
 dimension check, retry, timeout, access, pacing, schema, CLI or configuration
 change was introduced. Source-read and trace/response bounds remain unchanged.
@@ -337,7 +364,7 @@ Locator rounding and unchanged guide/forbidden-click behavior. Full repository,
 separate Discovery/Policy/Research and packaging Unit suites are not required
 by this site-local table addition; their code/contracts are unchanged and the
 real standard packager was verified above. Live proof covers this episode;
-other unobserved backing/display variants remain unsupported/unverified.
+other backing/display variants outside the bounded actual-frame protocol remain unsupported/unverified.
 
 ## 763px ordinary/overscan presentation selection (2026-10-14)
 
@@ -417,7 +444,7 @@ Frame y must be zero within 0.01, its horizontal bounds remain inside the
 The ordinary finite DPR and all ancestor visibility checks still apply.
 During an approved advance, this exact settled geometry may accumulate the
 same three stable samples; an out-of-position 763px canvas still waits within
-the existing deadline. Other overflow profiles/sizes/offsets remain unsupported.
+the existing deadline. Other overflow layouts outside the bounded actual-frame protocol remain unsupported.
 No viewer resize, scroll, reflow, timeout extension or extra next click is used.
 
 This profile requires a complete native proof to capture the full page rather
@@ -616,13 +643,14 @@ and baseline JPEG validators in a bounded diagnostic. Total source bytes were
 1904x1200, DPR 1.0000000298023224. The existing strict scaled four-node paint
 path validates for every page. The diagnostic reached explicit END.
 
-Current native replay enumerates 1125x1600 (23x32 grid), 1350x1920
+Dedicated native replay profiles retain 1125x1600 (23x32 grid), 1350x1920
 (27x39 grid), 1128x1600 (23x32), 1441x2048 (29x41), and 1884x2819
 (38x57), with the additional display profiles described above. The first two
 use the same observed
 843.046875x1199 display profile within the existing 0.01 tolerance, left
 offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
-remain explicit; neighboring or same-aspect-ratio sizes are not inferred.
+remain explicit for these dedicated profiles; additional sizes use the bounded
+actual-frame protocol above without dimension-only attribution.
 Both preserve the replay's full RGBA pixels in validated lossless WebP, with
 the original PNG encoding fallback and finite 128,000,000-byte scaled budget.
 Source binding, exact fractional draws, paint path, generation, full round-trip,
@@ -876,9 +904,10 @@ Each page has exactly 1056 trace events: context creation, two backing resets,
 and a complete 27x39 grid of 1053 image draws. The final destination row is 20px;
 the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
 unique first-party baseline JPEG response, exact context/draw arguments and
-complete unique source/destination grids remain mandatory. Current scaled
-native support enumerates this 1350x1920 grid and the separately verified
-1125x1600, 1128x1600, 1441x2048 and 1884x2819 grids described above; nearby/unknown sizes are not inferred.
+complete unique source/destination grids remain mandatory. Dedicated scaled
+native profiles retain this 1350x1920 grid and the separately verified
+1125x1600, 1128x1600, 1441x2048 and 1884x2819 grids described above. Additional sizes must prove the bounded actual-frame
+protocol above; dimensions never establish source attribution.
 Per-target trace capacity is 2169 events; the bounded simultaneous event total
 is 32768 and retired traces release their capacity. Retained canvases (16), active
 traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte

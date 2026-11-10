@@ -69,6 +69,67 @@ _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
 )
 
 
+def is_additional_scaled_size(width: object, height: object) -> bool:
+    """Select source grids using the existing finite budget, at any native scale.
+
+    Source dimensions are not an observed-size allowlist or a display-mode
+    classifier. Legacy/scaled routing uses actual frame and paint geometry.
+    """
+    return (
+        type(width) is int and type(height) is int
+        and width > 0 and height > 0
+        and ((width + 49) // 50) * ((height + 49) // 50) + 3 <= MAX_TARGET_EVENTS
+    )
+
+
+def is_ordinary_native_presentation(
+    width: object, height: object, frame_width: object, rect: object
+) -> bool:
+    """Preserve the existing 1200px-high 1:1 presentation and its tolerances."""
+    return (
+        type(width) is int and type(height) is int and width > 0 and height == 1200
+        and type(frame_width) in {int, float} and math.isfinite(frame_width)
+        and isinstance(rect, list) and len(rect) == 4
+        and all(type(v) in {int, float} and math.isfinite(v) for v in rect)
+        and abs(frame_width - width) <= 0.5
+        and abs(rect[2] - width) <= 0.5 and abs(rect[3] - height) <= 0.5
+    )
+
+
+def scaled_display_profile(
+    width: object, height: object, frame_width: object
+) -> ScaledDisplayProfile | None:
+    """Keep discrete profiles; derive other bounded layouts from the actual frame.
+
+    The live viewer's setImgHeightV uses ceil(frame.width / image.width *
+    image.height), with CSS canvas aspect sizing quantized to 1/64 px. Its
+    episode frame depends on the first image, not each subsequent canvas.
+    """
+    if type(width) is not int or type(height) is not int:
+        return None
+    observed = SCALED_DISPLAY_PROFILES.get((width, height))
+    if (observed is not None and type(frame_width) in {int, float}
+            and math.isfinite(frame_width) and abs(frame_width - observed.frame_width) <= 0.01):
+        return observed
+    if (
+        not is_additional_scaled_size(width, height)
+        or type(frame_width) not in {int, float}
+        or not math.isfinite(frame_width)
+        or not float(frame_width).is_integer()
+        or not 0 < frame_width <= 1904
+    ):
+        return None
+    frame_width = int(frame_width)
+    # Preserve the site's division-then-multiplication order: ceil can differ
+    # by one at an exact mathematical integer because of floating-point error.
+    display_height = math.ceil(frame_width / width * height)
+    return ScaledDisplayProfile(
+        (math.floor(width * display_height / height * 64) / 64, display_height),
+        frame_width,
+        (1200 - display_height) / 2,
+    )
+
+
 class NativeCaptureUnavailable(Exception):
     """A native-source optimization proof was absent or unsupported."""
 
@@ -965,6 +1026,8 @@ def _native_tile_grid(width: int, height: int) -> tuple[int, int] | None:
         return observed
     if is_additional_ordinary_size(width, height):
         return (width + 49) // 50, 24
+    if is_additional_scaled_size(width, height):
+        return (width + 49) // 50, (height + 49) // 50
     return None
 
 
@@ -1178,7 +1241,9 @@ def validate_scaled_alpha_paint_path(
 ) -> bool:
     """Validate the observed scaled path without claiming white covers its edge."""
 
-    if (width, height) not in SCALED_NATIVE_SIZES and (width, height) != OVERSCAN_NATIVE_SIZE:
+    if ((width, height) not in SCALED_NATIVE_SIZES
+            and (width, height) != OVERSCAN_NATIVE_SIZE
+            and not is_additional_scaled_size(width, height)):
         return False
     return _validate_paint_path(snapshot, width=width, height=height, preserve_alpha=True)
 
@@ -1197,7 +1262,14 @@ def _validate_paint_path(
     first_opaque = snapshot.get("firstOpaqueIndex")
     color = snapshot.get("firstOpaqueColor")
     overscan = (width, height) == OVERSCAN_NATIVE_SIZE and preserve_alpha
-    scaled_profile = SCALED_DISPLAY_PROFILES.get((width, height))
+    paint_frame_width = None
+    if (isinstance(rows, list) and len(rows) > 1 and isinstance(rows[1], dict)
+            and isinstance(rows[1].get("rect"), list) and len(rows[1]["rect"]) == 4):
+        paint_frame_width = rows[1]["rect"][2]
+    ordinary = is_ordinary_native_presentation(width, height, paint_frame_width, rect)
+    scaled_profile = None if ordinary else scaled_display_profile(width, height, paint_frame_width)
+    if is_additional_scaled_size(width, height) and not ordinary and scaled_profile is None:
+        return False
     display_width, display_height = (OVERSCAN_DISPLAY_SIZE if overscan else
         scaled_profile.display_size if scaled_profile else (width, height))
     frame_width = 764 if overscan else scaled_profile.frame_width if scaled_profile else width
@@ -1228,7 +1300,10 @@ def _validate_paint_path(
         return False
     if preserve_alpha:
         roles = ["", "PCM-viewer2_canvas_wrap", "PCM-viewer2_zoomPageContent", "PCM-viewer2_zoomPageWrap"]
-        if first_opaque != 3 or len(rows) != 4 or snapshot.get("firstOpaqueCoversCanvas") is not False:
+        # Exact-fit members still preserve RGBA and prove the same paint path.
+        covers_canvas = display_width <= frame_width
+        if (first_opaque != 3 or len(rows) != 4
+                or snapshot.get("firstOpaqueCoversCanvas") is not covers_canvas):
             return False
         for index, (row, role) in enumerate(zip(rows, roles, strict=True)):
             box = row.get("rect") if isinstance(row, dict) else None
@@ -1641,6 +1716,14 @@ async def capture_native_tile_replay(
             before, expected_width=expected_width, expected_height=expected_height
         )
         paint_before = before.get("paint") if isinstance(before, dict) else None
+        if is_additional_scaled_size(expected_width, expected_height) and not preserve_alpha:
+            rows = paint_before.get("ancestors") if isinstance(paint_before, dict) else None
+            box = rows[1].get("rect") if isinstance(rows, list) and len(rows) > 1 and isinstance(rows[1], dict) else None
+            frame_width = box[2] if isinstance(box, list) and len(box) == 4 else None
+            preserve_alpha = not is_ordinary_native_presentation(
+                expected_width, expected_height, frame_width,
+                paint_before.get("canvasRect") if isinstance(paint_before, dict) else None,
+            )
         # The same 763px backing size also has an ordinary 1:1 presentation.
         # Select alpha preservation only from the complete overscan paint proof.
         if (expected_width, expected_height) == OVERSCAN_NATIVE_SIZE:
@@ -1871,7 +1954,10 @@ __all__ = [
     "encode_lossless_webp_or_png",
     "install_native_trace",
     "is_additional_ordinary_size",
+    "is_additional_scaled_size",
+    "is_ordinary_native_presentation",
     "retire_native_trace",
+    "scaled_display_profile",
     "snapshot_native_trace",
     "target_generation_signature",
     "validate_native_capture_still_current",

@@ -18,12 +18,27 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
     composite_replay_png_on_white,
     encode_lossless_webp,
     encode_lossless_webp_or_png,
+    is_additional_scaled_size,
+    scaled_display_profile,
     target_generation_signature,
     validate_scaled_alpha_paint_path,
     validate_source_jpeg,
     validate_tile_trace,
     validate_white_paint_path,
 )
+
+# Independent measured display expectations for the bounded 1342px family.
+CENTERED_1342 = {
+    902: (809.234375, 1204, -2),
+    903: (809.46875, 1203, -1.5),
+    904: (809.015625, 1201, -0.5),
+    905: (809.234375, 1200, 0),
+    906: (809.453125, 1199, 0.5),
+    907: (809, 1197, 1.5),
+    908: (809.203125, 1196, 2),
+    909: (809.421875, 1195, 2.5),
+    910: (809.640625, 1194, 3),
+}
 
 SOURCE_URL = "https://pcm.kakaocdn.net/dna/a/b/c/i123.jpg?token=fixture"
 CONTEXT_ATTRIBUTES = {
@@ -247,7 +262,7 @@ def test_native_snapshot_json_rejects_oversized_transport(
     ("scaled_size", "left_offset", "offset_supported"),
     [(None, 0, True), (None, -1 / 3, True)] + [
         (size, offset, accepted and (size != (763, 1200) or offset == 0))
-        for size in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (763, 1200))
+        for size in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (763, 1200))
         for offset, accepted in (
             (0, True), (-1 / 3, True), (-1 / 3 + 0.009, True),
             (-1 / 3 + 0.011, False), (-0.2, False), (-0.5, False), (1 / 3, False),
@@ -285,6 +300,9 @@ def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
     if scaled_size == (763, 1200):
         row["canvas"].update(width=763, height=1200, rect=[570, -1, 764.265625, 1202], inFrame=False)
         snapshot["frameRect"] = [570, 0, 764, 1200]
+    elif scaled_size == (905, 1342):
+        row["canvas"].update(width=905, height=1342, rect=[547.5, 0, 809.234375, 1200])
+        snapshot["frameRect"] = [547.5, 0, 809, 1200]
     elif scaled_size == (1441, 2048):
         row["canvas"].update(width=1441, height=2048, rect=[530, 0, 844.3333740234375, 1200])
     elif scaled_size == (1884, 2819):
@@ -317,18 +335,21 @@ def _scaled_paint_path(size: tuple[int, int] = (1350, 1920)) -> dict[str, object
                    rect=[530.5, 0.5, 843.046875 if index == 0 else 843, 1199])
         if size == (763, 1200):
             row["rect"] = [570, -1, 764.265625 if index == 0 else 764, 1202]
+        elif size[1] == 1342 and size[0] in CENTERED_1342:
+            display_width, display_height, top = CENTERED_1342[size[0]]
+            row["rect"] = [547.5, top, display_width if index == 0 else 809, display_height]
         elif size == (1441, 2048):
             row["rect"] = [530, 0, 844.3333740234375 if index == 0 else 844, 1200]
         elif size == (1884, 2819):
             row["rect"] = [551.5, 0.5, 801.3125 if index == 0 else 801, 1199]
         elif size == (1128, 1600):
             row["rect"] = [529.5, 0.5, 845.2916870117188 if index == 0 else 845, 1199]
-    snapshot.update(ancestors=rows, firstOpaqueIndex=3, firstOpaqueCoversCanvas=False,
+    snapshot.update(ancestors=rows, firstOpaqueIndex=3, firstOpaqueCoversCanvas=size == (907, 1342),
                     canvasRect=list(rows[0]["rect"]))
     return snapshot
 
 
-@pytest.mark.parametrize("size", [(1128, 1600), (1441, 2048), (1884, 2819)])
+@pytest.mark.parametrize("size", [(1128, 1600), (1441, 2048), (1884, 2819), (905, 1342)])
 @pytest.mark.parametrize(("field", "index", "delta"), [
     ("rect", 2, -1), ("rect", 2, 0.02),
     ("rect", 3, -1), ("rect", 1, 0.5),
@@ -341,7 +362,10 @@ def test_piccoma_native_only_profile_rejects_unobserved_display_geometry(size, f
                           {"display": "block", "visibility": "visible", "opacity": 1,
                            "contentVisibility": "visible"}]}}}
     snapshot = {"viewport": [1904, 1200, 1], "frameRect": [530, 0, 844, 1200]}
-    if size == (1884, 2819):
+    if size == (905, 1342):
+        row["canvas"]["rect"] = [547.5, 0, 809.234375, 1200]
+        snapshot["frameRect"] = [547.5, 0, 809, 1200]
+    elif size == (1884, 2819):
         row["canvas"]["rect"] = [551.5, 0.5, 801.3125, 1199]
         snapshot["frameRect"] = [551.5, 0, 801, 1200]
     elif size == (1128, 1600):
@@ -350,6 +374,128 @@ def test_piccoma_native_only_profile_rejects_unobserved_display_geometry(size, f
     (row["canvas"][field] if field == "rect" else snapshot[field])[index] += delta
     with pytest.raises(UnknownPageStateError, match="supported viewport"):
         PiccomaAdapter()._validate_canvas_geometry(snapshot, row)
+
+
+@pytest.mark.parametrize("width", CENTERED_1342)
+@pytest.mark.parametrize("fault", [None, "scale", "top", "frame", "offscreen", "paint"])
+def test_piccoma_centered_family_requires_measured_geometry_and_full_proof(width, fault) -> None:
+    display_width, display_height, top = CENTERED_1342[width]
+    paint = _scaled_paint_path((width, 1342))
+    row = {"canvas": {
+        "width": width, "height": 1342,
+        "rect": [547.5, top, display_width, display_height],
+        "inFrame": display_height <= 1201 and display_width <= 809.5,
+        "renderability": {"visible": True, "ancestors": [{
+            "display": "block", "visibility": "visible", "opacity": 1,
+            "contentVisibility": "visible",
+        }]},
+    }}
+    snapshot = {"viewport": [1904, 1200, 1], "frameRect": [547.5, 0, 809, 1200]}
+    if fault == "scale":
+        row["canvas"]["rect"][2] += 0.02
+    elif fault == "top":
+        row["canvas"]["rect"][1] += 0.02
+    elif fault == "frame":
+        snapshot["frameRect"][2] += 1
+    elif fault == "offscreen":
+        row["canvas"]["rect"][0] = -1
+    elif fault == "paint":
+        paint["firstOpaqueCoversCanvas"] = not paint["firstOpaqueCoversCanvas"]
+    if fault in {None, "paint"}:
+        assert PiccomaAdapter()._validate_canvas_geometry(snapshot, row) == (width, 1342)
+        assert validate_scaled_alpha_paint_path(paint, width=width, height=1342) is (fault is None)
+        validated = validate_tile_trace(_trace(width, 1342), expected_width=width, expected_height=1342)
+        assert len(validated.draws) == 513
+    else:
+        with pytest.raises(UnknownPageStateError, match="supported viewport"):
+            PiccomaAdapter()._validate_canvas_geometry(snapshot, row)
+
+
+@pytest.mark.parametrize(("width", "height", "frame", "display_width", "display_height"), [
+    (898, 1342, 807, 807.65625, 1207),
+    (900, 1342, 807, 807.4375, 1204),
+    (901, 1342, 807, 807, 1202),
+    (902, 1342, 807, 807.21875, 1201),
+    (903, 1342, 807, 807.4375, 1200),
+    (904, 1342, 807, 807.671875, 1199),
+    (906, 1342, 807, 807.421875, 1196),
+    (904, 1342, 808, 808.34375, 1200),
+    (920, 1360, 811, 811.078125, 1199),
+    (1000, 1540, 779, 779.21875, 1200),
+    (1000, 1420, 845, 845.0625, 1200),
+    (1883, 2818, 801, 801.171875, 1199),
+    (1341, 2086, 774, 774.640625, 1205),
+    (883, 1342, 793, 793.515625, 1206),
+    (887, 1342, 793, 793.140625, 1200),
+    (549, 834, 791, 791.234375, 1202),
+    (550, 834, 791, 791.359375, 1200),
+    (551, 834, 791, 791.484375, 1198),
+    (552, 834, 791, 791.59375, 1196),
+    (200, 300, 800, 800, 1200),
+    (20, 30, 800, 800, 1200),
+    (844, 1200, 800, 800.390625, 1138),
+    (1128, 1600, 844, 844.578125, 1198),
+    (900, 1342, 793, 793.359375, 1183),
+    (901, 1342, 793, 793.578125, 1182),
+    (902, 1342, 793, 793.109375, 1180),
+    (880, 1342, 793, 793.4375, 1210),
+    (900, 1334, 809, 809.59375, 1200),
+    (1500, 3000, 600, 600, 1200),
+    (2500, 1500, 1600, 1600, 960),
+    (1900, 2850, 800, 800, 1200),
+])
+@pytest.mark.parametrize("fault", [None, "scale", "frame_drift", "paint"])
+def test_bounded_scaled_layout_uses_actual_episode_frame(
+    width, height, frame, display_width, display_height, fault
+) -> None:
+    profile = scaled_display_profile(width, height, frame)
+    assert profile.display_size == (display_width, display_height)
+    left, top = (1904 - frame) / 2, (1200 - display_height) / 2
+    row = {"canvas": {"width": width, "height": height,
+        "rect": [left, top, display_width, display_height],
+        "inFrame": display_height <= 1201 and display_width <= frame + 0.5,
+        "renderability": {"visible": True, "ancestors": [{"display": "block",
+            "visibility": "visible", "opacity": 1, "contentVisibility": "visible"}]}}}
+    snapshot = {"viewport": [1904, 1200, 1], "frameRect": [left, 0, frame, 1200]}
+    paint = _scaled_paint_path()
+    for index, ancestor in enumerate(paint["ancestors"]):
+        ancestor["rect"] = [left, top, display_width if index == 0 else frame, display_height]
+    paint["canvasRect"] = list(row["canvas"]["rect"])
+    paint["firstOpaqueCoversCanvas"] = display_width <= frame
+    adapter = PiccomaAdapter()
+    if fault == "scale":
+        row["canvas"]["rect"][2] += 0.02
+    elif fault == "frame_drift":
+        adapter._scaled_frame_rect = (left - 0.5, 0, frame + 1, 1200)
+    elif fault == "paint":
+        paint["ancestors"][1]["rect"][2] -= 1
+    if fault in {"scale", "frame_drift"}:
+        with pytest.raises(UnknownPageStateError, match="supported viewport"):
+            adapter._validate_canvas_geometry(snapshot, row)
+    else:
+        assert adapter._validate_canvas_geometry(snapshot, row) == (width, height)
+        assert validate_scaled_alpha_paint_path(paint, width=width, height=height) is (fault is None)
+
+
+@pytest.mark.parametrize("frame", [0, -1, 1905, 807.1, True, float("nan"), float("inf"), None])
+def test_bounded_scaled_layout_rejects_unproven_frame(frame) -> None:
+    assert scaled_display_profile(903, 1342, frame) is None
+
+
+@pytest.mark.parametrize(("width", "height"), [
+    (1, 1), (20, 30), (550, 834), (757, 1199), (750, 1200), (844, 1200), (845, 1200), (1, 1201), (883, 1342), (900, 1334), (1885, 2819), (1500, 3000),
+    (2500, 1500), (1900, 2850),
+])
+def test_scaled_candidates_are_bounded_by_grid_not_observed_dimensions(width, height) -> None:
+    assert is_additional_scaled_size(width, height)
+
+
+@pytest.mark.parametrize(("width", "height"), [
+    (0, 1342), (-1, 1342), (True, 1342), (887.0, 1342), (887, False),
+    (887, 0), (887, -1), (2400, 2400), (1901, 2850), (1900, 2851),
+])
+def test_scaled_candidates_reject_invalid_or_over_budget_grids(width, height) -> None:
+    assert not is_additional_scaled_size(width, height)
 
 
 def _white_paint_path(width: int = 844) -> dict[str, object]:
@@ -421,7 +567,7 @@ def _jpeg(*, subsampling: int = 0, progressive: bool = False) -> bytes:
     return output.getvalue()
 
 
-@pytest.mark.parametrize(("width", "height"), [(width, 1200) for width in range(757, 845)] + [(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819)])
+@pytest.mark.parametrize(("width", "height"), [(width, 1200) for width in range(757, 845)] + [(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342)] + [(20, 30), (549, 834), (550, 834), (551, 834), (552, 834), (750, 1200), (756, 1200), (845, 1200), (757, 1199), (883, 1342), (887, 1342), (900, 1342), (898, 1341), (844, 1201), (1885, 2819), (1884, 2820), (1900, 2850), (1500, 3000), (901, 1342), (911, 1342), (905, 1343), (1124, 1600), (1126, 1600), (1125, 1601), (1127, 1600), (1129, 1600), (1128, 1599), (1128, 1601), (1440, 2048), (1442, 2048), (1441, 2047), (1441, 2049), (1883, 2819), (1884, 2818)])
 def test_validates_full_fractional_source_and_destination_grid(width: int, height: int) -> None:
     result = validate_tile_trace(_trace(width, height), expected_width=width, expected_height=height)
 
@@ -477,7 +623,7 @@ def test_native_source_requires_observed_jpeg_path(suffix: str, supported: bool)
         ),
     ],
 )
-@pytest.mark.parametrize(("width", "height"), [(757, 1200), (763, 1200), (764, 1200), (773, 1200), (775, 1200), (777, 1200), (800, 1200), (801, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819)])
+@pytest.mark.parametrize(("width", "height"), [(757, 1200), (763, 1200), (764, 1200), (773, 1200), (775, 1200), (777, 1200), (800, 1200), (801, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (883, 1342), (901, 1342), (1900, 2850), (550, 834), (552, 834)])
 def test_rejects_trace_gaps_or_unobserved_generation_changes(
     change, reason: str, width: int, height: int
 ) -> None:
@@ -490,11 +636,7 @@ def test_rejects_trace_gaps_or_unobserved_generation_changes(
 
 @pytest.mark.parametrize(
     ("width", "height"),
-    [(750, 1200), (756, 1200), (845, 1200), (850, 1200), (757, 1199), (763, 1199),
-     (773, 1199), (777, 1199), (844, 1201), (1124, 1600), (1126, 1600), (1125, 1601),
-     (1127, 1600), (1129, 1600), (1128, 1599), (1128, 1601),
-     (1440, 2048), (1442, 2048), (1441, 2047), (1441, 2049),
-     (1883, 2819), (1885, 2819), (1884, 2818), (1884, 2820)],
+    [(0, 1200), (750, 0), (2400, 2400), (1901, 2850), (1900, 2851)],
 )
 def test_native_dimensions_outside_bounded_profiles_remain_unsupported(width: int, height: int) -> None:
     with pytest.raises(NativeCaptureUnavailable, match="target_canvas_identity_or_dimensions"):
@@ -519,7 +661,7 @@ def test_rejects_unstable_or_ambiguous_live_image_object_state(mutate) -> None:
         validate_tile_trace(trace, expected_width=844, expected_height=1200)
 
 
-@pytest.mark.parametrize("scaled_size", [None, (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (763, 1200)])
+@pytest.mark.parametrize("scaled_size", [None, (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (763, 1200)])
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -547,7 +689,7 @@ def test_white_backdrop_gate_rejects_unobserved_paint(mutate, scaled_size) -> No
         assert not validate_white_paint_path(snapshot, width=844, height=1200)
 
 
-@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (763, 1200)])
+@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (763, 1200)])
 def test_white_backdrop_gate_accepts_only_covering_solid_white(width: int, height: int) -> None:
     assert validate_white_paint_path(_white_paint_path(), width=844, height=1200)
     assert validate_white_paint_path(_white_paint_path(763), width=763, height=1200)
