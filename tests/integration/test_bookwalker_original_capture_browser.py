@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 from PIL import Image
 from playwright.async_api import Page
 
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
 from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.state import PageState
@@ -2064,6 +2066,933 @@ async def test_same_task_canvas_attribute_mutation_is_flushed_before_mapping_fre
     assert result["unknown"] is True
 
 
+async def test_diagnostic_history_survives_reset_and_classifies_mapping_gaps(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const history = window.__bookwalkerDiagnosticHistory;
+          const makeBitmap = async () => {
+            const source = document.createElement('canvas');
+            source.width = 8; source.height = 8;
+            source.getContext('2d').fillRect(0, 0, 8, 8);
+            return createImageBitmap(source);
+          };
+          const bitmap = await makeBitmap();
+           const validSource = document.createElement('canvas');
+           validSource.width = 1200; validSource.height = 600;
+           validSource.getContext('2d').fillRect(0, 0, 1200, 600);
+           const mappingBitmap = await createImageBitmap(validSource);
+          const tiled = document.createElement('canvas');
+           tiled.width = 1200; tiled.height = 600;
+          const tiledContext = tiled.getContext('2d');
+           tiledContext.clearRect(0, 0, 1200, 600);
+           tiledContext.drawImage(mappingBitmap, 0, 0, 1200, 600, 0, 0, 1200, 600);
+          const renderer = document.createElement('canvas');
+          renderer.width = 1200; renderer.height = 600;
+           const rendererContext = renderer.getContext('2d');
+           rendererContext.clearRect(0, 0, 1200, 600);
+           rendererContext.drawImage(tiled, 0, 0, 1200, 600, 0, 0, 1200, 600);
+           const validPixels = [...rendererContext.getImageData(0, 0, 1, 1).data];
+           const validMapping = window.__bookwalkerTransformTrace.completedMappings.at(-1);
+           const validDrawCall = window.__bookwalkerNativeDrawCalls.at(-1);
+          const firstEpoch = window.__bookwalkerTransformTrace.traceEpoch;
+
+          const imageOnlyRenderer = document.createElement('canvas');
+          imageOnlyRenderer.width = 1200; imageOnlyRenderer.height = 600;
+          imageOnlyRenderer.getContext('2d').drawImage(bitmap, 0, 0, 8, 8, 0, 0, 100, 100);
+          const htmlSourceWithoutSegment = document.createElement('canvas');
+          htmlSourceWithoutSegment.width = 8; htmlSourceWithoutSegment.height = 8;
+          window.__bookwalkerResetTransformTrace('before_no_active_segment');
+          renderer.getContext('2d').drawImage(htmlSourceWithoutSegment, 0, 0, 8, 8, 100, 0, 100, 100);
+
+           for (let index = 0; index < 20; index += 1) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 8; canvas.height = 8;
+            canvas.getContext('2d').clearRect(0, 0, 8, 8);
+          }
+              const preFloodNoActive = Object.keys(history.freezeNullCounts)
+                .some(key => key.startsWith('no_active_segment:'));
+              const preFloodActiveEviction = history.events
+                .some(event => event.kind === 'active_segment_eviction');
+          window.__bookwalkerResetTransformTrace('synthetic_reset');
+          const secondEpoch = window.__bookwalkerTransformTrace.traceEpoch;
+          const beforeFailure = window.__bookwalkerTransformTrace.diagnostics.drawImageCount;
+           const failureContext = renderer.getContext('2d');
+           for (let index = 0; index < 70; index += 1) {
+             window.__bookwalkerResetTransformTrace(`flood_${index}`);
+             failureContext.drawImage(bitmap, 0, 0, 8, 8, 300, 0, 100, 100);
+           }
+           Object.freeze(history.events);
+           failureContext.drawImage(bitmap, 0, 0, 8, 8, 200, 0, 100, 100);
+           const failurePixels = [...failureContext.getImageData(200, 0, 1, 1).data];
+           const afterFailure = window.__bookwalkerTransformTrace.diagnostics.drawImageCount;
+           const epochBeforeBrokenDiagnosticReset =
+             window.__bookwalkerTransformTrace.traceEpoch;
+           Object.freeze(history.canvasSummaries);
+           window.__bookwalkerResetTransformTrace('broken_diagnostic_reset');
+           const afterBrokenDiagnosticReset = window.__bookwalkerTransformTrace;
+          return {
+            firstEpoch,
+            secondEpoch,
+            eventKinds: history.events.filter(event => event && event.kind).map(event => event.kind),
+            freezeReasons: history.events.filter(event => event.kind === 'freeze_null').map(event => event.reason),
+             freezeNullKeys: Object.keys(history.freezeNullCounts),
+            droppedEventCount: history.droppedEventCount,
+            droppedCanvasSummaryCount: history.droppedCanvasSummaryCount,
+             freezeNullKeyCount: Object.keys(history.freezeNullCounts).length,
+            summaryCount: Object.keys(history.canvasSummaries).length,
+                activeEviction: preFloodActiveEviction,
+                preFloodNoActive,
+            drawContinuedAfterDiagnosticFailure: afterFailure >= beforeFailure,
+             brokenDiagnosticResetEpoch: afterBrokenDiagnosticReset.traceEpoch,
+             brokenDiagnosticResetActiveCount: Object.keys(
+               afterBrokenDiagnosticReset.activeSegments || {},
+             ).length,
+             brokenDiagnosticResetCompletedCount:
+               (afterBrokenDiagnosticReset.completedMappings || []).length,
+             epochBeforeBrokenDiagnosticReset,
+             validMapping,
+             validDrawCall,
+             failureDrawCall: window.__bookwalkerNativeDrawCalls.at(-1),
+             validPixels,
+             failurePixels,
+          };
+        }
+        """
+    )
+    assert result["secondEpoch"] > result["firstEpoch"]
+    assert "trace_reset" in result["eventKinds"]
+    assert any(key.startswith("source_not_canvas:") for key in result["freezeNullKeys"])
+    assert result["preFloodNoActive"] is True, result
+    assert result["activeEviction"] is True
+    assert result["droppedCanvasSummaryCount"] > 0
+    assert result["summaryCount"] <= 16
+    assert result["droppedEventCount"] > 0
+    assert result["freezeNullKeyCount"] <= 32
+    assert result["drawContinuedAfterDiagnosticFailure"] is True
+    assert result["brokenDiagnosticResetEpoch"] > result["epochBeforeBrokenDiagnosticReset"]
+    assert result["brokenDiagnosticResetActiveCount"] == 0
+    assert result["brokenDiagnosticResetCompletedCount"] == 0
+    assert result["validMapping"]["mappingId"] is not None
+    assert result["validDrawCall"]["mappingId"] == result["validMapping"]["mappingId"]
+    assert result["failureDrawCall"]["mappingId"] is None
+    assert result["failurePixels"] == result["validPixels"]
+    valid_mapping = result["validMapping"]
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [valid_mapping]},
+        {
+            "mappingId": valid_mapping["mappingId"],
+            "traceOperationIndex": valid_mapping["rendererOperationIndex"],
+            "sourceCanvasId": valid_mapping["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert analysis.proven is True, analysis
+
+
+async def test_capture_window_hook_absence_preserves_legacy_reset(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    adapter = BookWalkerAdapter()
+    before = await browser_page.evaluate(
+        "() => window.__bookwalkerTransformTrace.traceEpoch"
+    )
+    await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerBeginCaptureWindow = undefined;
+          window.__bookwalkerResetDirectOneHop = () => {
+            throw new Error('synthetic direct reset failure');
+          };
+        }
+        """
+    )
+    await adapter._clear_geometry_trace(browser_page)
+    after_cleanup = await browser_page.evaluate(
+        "() => ({epoch: window.__bookwalkerTransformTrace.traceEpoch, token: window.__bookwalkerCaptureWindowToken, active: Object.keys(window.__bookwalkerTransformTrace.activeSegments || {}).length, completed: (window.__bookwalkerTransformTrace.completedMappings || []).length})"
+    )
+    await adapter._arm_native_capture(browser_page)
+    after_arm = await browser_page.evaluate(
+        "() => ({epoch: window.__bookwalkerTransformTrace.traceEpoch, token: window.__bookwalkerCaptureWindowToken, active: Object.keys(window.__bookwalkerTransformTrace.activeSegments || {}).length, completed: (window.__bookwalkerTransformTrace.completedMappings || []).length})"
+    )
+    assert after_cleanup["epoch"] > before, after_cleanup
+    assert after_cleanup["token"] is None, after_cleanup
+    assert after_cleanup["active"] == 0 and after_cleanup["completed"] == 0, after_cleanup
+    assert after_arm["epoch"] > after_cleanup["epoch"], after_arm
+    assert after_arm["token"] is None, after_arm
+    assert after_arm["active"] == 0 and after_arm["completed"] == 0, after_arm
+
+
+async def test_empty_capture_window_retention_is_strict_and_same_epoch(
+    browser_page: Page,
+) -> None:
+    """Retain only a verified empty clear across the two capture-window hooks."""
+    await browser_page.add_init_script(
+        "window.__bookwalkerCaptureMode = 'native'; "
+        "window.__bookwalkerNativeCaptureEnabled = true;"
+    )
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const makeBitmap = async () => {
+            const source = document.createElement('canvas');
+            source.width = 1200; source.height = 600;
+            source.getContext('2d').fillStyle = '#183c5a';
+            source.getContext('2d').fillRect(0, 0, 1200, 600);
+            return createImageBitmap(source);
+          };
+          const run = async kind => {
+            const other = document.createElement('canvas');
+            other.width = 1200; other.height = 600;
+            const renderer = document.createElement('canvas');
+            renderer.width = 1200; renderer.height = 600;
+            window.__bookwalkerResetTransformTrace(`capture_window_${kind}`);
+            const oldA = kind === 'copy_flood' ? document.createElement('canvas') : null;
+            const emptyA = kind === 'copy_flood' ? document.createElement('canvas') : null;
+            for (const canvas of [oldA, emptyA]) {
+              if (canvas) { canvas.width = 1200; canvas.height = 600; }
+            }
+            const target = emptyA || document.createElement('canvas');
+            target.width = 1200; target.height = 600;
+            const targetContext = target.getContext('2d');
+            const bitmap = await makeBitmap();
+            let tileBitmap = bitmap;
+            let oldACanvasId = null;
+            let emptyACanvasId = null;
+            if (kind === 'copy_flood') {
+              oldA.getContext('2d').clearRect(0, 0, 1200, 600);
+              oldA.getContext('2d').drawImage(
+                bitmap, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              // This old nonempty mapping must be purged by the next window.
+              renderer.getContext('2d').drawImage(
+                oldA, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              oldACanvasId = window.__bookwalkerTransformTrace.completedMappings
+                .at(-1)?.sourceCanvas?.canvasId || null;
+            }
+            if (kind !== 'no_clear') targetContext.clearRect(0, 0, 1200, 600);
+            if (kind === 'nonempty') {
+              targetContext.drawImage(bitmap, 0, 0, 1200, 600, 0, 0, 1200, 600);
+            }
+            window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+            if (kind === 'mutation') targetContext.fillRect(2, 2, 3, 3);
+            if (kind === 'two_hop') {
+              window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+              window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+            } else if (kind === 'explicit_reset') {
+              window.__bookwalkerResetTransformTrace('explicit_between_hooks');
+              window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+            } else {
+              window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+            }
+            if (kind === 'copy_flood') {
+              emptyACanvasId = window.__bookwalkerTransformTrace.retainedEmptyBoundaries
+                ?.at(0)?.canvasId || null;
+            }
+            if (kind === 'native_throw') {
+              bitmap.close();
+              try {
+                targetContext.drawImage(bitmap, 0, 0, 1200, 600);
+              } catch (error) {}
+              tileBitmap = await makeBitmap();
+            }
+            const drawTarget = kind === 'other_object' ? other : target;
+            if (kind === 'reset_generation') target.width = target.width;
+            if (kind !== 'copy_flood') {
+              drawTarget.getContext('2d').drawImage(
+                tileBitmap, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              if (kind === 'missing_mapping_with_segment' || kind === 'segment_deleted_with_history') {
+                const sourceCanvasId = Object.keys(
+                  window.__bookwalkerTransformTrace.activeSegments || {},
+                ).find(id => (
+                  window.__bookwalkerTransformTrace.activeSegments[id]?.tileDraws?.length
+                ));
+                if (sourceCanvasId && kind === 'missing_mapping_with_segment') {
+                  window.__bookwalkerTransformTrace.activeSegments[sourceCanvasId]
+                    .captureWindowToken = 'stale-window';
+                }
+                if (sourceCanvasId && kind === 'segment_deleted_with_history') {
+                  delete window.__bookwalkerTransformTrace.activeSegments[sourceCanvasId];
+                }
+              }
+              renderer.getContext('2d').drawImage(
+                drawTarget, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+            }
+            if (kind === 'ordinary_after_retained') {
+              targetContext.clearRect(0, 0, 1200, 600);
+              targetContext.drawImage(
+                tileBitmap, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              renderer.getContext('2d').drawImage(
+                target, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+            }
+            let protectedMappingId = null;
+            let freshB = null;
+            if (kind === 'copy_flood') {
+              freshB = document.createElement('canvas');
+              freshB.width = 1200; freshB.height = 600;
+              freshB.getContext('2d').clearRect(0, 0, 1200, 600);
+              freshB.getContext('2d').drawImage(
+                tileBitmap, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              renderer.getContext('2d').drawImage(
+                freshB, 0, 0, 1200, 600, 0, 0, 1200, 600,
+              );
+              const completed = window.__bookwalkerTransformTrace.completedMappings || [];
+              protectedMappingId = completed.at(-1)?.mappingId || null;
+            }
+            if (kind === 'copy_flood') {
+              for (let index = 0; index < 13; index += 1) {
+                renderer.getContext('2d').drawImage(
+                  oldA, 0, 0, 1200, 600, 0, 0, 8, 8,
+                );
+                renderer.getContext('2d').drawImage(
+                  target, 0, 0, 1200, 600, 8, 8, 8, 8,
+                );
+              }
+            }
+            tileBitmap.close();
+            const trace = window.__bookwalkerTransformTrace;
+            const mapping = (trace.completedMappings || []).at(-1) || null;
+            const lastNativeCall = (window.__bookwalkerNativeDrawCalls || []).at(-1) || null;
+            const protectedNativeCall = (window.__bookwalkerNativeDrawCalls || []).find(
+              call => call.mappingId === protectedMappingId,
+            ) || null;
+            const token = trace.captureWindowToken;
+            return {
+              kind,
+              mapping,
+              mappingCaptureWindowRetained: mapping?.captureWindowRetained ?? null,
+              nativeCaptureWindowRetained: lastNativeCall?.captureWindowRetained ?? null,
+              protectedMappingId,
+              protectedMappingStillPresent: protectedMappingId === null ||
+                (trace.completedMappings || []).some(
+                  item => item.mappingId === protectedMappingId,
+                ),
+              completedMappingCount: (trace.completedMappings || []).length,
+              emptyAMappingCount: (trace.completedMappings || []).filter(
+                item => item.sourceCanvas?.canvasId === emptyACanvasId,
+              ).length,
+              protectedSourceSnapshotId: protectedNativeCall?.fullSourceSnapshotId || null,
+              protectedTargetSnapshotId: protectedNativeCall?.targetSnapshotId || null,
+              protectedSnapshotsPresent: Boolean(
+                protectedNativeCall?.fullSourceSnapshotId
+                  && protectedNativeCall?.targetSnapshotId
+                  && window.__bookwalkerNativeSnapshots?.has(
+                    String(protectedNativeCall.fullSourceSnapshotId),
+                  )
+                  && window.__bookwalkerNativeSnapshots?.has(
+                    String(protectedNativeCall.targetSnapshotId),
+                  )
+              ),
+              oldAMappingCount: (trace.completedMappings || []).filter(
+                item => item.sourceCanvas?.canvasId === oldACanvasId,
+              ).length,
+              token,
+              activeCount: Object.keys(trace.activeSegments || {}).length,
+              tokenEvents: window.__bookwalkerDiagnosticHistory.events.filter(
+                event => event.kind === 'capture_window_begin'
+                  && event.token === token,
+              ).length,
+            };
+          };
+          const cases = {};
+          for (const kind of [
+            'positive', 'no_clear', 'nonempty', 'mutation', 'two_hop',
+            'other_object', 'reset_generation', 'explicit_reset',
+            'ordinary_after_retained',
+            'missing_mapping_with_segment', 'segment_deleted_with_history',
+            'native_throw', 'copy_flood',
+          ]) cases[kind] = await run(kind);
+          return cases;
+        }
+        """
+    )
+    positive = result["positive"]
+    assert positive["mapping"] is not None, result
+    assert positive["mapping"]["mappingId"] is not None
+    assert positive["token"] is not None
+    assert positive["tokenEvents"] >= 1
+    positive_mapping = positive["mapping"]
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [positive_mapping]},
+        {
+            "mappingId": positive_mapping["mappingId"],
+            "traceOperationIndex": positive_mapping["rendererOperationIndex"],
+            "sourceCanvasId": positive_mapping["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert analysis.status == MAPPING_PROVEN, analysis
+    for kind in (
+        "no_clear", "nonempty", "mutation", "two_hop",
+        "other_object", "explicit_reset", "native_throw",
+    ):
+        assert result[kind]["mapping"] is None, (kind, result[kind])
+    # A dimension reset creates a new, ordinary full-clear segment.  It must
+    # not be mistaken for the retained boundary, but the legacy path remains
+    # valid and independently proven.
+    assert result["reset_generation"]["mapping"] is not None
+    assert result["reset_generation"]["mapping"]["segmentResetKind"] == (
+        "canvas_dimension_reset"
+    )
+    assert result["positive"]["mappingCaptureWindowRetained"] is True
+    assert result["positive"]["nativeCaptureWindowRetained"] is True
+    assert result["ordinary_after_retained"]["mapping"] is not None
+    assert result["ordinary_after_retained"]["mappingCaptureWindowRetained"] is False
+    assert result["ordinary_after_retained"]["nativeCaptureWindowRetained"] is False
+    assert result["missing_mapping_with_segment"]["mapping"] is None
+    assert result["missing_mapping_with_segment"]["nativeCaptureWindowRetained"] is True
+    assert result["segment_deleted_with_history"]["mapping"] is None
+    assert result["segment_deleted_with_history"]["nativeCaptureWindowRetained"] is True
+    assert result["copy_flood"]["mapping"] is not None, result["copy_flood"]
+    assert result["copy_flood"]["protectedMappingId"] is not None, result["copy_flood"]
+    assert result["copy_flood"]["protectedMappingStillPresent"] is True, result["copy_flood"]
+    assert result["copy_flood"]["completedMappingCount"] == 1, result["copy_flood"]
+    assert result["copy_flood"]["emptyAMappingCount"] == 0, result["copy_flood"]
+    assert result["copy_flood"]["protectedSourceSnapshotId"] is not None, result["copy_flood"]
+    assert result["copy_flood"]["protectedTargetSnapshotId"] is not None, result["copy_flood"]
+    assert result["copy_flood"]["protectedSnapshotsPresent"] is True, result["copy_flood"]
+    assert result["copy_flood"]["oldAMappingCount"] == 0, result["copy_flood"]
+
+
+async def test_capture_window_roi_pin_rejects_final_one_pixel_mutation(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+
+    async def fulfill(route) -> None:
+        await route.fulfill(content_type="text/html", body="<html><body></body></html>")
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.goto(
+        "https://viewer.bookwalker.jp/03/30/viewer.html?cid=synthetic-roi"
+    )
+    setup = await browser_page.evaluate(
+        """
+        async () => {
+          document.body.innerHTML = `
+            <div id="pageSliderCounter">2/3</div>
+            <div id="renderer"><div class="currentScreen">
+              <canvas id="roi-renderer" width="1200" height="600"
+                style="width:1200px;height:600px"></canvas>
+            </div></div>`;
+          const renderer = document.querySelector('#roi-renderer');
+          const source = document.createElement('canvas');
+          source.width = 1200; source.height = 600;
+          source.getContext('2d').fillStyle = '#153b58';
+          source.getContext('2d').fillRect(0, 0, 1200, 600);
+          window.__bookwalkerCaptureWindowToken = 'window-1';
+          window.__bookwalkerNativeCaptureEnabled = true;
+          window.__bookwalkerDirectOneHopGeometryState = element => ({
+            token: '1', traceEpoch: 1, geometryVersion: 1,
+            contentVersion: 1, geometryHistoryIncomplete: false,
+            observerFlushed: true, observerAvailable: true,
+            observerTakeRecordsAvailable: true, unknownMutation: false,
+            resetEpoch: 0, width: element.width, height: element.height,
+          });
+          renderer.getContext('2d').drawImage(
+            source, 0, 0, 1200, 600, 0, 0, 1200, 600,
+          );
+          const call = window.__bookwalkerNativeDrawCalls.at(-1);
+          const anchor = window.__bookwalkerP4BCurrentAnchor(
+            renderer, call.traceOperationIndex,
+          );
+          const selected = anchor.selected;
+          return {
+            anchor,
+            expectedParts: [{
+              canvasId: call.canvasId,
+              operationIndex: call.traceOperationIndex,
+              sourceId: call.sourceId,
+              sourceCanvasId: call.sourceCanvasId || selected.sourceCanvasId,
+              traceEpoch: call.traceEpoch,
+              sourceContentVersion: call.sourceContentVersion,
+              fullSourceSnapshotId: call.fullSourceSnapshotId,
+              targetSnapshotId: call.targetSnapshotId,
+              targetContentVersionAfter: call.targetContentVersionAfter,
+              sourceRect: call.sourceRect,
+              destination: call.destination,
+            }],
+          };
+        }
+        """
+    )
+    renderer = await browser_page.locator("#roi-renderer").element_handle()
+    assert renderer is not None
+    payload = {
+        "expectedParts": setup["expectedParts"],
+        "initialAnchor": {"common": setup["anchor"], "parts": [setup["anchor"]]},
+        "originalElement": renderer,
+        "captureWindowToken": "window-1",
+        "captureWindowBookIdentity": "synthetic-roi",
+        "captureWindowCounter": "2/3",
+        "captureBaseline": True,
+    }
+    baseline_handle = await browser_page.evaluate_handle(
+        adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, payload,
+    )
+    baseline_result = await baseline_handle.evaluate(
+        "value => ({available: value.available, exact: value.exact, reason: value.reason, mismatch: value.mismatch, baseline: value.roiBaseline})"
+    )
+    assert baseline_result["available"] is True, baseline_result
+    assert baseline_result["exact"] is True, baseline_result
+    roi_baseline = await baseline_handle.get_property("roiBaseline")
+    assert roi_baseline is not None
+    await browser_page.evaluate(
+        "() => { const c = document.querySelector('#roi-renderer'); c.getContext('2d').fillRect(0, 0, 1, 1); }"
+    )
+    final_payload = dict(payload)
+    final_payload["captureBaseline"] = False
+    final_payload["roiBaseline"] = roi_baseline
+    changed = await browser_page.evaluate(
+        adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, final_payload,
+    )
+    assert changed["exact"] is False, changed
+    await baseline_handle.dispose()
+
+
+async def test_capture_window_final_join_records_geometry_drift_draw_context(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    async def fulfill(route) -> None:
+        await route.fulfill(content_type="text/html", body="<html><body></body></html>")
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.goto(
+        "https://viewer.bookwalker.jp/03/30/viewer.html?cid=synthetic-geometry"
+    )
+    setup = await browser_page.evaluate(
+        """
+        () => {
+          document.body.innerHTML = `
+            <div id="pageSliderCounter">2/3</div>
+            <div id="renderer"><div class="currentScreen">
+              <canvas id="geometry-renderer" width="1200" height="600"></canvas>
+            </div></div>`;
+          const renderer = document.querySelector('#geometry-renderer');
+          const source = document.createElement('canvas');
+          source.width = 1200; source.height = 600;
+          source.getContext('2d').fillRect(0, 0, 1200, 600);
+          window.__bookwalkerCaptureWindowToken = 'window-geometry';
+          window.__bookwalkerNativeCaptureEnabled = true;
+          let geometryVersion = 1;
+          window.__bookwalkerDirectOneHopGeometryState = element => ({
+            token: '1', traceEpoch: 1, geometryVersion,
+            contentVersion: 1, geometryHistoryIncomplete: false,
+            observerFlushed: true, observerAvailable: true,
+            observerTakeRecordsAvailable: true, unknownMutation: false,
+            resetEpoch: 0, width: element.width, height: element.height,
+          });
+          renderer.getContext('2d').drawImage(
+            source, 0, 0, 1200, 600, 0, 0, 1200, 600,
+          );
+          const call = window.__bookwalkerNativeDrawCalls.at(-1);
+          const anchor = window.__bookwalkerP4BCurrentAnchor(
+            renderer, call.traceOperationIndex,
+          );
+          geometryVersion = 2;
+          return {
+            anchor,
+            expectedParts: [{
+              canvasId: call.canvasId,
+              operationIndex: call.traceOperationIndex,
+              sourceId: call.sourceId,
+              sourceCanvasId: call.sourceCanvasId || anchor.selected.sourceCanvasId,
+              traceEpoch: call.traceEpoch,
+              sourceContentVersion: call.sourceContentVersion,
+              fullSourceSnapshotId: call.fullSourceSnapshotId,
+              targetSnapshotId: call.targetSnapshotId,
+              targetContentVersionAfter: call.targetContentVersionAfter,
+              sourceRect: call.sourceRect,
+              destination: call.destination,
+            }],
+          };
+        }
+        """
+    )
+    renderer = await browser_page.locator("#geometry-renderer").element_handle()
+    assert renderer is not None
+    result = await browser_page.evaluate(
+        adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT,
+        {
+            "expectedParts": setup["expectedParts"],
+            "initialAnchor": {"common": setup["anchor"], "parts": [setup["anchor"]]},
+            "originalElement": renderer,
+            "captureWindowToken": "window-geometry",
+            "captureWindowBookIdentity": "synthetic-geometry",
+            "captureWindowCounter": "2/3",
+            "roiBaseline": {
+                "canvases": [],
+            },
+        },
+    )
+    assert result["exact"] is False, result
+    assert result["reason"] == "capture window common anchor changed", result
+    assert result["mismatch"] == "geometryVersion", result
+    diagnostic = result["diagnostic"]
+    assert diagnostic["expected"]["geometryVersion"] == 1, diagnostic
+    assert diagnostic["actual"]["geometryVersion"] == 2, diagnostic
+    assert diagnostic["selectedOperationIndex"] == setup["expectedParts"][0]["operationIndex"]
+    assert len(diagnostic["recentRendererDraws"]) <= 16
+    assert len(diagnostic["recentNativeDraws"]) <= 16
+
+
+async def test_retained_two_part_final_join_is_atomic_per_roi(
+    browser_page: Page,
+) -> None:
+    await _setup_synthetic_terminal_page(browser_page)
+    setup = await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerResetTransformTrace('retained_two_part');
+          window.__bookwalkerNativeDrawCalls = [];
+          window.__bookwalkerNativeCaptureEnabled = true;
+          window.__bookwalkerCaptureWindowToken = 'window-two-part';
+          const renderer = document.querySelector('#renderer canvas');
+          renderer.width = 1200; renderer.height = 800;
+          const drawPart = (color, x) => {
+            const source = document.createElement('canvas');
+            source.width = 600; source.height = 800;
+            const context = source.getContext('2d');
+            context.fillStyle = color; context.fillRect(0, 0, 600, 800);
+            renderer.getContext('2d').drawImage(
+              source, 0, 0, 600, 800, x, 0, 600, 800,
+            );
+          };
+          drawPart('rgb(20, 40, 60)', 0);
+          drawPart('rgb(60, 40, 20)', 600);
+          const calls = window.__bookwalkerNativeDrawCalls.slice(-2);
+          const anchors = calls.map(call => (
+            window.__bookwalkerP4BCurrentAnchor(renderer, call.traceOperationIndex)
+          ));
+          return {
+            expectedParts: anchors.map(anchor => anchor.selected),
+            anchors,
+          };
+        }
+        """
+    )
+    renderer = await browser_page.locator("#renderer canvas").element_handle()
+    assert renderer is not None
+    payload = {
+        "expectedParts": setup["expectedParts"],
+        "initialAnchor": {"common": setup["anchors"][0], "parts": setup["anchors"]},
+        "originalElement": renderer,
+        "captureWindowToken": "window-two-part",
+        "captureWindowBookIdentity": "synthetic",
+        "captureWindowCounter": "2/3",
+        "captureBaseline": True,
+    }
+    baseline_handle = await browser_page.evaluate_handle(
+        adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, payload,
+    )
+    try:
+        baseline = await baseline_handle.evaluate(
+            "value => ({available: value.available, exact: value.exact, reason: value.reason})"
+        )
+        assert baseline["available"] is True and baseline["exact"] is True, baseline
+        roi_baseline = await baseline_handle.get_property("roiBaseline")
+        assert roi_baseline is not None
+        final_payload = dict(payload)
+        final_payload["captureBaseline"] = False
+        final_payload["roiBaseline"] = roi_baseline
+        exact = await browser_page.evaluate(
+            adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, final_payload,
+        )
+        assert exact["available"] is True and exact["exact"] is True, exact
+        await browser_page.evaluate(
+            "() => document.querySelector('#renderer canvas').getContext('2d').fillRect(600, 0, 1, 1)"
+        )
+        roi_changed = await browser_page.evaluate(
+            adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, final_payload,
+        )
+        assert roi_changed["exact"] is False, roi_changed
+        if roi_changed.get("available") is True:
+            assert roi_changed["current"][1]["differing_pixel_count"] > 0, roi_changed
+        else:
+            assert roi_changed["reason"] in {
+                "capture window common anchor changed",
+                "capture window final anchor changed",
+            }, roi_changed
+        await browser_page.locator("#pageSliderCounter").evaluate(
+            "node => node.textContent = '3/3'"
+        )
+        identity_changed = await browser_page.evaluate(
+            adapter_module._BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, final_payload,
+        )
+        assert identity_changed["exact"] is False, identity_changed
+        assert identity_changed["reason"] == "capture window identity changed", identity_changed
+    finally:
+        await baseline_handle.dispose()
+
+
+@pytest.mark.parametrize(
+    "mode", [
+        "positive_codec", "positive_png", "native_pixel_mismatch",
+        "native_pixel_unavailable", "selectors_false", "mutation",
+        "selection_anchor_missing",
+    ]
+)
+async def test_retained_capture_page_final_join_is_atomic(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """The retained path reaches finish() and rejects a post-pin mutation."""
+    await _setup_synthetic_terminal_page(browser_page)
+    await browser_page.evaluate(
+        """
+        async () => {
+          window.__bookwalkerResetTransformTrace('retained_capture_test');
+          window.__bookwalkerNativeDrawCalls = [];
+          const renderer = document.querySelector('#renderer canvas');
+          const tileTarget = document.createElement('canvas');
+          tileTarget.width = 800; tileTarget.height = 600;
+          const context = tileTarget.getContext('2d');
+          context.clearRect(0, 0, tileTarget.width, tileTarget.height);
+          window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+          window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+          const source = document.createElement('canvas');
+          source.width = 800; source.height = 600;
+          source.getContext('2d').fillStyle = 'rgb(42, 63, 84)';
+          source.getContext('2d').fillRect(0, 0, 800, 600);
+          const bitmap = await createImageBitmap(source);
+          context.drawImage(bitmap, 0, 0, 800, 600);
+          renderer.getContext('2d').drawImage(
+            tileTarget, 0, 0, 800, 600, 100, 0, 800, 600,
+          );
+        }
+        """
+    )
+    candidate_data = None
+    candidate_b64 = None
+    if mode in {
+        "positive_codec", "native_pixel_mismatch", "native_pixel_unavailable",
+        "selectors_false",
+    }:
+        candidate_image = Image.new("RGB", (1280, 800), (42, 63, 84))
+        candidate_image.paste((123, 45, 67), (640, 0, 1280, 800))
+        candidate_buffer = BytesIO()
+        candidate_image.save(candidate_buffer, format="JPEG", quality=95, subsampling=0)
+        candidate_data = candidate_buffer.getvalue()
+        candidate_b64 = base64.b64encode(candidate_data).decode("ascii")
+        await browser_page.evaluate(
+            """
+            async ({encoded}) => {
+              window.__bookwalkerResetTransformTrace('retained_codec_swap');
+              window.__bookwalkerNativeDrawCalls = [];
+              const renderer = document.querySelector('#renderer canvas');
+              renderer.width = 1280; renderer.height = 800;
+              const tileTarget = document.createElement('canvas');
+              tileTarget.width = 1280; tileTarget.height = 800;
+              const tileContext = tileTarget.getContext('2d');
+              tileContext.clearRect(0, 0, 1280, 800);
+              window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+              window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+              const bitmap = await createImageBitmap(
+                await (await fetch(`data:image/jpeg;base64,${encoded}`)).blob(),
+              );
+              tileContext.drawImage(bitmap, 640, 0, 640, 800, 0, 0, 640, 800);
+              tileContext.drawImage(bitmap, 0, 0, 640, 800, 640, 0, 640, 800);
+              renderer.getContext('2d').drawImage(
+                tileTarget, 0, 0, 1280, 800, 0, 0, 1280, 800,
+              );
+            }
+            """,
+            {"encoded": candidate_b64},
+        )
+    call_info = await browser_page.evaluate(
+        """() => {
+          const call = window.__bookwalkerNativeDrawCalls.at(-1);
+          return call ? {
+            captureWindowToken: call.captureWindowToken,
+            captureWindowRetained: call.captureWindowRetained,
+            sourceCanvasId: call.sourceCanvasId,
+            sourceConstructor: call.source?.constructor,
+            mappingId: call.mappingId,
+          } : null;
+        }"""
+    )
+    assert call_info and call_info["captureWindowRetained"] is True, call_info
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic"
+    adapter.enable_original_jpeg_capture = False
+    adapter.lossless_jpeg_output_enabled = False
+    if mode in {
+        "positive_codec", "native_pixel_mismatch", "native_pixel_unavailable",
+        "selectors_false",
+    }:
+        candidate = adapter_module.candidate_from_jpeg(
+            candidate_data,
+            url="https://bw-bv-epubs.bookwalker.jp/retained-positive.jpg"
+            if mode == "positive_codec"
+            else "https://bw-bv-epubs.bookwalker.jp/retained-negative.jpg",
+            sequence=1,
+        )
+        assert candidate is not None
+        adapter.enable_original_jpeg_capture = True
+        adapter.lossless_jpeg_output_enabled = True
+        adapter._original_candidates.add(candidate)
+
+        async def no_original_jpeg(_page, _native):
+            return None
+
+        monkeypatch.setattr(adapter, "_capture_original_jpegs", no_original_jpeg)
+        if mode in {"native_pixel_mismatch", "native_pixel_unavailable"}:
+            async def fake_pixel_compare(*_args):
+                if mode == "native_pixel_unavailable":
+                    return {
+                        "available": False,
+                        "dimensions_equal": False,
+                        "exact": False,
+                        "reason": "synthetic native pixel comparison unavailable",
+                    }
+                return {
+                    "available": True,
+                    "dimensions_equal": True,
+                    "exact": False,
+                    "differing_pixel_count": 1,
+                    "max_channel_difference": 1,
+                }
+
+            monkeypatch.setattr(adapter, "_browser_pixel_exact", fake_pixel_compare)
+        elif mode == "selectors_false":
+            original_reconstruct = adapter_module.reconstruct_lossless_jpeg
+
+            def selectors_false(*args, **kwargs):
+                result = original_reconstruct(*args, **kwargs)
+                validation = dict(result.coefficient_validation)
+                validation["component_quantization_selectors_equal"] = False
+                return replace(result, coefficient_validation=validation)
+
+            monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", selectors_false)
+    if mode == "selection_anchor_missing":
+        monkeypatch.setattr(adapter_module, "_BOOKWALKER_SELECTION_ANCHOR_SCRIPT", "() => null")
+        with pytest.raises(UnknownPageStateError):
+            await adapter.capture_page(browser_page)
+    elif mode == "mutation":
+        materialize = adapter._materialize_native_source_crops
+
+        async def mutate_after_materialize(page, calls):
+            result = await materialize(page, calls)
+            await page.locator("#renderer canvas").evaluate(
+                "canvas => canvas.getContext('2d').fillRect(100, 0, 1, 1)"
+            )
+            return result
+
+        monkeypatch.setattr(adapter, "_materialize_native_source_crops", mutate_after_materialize)
+        try:
+            result = await adapter.capture_page(browser_page)
+        except UnknownPageStateError:
+            pass
+        else:
+            debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_capture"]
+            assert False, {
+                "result": result,
+                "returned_path": debug.get("returned_path"),
+                "final_join": debug.get("capture_window_final_join"),
+                "selected_draw": debug.get("selected_draw"),
+                "failure_reason": debug.get("failure_reason"),
+            }
+    elif mode in {"native_pixel_mismatch", "native_pixel_unavailable", "selectors_false"}:
+        result = await adapter.capture_page(browser_page)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].mime_type == "image/png"
+        capture_debug = adapter._capture_debug["bookwalker_capture"]
+        assert capture_debug["returned_path"] == "native_png"
+        part = capture_debug["lossless_shadow"]["parts"][0]
+        assert part["final_pixel_verify_enabled"] is False
+        if mode in {"native_pixel_mismatch", "native_pixel_unavailable"}:
+            assert part["native_pixel_exact"] is False
+        else:
+            assert part["component_quantization_selectors_equal"] is False
+        assert capture_debug["capture_window_final_join"]["exact"] is True
+    else:
+        result = await adapter.capture_page(browser_page)
+        assert result is not None, await adapter.collect_debug_metadata(browser_page)
+        assert len(result) == 1
+        if mode == "positive_codec":
+            assert result[0].mime_type == "image/jpeg", adapter._capture_debug
+            capture_debug = adapter._capture_debug["bookwalker_capture"]
+            assert capture_debug["returned_path"] == "reconstructed_jpeg"
+            assert capture_debug["lossless_shadow"]["spread_ready"] is True
+            assert capture_debug["lossless_shadow"]["parts"][0][
+                "executed_clear_provenance"
+            ] is False
+        else:
+            assert result[0].mime_type == "image/png"
+
+
+async def test_retained_capture_page_original_jpeg_return_still_runs_final_join(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _setup_synthetic_terminal_page(browser_page)
+    await browser_page.evaluate(
+        """
+        async () => {
+          window.__bookwalkerResetTransformTrace('retained_jpeg_test');
+          window.__bookwalkerNativeDrawCalls = [];
+          const renderer = document.querySelector('#renderer canvas');
+          const tileTarget = document.createElement('canvas');
+          tileTarget.width = 800; tileTarget.height = 600;
+          const context = tileTarget.getContext('2d');
+          context.clearRect(0, 0, tileTarget.width, tileTarget.height);
+          window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+          window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+          const source = document.createElement('canvas');
+          source.width = 800; source.height = 600;
+          source.getContext('2d').fillStyle = 'rgb(42, 63, 84)';
+          source.getContext('2d').fillRect(0, 0, 800, 600);
+          const bitmap = await createImageBitmap(source);
+          context.drawImage(bitmap, 0, 0, 800, 600);
+          renderer.getContext('2d').drawImage(
+            tileTarget, 0, 0, 800, 600, 100, 0, 800, 600,
+          );
+        }
+        """
+    )
+    call_info = await browser_page.evaluate(
+        """() => {
+          const call = window.__bookwalkerNativeDrawCalls.at(-1);
+          return call ? {
+            captureWindowToken: call.captureWindowToken,
+            captureWindowRetained: call.captureWindowRetained,
+            sourceCanvasId: call.sourceCanvasId,
+            sourceConstructor: call.source?.constructor,
+          } : null;
+        }"""
+    )
+    assert call_info and call_info["captureWindowRetained"] is True, call_info
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic"
+
+    async def original_capture(_page, _native):
+        return (CaptureResult(b"jpeg", 800, 600, "image/jpeg", ".jpg"),)
+
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", original_capture)
+    result = await adapter.capture_page(browser_page)
+    assert result is not None, await adapter.collect_debug_metadata(browser_page)
+    assert result[0].mime_type == "image/jpeg"
+
+
 async def test_html_canvas_snapshot_is_pixel_stable_until_materialize(
     browser_page: Page,
 ) -> None:
@@ -2158,6 +3087,40 @@ async def test_same_image_jpeg_and_png_have_exact_browser_signature(
     assert await image_signature(browser_page, png_data, "image/png") == await image_signature(
         browser_page, jpeg_data, "image/jpeg"
     )
+
+
+async def test_browser_image_signature_scratch_canvas_is_internal(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    data_url = await browser_page.evaluate(
+        """
+        () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 128; canvas.height = 64;
+          const context = canvas.getContext('2d');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, 128, 64);
+          return canvas.toDataURL('image/png');
+        }
+        """
+    )
+    png_data = base64.b64decode(data_url.split(",", 1)[1])
+    before = await browser_page.evaluate(
+        "() => ({activeCount: Object.keys(window.__bookwalkerTransformTrace.activeSegments || {}).length, drawImageCount: window.__bookwalkerTransformTrace.diagnostics.drawImageCount})"
+    )
+    for _ in range(9):
+        assert await image_signature(browser_page, png_data, "image/png")
+    trace_state = await browser_page.evaluate(
+        """
+        () => ({
+          activeCount: Object.keys(window.__bookwalkerTransformTrace.activeSegments || {}).length,
+          drawImageCount: window.__bookwalkerTransformTrace.diagnostics.drawImageCount,
+        })
+        """
+    )
+    assert trace_state == before
 
 
 async def test_retained_imagebitmap_uses_the_same_signature_contract(

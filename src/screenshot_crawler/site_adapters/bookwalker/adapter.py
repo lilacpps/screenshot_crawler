@@ -282,10 +282,17 @@ _DRAW_TRACE_SCRIPT = """
   const MAX_COMPLETED_TILE_RECORDS = 20000;
   const MAX_NON_IMAGE_BITMAP_DRAW_RECORDS = 4;
   const FULL_CLEAR_EPSILON = 1e-7;
+  const DIAGNOSTIC_MAX_CANVASES = 16;
+  const DIAGNOSTIC_MAX_EVENTS = 128;
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
   const canvasIds = new WeakMap();
+  // Weak references keep this diagnostic registry from retaining canvases.
+  const diagnosticCanvasRefs = new Map();
+  // The capture-window proof keeps a separate weak registry.  Diagnostic
+  // history is never used as proof authority.
+  const captureCanvasRefs = new Map();
   const sourceIds = new WeakMap();
   const canvasResetEpochs = new WeakMap();
   const canvasUnknownMutations = new WeakSet();
@@ -298,15 +305,256 @@ _DRAW_TRACE_SCRIPT = """
   const canvasContexts = new WeakMap();
   const contextLossObserved = new WeakSet();
   const internalCanvases = new WeakSet();
+  const diagnosticHistory = window.__bookwalkerDiagnosticHistory || {
+    version: 1,
+    events: [],
+    canvasSummaries: {},
+    freezeNullCounts: {},
+    freezeNullCountKeys: [],
+    droppedEventCount: 0,
+    droppedCanvasSummaryCount: 0,
+  };
+  window.__bookwalkerDiagnosticHistory = diagnosticHistory;
+  const diagnosticEvent = (kind, payload = {}) => {
+    try {
+      const trace = window.__bookwalkerTransformTrace;
+      const event = {
+        index: (diagnosticHistory.events.at(-1)?.index || 0) + 1,
+        kind,
+        traceEpoch: trace?.traceEpoch ?? null,
+        captureWindowToken: trace?.captureWindowToken ?? null,
+        operationIndex: trace?.nextOperationIndex ?? null,
+        ...payload,
+      };
+      diagnosticHistory.events.push(event);
+      while (diagnosticHistory.events.length > DIAGNOSTIC_MAX_EVENTS) {
+        diagnosticHistory.events.shift();
+        diagnosticHistory.droppedEventCount += 1;
+      }
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
+  const diagnosticCanvasSummary = (canvasId, payload = {}) => {
+    try {
+      if (!canvasId) return null;
+      let summary = diagnosticHistory.canvasSummaries[canvasId];
+      if (!summary) {
+        const ids = Object.keys(diagnosticHistory.canvasSummaries);
+        if (ids.length >= DIAGNOSTIC_MAX_CANVASES) {
+          const evicted = ids[0];
+          delete diagnosticHistory.canvasSummaries[evicted];
+          diagnosticHistory.droppedCanvasSummaryCount += 1;
+          diagnosticEvent('diagnostic_canvas_eviction', {canvasId: evicted});
+        }
+        summary = {
+          canvasId,
+          firstTraceEpoch: null,
+          lastTraceEpoch: null,
+          firstOperationIndex: null,
+          lastOperationIndex: null,
+          tileCount: 0,
+          firstTileOperationIndex: null,
+          lastTileOperationIndex: null,
+          sourceIds: [],
+          resetCount: 0,
+          clearCount: 0,
+          freezeSuccessCount: 0,
+          freezeNullCount: 0,
+          completedTileCount: 0,
+          lastCompletedTileOperationIndex: null,
+          lastCompletedTileTraceEpoch: null,
+          lastCompletedTileContentVersion: null,
+          orphanTileCount: 0,
+          firstOrphanTileOperationIndex: null,
+          lastOrphanTileOperationIndex: null,
+          lastOrphanTileTraceEpoch: null,
+          orphanSourceIds: [],
+          orphanEpochs: {},
+          orphanEpochKeys: [],
+          lastCaptureWindowToken: null,
+          ...payload,
+        };
+        diagnosticHistory.canvasSummaries[canvasId] = summary;
+      }
+      return summary;
+    } catch (error) {
+      return null;
+    }
+  };
+  const diagnosticTile = (canvasId, operation, sourceInfo) => {
+    try {
+      const summary = diagnosticCanvasSummary(canvasId);
+      if (!summary) return;
+      const traceEpoch = operation?.traceEpoch ?? null;
+      const operationIndex = operation?.index ?? null;
+      summary.firstTraceEpoch ??= traceEpoch;
+      summary.lastTraceEpoch = traceEpoch;
+      summary.lastCaptureWindowToken = operation?.captureWindowToken
+        ?? window.__bookwalkerTransformTrace?.captureWindowToken ?? null;
+      summary.firstOperationIndex ??= operationIndex;
+      summary.lastOperationIndex = operationIndex;
+      summary.tileCount += 1;
+      summary.firstTileOperationIndex ??= operationIndex;
+      summary.lastTileOperationIndex = operationIndex;
+      const sourceId = sourceInfo?.sourceId;
+      if (sourceId && !summary.sourceIds.includes(sourceId)) {
+        if (summary.sourceIds.length < 4) summary.sourceIds.push(sourceId);
+      }
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
+  const diagnosticTileCompleted = (canvasId, operation, contentVersionAfter) => {
+    try {
+      const summary = diagnosticCanvasSummary(canvasId);
+      if (!summary) return;
+      summary.completedTileCount = (summary.completedTileCount || 0) + 1;
+      summary.lastCompletedTileOperationIndex = operation?.index ?? null;
+      summary.lastCompletedTileTraceEpoch = operation?.traceEpoch ?? null;
+      summary.lastCompletedTileContentVersion = contentVersionAfter ?? null;
+      summary.lastCaptureWindowToken = operation?.captureWindowToken
+        ?? window.__bookwalkerTransformTrace?.captureWindowToken ?? null;
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
+  const diagnosticFreezeNull = (reason, payload = {}) => {
+    try {
+      const traceEpoch = window.__bookwalkerTransformTrace?.traceEpoch ?? null;
+      const key = `${reason}:${traceEpoch}`;
+      if (!Object.prototype.hasOwnProperty.call(diagnosticHistory.freezeNullCounts, key)) {
+        diagnosticHistory.freezeNullCountKeys.push(key);
+        while (diagnosticHistory.freezeNullCountKeys.length > 32) {
+          const oldest = diagnosticHistory.freezeNullCountKeys.shift();
+          delete diagnosticHistory.freezeNullCounts[oldest];
+        }
+      }
+      diagnosticHistory.freezeNullCounts[key] =
+        (diagnosticHistory.freezeNullCounts[key] || 0) + 1;
+      if (diagnosticHistory.freezeNullCounts[key] === 1) {
+        diagnosticEvent('freeze_null', {
+          reason,
+          count: 1,
+          ...payload,
+        });
+      }
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
+  const diagnosticPageIdentity = () => {
+    let bookIdentity = null;
+    try { bookIdentity = new URL(window.location.href).searchParams.get('cid') || null; }
+    catch (error) {}
+    return {
+      counter: document.querySelector('#pageSliderCounter')?.textContent || null,
+      bookIdentity,
+    };
+  };
+  const diagnosticOrphanTile = (canvasId, operation, sourceInfo) => {
+    try {
+      const summary = diagnosticCanvasSummary(canvasId);
+      if (!summary) return;
+      const traceEpoch = operation?.traceEpoch ?? null;
+      const operationIndex = operation?.index ?? null;
+      const epochKey = String(traceEpoch ?? 'null');
+      let epoch = summary.orphanEpochs[epochKey];
+      if (!epoch) {
+        if (summary.orphanEpochKeys.length >= 8) {
+          const oldest = summary.orphanEpochKeys.shift();
+          delete summary.orphanEpochs[oldest];
+        }
+        epoch = {
+          traceEpoch,
+          firstOperationIndex: operationIndex,
+          lastOperationIndex: operationIndex,
+          attemptCount: 0,
+          successCount: 0,
+          failureCount: 0,
+          bitmapSourceIds: [],
+          firstBeforeContentVersion: operation?.target?.contentVersion ?? null,
+          lastAfterContentVersion: null,
+          targetCanvasId: operation?.target?.canvasId ?? null,
+          targetResetEpoch: operation?.target?.resetEpoch ?? null,
+          targetWidth: operation?.target?.width ?? null,
+          targetHeight: operation?.target?.height ?? null,
+          captureWindowToken: operation?.captureWindowToken
+            ?? window.__bookwalkerTransformTrace?.captureWindowToken ?? null,
+        };
+        summary.orphanEpochs[epochKey] = epoch;
+        summary.orphanEpochKeys.push(epochKey);
+      }
+      epoch.lastOperationIndex = operationIndex;
+      epoch.attemptCount += 1;
+      const sourceId = sourceInfo?.sourceId;
+      if (sourceId && !epoch.bitmapSourceIds.includes(sourceId)
+          && epoch.bitmapSourceIds.length < 4) {
+        epoch.bitmapSourceIds.push(sourceId);
+      }
+      summary.orphanTileCount += 1;
+      summary.firstOrphanTileOperationIndex ??= operationIndex;
+      summary.lastOrphanTileOperationIndex = operationIndex;
+      const firstForEpoch = summary.lastOrphanTileTraceEpoch !== traceEpoch;
+      summary.lastOrphanTileTraceEpoch = traceEpoch;
+      if (sourceId && !summary.orphanSourceIds.includes(sourceId)
+          && summary.orphanSourceIds.length < 4) {
+        summary.orphanSourceIds.push(sourceId);
+      }
+      if (firstForEpoch) {
+        diagnosticEvent('orphan_tile_draws', {
+          canvasId,
+          traceEpoch,
+          firstOperationIndex: operationIndex,
+          sourceId: sourceId ?? null,
+          sourceConstructor: sourceInfo?.constructor ?? null,
+          sourceContentVersion: sourceInfo?.contentVersion ?? null,
+          targetContentVersion: operation?.target?.contentVersion ?? null,
+        });
+      }
+      return {canvasId, epochKey, traceEpoch, operationIndex};
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+      return null;
+    }
+  };
+  const diagnosticOrphanTileCompleted = (record, targetContentVersionAfter) => {
+    try {
+      if (!record) return;
+      const epoch = diagnosticHistory.canvasSummaries[record.canvasId]
+        ?.orphanEpochs?.[record.epochKey];
+      if (!epoch) return;
+      epoch.successCount += 1;
+      epoch.lastAfterContentVersion = targetContentVersionAfter ?? null;
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
+  const diagnosticOrphanTileFailed = record => {
+    try {
+      if (!record) return;
+      const epoch = diagnosticHistory.canvasSummaries[record.canvasId]
+        ?.orphanEpochs?.[record.epochKey];
+      if (epoch) epoch.failureCount += 1;
+    } catch (error) {
+      // Diagnostic retention must never affect renderer behavior.
+    }
+  };
   window.__bookwalkerCanvasResetObservationAvailable = false;
   window.__bookwalkerMarkInternalCanvas = canvas => {
     if (canvas) internalCanvases.add(canvas);
   };
 
   let transformTraceEpoch = 0;
-  const newTrace = () => ({
-    traceEpoch: ++transformTraceEpoch,
-    nextOperationIndex: 0,
+  let captureWindowSequence = 0;
+  const newTrace = (traceEpoch = null, nextOperationIndex = 0) => ({
+    traceEpoch: traceEpoch ?? ++transformTraceEpoch,
+    nextOperationIndex,
+    captureWindowToken: null,
+    captureWindowReason: null,
+    captureWindowHop: 0,
+    retainedEmptyBoundaries: [],
+    retainedEmptySegmentCanvasIds: [],
     activeSegments: {},
     completedMappings: [],
     droppedActiveSegmentCount: 0,
@@ -325,15 +573,39 @@ _DRAW_TRACE_SCRIPT = """
     },
   });
   window.__bookwalkerTransformTrace = newTrace();
-  window.__bookwalkerResetTransformTrace = () => {
+  window.__bookwalkerResetTransformTrace = (reason = 'unspecified') => {
+    let canvasStates = [];
+    try {
+      canvasStates = Object.keys(diagnosticHistory.canvasSummaries)
+        .slice(-DIAGNOSTIC_MAX_CANVASES)
+        .map(canvasId => diagnosticCanvasState(canvasId));
+    } catch (error) {}
+    try {
+      diagnosticEvent('trace_reset', {
+        reason: String(reason),
+        canvasStates,
+      });
+    } catch (error) {}
     window.__bookwalkerTransformTrace = newTrace();
+    window.__bookwalkerCaptureWindowToken = null;
   };
+  window.__bookwalkerBeginCaptureWindow = reason => beginCaptureWindow(reason);
 
   const getCanvasId = canvas => {
     let id = canvasIds.get(canvas);
     if (!id) {
       id = String(nextCanvasId++);
       canvasIds.set(canvas, id);
+      if (typeof WeakRef === 'function') {
+        diagnosticCanvasRefs.set(id, new WeakRef(canvas));
+        while (diagnosticCanvasRefs.size > DIAGNOSTIC_MAX_CANVASES) {
+          diagnosticCanvasRefs.delete(diagnosticCanvasRefs.keys().next().value);
+        }
+        captureCanvasRefs.set(id, new WeakRef(canvas));
+        while (captureCanvasRefs.size > MAX_ACTIVE_SEGMENTS) {
+          captureCanvasRefs.delete(captureCanvasRefs.keys().next().value);
+        }
+      }
       try { canvas.dataset.bookwalkerTraceId = id; } catch (error) {}
     }
     return id;
@@ -345,6 +617,37 @@ _DRAW_TRACE_SCRIPT = """
     canvas ? Number(canvasResetEpochs.get(canvas) || 0) : null
   );
   const contentVersion = canvas => Number(canvasContentVersions.get(canvas) || 0);
+  const diagnosticCanvasState = canvasId => {
+    try {
+      const canvas = diagnosticCanvasRefs.get(String(canvasId))?.deref?.() || null;
+      const trace = window.__bookwalkerTransformTrace;
+      const segment = trace?.activeSegments?.[String(canvasId)] || null;
+      const summary = diagnosticHistory.canvasSummaries[String(canvasId)] || null;
+      return {
+        canvasId: String(canvasId),
+        objectAvailable: Boolean(canvas),
+        width: canvas?.width ?? null,
+        height: canvas?.height ?? null,
+        resetEpoch: canvas ? Number(canvasResetEpochs.get(canvas) || 0) : null,
+        contentVersion: canvas ? contentVersion(canvas) : null,
+        activeSegment: Boolean(segment),
+        activeTileCount: segment?.tileDraws?.length ?? 0,
+        activeSourceIds: Array.isArray(segment?.sourceIds)
+          ? segment.sourceIds.slice(0, 4) : [],
+        activeUnsafeCount: segment?.unsafeOperationCount ?? 0,
+        activeUnknownMutation: segment?.unknownMutation === true,
+        clearWitness: segment?.executedFullClearWitness || null,
+        captureWindowToken: segment?.captureWindowToken
+          ?? trace?.captureWindowToken ?? null,
+        clearWitnessContentVersionAfter:
+          segment?.executedFullClearWitness?.contentVersionAfter ?? null,
+        summaryLastTraceEpoch: summary?.lastTraceEpoch ?? null,
+        summaryLastCaptureWindowToken: summary?.lastCaptureWindowToken ?? null,
+      };
+    } catch (error) {
+      return {canvasId: String(canvasId), available: false};
+    }
+  };
   const advanceContentVersion = canvas => {
     if (!canvas) return 0;
     const next = contentVersion(canvas) + 1;
@@ -386,6 +689,149 @@ _DRAW_TRACE_SCRIPT = """
       saveStackKnown: state.knownNoClip === true,
       saveStackDepth: state.saveStack.length,
     } : null;
+  };
+  const emptyBoundaryFromSegment = (trace, canvasId, segment) => {
+    try {
+      if (!trace || !segment || segment.tileDraws.length !== 0
+          || segment.sourceIds.length !== 0
+          || segment.nonImageBitmapDraws.length !== 0
+          || segment.unsafeOperationCount !== 0
+          || segment.unknownMutation || segment.overflow) return null;
+      const witness = segment.executedFullClearWitness;
+      if (!witness || witness.kind !== 'executed_full_clear'
+          || witness.canvasId !== canvasId
+          || witness.canvasResetObservationAvailable !== true
+          || witness.observerAvailable !== true
+          || witness.takeRecordsAvailable !== true
+          || witness.contextLostAfter !== false
+          || witness.unknownMutationAfter !== false) return null;
+      const canvas = captureCanvasRefs.get(String(canvasId))?.deref?.() || null;
+      if (!canvas) return null;
+      flushCanvasMutationObserver(canvas);
+      const dimensions = {width: Number(canvas.width), height: Number(canvas.height)};
+      const resetEpoch = Number(canvasResetEpochs.get(canvas) || 0);
+      const currentContentVersion = contentVersion(canvas);
+      if (dimensions.width !== witness.dimensionsAfter.width
+          || dimensions.height !== witness.dimensionsAfter.height
+          || resetEpoch !== witness.resetEpoch
+          || currentContentVersion !== witness.contentVersionAfter
+          || segment.target?.canvasId !== canvasId
+          || segment.target?.width !== dimensions.width
+          || segment.target?.height !== dimensions.height
+          || canvasUnknownMutations.has(canvas)) return null;
+      return {
+        canvasId: String(canvasId),
+        canvasRef: captureCanvasRefs.get(String(canvasId)),
+        width: dimensions.width,
+        height: dimensions.height,
+        resetEpoch,
+        contentVersionAfter: currentContentVersion,
+        clearOperationIndex: segment.clearOperationIndex,
+        clearTraceEpoch: witness.traceEpoch,
+        resetKind: segment.resetKind,
+        clearRectangle: {...segment.clearRectangle},
+        witness: {...witness},
+      };
+    } catch (error) {
+      return null;
+    }
+  };
+  const validateEmptyBoundary = boundary => {
+    try {
+      const canvas = boundary?.canvasRef?.deref?.() || null;
+      if (!canvas || !boundary || canvas.width !== boundary.width
+          || canvas.height !== boundary.height
+          || Number(canvasResetEpochs.get(canvas) || 0) !== boundary.resetEpoch
+          || contentVersion(canvas) !== boundary.contentVersionAfter
+          || canvasUnknownMutations.has(canvas)
+          || window.__bookwalkerCanvasResetObservationAvailable !== true
+          || !flushCanvasMutationObserver(canvas)) return false;
+      const contexts = canvasContexts.get(canvas);
+      if (!contexts || contexts.size === 0) return false;
+      for (const context of contexts) {
+        const safety = contextSafetyInfo(context);
+        const lost = contextLostState(context);
+        if (!safety?.knownNoClip || !safety.saveStackKnown
+            || !lost.available || lost.value) return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+  const beginCaptureWindow = reason => {
+    try {
+      const previous = window.__bookwalkerTransformTrace;
+      const reasonText = String(reason || 'unspecified');
+      let retained = [];
+      let hop = 0;
+      if (reasonText === 'geometry_cleanup') {
+        for (const [canvasId, segment] of Object.entries(previous?.activeSegments || {})) {
+          const boundary = emptyBoundaryFromSegment(previous, canvasId, segment);
+          if (boundary && retained.length < 8) retained.push(boundary);
+        }
+        hop = retained.length ? 1 : 0;
+      } else if (reasonText === 'native_capture_arm'
+          && previous?.captureWindowReason === 'geometry_cleanup'
+          && previous?.captureWindowHop === 1) {
+        retained = Array.isArray(previous.retainedEmptyBoundaries)
+          ? previous.retainedEmptyBoundaries.filter(validateEmptyBoundary).slice(0, 8) : [];
+        hop = retained.length ? 2 : 0;
+      }
+      const next = newTrace(previous?.traceEpoch ?? null, previous?.nextOperationIndex || 0);
+      next.captureWindowToken = ++captureWindowSequence;
+      next.captureWindowReason = reasonText;
+      next.captureWindowHop = hop;
+      next.retainedEmptyBoundaries = retained;
+      window.__bookwalkerTransformTrace = next;
+      window.__bookwalkerCaptureWindowToken = next.captureWindowToken;
+      diagnosticEvent('capture_window_begin', {
+        reason: reasonText,
+        token: next.captureWindowToken,
+        hop,
+        retainedCanvasIds: retained.map(boundary => boundary.canvasId),
+      });
+    } catch (error) {
+      // A capture-window diagnostic/proof helper must never affect drawing.
+      window.__bookwalkerTransformTrace = newTrace();
+      window.__bookwalkerCaptureWindowToken = null;
+    }
+  };
+  const retainedEmptyBoundaryFor = (canvas, context, operation, sourceInfo, geometry) => {
+    try {
+      const trace = window.__bookwalkerTransformTrace;
+      if (!trace || !trace.captureWindowToken || trace.captureWindowHop !== 2
+          || sourceInfo?.constructor !== 'ImageBitmap'
+          || !geometry?.sourceRect || !geometry?.destination) return null;
+      const canvasId = getCanvasId(canvas);
+      const index = trace.retainedEmptyBoundaries.findIndex(
+        boundary => boundary.canvasId === canvasId,
+      );
+      if (index < 0) return null;
+      const boundary = trace.retainedEmptyBoundaries[index];
+      const actual = boundary.canvasRef?.deref?.() || null;
+      flushCanvasMutationObserver(canvas);
+      const valid = actual === canvas
+        && validateEmptyBoundary(boundary)
+        && canvas.width === boundary.width && canvas.height === boundary.height
+        && Number(canvasResetEpochs.get(canvas) || 0) === boundary.resetEpoch
+        && contentVersion(canvas) === boundary.contentVersionAfter
+        && !canvasUnknownMutations.has(canvas)
+        && window.__bookwalkerCanvasResetObservationAvailable === true
+        && operation.contextSafety?.knownNoClip === true
+        && operation.contextSafety?.saveStackKnown === true
+        && contextLostState(context).available === true
+        && contextLostState(context).value === false
+        && isSafeDraw(operation);
+      if (!valid) {
+        trace.retainedEmptyBoundaries.splice(index, 1);
+        return null;
+      }
+      trace.retainedEmptyBoundaries.splice(index, 1);
+      return boundary;
+    } catch (error) {
+      return null;
+    }
   };
   const observeContextLoss = canvas => {
     if (!canvas || contextLossObserved.has(canvas)
@@ -598,6 +1044,7 @@ _DRAW_TRACE_SCRIPT = """
       index,
       operation: operationName,
       traceEpoch: trace.traceEpoch,
+      captureWindowToken: trace.captureWindowToken,
       target: targetInfo(canvas),
       transform: readTransform(context),
       globalAlpha: Number.isFinite(context.globalAlpha)
@@ -676,9 +1123,9 @@ _DRAW_TRACE_SCRIPT = """
       let oldestId = null;
       let oldestIndex = Infinity;
       for (const [id, candidate] of Object.entries(active)) {
-        if (candidate.clearOperationIndex < oldestIndex) {
+        if ((candidate.creationOperationIndex ?? candidate.clearOperationIndex) < oldestIndex) {
           oldestId = id;
-          oldestIndex = candidate.clearOperationIndex;
+          oldestIndex = candidate.creationOperationIndex ?? candidate.clearOperationIndex;
         }
       }
       if (oldestId !== null) {
@@ -686,10 +1133,15 @@ _DRAW_TRACE_SCRIPT = """
         trace.droppedActiveSegmentCount += 1;
         trace.evictedCanvasIds.push(oldestId);
         if (trace.evictedCanvasIds.length > 32) trace.evictedCanvasIds.shift();
+        diagnosticEvent('active_segment_eviction', {
+          canvasId: oldestId,
+          droppedActiveSegmentCount: trace.droppedActiveSegmentCount,
+        });
       }
     }
     active[canvasId] = {
       clearOperationIndex: operationIndex,
+      creationOperationIndex: trace.nextOperationIndex,
       clearRectangle: rectangle,
       target: targetInfo(canvas),
       clearTarget: targetInfo(canvas),
@@ -708,8 +1160,52 @@ _DRAW_TRACE_SCRIPT = """
       nonImageBitmapDraws: [],
       overflow: false,
       expectedTileCount: null,
+      captureWindowToken: trace.captureWindowToken,
     };
+    const summary = diagnosticCanvasSummary(canvasId, {
+      firstTraceEpoch: trace.traceEpoch,
+      lastTraceEpoch: trace.traceEpoch,
+      firstOperationIndex: operationIndex,
+      lastOperationIndex: operationIndex,
+    });
+    if (summary) summary.resetCount += resetKind === 'canvas_dimension_reset' ? 1 : 0;
+    diagnosticEvent('segment_created', {
+      canvasId,
+      resetKind,
+      resetEpoch: resetEpoch ?? (canvasResetEpochs.get(canvas) || 0),
+      targetWidth: active[canvasId].target?.width ?? null,
+      targetHeight: active[canvasId].target?.height ?? null,
+    });
     return active[canvasId];
+  };
+  const startRetainedEmptySegment = (canvas, boundary) => {
+    const trace = window.__bookwalkerTransformTrace;
+    const segment = newSegment(
+      canvas,
+      boundary.clearOperationIndex,
+      boundary.clearRectangle,
+      boundary.resetKind || 'clearRect',
+      boundary.resetEpoch,
+    );
+    if (!segment) return null;
+    segment.retainedEmptyBoundary = boundary;
+    segment.executedFullClearWitness = boundary.witness;
+    segment.resetObservationAvailable = boundary.witness.canvasResetObservationAvailable === true;
+    segment.mutationObserverAvailable = boundary.witness.observerAvailable === true;
+    segment.mutationObserverTakeRecordsAvailable = boundary.witness.takeRecordsAvailable === true;
+    segment.captureWindowToken = trace.captureWindowToken;
+    segment.creationOperationIndex = trace.nextOperationIndex;
+    if (!trace.retainedEmptySegmentCanvasIds.includes(boundary.canvasId)) {
+      trace.retainedEmptySegmentCanvasIds.push(boundary.canvasId);
+    }
+    diagnosticEvent('retained_empty_segment_started', {
+      canvasId: boundary.canvasId,
+      currentOperationIndex: trace.nextOperationIndex,
+      clearOperationIndex: boundary.clearOperationIndex,
+      clearTraceEpoch: boundary.clearTraceEpoch,
+      token: trace.captureWindowToken,
+    });
+    return segment;
   };
   const recordExecutedFullClearWitness = (
     context, args, operation, observerState, flushedBefore,
@@ -775,6 +1271,11 @@ _DRAW_TRACE_SCRIPT = """
           reasons: [...new Set(reasons)],
         };
       }
+      diagnosticEvent('clear_witness_rejected', {
+        canvasId,
+        operationIndex: operation.index,
+        reasons: [...new Set(reasons)],
+      });
       return false;
     }
     const witness = {
@@ -806,6 +1307,15 @@ _DRAW_TRACE_SCRIPT = """
       targetCanvasId: operation.target?.canvasId ?? null,
     };
     segment.executedFullClearWitness = witness;
+    const summary = diagnosticCanvasSummary(canvasId);
+    if (summary) summary.clearCount += 1;
+    diagnosticEvent('clear_witness_success', {
+      canvasId,
+      operationIndex: operation.index,
+      resetEpoch: resetEpochAfter,
+      contentVersionBefore,
+      contentVersionAfter,
+    });
     trace.diagnostics.executedFullClearWitnessCount += 1;
     const nativeDiagnostics = window.__bookwalkerNativeCaptureDiagnostics;
     if (nativeDiagnostics) nativeDiagnostics.executedFullClearWitnessCount += 1;
@@ -955,12 +1465,75 @@ _DRAW_TRACE_SCRIPT = """
     trace.completedMappings.push(mapping);
   };
   const freezeCompletedMapping = (operation, sourceInfo, geometry, sourceObject) => {
-    if (sourceInfo?.constructor !== 'HTMLCanvasElement' || !sourceInfo.canvasId) {
+    if (sourceInfo?.constructor !== 'HTMLCanvasElement') {
+      diagnosticFreezeNull('source_not_canvas', {
+        sourceConstructor: sourceInfo?.constructor ?? null,
+        sourceCanvasId: sourceInfo?.canvasId ?? null,
+        sourceId: sourceInfo?.sourceId ?? null,
+        sourceContentVersion: sourceInfo?.contentVersion ?? null,
+        sourceResetEpoch: sourceInfo?.resetEpoch ?? null,
+        targetCanvasId: operation?.target?.canvasId ?? null,
+        targetWidth: operation?.target?.width ?? null,
+        targetHeight: operation?.target?.height ?? null,
+        targetContentVersion: operation?.target?.contentVersion ?? null,
+      });
+      return null;
+    }
+    if (!sourceInfo.canvasId) {
+      diagnosticFreezeNull('no_canvas_id', {
+        sourceConstructor: sourceInfo.constructor,
+        sourceId: sourceInfo.sourceId ?? null,
+        sourceContentVersion: sourceInfo.contentVersion ?? null,
+        sourceResetEpoch: sourceInfo.resetEpoch ?? null,
+        targetCanvasId: operation?.target?.canvasId ?? null,
+        targetWidth: operation?.target?.width ?? null,
+        targetHeight: operation?.target?.height ?? null,
+        targetContentVersion: operation?.target?.contentVersion ?? null,
+      });
       return null;
     }
     const trace = window.__bookwalkerTransformTrace;
     const segment = trace?.activeSegments?.[sourceInfo.canvasId];
-    if (!segment) return null;
+    if (!segment) {
+      const summary = diagnosticCanvasSummary(sourceInfo.canvasId);
+      if (summary) summary.freezeNullCount += 1;
+      diagnosticFreezeNull('no_active_segment', {
+        sourceCanvasId: sourceInfo.canvasId,
+        sourceId: sourceInfo.sourceId ?? null,
+        sourceContentVersion: sourceInfo.contentVersion ?? null,
+        sourceResetEpoch: sourceInfo.resetEpoch ?? null,
+        sourceActualObjectId: sourceInfo.sourceId ?? null,
+        sourceActualObjectType: sourceObject?.constructor?.name ?? null,
+        sourceActualWidth: sourceObject?.width ?? null,
+        sourceActualHeight: sourceObject?.height ?? null,
+        sourceActualCanvasId: sourceObject?.constructor?.name === 'HTMLCanvasElement'
+          ? getCanvasId(sourceObject) : null,
+        sourceActualContentVersion: sourceObject?.constructor?.name === 'HTMLCanvasElement'
+          ? contentVersion(sourceObject) : null,
+        sourceActualResetEpoch: sourceObject?.constructor?.name === 'HTMLCanvasElement'
+          ? Number(canvasResetEpochs.get(sourceObject) || 0) : null,
+        targetCanvasId: operation?.target?.canvasId ?? null,
+        targetResetEpoch: operation?.target?.resetEpoch ?? null,
+        targetWidth: operation?.target?.width ?? null,
+        targetHeight: operation?.target?.height ?? null,
+        targetContentVersion: operation?.target?.contentVersion ?? null,
+        ...diagnosticPageIdentity(),
+      });
+      return null;
+    }
+    if (segment.retainedEmptyBoundary && segment.tileDraws.length === 0) {
+      diagnosticFreezeNull('retained_empty_segment_before_first_tile', {
+        sourceCanvasId: sourceInfo.canvasId,
+        sourceContentVersion: sourceInfo.contentVersion ?? null,
+      });
+      return null;
+    }
+    if (segment.captureWindowToken !== trace.captureWindowToken) {
+      diagnosticFreezeNull('capture_window_token_mismatch', {
+        sourceCanvasId: sourceInfo.canvasId,
+      });
+      return null;
+    }
     const mappingId = `mapping-${operation.index}`;
     let sourceSnapshotId = null;
     let sourceSnapshotError = null;
@@ -1009,6 +1582,8 @@ _DRAW_TRACE_SCRIPT = """
       segmentResetKind: segment.resetKind,
       segmentResetEpoch: segment.resetEpoch,
       segmentTraceEpoch: trace.traceEpoch,
+      captureWindowToken: trace.captureWindowToken,
+      captureWindowRetained: Boolean(segment.retainedEmptyBoundary),
       segmentDrawTarget: segment.tileTarget,
       segmentUnknownMutation: segment.unknownMutation,
       segmentResetObservationAvailable: segment.resetObservationAvailable,
@@ -1023,7 +1598,27 @@ _DRAW_TRACE_SCRIPT = """
         ? contentVersion(sourceObject) : null,
     };
     retainCompletedMapping(mapping);
-    return {mappingId, sourceCanvasId: sourceInfo.canvasId};
+    const summary = diagnosticCanvasSummary(sourceInfo.canvasId);
+    if (summary) summary.freezeSuccessCount += 1;
+    diagnosticEvent('freeze_success', {
+      mappingId,
+      sourceCanvasId: sourceInfo.canvasId,
+      sourceId: sourceInfo.sourceId ?? null,
+      sourceContentVersion: sourceInfo.contentVersion ?? null,
+      sourceResetEpoch: sourceInfo.resetEpoch ?? null,
+      targetCanvasId: operation?.target?.canvasId ?? null,
+      targetWidth: operation?.target?.width ?? null,
+      targetHeight: operation?.target?.height ?? null,
+      targetContentVersion: operation?.target?.contentVersion ?? null,
+      tileCount: segment.tileDraws.length,
+      firstTileOperationIndex: segment.tileDraws[0]?.operationIndex ?? null,
+      lastTileOperationIndex: segment.tileDraws.at(-1)?.operationIndex ?? null,
+    });
+    return {
+      mappingId,
+      sourceCanvasId: sourceInfo.canvasId,
+      captureWindowRetained: Boolean(segment.retainedEmptyBoundary),
+    };
   };
   const recordDraw = (context, source, geometry) => {
     flushCanvasMutationObserver(context?.canvas);
@@ -1039,7 +1634,21 @@ _DRAW_TRACE_SCRIPT = """
     const canvas = context.canvas;
     const sourceInfo = operation.source;
     const canvasId = getCanvasId(canvas);
-    const segment = window.__bookwalkerTransformTrace?.activeSegments?.[canvasId];
+    let segment = window.__bookwalkerTransformTrace?.activeSegments?.[canvasId];
+    if (!segment && sourceInfo?.constructor === 'ImageBitmap') {
+      const boundary = retainedEmptyBoundaryFor(canvas, context, operation, sourceInfo, geometry);
+      if (boundary) segment = startRetainedEmptySegment(canvas, boundary);
+    }
+    if (segment?.retainedEmptyBoundary && segment.tileDraws.length === 0) {
+      // The retained boundary's historical clear operation must not make a
+      // freshly admitted segment the first eviction candidate.
+      segment.creationOperationIndex = operation.index;
+    }
+    let orphanTileRecord = null;
+    if (!segment && sourceInfo?.constructor === 'ImageBitmap'
+        && geometry.sourceRect && geometry.destination) {
+      orphanTileRecord = diagnosticOrphanTile(canvasId, operation, sourceInfo);
+    }
     let tileRecord = null;
     let nonImageBitmapRecord = null;
     if (segment) {
@@ -1114,6 +1723,7 @@ _DRAW_TRACE_SCRIPT = """
           filter: operation.filter,
         };
         segment.tileDraws.push(tileRecord);
+        diagnosticTile(canvasId, operation, sourceInfo);
         if (!segment.sourceIds.includes(sourceInfo.sourceId)) {
           segment.sourceIds.push(sourceInfo.sourceId);
         }
@@ -1125,6 +1735,8 @@ _DRAW_TRACE_SCRIPT = """
       completed: freezeCompletedMapping(operation, sourceInfo, geometry, source),
       tileRecord,
       nonImageBitmapRecord,
+      orphanTileRecord,
+      retainedEmptySegment: segment?.retainedEmptyBoundary ? segment : null,
     };
   };
   const snapshotSourceCrop = (source, sourceRect) => {
@@ -1739,6 +2351,7 @@ _DRAW_TRACE_SCRIPT = """
             destination,
             operationIndex: recorded?.operation?.index || null,
             traceEpoch: window.__bookwalkerTransformTrace?.traceEpoch || null,
+            captureWindowToken: recorded?.operation?.captureWindowToken ?? null,
             resetEpoch: canvasResetEpochs.get(canvas) || 0,
           });
           const geometryLedgerLimit = window.__bookwalkerDirectOriginalEnabled === true
@@ -1762,6 +2375,7 @@ _DRAW_TRACE_SCRIPT = """
           } else {
             const source = args[0];
             const sourceInfo = recorded?.operation?.source || traceSourceInfo(source);
+            const pageIdentity = diagnosticPageIdentity();
             nativeCall = {
               timestamp: performance.now(),
               canvasId: getCanvasId(canvas),
@@ -1773,6 +2387,19 @@ _DRAW_TRACE_SCRIPT = """
               sourceCanvasId: sourceInfo?.canvasId || null,
               sourceContentVersion: sourceInfo?.contentVersion ?? null,
               traceEpoch: window.__bookwalkerTransformTrace?.traceEpoch || null,
+              captureWindowToken: recorded?.operation?.captureWindowToken ?? null,
+              captureWindowRetained: (() => {
+                const completedRetained = recorded?.completed?.captureWindowRetained;
+                if (typeof completedRetained === 'boolean') return completedRetained;
+                const retainedSegment = recorded?.retainedEmptySegment;
+                if (retainedSegment) return Boolean(retainedSegment.retainedEmptyBoundary);
+                return Boolean(
+                  window.__bookwalkerTransformTrace?.retainedEmptySegmentCanvasIds
+                    ?.includes(sourceInfo?.canvasId),
+                );
+              })(),
+              pageCounter: pageIdentity.counter,
+              bookIdentity: pageIdentity.bookIdentity,
               targetResetEpoch: canvasResetEpochs.get(canvas) || 0,
               sourceRect: geometry.sourceRect,
               destination: geometry.destination,
@@ -1799,19 +2426,47 @@ _DRAW_TRACE_SCRIPT = """
         }
       }
     } catch (error) {}
-    const result = original.apply(this, args);
+    let result;
+    try {
+      result = original.apply(this, args);
+    } catch (error) {
+      diagnosticOrphanTileFailed(recorded?.orphanTileRecord);
+      const retainedSegment = recorded?.retainedEmptySegment;
+      if (retainedSegment) {
+        const failedCanvasId = recorded?.operation?.target?.canvasId;
+        if (failedCanvasId) {
+          delete window.__bookwalkerTransformTrace?.activeSegments?.[failedCanvasId];
+          diagnosticEvent('retained_empty_segment_invalidated', {
+            canvasId: failedCanvasId,
+            operationIndex: recorded?.operation?.index ?? null,
+            reason: 'first fresh tile draw threw',
+          });
+        }
+      }
+      throw error;
+    }
+    let targetContentVersionAfter = null;
     if (directRecord) {
       try { directAfterDraw(directRecord, this); } catch (error) {}
+      targetContentVersionAfter = contentVersion(this.canvas);
     } else {
-      const targetContentVersionAfter = advanceContentVersion(this.canvas);
+      targetContentVersionAfter = advanceContentVersion(this.canvas);
       if (recorded?.operation?.index !== null
           && recorded?.operation?.index !== undefined) {
         const activeTile = recorded?.tileRecord;
-        if (activeTile) activeTile.targetContentVersionAfter = targetContentVersionAfter;
+        if (activeTile) {
+          activeTile.targetContentVersionAfter = targetContentVersionAfter;
+          diagnosticTileCompleted(
+            recorded?.operation?.target?.canvasId,
+            recorded?.operation,
+            targetContentVersionAfter,
+          );
+        }
         const activeNonImage = recorded?.nonImageBitmapRecord;
         if (activeNonImage) activeNonImage.targetContentVersionAfter = targetContentVersionAfter;
       }
     }
+    diagnosticOrphanTileCompleted(recorded?.orphanTileRecord, targetContentVersionAfter);
     if (nativeCall) {
       try {
         if (nativeCall._bookwalkerPendingFullSourceSnapshot) {
@@ -2754,6 +3409,224 @@ _BOOKWALKER_P4B_CURRENT_ROI_ANCHOR_SCRIPT = """
 }
 """
 
+_BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT = """
+({expectedParts, initialAnchor, originalElement, captureWindowToken,
+  captureWindowBookIdentity, captureWindowCounter, captureBaseline = false,
+  roiBaseline = null}) => {
+  const parts = Array.isArray(expectedParts) ? expectedParts : [];
+  const initial = initialAnchor && typeof initialAnchor === 'object'
+    ? initialAnchor : null;
+  if (!initial || !originalElement || parts.length < 1 || parts.length > 2
+      || !originalElement.isConnected || !document.contains(originalElement)) {
+    return {available: false, exact: false, reason: 'capture window renderer unavailable'};
+  }
+  const currentScreen = [...document.querySelectorAll('#renderer .currentScreen canvas:not(.dummy)')];
+  const pool = currentScreen.length ? currentScreen
+    : [...document.querySelectorAll('#renderer canvas:not(.dummy)')];
+  const visible = pool.filter(element => {
+    if (!element?.isConnected || !document.contains(element)) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none'
+      && rect.width > 0 && rect.height > 0
+      && Number(element.width) > 0 && Number(element.height) > 0;
+  });
+  if (visible.length !== 1 || visible[0] !== originalElement) {
+    return {available: false, exact: false, reason: 'current renderer canvas changed'};
+  }
+  let currentBookIdentity = null;
+  try { currentBookIdentity = new URL(window.location.href).searchParams.get('cid') || null; }
+  catch (error) {}
+  const currentCounter = document.querySelector('#pageSliderCounter')?.textContent || null;
+  if (window.__bookwalkerCaptureWindowToken !== captureWindowToken
+      || currentBookIdentity !== captureWindowBookIdentity
+      || currentCounter !== captureWindowCounter) {
+    return {available: false, exact: false, reason: 'capture window identity changed'};
+  }
+  if (typeof window.__bookwalkerP4BCurrentAnchor !== 'function') {
+    return {available: false, exact: false, reason: 'capture window anchor unavailable'};
+  }
+  const common = initial.common || initial;
+  const commonFields = ['traceId', 'actualCanvasId', 'connected', 'bookIdentity',
+    'counter', 'geometryToken', 'traceEpoch', 'geometryVersion',
+    'targetContentVersion', 'geometryHistoryIncomplete', 'observerFlushed',
+    'observerAvailable', 'observerTakeRecordsAvailable', 'unknownMutation',
+    'resetEpoch', 'canvasWidth', 'canvasHeight'];
+  const selectedFields = ['canvasId', 'operationIndex', 'sourceId', 'sourceCanvasId',
+    'traceEpoch', 'sourceContentVersion', 'fullSourceSnapshotId',
+    'targetSnapshotId', 'targetContentVersionAfter', 'sourceRect', 'destination'];
+  const same = (left, right) => left === right || JSON.stringify(left) === JSON.stringify(right);
+  const present = value => value !== null && value !== undefined && value !== '';
+  const diagnosticAnchor = anchor => {
+    if (!anchor || typeof anchor !== 'object') return null;
+    const selectedOperationIndex = Number(parts[0]?.operationIndex || 0);
+    const traceId = originalElement.getAttribute('data-bookwalker-trace-id') || null;
+    const pickAnchor = value => {
+      if (!value || typeof value !== 'object') return null;
+      return {
+        traceId: value.traceId ?? null,
+        actualCanvasId: value.actualCanvasId ?? null,
+        bookIdentity: value.bookIdentity ?? null,
+        counter: value.counter ?? null,
+        geometryToken: value.geometryToken ?? null,
+        traceEpoch: value.traceEpoch ?? null,
+        geometryVersion: value.geometryVersion ?? null,
+        resetEpoch: value.resetEpoch ?? null,
+        canvasWidth: value.canvasWidth ?? null,
+        canvasHeight: value.canvasHeight ?? null,
+        targetContentVersion: value.targetContentVersion ?? null,
+      };
+    };
+    const rendererDraws = (window.__bookwalkerDrawCalls || [])
+      .filter(call => call?.canvasId === traceId
+        && Number(call?.operationIndex || 0) >= selectedOperationIndex)
+      .slice(-16)
+      .map(call => ({
+        canvasId: call.canvasId ?? null,
+        operationIndex: call.operationIndex ?? null,
+        traceEpoch: call.traceEpoch ?? null,
+        captureWindowToken: call.captureWindowToken ?? null,
+        resetEpoch: call.resetEpoch ?? null,
+        destination: call.destination ?? null,
+      }));
+    const nativeDraws = (window.__bookwalkerNativeDrawCalls || [])
+      .filter(call => call?.canvasId === traceId
+        && Number(call?.traceOperationIndex || call?.operation?.index || 0)
+          >= selectedOperationIndex)
+      .slice(-16)
+      .map(call => ({
+        canvasId: call.canvasId ?? null,
+        traceOperationIndex: call.traceOperationIndex
+          ?? call.operation?.index ?? null,
+        sourceId: call.sourceId ?? null,
+        sourceCanvasId: call.sourceCanvasId
+          ?? call.source?.canvasId ?? null,
+        sourceContentVersion: call.sourceContentVersion ?? null,
+        targetContentVersionAfter: call.targetContentVersionAfter ?? null,
+        captureWindowToken: call.captureWindowToken ?? null,
+      }));
+    return {
+      expected: pickAnchor(common),
+      actual: pickAnchor(anchor),
+      selectedOperationIndex,
+      currentCaptureWindowToken: window.__bookwalkerCaptureWindowToken ?? null,
+      currentBookIdentity: (() => {
+        try { return new URL(window.location.href).searchParams.get('cid') || null; }
+        catch (error) { return null; }
+      })(),
+      currentCounter: document.querySelector('#pageSliderCounter')?.textContent || null,
+      recentRendererDraws: rendererDraws,
+      recentNativeDraws: nativeDraws,
+    };
+  };
+  const anchors = parts.map(part => window.__bookwalkerP4BCurrentAnchor(
+    originalElement, part.operationIndex));
+  const commonEqual = anchor => commonFields.every(field => (
+    present(common[field]) && present(anchor?.[field]) && same(common[field], anchor[field])
+  )) && anchor.connected === true && anchor.geometryHistoryIncomplete === false
+    && anchor.observerFlushed === true && anchor.observerAvailable === true
+    && anchor.observerTakeRecordsAvailable === true && anchor.unknownMutation === false;
+  if (anchors.some(anchor => !anchor || !commonEqual(anchor))) {
+    const mismatchAnchor = anchors.find(anchor => !anchor || !commonEqual(anchor)) || null;
+    const mismatchField = commonFields.find(field => (
+      !mismatchAnchor || !present(common[field])
+        || !present(mismatchAnchor[field])
+        || !same(common[field], mismatchAnchor[field])
+    )) || null;
+    return {available: false, exact: false, reason: 'capture window common anchor changed',
+      mismatch: mismatchField,
+      diagnostic: diagnosticAnchor(mismatchAnchor)};
+  }
+  for (let index = 0; index < parts.length; index += 1) {
+    const selected = anchors[index]?.selected;
+    if (!selected || selectedFields.some(field => (
+      !present(selected[field]) || !same(selected[field], parts[index][field])
+    ))) {
+      return {available: false, exact: false, reason: 'capture window selected tuple changed'};
+    }
+  }
+  const current = [];
+  const canvases = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const destination = parts[index].destination;
+    const x = Number(destination?.x), y = Number(destination?.y);
+    const width = Number(destination?.width), height = Number(destination?.height);
+    if (![x, y, width, height].every(Number.isInteger) || width <= 0 || height <= 0
+        || x < 0 || y < 0 || x + width > originalElement.width
+        || y + height > originalElement.height) {
+      return {available: false, exact: false, reason: 'capture window ROI geometry unavailable'};
+    }
+    const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d');
+    const source = originalElement.getContext('2d');
+    if (!context || !source) {
+      return {available: false, exact: false, reason: 'capture window ROI context unavailable'};
+    }
+    if (captureBaseline) {
+      context.drawImage(originalElement, x, y, width, height, 0, 0, width, height);
+      canvases.push(canvas);
+      continue;
+    }
+    const baseline = roiBaseline?.canvases?.[index];
+    if (!baseline || baseline.width !== width || baseline.height !== height) {
+      return {available: false, exact: false, reason: 'capture window ROI baseline unavailable'};
+    }
+    context.drawImage(baseline, 0, 0);
+    const actual = source.getImageData(x, y, width, height).data;
+    const expected = context.getImageData(0, 0, width, height).data;
+    let differing = 0; let maximum = 0;
+    for (let offset = 0; offset < actual.length; offset += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const delta = Math.abs(actual[offset + channel] - expected[offset + channel]);
+        maximum = Math.max(maximum, delta); different ||= delta !== 0;
+      }
+      if (different) differing += 1;
+    }
+    current.push({available: true, dimensions_equal: true, exact: differing === 0,
+      differing_pixel_count: differing, max_channel_difference: maximum});
+  }
+  const after = parts.map(part => window.__bookwalkerP4BCurrentAnchor(
+    originalElement, part.operationIndex));
+  let finalBookIdentity = null;
+  try { finalBookIdentity = new URL(window.location.href).searchParams.get('cid') || null; }
+  catch (error) {}
+  const finalCounter = document.querySelector('#pageSliderCounter')?.textContent || null;
+  if (window.__bookwalkerCaptureWindowToken !== captureWindowToken
+      || finalBookIdentity !== captureWindowBookIdentity
+      || finalCounter !== captureWindowCounter) {
+    return {available: false, exact: false, reason: 'capture window identity changed'};
+  }
+  if (after.some((anchor, index) => (
+    !anchor || !commonEqual(anchor)
+      || !same(anchor.selected, anchors[index].selected)
+  ))) {
+    const mismatchIndex = after.findIndex((anchor, index) => (
+      !anchor || !commonEqual(anchor)
+        || !same(anchor.selected, anchors[index].selected)
+    ));
+    const mismatchAnchor = mismatchIndex >= 0 ? after[mismatchIndex] : null;
+    const mismatchField = commonFields.find(field => (
+      !mismatchAnchor || !present(common[field])
+        || !present(mismatchAnchor[field])
+        || !same(common[field], mismatchAnchor[field])
+    )) || (mismatchIndex >= 0 ? 'selected' : null);
+    return {available: true, exact: false, reason: 'capture window final anchor changed',
+      mismatch: mismatchField,
+      diagnostic: diagnosticAnchor(mismatchAnchor)};
+  }
+  if (captureBaseline) {
+    return {available: true, exact: true, reason: 'capture window baseline pinned',
+      roiBaseline: {common, parts, canvases}};
+  }
+  const exact = current.length === parts.length && current.every(item => item.exact === true);
+  return {available: true, exact, current,
+    reason: exact ? 'capture window ROI exact' : 'capture window ROI mismatch'};
+}
+"""
+
 _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
 (requestedMappingIds) => {
   try {
@@ -2914,6 +3787,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         'segmentExecutedFullClearWitness',
         'segmentExecutedFullClearWitnessRejection',
         'segmentTraceEpoch',
+        'captureWindowToken', 'captureWindowRetained',
         'sourceSnapshotId',
         'sourceSnapshotError',
         'sourceSnapshotContentVersion',
@@ -4978,6 +5852,12 @@ class BookWalkerAdapter(SiteAdapter):
                 ),
                 "lossless_shadow": self._safe_diagnostic_value(
                     capture.get("lossless_shadow")
+                ),
+                "diagnostic_history": self._safe_diagnostic_value(
+                    capture.get("diagnostic_history")
+                ),
+                "capture_window_final_join": self._safe_diagnostic_value(
+                    capture.get("capture_window_final_join")
                 ),
             }
         )
@@ -7968,6 +8848,76 @@ class BookWalkerAdapter(SiteAdapter):
             finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
 
+        capture_window_tokens = {
+            call.get("captureWindowToken")
+            for call in selected_draw_calls
+            if isinstance(call, dict)
+            and call.get("captureWindowToken") is not None
+        }
+        capture_window_path = any(
+            isinstance(call, dict) and call.get("captureWindowRetained") is True
+            for call in selected_draw_calls
+        )
+        current_capture_window_token: Any | None = None
+        if capture_window_path:
+            try:
+                current_capture_window_token = await page.evaluate(
+                    "() => window.__bookwalkerCaptureWindowToken ?? null"
+                )
+            except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+                current_capture_window_token = None
+            shadow["capture_window_token"] = current_capture_window_token
+            if (
+                len(capture_window_tokens) != 1
+                or current_capture_window_token not in capture_window_tokens
+            ):
+                shadow["reason"] = "capture window token is not current and unique"
+                shadow["parts"] = [
+                    self._shadow_part_defaults(
+                        len(reconstruction_candidates),
+                        final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                    )
+                    for _ in native_captures
+                ]
+                finish_timing()
+                return LosslessReconstructionEvaluation(shadow, None)
+            try:
+                current_identity = await self.get_content_identity(page)
+            except Exception:  # noqa: BLE001 - strict current identity is required
+                current_identity = None
+            current_page_id = current_identity.page_id if current_identity else None
+            current_source_id = current_identity.source_id if current_identity else None
+            shadow["capture_window_identity"] = {
+                "page_id": current_page_id,
+                "source_id": current_source_id,
+            }
+            if current_identity is None or not current_page_id or not current_source_id:
+                shadow["reason"] = "capture window current identity unavailable"
+                shadow["parts"] = [
+                    self._shadow_part_defaults(
+                        len(reconstruction_candidates),
+                        final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                    )
+                    for _ in native_captures
+                ]
+                finish_timing()
+                return LosslessReconstructionEvaluation(shadow, None)
+            if any(
+                call.get("pageCounter") != current_page_id
+                or call.get("bookIdentity") != current_source_id
+                for call in selected_draw_calls
+            ):
+                shadow["reason"] = "capture window renderer identity is stale"
+                shadow["parts"] = [
+                    self._shadow_part_defaults(
+                        len(reconstruction_candidates),
+                        final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                    )
+                    for _ in native_captures
+                ]
+                finish_timing()
+                return LosslessReconstructionEvaluation(shadow, None)
+
         requested_mapping_ids: list[str] = []
         requested_mapping_ids_seen: set[str] = set()
         for draw_call in selected_draw_calls:
@@ -8194,6 +9144,12 @@ class BookWalkerAdapter(SiteAdapter):
                 and any(strict_executed_clear_flags)
             )
         )
+        # Retained-boundary captures have their own final current-ROI join in
+        # capture_page.finish().  Do not promote them into the legacy J2
+        # executed-clear proof flag: that flag deliberately requires a
+        # strict-clear part record, which a direct retained mapping does not
+        # produce.  The retained path still requires the native pixel gate
+        # below and the final renderer join before any output is returned.
 
         batch_atomic_proof: dict[str, Any] | None = None
         parts: list[dict[str, Any]] = []
@@ -8456,6 +9412,7 @@ class BookWalkerAdapter(SiteAdapter):
                     self.final_pixel_verify_enabled
                     or mandatory_intrinsic_verify
                     or uniform_refinement is not None
+                    or capture_window_path
                 ):
                     final_compare_started = time.perf_counter()
                     if (
@@ -8666,7 +9623,11 @@ class BookWalkerAdapter(SiteAdapter):
             and (
                 part.get("component_quantization_selectors_equal") is True
                 if part.get("coded_dimensions") != part.get("visible_dimensions")
-                else True
+                else (
+                    part.get("component_quantization_selectors_equal") is True
+                    if capture_window_path
+                    else True
+                )
             )
             and (
                 part.get("uniform_refinement_used") is not True
@@ -8701,8 +9662,9 @@ class BookWalkerAdapter(SiteAdapter):
                 or (
                     part.get("coded_dimensions") == part.get("visible_dimensions")
                     and (
-                        not self.final_pixel_verify_enabled
-                        or part.get("native_pixel_exact") is True
+                        part.get("native_pixel_exact") is True
+                        if capture_window_path or self.final_pixel_verify_enabled
+                        else True
                     )
                 )
             )
@@ -9213,8 +10175,12 @@ class BookWalkerAdapter(SiteAdapter):
                 () => {
                   try { window.__bookwalkerStopCoverRendererDiagnostics?.(); } catch (error) {}
                   window.__bookwalkerDrawCalls = [];
-                  window.__bookwalkerResetDirectOneHop?.();
-                  window.__bookwalkerResetTransformTrace?.();
+                  try { window.__bookwalkerResetDirectOneHop?.(); } catch (error) {}
+                  if (typeof window.__bookwalkerBeginCaptureWindow === 'function') {
+                    window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+                  } else {
+                    window.__bookwalkerResetTransformTrace?.('geometry_cleanup');
+                  }
                 }
                 """
             )
@@ -9230,10 +10196,14 @@ class BookWalkerAdapter(SiteAdapter):
                 () => {
                   window.__bookwalkerNativeDrawCalls = [];
                   window.__bookwalkerResetNativeCaptureDiagnostics?.();
-                  window.__bookwalkerResetDirectOneHop?.();
+                  try { window.__bookwalkerResetDirectOneHop?.(); } catch (error) {}
                   window.__bookwalkerNativeSourceObjects?.clear();
                   window.__bookwalkerNativeSnapshots?.clear();
-                  window.__bookwalkerResetTransformTrace?.();
+                  if (typeof window.__bookwalkerBeginCaptureWindow === 'function') {
+                    window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+                  } else {
+                    window.__bookwalkerResetTransformTrace?.('native_capture_arm');
+                  }
                   window.__bookwalkerNativeCaptureEnabled = true;
                   // The direct one-hop ledger is a cover-only path.  Initial
                   // page capture uses the prepare-page flag; navigation arms
@@ -9347,6 +10317,193 @@ class BookWalkerAdapter(SiteAdapter):
         if cancellation is not None:
             raise cancellation
 
+    async def _read_diagnostic_history(
+        self,
+        page: Page,
+        trace_id: str | None,
+        draw_calls: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Read bounded source/renderer history after capture selection finishes."""
+
+        if not trace_id:
+            return None
+        source_ids = [
+            call.get("sourceId")
+            for call in draw_calls
+            if isinstance(call, dict) and call.get("sourceId")
+        ]
+        source_canvas_ids = [
+            call.get("sourceCanvasId")
+            or (call.get("source") or {}).get("canvasId")
+            for call in draw_calls
+            if isinstance(call, dict)
+            and (
+                call.get("sourceCanvasId")
+                or (call.get("source") or {}).get("canvasId")
+            )
+        ]
+        try:
+            result = await page.evaluate(
+                """
+                ({canvasId, sourceIds, sourceCanvasIds}) => {
+                  const history = window.__bookwalkerDiagnosticHistory;
+                  if (!history || typeof history !== 'object') return null;
+                  const ids = new Set(sourceIds || []);
+                  const canvasIds = new Set([canvasId, ...(sourceCanvasIds || [])]);
+                  const events = Array.isArray(history.events)
+                    ? history.events.filter(event => (
+                        canvasIds.has(event.canvasId)
+                        || canvasIds.has(event.sourceCanvasId)
+                        || ids.has(event.sourceId)
+                        || [
+                          'trace_reset', 'capture_window_begin',
+                          'active_segment_eviction', 'diagnostic_canvas_eviction',
+                          'orphan_tile_draws',
+                        ].includes(event.kind)
+                      )).slice(-32).map(event => ({
+                        ...event,
+                        capture_window_id: event.captureWindowToken ?? null,
+                      }))
+                    : [];
+                  const canvasSummaries = {};
+                  for (const id of canvasIds) {
+                    if (history.canvasSummaries?.[id]) {
+                      canvasSummaries[id] = history.canvasSummaries[id];
+                    }
+                  }
+                  return {
+                    version: history.version ?? null,
+                    currentCounter: document.querySelector('#pageSliderCounter')?.textContent || null,
+                    capture_window_id: window.__bookwalkerCaptureWindowToken ?? null,
+                    currentCaptureWindowToken:
+                      window.__bookwalkerCaptureWindowToken ?? null,
+                    droppedEventCount: history.droppedEventCount ?? 0,
+                    droppedCanvasSummaryCount: history.droppedCanvasSummaryCount ?? 0,
+                    canvasSummaries,
+                    relatedEvents: events,
+                  };
+                }
+                """,
+                {"canvasId": trace_id, "sourceIds": source_ids, "sourceCanvasIds": source_canvas_ids},
+            )
+            return result if isinstance(result, dict) else None
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            return {"available": False, "reason": "diagnostic history read failed"}
+
+    async def _capture_window_roi_baseline(
+        self,
+        page: Page,
+        selected_draw_calls: list[dict[str, Any]],
+        initial_anchor: dict[str, Any] | None,
+        renderer_handle: Any | None,
+    ) -> Any | None:
+        """Pin the settled whole renderer ROI for a retained capture window."""
+
+        if renderer_handle is None or not isinstance(initial_anchor, dict):
+            return None
+        tokens = {call.get("captureWindowToken") for call in selected_draw_calls}
+        if len(tokens) != 1 or None in tokens:
+            return None
+        expected_parts = [self._p4b_selected_expected(call) for call in selected_draw_calls]
+        normalized_anchor = initial_anchor
+        if len(expected_parts) == 1 and "common" not in initial_anchor:
+            normalized_anchor = {"common": initial_anchor, "parts": [initial_anchor]}
+        first = selected_draw_calls[0]
+        if (
+            self._initial_content_id is None
+            or first.get("bookIdentity") != self._initial_content_id
+        ):
+            return None
+        payload = {
+            "expectedParts": expected_parts,
+            "initialAnchor": normalized_anchor,
+            "originalElement": renderer_handle,
+            "captureWindowToken": next(iter(tokens)),
+            "captureWindowBookIdentity": first.get("bookIdentity"),
+            "captureWindowCounter": first.get("pageCounter"),
+            "captureBaseline": True,
+        }
+        try:
+            handle = await page.evaluate_handle(
+                _BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT, payload
+            )
+            self._capture_snapshot_handles.append(handle)
+            result = await handle.evaluate(
+                "value => ({available: value?.available === true, exact: value?.exact === true, reason: value?.reason || null})"
+            )
+            if not isinstance(result, dict) or result.get("exact") is not True:
+                return None
+            roi_baseline = await handle.get_property("roiBaseline")
+            if roi_baseline is not None:
+                self._capture_snapshot_handles.append(roi_baseline)
+            return roi_baseline
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            return None
+
+    async def _capture_window_final_join(
+        self,
+        page: Page,
+        selected_draw_calls: list[dict[str, Any]],
+        initial_anchor: dict[str, Any] | None,
+        renderer_handle: Any | None,
+        roi_baseline: Any | None,
+    ) -> dict[str, Any]:
+        """Join a retained-boundary capture to the final live renderer state."""
+
+        tokens = {
+            call.get("captureWindowToken")
+            for call in selected_draw_calls
+            if isinstance(call, dict)
+        }
+        retained = any(
+            isinstance(call, dict) and call.get("captureWindowRetained") is True
+            for call in selected_draw_calls
+        )
+        result: dict[str, Any] = {"required": retained, "exact": False}
+        if not retained:
+            result.update({"exact": True, "reason": "retained boundary not used"})
+            return result
+        if len(tokens) != 1 or None in tokens:
+            result["reason"] = "capture window token is not unique"
+            return result
+        if renderer_handle is None or not isinstance(initial_anchor, dict) or roi_baseline is None:
+            result["reason"] = "current renderer anchor unavailable"
+            return result
+        try:
+            expected_parts = [self._p4b_selected_expected(call) for call in selected_draw_calls]
+            normalized_anchor = initial_anchor
+            if len(expected_parts) == 1 and "common" not in initial_anchor:
+                normalized_anchor = {"common": initial_anchor, "parts": [initial_anchor]}
+            first = selected_draw_calls[0]
+            renderer = await page.evaluate(
+                _BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT,
+                {
+                    "expectedParts": expected_parts,
+                    "initialAnchor": normalized_anchor,
+                    "originalElement": renderer_handle,
+                    "captureWindowToken": next(iter(tokens)),
+                    "captureWindowBookIdentity": first.get("bookIdentity"),
+                    "captureWindowCounter": first.get("pageCounter"),
+                    "roiBaseline": roi_baseline,
+                },
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError, TypeError):
+            renderer = {"available": False, "exact": False,
+                        "reason": "current renderer join failed"}
+        result["renderer"] = self._safe_diagnostic_value(renderer)
+        result["exact"] = bool(
+            isinstance(renderer, dict)
+            and renderer.get("available") is True
+            and renderer.get("exact") is True
+        )
+        if not result["exact"]:
+            result["reason"] = (
+                renderer.get("reason")
+                if isinstance(renderer, dict) and renderer.get("reason")
+                else "current renderer ROI is not exact"
+            )
+        return result
+
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         """Prefer native source crops and return None for the legacy fallback."""
 
@@ -9364,8 +10521,60 @@ class BookWalkerAdapter(SiteAdapter):
         self._p4b_redraw_selected_draw_calls = None
         initial_anchor_retried = False
         retry_roi_baseline: Any | None = None
+        trace_id: str | None = None
+        diagnostic_draw_calls: list[dict[str, Any]] = []
+        selected_capture_window_retained = False
+        p4b_initial_anchor: dict[str, Any] | None = None
+        p4b_renderer_handle: Any | None = None
+        capture_window_roi_baseline: Any | None = None
 
         async def finish(captures: tuple[CaptureResult, ...]) -> tuple[CaptureResult, ...]:
+            final_join: dict[str, Any] | None = None
+            if selected_capture_window_retained:
+                try:
+                    final_join = await self._capture_window_final_join(
+                        page,
+                        selected_draw_calls,
+                        p4b_initial_anchor,
+                        p4b_renderer_handle,
+                        capture_window_roi_baseline,
+                    )
+                except Exception as exc:  # noqa: BLE001 - diagnose, then fail closed
+                    final_join = {
+                        "required": True,
+                        "exact": False,
+                        "reason": "capture window final renderer join raised",
+                        "error_type": type(exc).__name__,
+                    }
+            # Do not insert a diagnostic await before the retained atomic proof.
+            # The final-join JS task already returns bounded draw diagnostics;
+            # this history read occurs only after that proof has completed.
+            try:
+                history = await self._read_diagnostic_history(
+                    page, trace_id, diagnostic_draw_calls
+                )
+                if history is not None:
+                    self._capture_debug["bookwalker_capture"][
+                        "diagnostic_history"
+                    ] = self._safe_diagnostic_value(history)
+            except Exception:  # noqa: BLE001 - diagnostics cannot change capture output
+                self._capture_debug["bookwalker_capture"][
+                    "diagnostic_history"
+                ] = {"available": False, "reason": "diagnostic history read failed"}
+            if selected_capture_window_retained and final_join is None:
+                final_join = {
+                    "required": True,
+                    "exact": False,
+                    "reason": "capture window final renderer join unavailable",
+                }
+            if selected_capture_window_retained and final_join is not None:
+                self._capture_debug["bookwalker_capture"][
+                    "capture_window_final_join"
+                ] = self._safe_diagnostic_value(final_join)
+                if final_join.get("exact") is not True:
+                    raise UnknownPageStateError(
+                        "BookWalker retained capture final renderer join failed"
+                    )
             if initial_anchor_retried:
                 if retry_roi_baseline is None:
                     raise UnknownPageStateError("BookWalker initial batch retry settled ROI baseline missing")
@@ -9383,7 +10592,6 @@ class BookWalkerAdapter(SiteAdapter):
 
         try:
             canvas = await self.get_capture_target(page)
-            p4b_renderer_handle: Any | None = None
             try:
                 # Locator.element_handle() is the supported Playwright API.
                 # Keep the real capture path independent of test-double shape.
@@ -9446,6 +10654,9 @@ class BookWalkerAdapter(SiteAdapter):
             )
             if not isinstance(draw_calls, list):
                 draw_calls = []
+            diagnostic_draw_calls = [
+                call for call in draw_calls if isinstance(call, dict)
+            ]
             selected = select_native_draw_calls(
                 draw_calls,
                 canvas_id=trace_id,
@@ -9474,7 +10685,6 @@ class BookWalkerAdapter(SiteAdapter):
             selection_debug["outcome"] = "selected"
             selection_debug["selected_count"] = len(selected)
             selected_draw_calls = selected
-            p4b_initial_anchor: dict[str, Any] | None = None
             p4b_initial_anchor_failure: str | None = None
             if (
                 p4b_renderer_handle is not None
@@ -9592,6 +10802,75 @@ class BookWalkerAdapter(SiteAdapter):
                         )
                     except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
                         p4b_initial_anchor = None
+            selected_capture_window_retained = any(
+                isinstance(call, dict)
+                and call.get("captureWindowRetained") is True
+                for call in selected
+            )
+            if selected_capture_window_retained:
+                anchor_common = (
+                    p4b_initial_anchor.get("common", p4b_initial_anchor)
+                    if isinstance(p4b_initial_anchor, dict)
+                    else None
+                )
+                anchor_parts = (
+                    p4b_initial_anchor.get("parts")
+                    if isinstance(p4b_initial_anchor, dict)
+                    else None
+                )
+                if not isinstance(anchor_parts, list):
+                    anchor_parts = [p4b_initial_anchor]
+                if (
+                    self._initial_content_id is None
+                    or not isinstance(anchor_common, dict)
+                    or anchor_common.get("bookIdentity") != self._initial_content_id
+                    or len(anchor_parts) != len(selected)
+                ):
+                    raise UnknownPageStateError(
+                        "BookWalker retained capture content identity is unavailable"
+                    )
+                if not isinstance(selection_anchor, dict):
+                    raise UnknownPageStateError(
+                        "BookWalker retained capture selection anchor is unavailable"
+                    )
+                common_fields = (
+                    "traceId", "actualCanvasId", "connected", "bookIdentity", "counter",
+                    "geometryToken", "traceEpoch", "geometryVersion", "targetContentVersion",
+                    "geometryHistoryIncomplete", "observerFlushed", "observerAvailable",
+                    "observerTakeRecordsAvailable", "unknownMutation", "resetEpoch",
+                    "canvasWidth", "canvasHeight",
+                )
+                if any(
+                    selection_anchor.get(field) != anchor_common.get(field)
+                    for field in common_fields
+                ):
+                    raise UnknownPageStateError(
+                        "BookWalker retained capture selection anchor changed"
+                    )
+                for index, call in enumerate(selected):
+                    part = anchor_parts[index]
+                    selected_anchor = part.get("selected") if isinstance(part, dict) else None
+                    expected_selected = self._p4b_selected_expected(call)
+                    if (
+                        not isinstance(selected_anchor, dict)
+                        or any(
+                            selected_anchor.get(field) != value
+                            for field, value in expected_selected.items()
+                        )
+                    ):
+                        raise UnknownPageStateError(
+                            "BookWalker retained capture selected tuple changed"
+                        )
+                capture_window_roi_baseline = await self._capture_window_roi_baseline(
+                    page,
+                    selected,
+                    p4b_initial_anchor,
+                    p4b_renderer_handle,
+                )
+                if capture_window_roi_baseline is None:
+                    raise UnknownPageStateError(
+                        "BookWalker retained capture initial renderer ROI unavailable"
+                    )
             materialization_started = time.perf_counter()
             selected = await self._materialize_native_source_crops(page, selected)
             selected_draw_calls = selected
@@ -9898,6 +11177,10 @@ class BookWalkerAdapter(SiteAdapter):
             return await finish(native_captures)
         except CaptureUnavailableError as exc:
             self._capture_debug["bookwalker_capture"]["failure_reason"] = str(exc)
+            if selected_capture_window_retained:
+                raise UnknownPageStateError(
+                    "BookWalker retained capture became unavailable"
+                ) from exc
             if initial_anchor_retried:
                 raise UnknownPageStateError("BookWalker initial batch retry capture unavailable") from exc
             return None
@@ -9917,6 +11200,10 @@ class BookWalkerAdapter(SiteAdapter):
             self._capture_debug["bookwalker_capture"]["failure_reason"] = (
                 f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
             )
+            if selected_capture_window_retained:
+                raise UnknownPageStateError(
+                    "BookWalker retained capture failed closed"
+                ) from exc
             if initial_anchor_retried:
                 raise UnknownPageStateError("BookWalker initial batch retry capture failed") from exc
             return None
@@ -10330,7 +11617,7 @@ class BookWalkerAdapter(SiteAdapter):
         await page.evaluate(
             "() => { try { window.__bookwalkerStopCoverRendererDiagnostics?.(); } catch (error) {} "
             "window.__bookwalkerDrawCalls = []; "
-            "window.__bookwalkerResetTransformTrace?.(); }"
+            "window.__bookwalkerResetTransformTrace?.('capture_cleanup'); }"
         )
         if self._capture_debug.get("bookwalker_capture", {}).get("cover_geometry"):
             await self._refresh_cover_renderer_diagnostics(page)

@@ -374,6 +374,46 @@ class _TestBookWalkerAdapter(BookWalkerAdapter):
         return [{"x": 0, "y": 0, "width": 100, "height": 100}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renderer_exact", [True, False])
+async def test_capture_window_final_join_requires_current_token_identity_and_roi(
+    monkeypatch: pytest.MonkeyPatch,
+    renderer_exact: bool,
+) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic-book"
+
+    class Page:
+        def __init__(self, exact: bool) -> None:
+            self.exact = exact
+
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
+            return {"available": True, "exact": self.exact}
+
+    selected = [{
+        "captureWindowToken": "window-7",
+        "captureWindowRetained": True,
+        "pageCounter": "2/3",
+        "bookIdentity": "synthetic-book",
+        "traceEpoch": 4,
+    }]
+    result = await adapter._capture_window_final_join(
+        Page(renderer_exact), selected, {"selected": {}}, object(), object()
+    )
+    assert result["required"] is True
+    assert result["exact"] is renderer_exact
+
+    async def stale_page(_self: object, _expression: str, *_args: object) -> dict[str, object]:
+        return {"available": False, "exact": False, "reason": "capture window identity changed"}
+
+    monkeypatch.setattr(Page, "evaluate", stale_page)
+    stale = await adapter._capture_window_final_join(
+        Page(renderer_exact), selected, {"selected": {}}, object(), object()
+    )
+    assert stale["exact"] is False
+    assert stale["reason"] == "capture window identity changed"
+
+
 def _native_call_fixture(*, constructor: str | None = "ImageBitmap") -> dict:
     return {
         "canvasId": "content",

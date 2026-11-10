@@ -52,6 +52,7 @@ async ({encoded, mimeType}) => {
   const bitmap = await createImageBitmap(blob);
   try {
     const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
     canvas.width = 64;
     canvas.height = 64;
     const context = canvas.getContext('2d', {willReadFrequently: true});

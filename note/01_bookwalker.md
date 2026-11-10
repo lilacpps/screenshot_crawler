@@ -3999,32 +3999,343 @@ failed closed before viewer initialization. No viewer entry/page navigation or
 capture occurred; no Catalog/ZIP writes occurred, the created page was closed,
 and existing tabs were untouched.
 
-The final bounded 1940 strict-owned probe used the worktree adapter SHA above
-and captured pages 2/300, 3/300, and 4/300 at viewport 1920x1001, DPR 1. The
-initial anchor was 1/300 and was restored exactly to 1/300 with the same CID;
-tabs remained 4 after closing the created page. All three captures remained
-source-native PNG (960x1280). Existing debug reported
+The earlier bounded 1940 manual probe used the worktree adapter and captured
+pages 2/300, 3/300, and 4/300 at viewport 1920x1001, DPR 1. Its recorded
+anchor was 2/300 and it restored exactly to 2/300 with the same CID; all three
+captures remained source-native PNG (960x1280). Existing debug reported
 `selected renderer draw mapping identity unavailable` with no mapping ID or
-proven mapping, so this probe provides no JPEG/proof evidence and caused no
-additional production change. Sanitized results are in
-`.tmp/bookwalker-live-manual-1940-20261110-r2/summary.json`.
+proven mapping. This manual run is retained as a baseline observation only;
+it is not evidence that a later mapping could safely be reused. Sanitized
+results are in `.tmp/bookwalker-live-manual-1940-20261110-r2/summary.json`.
+
+## Mapping-identity diagnostic history (2026-11-10)
+
+To distinguish missing renderer history from a source-format or timing issue,
+the adapter now keeps an observation-only, bounded history independent of the
+transform trace: at most 16 canvas summaries and 128 significant events.
+It records trace reset reasons, segment creation and clear-witness results,
+active-segment eviction, aggregate ImageBitmap tile draws made without an
+active segment, and bounded freeze success/null reasons. It retains only
+metadata (canvas/source IDs, dimensions, content/reset versions, counters and
+first/last operation positions); it does not retain image bodies, URLs, or
+per-tile arrays. Diagnostic exceptions and truncation cannot affect native
+selection, proof, JPEG choice, or PNG fallback. The readout is taken after
+capture selection completes and is persisted as bounded sidecar metadata.
+
+The synthetic browser test verifies reset-spanning history, `source_not_canvas`
+and `no_active_segment` classification, active-summary eviction, and that
+diagnostic failures do not change drawing. The `131 passed, 55 warnings` count
+here is the historical diagnostic-only checkpoint, not the latest affected
+suite result.
+
+The one subsequent normal-Runner probe for owned 1940 used adapter SHA
+`7abbb4a5e14497b561e8432af21b69dbde0d69cf04d03b1fc0e43830575e7140` and draw
+trace SHA `a135af1d31ebb1f8d564e7fc456cae9f44fb49e2fe7d988ce9f2371fa7c48853d`.
+The actual pre-Home anchor was 5/300 (not the product-page observation), and
+the same counter/CID was observed after capture and after settling; tabs were
+4 -> 5 -> 4. Pages 1/300 and 2/300 were JPEG; pages 3/300 and 4/300 remained
+PNG. The isolated summary is
+`.tmp/bookwalker-live-diagnostic-1940-20261110-r3/summary.json`.
+
+For the target renderer source canvas 4, the history shows the same bounded
+sequence on the PNG pages: an `orphan_tile_draws` aggregate begins after the
+arm/reset epoch, approximately 1,200 ImageBitmap draws occur while no active
+segment is present, `freeze_null` is recorded with reason `no_active_segment`,
+and a following `clearRect` creates a segment and records a successful clear
+witness. Later 1,200-tile active mappings are independently frozen and proven.
+Across pages 2, 3, and 4 the aggregate orphan counts grew 1,200, 2,400, and
+3,600; event and summary drops were zero for the relevant page-2 history.
+Active-segment eviction was observed (five bounded eviction events), so the
+diagnostic establishes a lifecycle/ownership race candidate, not proof that a
+previous mapping belongs to the current renderer page. At the time of this
+historical observation, no cross-reset mapping carryover, wait-only retry,
+proof relaxation, or forced JPEG behavior was implemented; the observed
+`no_active_segment` path was fail-closed PNG. The later approved fix is
+described in the current-state section below and does not reuse old mappings.
+
+The final bounded diagnostic complement used adapter SHA
+`0aa75a260dc8f0c9f2d9c54946cc828f212a39b303f8833c7f01c587a291063f` and draw
+trace SHA `31a7bb30de5cd397d9c09da06cc91eb969d2c476edbd2d2ca4824ca3e551f7d4`.
+It began and ended at 5/300 with the same CID, viewport 1920x1001, DPR 1, and
+tabs 4 -> 5 -> 4. Its four outputs were JPEG, PNG, PNG, JPEG. The isolated
+summary is `.tmp/bookwalker-live-diagnostic-1940-20261110-r4/summary.json`.
+
+For source canvas 4, immediately before `geometry_cleanup` (trace epoch 1,
+operation 2512), the actual canvas was 960x1280, reset epoch 2, content
+version 2404, with an empty active segment and the preceding full-clear
+witness ending at content version 2404. Immediately before
+`native_capture_arm` (epoch 2), the same canvas remained 960x1280/reset epoch
+2/content version 2404 with no active segment. In epoch 3, the first orphan
+tile operation was 15 and the last was 1214: 1,200 ImageBitmap draw attempts,
+all 1,200 returned successfully, target canvas 4/reset epoch 2, target content
+version 2404 -> 3604. The first observed Bitmap source ID was 17. At operation
+1215, freeze reported `no_active_segment` for actual source canvas 4
+(HTMLCanvasElement, 960x1280, reset epoch 2, content version 3604) while the
+current renderer was canvas 3/reset epoch 2 at counter 2/300 and the same CID.
+Operation 1216 then created the segment and recorded a full-clear witness at
+content version 3605. The next target epoch repeated the same shape with
+Bitmap source ID 28 and content version 3605 -> 4805; the following epoch used
+Bitmap source ID 35 and 4806 -> 6006. These are lifecycle observations only;
+they do not authorize joining the orphan draws to a later renderer mapping.
+
+The diagnostic browser test now additionally exercises normal-vs-diagnostic
+failure pixel equality, native mapping ID retention, Python analyzer proof,
+event-ring overflow beyond 128 events, the 16-canvas summary cap, and the
+32-key freeze-null counter cap. The test passes with the worktree source
+explicitly selected (`1 passed, 130 deselected, 5 warnings`).
 
 ## Final independent validation (2026-11-10)
 
 The lead independently reran the affected BookWalker selection with an
-absolute worktree `src` path and an isolated temporary base directory:
+absolute worktree `src` path and the isolated r4 temporary base directory:
 
 ```text
-python -m pytest -q tests/unit/test_bookwalker_adapter.py tests/unit/test_bookwalker_original_capture.py tests/unit/test_bookwalker_native_capture.py tests/unit/test_bookwalker_native_source.py tests/unit/test_bookwalker_purchased_mapping.py tests/unit/test_bookwalker_lossless_jpeg.py tests/unit/test_bookwalker_terminal_match.py tests/integration/test_bookwalker_adapter_browser.py tests/integration/test_bookwalker_original_capture_browser.py --basetemp <isolated .tmp unique path>
+cwd=C:/Users/kensu/projects/screenshot_crawler_starter/.worktrees/bookwalker-jpeg-fallback-20261110; $env:PYTHONPATH='C:/Users/kensu/projects/screenshot_crawler_starter/.worktrees/bookwalker-jpeg-fallback-20261110/src'; & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m pytest -q tests/unit/test_bookwalker_adapter.py tests/unit/test_bookwalker_original_capture.py tests/unit/test_bookwalker_native_capture.py tests/unit/test_bookwalker_native_source.py tests/unit/test_bookwalker_purchased_mapping.py tests/unit/test_bookwalker_lossless_jpeg.py tests/unit/test_bookwalker_terminal_match.py tests/integration/test_bookwalker_adapter_browser.py tests/integration/test_bookwalker_original_capture_browser.py --basetemp .tmp/pytest-lead-empty-boundary-20261110-r4
 ```
 
-Result: 508 passed, 0 skipped, 1184 warnings in 87.55 seconds. The warning
+Result: 525 passed, 0 skipped, 1202 warnings in 87.65 seconds. The warning
 set consists of the existing pytest-asyncio/Pillow deprecations plus one
 pytest temporary-cache `WinError 183` warning; no test failed. The raw output is
-retained at `.tmp/final-lead-validation-20261110.log`. Full repository pytest,
+retained at `.tmp/final-lead-empty-boundary-20261110-r4.log`. Full repository pytest,
 Research/PoC suites, and an unrestricted live crawl were not run: this was a
 site-local adapter change with no shared Core/PoC changes, and live checks were
 limited to the approved bounded owned windows. The first CLI run without a
 recorded original counter and the r5 wrong-import run remain invalid evidence;
-the accepted r7 run records exact 5/336 start/restore and the worktree source
-hash. The three original ZIP SHA-256 values were independently unchanged.
+r8/r9 are pre-final-classification, b359-source bounded observations only.
+The final retained-flag classification was verified synthetically and was not
+re-run live. Final adapter SHA is
+`763ea4060630677deec31f9bbd160a0063694c061e0278fe6fdfe95de33eba10`; the
+original-capture SHA independently confirmed by root/Reviewer is
+`22677d2764e5c210f5f6711e7273d770b8042fce4f1bbc7d4a26651b7956d289`.
+The three original ZIP SHA-256 values and sizes were independently unchanged.
+The rollback boundary
+for this change is the complete worktree change set back to baseline `f537930`;
+no commit ID is recorded here.
+
+## Empty-only capture-window retention (2026-11-10)
+
+The approved behavior fix for the 1940 `mappingId=None` lifecycle is narrowly
+scoped to an empty full-clear boundary. Normal geometry cleanup starts a new
+capture window and may retain at most eight empty segments for one bounded
+hop; native-capture arm may carry them through the second hop only after
+revalidating the same canvas object, dimensions, reset generation, content
+version, observer flush, context safety, and absence of unknown or unsafe
+mutations. A retained segment is admitted only on the first fresh ImageBitmap
+draw. Old nonempty active/completed mappings, native/source ledgers, and
+snapshots are still purged. Explicit `__bookwalkerResetTransformTrace` remains
+a complete reset with a new epoch.
+
+The retained boundary keeps the original clear kind and witness; it does not
+pretend that the boundary itself is a new draw. A fresh segment receives a
+current creation order so historical clear operation numbers cannot make it
+the first eviction candidate. A first fresh draw that throws, an object or
+generation change, unknown/unsafe mutation, an extra hop, or a token mismatch
+invalidates the retained path. A zero-tile retained segment cannot freeze a
+mapping. Dimension-reset segments continue through the existing independent
+legacy path.
+
+All draw calls may carry a capture-window token for diagnostics, but the new
+strict current-identity and mandatory native-pixel gate is enabled only when a
+selected renderer call actually uses a retained empty boundary. That path
+requires a current page/CID join and same-Chromium full RGBA equality; the
+existing JPEG candidate uniqueness, raw response equality, MCU/provenance,
+selector, mapping, native-source, and PNG fail-closed gates are unchanged.
+Diagnostic history remains observation-only and bounded (16 canvas summaries,
+128 events, bounded epoch counters); event/readout metadata includes the
+capture-window token but is never proof authority.
+
+Browser synthetic coverage includes the positive empty-boundary path and
+no-clear, nonempty, mutation, two-hop, different-object, explicit-reset, and
+zero-tile near misses. The positive mapping is proven by the existing Python
+analyzer; near misses remain unproven or use the independent legacy
+dimension-reset path. The affected BookWalker selection (including the
+browser-backed capture file) passed 512 tests with zero skips in an
+intermediate worktree run; later 516-test counts were also intermediate
+snapshots. The final affected result is recorded in Final independent
+validation below. The bounded live runs are evidence for their observed
+windows only and are not a general success-rate estimate.
+
+The retained path also performs one final common join in `finish()` for every
+output route, including an exact original JPEG, reconstructed JPEG, and native
+PNG. It rechecks the unique current capture-window token, current page/CID and
+counter against the selected native calls, the same connected renderer canvas,
+the selected source tuple, and an exact current-ROI atomic proof. A stale,
+missing, one-pixel-different, or otherwise unavailable final join raises
+UNKNOWN rather than returning an older native PNG. This final renderer proof is
+separate from the JPEG-vs-native-PNG RGBA comparison; the latter remains a
+codec/output gate and is not renderer identity evidence.
+
+The current retained final-join tests exercise the real `capture_page` native
+PNG route, a post-pin one-pixel mutation that must raise UNKNOWN, and an exact
+original-JPEG return that still passes through the same final join. The ROI
+baseline is pinned before native source materialization; both its parent and
+the returned child JS handles are owned by the capture cleanup list. Selection
+anchor continuity and the authorized initial content identity are required
+before pinning. The synthetic copy-flood case also creates a nonempty old A
+and an empty retained A before cleanup, creates a fresh B mapping with both
+native snapshots, then performs 13 small renderer copies from each A; it
+asserts no A mapping is created and the B mapping/snapshots remain retained.
+
+## Post-review bounded 1940 live verification (2026-11-10)
+
+The approved normal-Runner run used the worktree adapter SHA
+`eda0185056a80ef9a47f0f70b743c48b02f2a44d0de0cec772b8b2aef3ce7557` and draw
+trace SHA `3ef29be248cc06cc804e38d068a40cffe5979ba488c76ca1d1d6a01a816eec71`.
+It began at the actual viewer anchor 4/300 with the same authorized CID,
+viewport 1920x1001 and DPR 1, created one isolated page, and ended at 4/300
+with the same CID after settling; tabs were 4 -> 5 -> 4. The isolated output
+is `.tmp/bookwalker-live-diagnostic-1940-20261110-r5/summary.json`; no
+Catalog/ZIP writes or existing-tab changes were made.
+
+Pages 1/300 and 2/300 were JPEG (page 2 reconstructed JPEG); pages 3/300 and
+4/300 remained source-native PNG. Thus the run produced 2/4 JPEG, unchanged
+from the earlier r4 rate. On pages 3 and 4, the selected renderer draw still
+had no mapping ID and the diagnostic history accumulated orphan ImageBitmap
+draws (1,200 per page; cumulative 2,400 and 3,600) with `no_active_segment`
+freeze-null observations. This confirms the approved empty-boundary path was
+not evidenced as selected by this normal Runner sequence. It does not justify
+wait-only retry, cross-reset nonempty mapping carryover, cap expansion, or
+proof relaxation; the remaining ordering/ownership cause is unresolved and
+must be investigated with a bounded lifecycle observation before another
+behavior change.
+
+The r5 component timings are intentionally separated: page 2 reconstructed
+JPEG capture was 1,238.723 ms including 818.68 ms lossless evaluation, while
+PNG pages were 375.752 ms and 368.402 ms. These are path timings, not a claim
+that PNG is generally faster or that the proof path should be removed.
+
+## Capture-window observability and compatibility hardening (2026-11-10)
+
+The bounded capture-canvas WeakRef registry and its existing eight-entry cap
+remain unchanged; the r5/r6 evidence did not prove a WeakRef-loss cause, so no
+reference-retention change was promoted. If the capture-window hook is absent (for
+example, an older injected script remains), geometry cleanup and native arm
+fall back to the previous complete transform-trace reset; direct-one-hop
+diagnostic reset failures cannot prevent either reset. The hook-absence browser
+regression passes.
+
+Diagnostic sidecars expose the current capture window through the sanitized
+alias `capture_window_id` and include bounded `capture_window_begin` events;
+the secret sanitizer still removes opaque token fields. The final retained
+join is now included in the normal capture diagnostic metadata. These fields
+are observation-only and never proof authority.
+
+The follow-up r6 run started at 5/300 rather than the matched r5 4/300 anchor
+and therefore is not a like-for-like success-rate comparison. It observed a
+geometry-cleanup `hop=0` with no retained boundary after the canvas4 empty
+segment was evicted by the active-segment cap before cleanup, then a native-arm
+`hop=0` and `no_active_segment` orphan sequence. It also aborted later on the
+existing strict-clear proof-part guard after two saved captures. This is a
+bounded lifecycle observation, not evidence to weaken the strict proof or to
+claim a regression; a matched-baseline decision is still required.
+
+The retained final-join browser fixture separates `positive_codec` and
+`positive_png`. The codec case uses a 1280x800 Python JPEG candidate, decodes
+that same candidate in Chromium, swaps its two 640x800 tiles into a fresh
+retained target, and verifies reconstructed-JPEG `spread_ready` plus the
+retained final join. The PNG, mutation, and missing-selection-anchor cases
+remain fail-closed as before.
+
+The original-JPEG signature helper now marks its temporary 64x64 canvas as an
+internal canvas, matching the existing ImageBitmap/full-resolution helpers.
+Nine repeated browser signature calls leave the renderer transform-trace
+active-segment and draw counters unchanged, preventing signature scratch work
+from consuming the bounded active-segment ledger. Signature bytes and candidate
+matching are unchanged.
+
+## Latest bounded 1940 live verification (2026-11-10)
+
+After the retained/J2 flag separation, the normal Runner was executed once
+with worktree adapter SHA
+`50f192b113dcfb92556ba9a85cd25e569e207ecd1272d152319286e0c2582f2a` and the
+same draw-trace SHA
+`3ef29be248cc06cc804e38d068a40cffe5979ba488c76ca1d1d6a01a816eec71`.
+The actual starting viewer position was 4/300 with the authorized CID,
+viewport 1920x1001 and DPR 1; the created page was closed and tabs were
+restored 4 -> 5 -> 4. The isolated result is
+`.tmp/bookwalker-live-diagnostic-1940-20261110-r7/summary.json`.
+
+Pages 1/300 and 2/300 were JPEG (page 2 reconstructed JPEG). The run then
+stopped fail-closed with `UnknownPageStateError: BookWalker retained capture
+final renderer join failed` while processing the next page; pages 3/4 were not
+saved in this run. Page 2's retained mapping was proven (1,200 32x32 tiles,
+expected 1,200), and its capture-window history shows the retained empty
+boundary and fresh segment. This is not a 4-page success-rate result and does
+not justify relaxing the final join or any proof gate. The output is retained
+for review; no Catalog/ZIP writes or existing-tab changes occurred.
+
+## Retained final-join drift diagnostics (2026-11-10)
+
+The retained final-join check now returns bounded failure diagnostics in the
+same browser task as the atomic check: expected/actual geometry and content
+versions, window/epoch/reset, renderer identity, CID/counter, and at most the
+16 most recent renderer/native draws after the selected operation. The
+diagnostic history read is performed only after the final join, so it cannot
+insert an await before that proof. These fields are diagnostic-only and do not
+relax the geometry, ROI, native-pixel, mapping, provenance, or JPEG gates.
+The synthetic geometry-version drift case records the expected/actual version
+and remains UNKNOWN.
+
+## r8 bounded 1940 live verification (2026-11-10)
+
+After the bounded final-join diagnostics were reviewed, one normal Runner
+prefix run was performed with adapter SHA
+`b359433054ba8a20fac2c7bac57e9b581a5b0bcad7db81fd8082cbba36883a7d` and draw
+trace SHA
+`3ef29be248cc06cc804e38d068a40cffe5979ba488c76ca1d1d6a01a816eec71`.
+The actual starting position was 3/300 with the authorized CID, viewport
+1920x1001 and DPR 1; restore returned exactly to 3/300 and tabs remained
+4 -> 5 -> 4. The isolated result is
+`.tmp/bookwalker-live-diagnostic-1940-20261110-r8/summary.json`.
+
+All four saved pages were JPEG: page 1 original JPEG, pages 2--4
+reconstructed JPEG. The reconstructed pages had proven 1,200-tile mappings
+with 32x32 source and destination tiles, and each retained final join was
+`exact=true` in the output manifest. Capture elapsed times were 1,977.943 ms
+(page 1), 1,368.497 ms (page 2), 949.083 ms (page 3), and 1,093.997 ms
+(page 4). Reconstruction evaluation totals for pages 2--4 were 868.17 ms,
+536.31 ms, and 644.63 ms respectively; these are path measurements, not a
+general speed claim.
+
+Using Chromium 151.0.7922.34, the root-authoritative r8 comparison used the
+saved source-native PNGs page 2 from r4, page 3 from r4, and page 4 from r5;
+all were 960x1280 with zero differing pixels and zero maximum channel
+difference. A supplemental worker comparison used page 3 from r5 as well and
+also produced zero differences. The raw authoritative result is
+`.tmp/final-lead-ax25-r8-rgba.json`. The page-1 control JPEG SHA matched the
+earlier r4 control. This is a bounded success for the observed 3/300 start
+window only; it is not a general rate estimate and no retry or proof
+relaxation was added.
+
+## r9 bounded reproducibility check (2026-11-10)
+
+One final normal-Runner prefix was repeated from the same observed 3/300
+anchor. It used the same adapter SHA
+`b359433054ba8a20fac2c7bac57e9b581a5b0bcad7db81fd8082cbba36883a7d` and draw
+trace SHA as r8, restored exactly to 3/300 with the same CID, and preserved
+tabs 4 -> 5 -> 4. The isolated result is
+`.tmp/bookwalker-live-diagnostic-1940-20261110-r9/summary.json`.
+
+This run completed its bounded prefix with page 1 and pages 3--4 as JPEG, but
+page 2 returned source-native PNG. Its lossless evaluation recorded
+`selected renderer draw mapping identity unavailable`; the diagnostic history
+recorded 2,400 orphan ImageBitmap draws and no active segment at native arm.
+Pages 3--4 had proven 1,200-tile mappings and `capture_window_final_join`
+`exact=true`; their JPEG hashes matched r8. This is consistent with a
+timing/lifecycle-sensitive candidate/mapping availability case, not evidence
+to weaken proof or to treat the r8 4/4 result as a general success rate. The
+PNG result remains the intended fail-closed fallback, and no retry or further
+live run was added.
+
+## Capture-window retained flag classification (2026-11-10)
+
+`captureWindowRetained` is now derived from the actual segment's
+`retainedEmptyBoundary`, not from a canvas ID that merely appeared earlier in
+the same window. The native-call flag prefers the completed mapping's explicit
+classification; when mapping completion is unavailable it conservatively uses
+the current retained segment, then the same-window carry history. Thus an
+ordinary later full-clear segment is not promoted to the retained strict path,
+while ambiguous missing-mapping cases remain conservatively guarded. Synthetic
+coverage verifies retained=true, subsequent ordinary mapping/native-call=false,
+and missing mapping with either a current segment or carry history retains the
+strict guard. No proof or JPEG gate is weakened.
