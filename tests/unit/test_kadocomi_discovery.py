@@ -282,17 +282,18 @@ def test_native_kadocomi_history_preserves_explicit_gapped_positions_and_runs() 
     ]
 
 
-def test_native_kadocomi_history_accepts_explicit_extra_episode_type() -> None:
+@pytest.mark.parametrize("episode_type", ["extra", "pr"])
+def test_native_kadocomi_history_accepts_explicit_extra_episode_type(episode_type) -> None:
     payload = _native_payload()
     query = payload["props"]["pageProps"]["dehydratedState"]["queries"][0]
     first = query["state"]["data"]["firstEpisodes"]["result"]
-    first[2]["type"] = "extra"
-    first[2]["internal"]["episodetype"] = "extra"
+    first[2]["type"] = episode_type
+    first[2]["internal"]["episodetype"] = episode_type
     query["state"]["data"]["latestEpisodes"]["result"] = list(reversed(first))
 
     listing = _parse_native_work_listing(payload, work_id=WORK_ID)
 
-    assert listing.episodes[2].episode_type == "extra"
+    assert listing.episodes[2].episode_type == episode_type
 
 
 @pytest.mark.parametrize(
@@ -310,6 +311,8 @@ def test_native_kadocomi_history_accepts_explicit_extra_episode_type() -> None:
         lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(code=payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][0]["code"]),
         lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(id=payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][0]["id"]),
         lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"].append(_native_entry(11, active=False)),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(type="unsupported"),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(type="pr"),
     ],
     ids=[
         "total-mismatch",
@@ -324,6 +327,8 @@ def test_native_kadocomi_history_accepts_explicit_extra_episode_type() -> None:
         "duplicate-code",
         "duplicate-uuid",
         "extra-unaccounted-row",
+        "unknown-episode-type",
+        "pr-internal-type-mismatch",
     ],
 )
 def test_native_kadocomi_history_rejects_incomplete_or_ambiguous_data(mutate) -> None:

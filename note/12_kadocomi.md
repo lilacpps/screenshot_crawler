@@ -260,6 +260,128 @@ suites were not rerun for the site-local change; all known original layouts,
 the new profiles, native source failures and Batch/ZIP boundaries are covered.
 Shared code/contracts are unchanged, so `00_core.md` needs no synchronization.
 
+## Episode 108 direct-first final-PR without recommendation (2026-11-11)
+
+Item/Source 47778, `KC_002911_S:KC_0029110010900011_E` (Episode 108),
+uses `direct_first_final_pr` with no trailing recommendation. A fresh
+shared-CDP observation reproduced the failure with 54 native slots:
+`[1, 2 x 26, 1, 0]`. The unique known beginning root owns the directly typed
+first canvas and zero PR markers. Final singleton index 27 owns exactly one
+main-wrapper PR n=2. Empty index 28 owns exactly main END n=1,n=2 and is the
+last slide; no secondary END/recommendation is present. The previous profile
+required a recommendation after END, so it failed before capture.
+
+The direct-first final-PR profile now accepts the observed zero/one trailing
+recommendation forms. Inventory validation still requires exact beginning
+ownership and geometry, one first singleton, paired middle, one final singleton,
+one final PR and the empty paired END. An existing recommendation must still
+pass all prior marker, owner, number, geometry and empty-slide checks. Absence
+must be exact: no trailing slide or secondary marker. Other final-PR profiles
+retain their established recommendation/double-END requirements.
+
+The final ArrowLeft guard receives a no-recommendation flag only for this
+validated direct-first final-PR layout with exactly END+1 total slides. That
+mode rejects bridge/double-END/non-direct combinations and requires exactly
+two main END markers, correct ownership/geometry, one final content slot,
+visible reader/PR and safe focus. All ordered sources must be captured before
+the single key attempt reaches the immediately following empty END. Unknown
+markers, missing/misowned/duplicate PR, extra slides/content, no advance,
+skipped turns or asynchronous mutations remain fail-closed. Native Blob,
+full-frame/RGBA proof, Core, access rules, pacing, max-pages and same-content
+contracts are unchanged; no `note/00_core.md` update is needed.
+
+A bounded source probe passed the production native proof for all 54 original
+WebPs and verified ordinary turns through exact final index 27 -> 28. Proof
+metadata and isolated artifacts are under ignored
+`work/kadocomi/error-47778-20261111/`. This uses the production native observer,
+not a separate independent source observer. Live scope is only the reported
+Episode 108; no other episode sweep is authorized by this maintenance.
+
+Normal CLI `batch run --limit 1` then completed only this episode in an
+isolated SQLite online-backup Catalog, retaining the Watchlist's real URL scope
+and archive settings and enabling only Source 47778 in the copy. Dedicated
+output/library paths produced one 54-page ZIP and a succeeded/end CrawlRun
+23107. All 54 ordered members passed CRC and WebP decoding and matched fresh
+source SHA-256, byte lengths and dimensions; archive hash/size matched the
+Artifact. The copied Catalog passed SQLite quick_check. Read-only before/after
+audit confirmed the operational target's Source, pending Item, CrawlRuns and
+Artifacts were unchanged. Other live candidates were not run. Exact evidence:
+`work/kadocomi/error-47778-20261111/live-batch.log`, `source-proof.json` and
+`audit.json`.
+
+Validation: 17 focused new-topology browser tests passed (including a final
+rerun after making the skip fixture land on a real wrong slide and asserting
+exactly one key attempt). The affected browser selection passed 209 tests,
+with another 6 existing direct/paired PR-END bridge positives passed separately;
+all 7 adapter/native-capture unit tests passed. Total distinct affected tests:
+222 passed, 0 failed/0 skipped. The browser selection covers the changed final-PR
+ArrowLeft helper's final, double-END and bridge callers, both CSS directions,
+exact Runner/Batch ZIP bytes, direct beginning faults, missing/duplicate/misowned
+PR, final-slot/END faults, extra content/slides, no advance/skipped turns,
+asynchronous PR mutation and the preceding mixed-final recommendation fix.
+Global `ruff check src tests` and diff checks for this change passed. Full
+repository, unrelated reader-profile integrations, Discovery/Policy selections
+and separate Research/Probe pytest suites were not rerun: this is a bounded
+site-local topology and key-guard extension; the previous 408-case capture
+baseline is recorded below. Other live episodes and an independent source
+observer were not run. Logs are under `error-47778-20261111/pytest-affected.log`;
+the 209 deselected browser cases are outside that affected selection, not skips.
+
+## Episode 10.1 direct-first mixed-final recommendation (2026-11-11)
+
+Item/Source 47775, `KC_008463_S:KC_0084630001200011_E` (Episode 10.1),
+uses `direct_first_mixed_final` with one trailing secondary recommendation.
+A fresh shared-CDP observation reproduced the failure with slot counts
+`[1,2,2,2,2,2,2,2,1,0,0]`: one directly typed first canvas in the unique
+known beginning root, seven RTL pairs, a final singleton at index 8 owning
+main END n=2, the empty paired main END n=1,n=2 at index 9, and one empty
+recognized secondary recommendation at index 10. No PR marker is present.
+The previous profile-selection branch accepted this direct-first mixed-final
+only without the recommendation, fell through to the wrapped-first profile,
+and failed before capture. This was a missing topology combination.
+
+The direct-first mixed-final selection now accepts zero or one trailing
+recommendation, retaining the existing exact secondary marker class, number,
+ownership and positive contained geometry checks. The paired-first mixed-final
+profile remains limited to its previously observed no-recommendation form.
+The beginning owner, first singleton, paired middle, final singleton and exact
+three main END markers remain required. Extra slides, missing/duplicate/misowned
+secondary markers, content at/after END, unknown PR, no advance, skipped indices
+and asynchronous mutations fail closed. Existing native Blob/full-frame/RGBA
+proof, complete ordered capture, first/final ArrowLeft guards, max-pages,
+same-content, access rules, shared Core and CLI/settings are unchanged.
+
+A bounded source probe verified all 16 original WebPs and ordinary turns
+0 -> 1 through 8 -> 9, leaving recommendation 10 inactive. A normal CLI
+`batch run --limit 1` completed only this target in an isolated online-backup
+Catalog with dedicated Watchlist/output/library paths: CrawlRun 23103,
+16 pages, explicit END, one ZIP Artifact. All ordered ZIP members passed CRC
+and WebP decoding and matched the fresh source SHA-256, byte lengths and
+dimensions; archive hash/size matched its Artifact. The copied Catalog passed
+SQLite quick_check. This comparison uses production native proof, not an
+independent source observer. Read-only before/after audit confirmed the
+operational target's Source, pending Item, CrawlRuns and Artifacts were
+unchanged. No other live candidate was run. Metadata-only source proofs,
+copy Catalog, CLI log, ZIP and audit are ignored under
+`work/kadocomi/error-47775-20261111/`.
+
+Validation: the focused new topology selection passed 16 tests; after the
+negative-fixture image-count adjustment, its final affected subset also passed
+16/0 failed/0 skipped. The full affected capture selection passed 408 tests,
+0 failed/0 skipped (593.71s, 41 existing pytest-asyncio/Python deprecation
+warnings): `tests/unit/test_kadocomi_adapter.py`,
+`tests/unit/test_kadocomi_native_capture.py`, and
+`tests/integration/test_kadocomi_adapter_browser.py`. Coverage includes both CSS
+directions, exact ordered Runner/Batch ZIP, all previous reader profiles,
+secondary missing/duplicate/wrong-owner faults, content at END/recommendation,
+extra slides, invalid beginning/main markers, no advance/skipped turns and
+unexpected/asynchronous PR insertion. Global `ruff check src tests` and diff
+checks for this change passed. Full repository, separate Research/Probe test
+suites and Discovery/Policy selections were not rerun because this changes only
+site-local reader topology selection. Live verification was limited to the
+reported target; other episodes and an independent source observer were not
+run. Shared Core is unchanged, so `note/00_core.md` needs no synchronization.
+
 ## Remaining 40-candidate topology maintenance (2026-10-22)
 
 The Item/Source 36662 failure is a separate unsupported layout from 36661:
@@ -468,15 +590,66 @@ the deliberately excluded Items in the dedicated Catalog; they are not test skip
 
 ## Discovery behavior
 
+### Short public lists without an expansion control (2026-11-11)
+
+Unconfigured targets still emit only currently public Sources, newest-first,
+with no global position hints, inactive Sources or complete-native inventory
+proof. If the unique visible `全N話を表示` control exists, its declared total
+continues to validate the expanded list. If no such control exists, Discovery
+reads the strict native first/latest inventory and requires the settled public
+DOM to match all active native IDs, labels and order. Inactive native runs must
+match the existing native marker validator, including proven trailing runs.
+Two identical snapshots 500 ms apart must settle within 12 seconds. Native data
+and DOM must remain unchanged through the final read, exact work-route check
+and AccessGuard check before emission. Missing or incomplete native evidence,
+unknown types, row/label/marker disagreement or changed identity remains an
+incomplete run with no records emitted. DOM row count alone never proves Full
+exhaustion. The expanded legacy marker rules below remain specific to that path.
+
+The shared site-local native parser now also accepts observed WEB `type=pr`
+only when `internal.episodetype=pr`; all identity, UUID, type, count, reverse
+array and order validation remains required. KC_007220_S naturally includes
+holiday illustration, comics announcement and extra-publication rows with this
+type; KC_008463_S also includes a PR listing identity. These are native episode
+identities, distinct from capture-time viewer PR markers. Their access still
+requires the validated public DOM, and this adds no reader profile or purchase.
+
+Live normal CLI Full with an isolated online-backup Catalog and dedicated
+Watchlist passed all four enabled operational targets: KC_004915_S observed 7
+(0 new/7 known), KC_008463_S 7 (0/7), KC_008719_S 3 (1/2), KC_007220_S 5 (0/5),
+all complete/exhausted. The latter two list their public rows without an expand
+button, which caused the prior failure. KC_004915_S has 123 native entries with
+7 active, exactly matching the expanded DOM, through 第79話. Read-only checks of
+the operational Catalog found 第78話/第79話 already available/free/acquisition
+on/completed, and the recorded 第79話 ZIP exists. No newer WEB episode was
+observed. Discovery's new=0 refers to existing identity, not missing acquisition.
+The operational Watchlist/Catalog were not written; no viewer, Capture, Batch,
+ticket or purchase action was executed. Ignored metadata/log/copy evidence:
+`work/kadocomi/discovery-20261111/`. Future WEB releases and app-only inventories
+are outside this observation. CLI options are unchanged.
+
+Validation: 177 affected tests passed, 0 failed/0 skipped, covering Kadocomi
+Discovery/policy/GUI scope and shared Discovery units, plus real-Chromium local
+Discovery, complete-list preview and registration integrations. Regressions
+cover three/five active rows without expansion, explicit PR types and rejected
+unknown/mismatched types, repeat-Full identity, incomplete-Full preservation,
+missing/foreign native proof, pre-emission identity/title drift and final guard
+stops. `ruff check src tests` and diff checks for the five changed files passed;
+the isolated live Catalog passed SQLite quick_check. Full repository,
+Research/Probe tests and reader/Capture/Batch live verification were not run:
+this is a site-local listing change with no capture/runtime contract change.
+The shared Service/Core are unchanged, so `note/00_core.md` needs no update.
+
+
 `src/screenshot_crawler/site_adapters/kadocomi/discovery.py` implements the site adapter. `screenshot_crawler.cli` registers it only for Discovery. It uses the connected Playwright `Page` and shared access guard; the adapter does not launch Chrome or select a browser profile.
 
-Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S` and `KC_011605_S`; no-deadline free classification applies to validated public rows without access gates for all work IDs. The unconfigured legacy path remains unbounded, current-public-only, and does not infer global positions. When `discovery_scope` or `archive_order` is configured, the adapter uses a separate strict native-history path that supports bounded `from_url` / `through_url` Discovery. The DOM path still requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the active public-row count must match the native active IDs and any expansion count. Page-wide recommendations and teaser links do not count.
+Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S` and `KC_011605_S`; no-deadline free classification applies to validated public rows without access gates for all work IDs. The unconfigured legacy path remains unbounded, current-public-only, and does not infer global positions. When `discovery_scope` or `archive_order` is configured, the adapter uses a separate strict native-history path that supports bounded `from_url` / `through_url` Discovery. Both public-list forms require the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the active public-row count must match the native active IDs and any expansion count. Page-wide recommendations and teaser links do not count.
 
-Every public row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Legacy records are buffered and emitted newest-first. The opt-in native path additionally binds one exact `/api/contents/details/work` query to the requested work and requires complete, unique `firstEpisodes` and reverse-ordered `latestEpisodes` arrays with matching totals. Each native row needs a matching work-prefixed code, canonical UUID, `serviceId=web`, a recognized `normal` / `extra` type matching `internal.episodetype`, strict boolean `isActive`, and positive unique ascending `internal.episodeNo`. It rejects missing, duplicated, reordered, cross-work, oversized, or inconsistent data before yielding.
+Every public row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Legacy records are buffered and emitted newest-first. The opt-in native path and the no-expansion public-list proof bind one exact `/api/contents/details/work` query to the requested work and require complete, unique `firstEpisodes` and reverse-ordered `latestEpisodes` arrays with matching totals. Each native row needs a matching work-prefixed code, canonical UUID, `serviceId=web`, a recognized `normal` / `extra` / `pr` type matching `internal.episodetype`, strict boolean `isActive`, and positive unique ascending `internal.episodeNo`. It rejects missing, duplicated, reordered, cross-work, oversized, or inconsistent data before yielding.
 
 For opted-in native history, active rows must match the settled public DOM IDs, labels and order exactly. Native inactive runs may correspond only to the observed internal and trailing ended-publication markers; expected marker groups are derived from actual `isActive=false` rows, never from gaps between `episodeNo` values. Leading or all-inactive histories remain unsupported and fail closed. Inactive observed rows are preserved as `available=false`, `access_mode=unknown`, with no invented expiry or grant and with their explicit native positions. Scope selection is inclusive and uses the latest-first validated native ID order. A final access guard and exact same-work route check run after all final listing/DOM reads before record emission.
 
-In the legacy public-list settlement path, the observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`. Each marker must be one attribute-free direct `LI` with exactly one direct paragraph, no links, no episode title, and no other text. Multiple markers are accepted only in distinct internal gaps, each directly between two validated episode rows whose labels match its previous/next snapshot labels. With N declared episode rows, the marker count must be an integer in 0..N-1 (bool rejected). Adjacent markers, leading/trailing markers, malformed markers, and other non-episode children fail closed in this legacy path. Every marker's direct-child index, exact text, and adjacent episode labels participate in the two identical snapshots required for settlement. Markers are excluded from the declared episode count and do not become Sources, identify missing episode IDs, or establish lifetime ordering. The opt-in native-history path uses a separate settlement validator: it permits only the observed internal-gap or trailing marker groups derived from actual inactive native rows; leading/all-inactive patterns remain unsupported.
+In the expanded legacy public-list settlement path, the observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`. Each marker must be one attribute-free direct `LI` with exactly one direct paragraph, no links, no episode title, and no other text. Multiple markers are accepted only in distinct internal gaps, each directly between two validated episode rows whose labels match its previous/next snapshot labels. With N declared episode rows, the marker count must be an integer in 0..N-1 (bool rejected). Adjacent markers, leading/trailing markers, malformed markers, and other non-episode children fail closed in this legacy path. Every marker's direct-child index, exact text, and adjacent episode labels participate in the two identical snapshots required for settlement. Markers are excluded from the declared episode count and do not become Sources, identify missing episode IDs, or establish lifetime ordering. The opt-in native-history path uses a separate settlement validator: it permits only the observed internal-gap or trailing marker groups derived from actual inactive native rows; leading/all-inactive patterns remain unsupported.
 
 Live validation on 2026-10-15 confirmed two exact ended-publication markers on `KC_004915_S`, between 第3話その2 / 第27話その1 and 第43話 / 第78話. The visible expansion control declares 42 episodes; the scoped list has exactly 42 valid episode rows plus the two markers, with no malformed children. The old 0..1 marker restriction caused the reported zero-observation incomplete run; a new browser regression reproduced that failure before the fix. After the site-local fix, the normal CLI full Discovery with a dedicated Watchlist and online-backup Catalog completed with 42 observed / 35 new / 7 known, `complete=True`, `exhausted`, and zero failed targets. The copied Catalog held 88 Sources (42 available / 46 unavailable) and passed `quick_check`. All 53 pre-existing Source IDs, Item links and display positions, existing Item statuses/completion times/operator notes, CrawlRuns and Artifacts were preserved. Read-only comparison confirmed that the normal Catalog was unchanged. Metadata-only diagnostics, isolated Catalog/Watchlist, CLI log and audit are ignored under `work/kadocomi/discovery-diagnosis-20261015/`; no reader capture was performed. The shared Service still exposes adapter incomplete exceptions only as `incomplete` / `Discovery incomplete`; error-message propagation is unchanged.
 

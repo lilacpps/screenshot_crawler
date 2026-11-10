@@ -236,7 +236,7 @@ def _native_episode_projection(raw: object, *, work_id: str) -> KadocomiNativeEp
         or not _normalize_text(title)
         or service_id != "web"
         or not isinstance(episode_type, str)
-        or episode_type not in {"normal", "extra"}
+        or episode_type not in {"normal", "extra", "pr"}
         or not isinstance(is_active, bool)
         or not isinstance(internal, dict)
     ):
@@ -902,22 +902,35 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
                 ),
                 timeout=5,
             )
-            button_label, declared_count = _read_expand_button(button_labels)
-            await guard.check_page(page)
-            expand_button = page.get_by_role("button", name=button_label, exact=True)
-            if await expand_button.count() != 1 or not await expand_button.is_visible():
-                raise DiscoveryIncompleteError(
-                    "Kadocomi episode expansion button changed or is ambiguous"
+            expand = _read_optional_expand_button(button_labels)
+            native_listing = None
+            settled_snapshot = None
+            if expand is None:
+                # Short public lists have no expansion control. Prove exhaustion
+                # against the complete first-party inventory, never the DOM count alone.
+                native_listing = await self._read_native_listing(page, work_id=work_id)
+                declared_count = sum(episode.is_active for episode in native_listing.episodes)
+                settled_snapshot = await self._wait_for_native_settled_snapshot(
+                    page, guard=guard, listing=native_listing
                 )
-            if _normalize_text(await expand_button.inner_text()) != button_label:
-                raise DiscoveryIncompleteError("Kadocomi episode expansion button changed")
-            await expand_button.click(timeout=DOM_TIMEOUT_MS)
-            raw_rows = await _wait_for_settled_rows(
-                page,
-                guard=guard,
-                declared_count=declared_count,
-                work_title=work_title,
-            )
+                raw_rows = settled_snapshot["rows"]
+            else:
+                button_label, declared_count = expand
+                await guard.check_page(page)
+                expand_button = page.get_by_role("button", name=button_label, exact=True)
+                if await expand_button.count() != 1 or not await expand_button.is_visible():
+                    raise DiscoveryIncompleteError(
+                        "Kadocomi episode expansion button changed or is ambiguous"
+                    )
+                if _normalize_text(await expand_button.inner_text()) != button_label:
+                    raise DiscoveryIncompleteError("Kadocomi episode expansion button changed")
+                await expand_button.click(timeout=DOM_TIMEOUT_MS)
+                raw_rows = await _wait_for_settled_rows(
+                    page,
+                    guard=guard,
+                    declared_count=declared_count,
+                    work_title=work_title,
+                )
             observed_at = now_jst()
             rows = _parse_listing_rows(
                 raw_rows,
@@ -927,6 +940,15 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
             )
             if len(rows) != declared_count:
                 raise DiscoveryIncompleteError("Kadocomi episode rows do not match the declared total")
+            if native_listing is not None:
+                final_listing = await self._read_native_listing(page, work_id=work_id)
+                final_snapshot = await _evaluate_snapshot(page)
+                if final_listing != native_listing or final_snapshot != settled_snapshot:
+                    raise DiscoveryIncompleteError("Kadocomi native history changed before emission")
+            await guard.check_page(page)
+            final_work = parse_kadocomi_work_url(page.url)
+            if final_work is None or final_work.work_id != work_id:
+                raise DiscoveryIncompleteError("Kadocomi page identity changed before emission")
             records = [
                 DiscoveredRecord(
                     item=DiscoveredItem(

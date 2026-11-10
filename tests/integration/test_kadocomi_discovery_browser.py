@@ -510,6 +510,72 @@ async def _route_native_listing(page, html: str) -> None:
     await page.route("https://comic-walker.com/**", fulfill)
 
 
+@pytest.mark.parametrize(
+    ("episode_type", "active_numbers"), [("normal", (1, 2, 5)), ("pr", (1, 2, 3, 4, 5))]
+)
+async def test_kadocomi_legacy_without_expand_requires_complete_native_public_rows(
+    browser_page, tmp_path, monkeypatch, episode_type, active_numbers
+) -> None:
+    catalog, service = _services(tmp_path)
+    episodes = _native_episodes()
+    episodes[4]["type"] = episode_type
+    episodes[4]["internal"]["episodetype"] = episode_type
+    for number in active_numbers:
+        episodes[number - 1]["isActive"] = True
+    await _route_native_listing(browser_page, _native_page_html(episodes=episodes))
+
+    result = await service.discover(browser_page, _target(), "full")
+
+    assert result.complete is True
+    assert (result.observed_count, result.new_count) == (len(active_numbers), len(active_numbers))
+    sources = catalog.list_sources(site="kadocomi")
+    assert {s.external_id for s in sources} == {
+        f"{WORK_ID}:{_episode_id(number)}" for number in active_numbers
+    }
+    assert all(s.available and s.access_mode == "free" for s in sources)
+    assert all(s.display_position is None for s in sources)
+    assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
+    repeated = await service.discover(browser_page, _target(), "full")
+    assert (repeated.complete, repeated.new_count, repeated.known_count) == (
+        True, 0, len(active_numbers)
+    )
+    sources = catalog.list_sources(site="kadocomi")
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_INTERVAL_MS", 1)
+    html = _native_page_html(episodes=episodes).replace(
+        f'/episodes/{_episode_id(5)}', f'/episodes/{_episode_id(6)}'
+    )
+    await _route_native_listing(browser_page, html)
+    incomplete = await service.discover(browser_page, _target(), "full")
+    assert incomplete.complete is False
+    assert incomplete.observed_count == 0
+    assert catalog.list_sources(site="kadocomi") == sources
+
+
+@pytest.mark.parametrize("mutation", ["missing-row", "missing-native", "wrong-native-work"])
+async def test_kadocomi_legacy_without_expand_rejects_unproven_completeness(
+    browser_page, tmp_path, monkeypatch, mutation
+) -> None:
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_INTERVAL_MS", 1)
+    monkeypatch.setattr(kadocomi_discovery, "DOM_TIMEOUT_MS", 50)
+    catalog, service = _services(tmp_path)
+    html = _native_page_html()
+    if mutation == "missing-row":
+        html = html.replace(f'/episodes/{_episode_id(5)}', f'/episodes/{_episode_id(6)}')
+    elif mutation == "missing-native":
+        html = html.replace('id="__NEXT_DATA__"', 'id="unavailable"')
+    else:
+        html = html.replace('"workCode": "KC_011605_S"', '"workCode": "KC_000001_S"')
+    await _route_native_listing(browser_page, html)
+
+    result = await service.discover(browser_page, _target(), "full")
+
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="kadocomi") == []
+
+
 def _native_target(*, scope=None, archive_order: int | None = 1) -> WatchlistTarget:
     return WatchlistTarget(
         key="kadocomi-test",
@@ -728,10 +794,13 @@ async def test_kadocomi_opt_in_scope_errors_publish_no_sources_or_proof(
 
 
 @pytest.mark.parametrize("mutation", ["native-title", "foreign-route"])
+@pytest.mark.parametrize("archive_order", [1, None], ids=["native", "legacy-no-expand"])
 async def test_kadocomi_native_pre_emission_drift_yields_nothing(
     browser_page,
     tmp_path,
+    monkeypatch,
     mutation,
+    archive_order,
 ) -> None:
     catalog, service = _services(tmp_path)
     post_click = (
@@ -744,10 +813,23 @@ async def test_kadocomi_native_pre_emission_drift_yields_nothing(
     )
     await _route_native_listing(
         browser_page,
-        _native_page_html(expand=True, post_click=post_click),
+        _native_page_html(expand=archive_order is not None, post_click=post_click),
     )
+    if archive_order is None:
+        original_settle = KadocomiDiscoveryAdapter._wait_for_native_settled_snapshot
 
-    result = await service.discover(browser_page, _native_target(), "full")
+        async def mutate_after_settlement(self, page, **kwargs):
+            snapshot = await original_settle(self, page, **kwargs)
+            await page.evaluate(f"() => {{ {post_click} }}")
+            return snapshot
+
+        monkeypatch.setattr(
+            KadocomiDiscoveryAdapter, "_wait_for_native_settled_snapshot", mutate_after_settlement
+        )
+
+    result = await service.discover(
+        browser_page, _native_target(archive_order=archive_order), "full"
+    )
 
     assert result.complete is False
     assert result.observed_count == 0
@@ -755,13 +837,15 @@ async def test_kadocomi_native_pre_emission_drift_yields_nothing(
     assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
 
 
+@pytest.mark.parametrize("archive_order", [1, None], ids=["native", "legacy-no-expand"])
 async def test_kadocomi_final_access_guard_stop_yields_nothing(
     browser_page,
     tmp_path,
     monkeypatch,
+    archive_order,
 ) -> None:
     catalog, service = _services(tmp_path)
-    await _route_native_listing(browser_page, _native_page_html(expand=True))
+    await _route_native_listing(browser_page, _native_page_html(expand=archive_order is not None))
     original_check_page = kadocomi_discovery.AccessGuard.check_page
     original_read_native_listing = kadocomi_discovery.KadocomiDiscoveryAdapter._read_native_listing
     final_listing_read = False
@@ -795,7 +879,9 @@ async def test_kadocomi_final_access_guard_stop_yields_nothing(
         mark_final_listing_read,
     )
 
-    result = await service.discover(browser_page, _native_target(), "full")
+    result = await service.discover(
+        browser_page, _native_target(archive_order=archive_order), "full"
+    )
 
     assert result.complete is False
     assert result.observed_count == 0

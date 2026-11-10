@@ -435,8 +435,12 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
       rect.left >= box.left - 1 && rect.top >= box.top - 1 &&
       rect.right <= box.right + 1 && rect.bottom <= box.bottom + 1;
   };
+  // Only the observed direct-first final-PR profile may end without a recommendation.
+  const noRecommendation = args.noRecommendation === true;
+  if (noRecommendation && (!args.directFirst || args.bridge || args.doubleEnd))
+    return {ok: false, reason: 'unsupported_no_recommendation'};
   if (!root.classList.contains('splide--rtl') || !visible(root) || args.endIndex < 2 ||
-      slides.length !== args.endIndex + (args.bridge ? 1 : 2) || active.length !== 1 ||
+      slides.length !== args.endIndex + (args.bridge || noRecommendation ? 1 : 2) || active.length !== 1 ||
       active[0] !== slides[args.endIndex - 1] || !visible(active[0]))
     return {ok: false, reason: 'active_or_inventory'};
   const prs = [...root.querySelectorAll('div[data-type="pr"]')];
@@ -458,7 +462,8 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
        canvases.length !== 1 || !prefix(canvases[0], '_root_bx4cr_')))
     return {ok: false, reason: 'final_slot'};
   const ends = [...root.querySelectorAll('div[data-type="end-of-book"]')];
-  if (ends.length !== (args.doubleEnd ? 4 : 3)) return {ok: false, reason: 'end_inventory'};
+  if (ends.length !== (args.doubleEnd ? 4 : (noRecommendation ? 2 : 3)))
+    return {ok: false, reason: 'end_inventory'};
   const roles = args.bridge ? [[args.endIndex - 1, '2'], [args.endIndex, '1'], [args.endIndex, '2']] :
     (args.doubleEnd ? [[args.endIndex, '1'], [args.endIndex, '2'], [args.endIndex + 1, '1'], [args.endIndex + 1, '2']] :
       [[args.endIndex, '1'], [args.endIndex, '2']]);
@@ -471,7 +476,7 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
         marker.closest('.splide__slide') !== owner || !contained(marker, owner))
       return {ok: false, reason: 'double_end'};
   }
-  if (!args.bridge && !args.doubleEnd) {
+  if (!args.bridge && !args.doubleEnd && !noRecommendation) {
     const marker = ends[2], owner = slides[args.endIndex + 1];
     if (!prefix(marker, '_endOfBook_') || prefix(marker, '_endOfBookWrapper_') ||
         marker.getAttribute('data-n') !== null || marker.closest('.splide__slide') !== owner ||
@@ -1263,7 +1268,7 @@ class KadocomiAdapter(SiteAdapter):
                     layout = _PAIRED_FIRST_FINAL_PR_LAYOUT
                 elif (
                     snapshot.get("directFirstContent") is True and end_index >= 3
-                    and trailing_count == 1 and len(first_slots) == 1
+                    and trailing_count in (0, 1) and len(first_slots) == 1
                     and isinstance(final_slots, list) and len(final_slots) == 1
                     and len(pr_markers) == 1
                 ):
@@ -1313,7 +1318,11 @@ class KadocomiAdapter(SiteAdapter):
                 and len(rows) == end_index + 1
             ):
                 layout = _DIRECT_FIRST_PR_END_LAYOUT
-            elif not pr_markers and len(rows) == end_index + 1 and (
+            # A direct-first mixed-final may have one verified recommendation after END.
+            elif not pr_markers and (
+                len(rows) == end_index + 1
+                or (snapshot.get("directFirstContent") is True and len(rows) == end_index + 2)
+            ) and (
                 snapshot.get("directFirstContent") is True or len(first_slots) == 2
             ):
                 layout = (
@@ -1398,7 +1407,7 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi main END marker count is inconsistent")
         self._validate_main_end_markers(snapshot, expected_main_markers)
         self._validate_secondary_end_markers(snapshot, expected_secondary_indexes)
-        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_FINAL_PR_LAYOUT} or (layout in {*_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS} and expected_secondary_indexes):
+        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT} or (layout in {_DIRECT_FIRST_FINAL_PR_LAYOUT, *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS} and expected_secondary_indexes):
             secondary = snapshot.get("secondaryEndMarkers")
             if (
                 not isinstance(secondary, list)
@@ -1996,7 +2005,11 @@ class KadocomiAdapter(SiteAdapter):
                     ),
                     {"endIndex": self._end_slide_index,
                      "doubleEnd": self._reader_layout == _PAIRED_FIRST_DOUBLE_END_LAYOUT,
-                     "directFirst": self._reader_layout == _DIRECT_FIRST_FINAL_PR_LAYOUT},
+                     "directFirst": self._reader_layout == _DIRECT_FIRST_FINAL_PR_LAYOUT,
+                     "noRecommendation": (
+                         self._reader_layout == _DIRECT_FIRST_FINAL_PR_LAYOUT
+                         and len(self._slide_slots) == self._end_slide_index + 1
+                     )},
                 )
             except PlaywrightError as exc:
                 raise UnknownPageStateError("Kadocomi final PR ArrowLeft target could not be verified") from exc
