@@ -1472,6 +1472,9 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return dict(EMPTY_COMPACT_PAYLOAD)
 
+    async def async_value(value: object) -> object:
+        return value
+
     mapping = PurchasedMapping(
         mapping=(
             {
@@ -1581,6 +1584,9 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return dict(EMPTY_COMPACT_PAYLOAD)
+
+    async def async_value(value: object) -> object:
+        return value
 
     mapping = PurchasedMapping(
         mapping=(
@@ -1741,6 +1747,227 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         for key in result["timing_ms"]
         if key != "unaccounted_ms"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selectors_equal", "pixel_result", "final_verify", "mixed_spread", "expected_ready"),
+    [
+        (True, {"available": True, "dimensions_equal": True, "exact": True}, None, False, True),
+        (False, {"available": True, "dimensions_equal": True, "exact": True}, None, False, False),
+        (True, {"available": False, "dimensions_equal": False, "exact": False}, None, False, False),
+        (True, {"available": True, "dimensions_equal": True, "exact": False}, None, False, False),
+        (True, {"available": True, "dimensions_equal": True, "exact": True}, None, True, False),
+    ],
+    ids=["pixel-required-when-final-flag-off", "selectors-required", "pixel-unavailable", "pixel-mismatch", "mixed-spread"],
+)
+async def test_nonuniform_direct_refinement_requires_codec_and_native_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
+    selectors_equal: bool,
+    pixel_result: dict[str, object],
+    final_verify: str | None,
+    mixed_spread: bool,
+    expected_ready: bool,
+) -> None:
+    if final_verify is None:
+        monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+    else:
+        monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", final_verify)
+
+    class ShadowPage:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
+            return dict(EMPTY_COMPACT_PAYLOAD)
+
+    async def async_value(value: object) -> object:
+        return value
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {"source_x": 0, "source_y": 0, "destination_x": 0, "destination_y": 0, "width": 16, "height": 16},
+            {"source_x": 0, "source_y": 16, "destination_x": 0, "destination_y": 16, "width": 16, "height": 8},
+        ),
+        source_dimensions=(16, 24),
+        destination_dimensions=(16, 24),
+        tile_dimensions=(16, 16),
+        imagebitmap_source_id="bitmap-1",
+        mapping_sha256="parent-mapping",
+        mapping_provenance="direct",
+        coded_dimensions=(16, 24),
+        visible_dimensions=(16, 24),
+        tile_dimensions_uniform=False,
+        tile_dimension_variants=((16, 8), (16, 16)),
+    )
+    ready = MappingAnalysis(
+        MAPPING_PROVEN, "ready", mapping, mapping_source="completed_segment"
+    )
+    unavailable = MappingAnalysis(
+        "MAPPING_UNAVAILABLE", "synthetic second spread part failed",
+        mapping_source="completed_segment",
+    )
+    analyses = iter((ready, unavailable)) if mixed_spread else None
+    monkeypatch.setattr(
+        adapter_module,
+        "analyze_purchased_mapping",
+        lambda *_args: next(analyses) if analyses is not None else ready,
+    )
+    monkeypatch.setattr(adapter_module, "image_signature", lambda *_args: async_value("sig"))
+    monkeypatch.setattr(adapter_module, "imagebitmap_signature", lambda *_args: async_value("sig"))
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_pixel_exact_match",
+        lambda *_args: async_value({"available": True, "exact": True}),
+    )
+
+    reconstruct_mappings: list[PurchasedMapping] = []
+
+    def fake_reconstruct(*args: object, **_kwargs: object) -> LosslessJpegResult:
+        assert isinstance(args[1], PurchasedMapping)
+        reconstruct_mappings.append(args[1])
+        return LosslessJpegResult(
+            data=b"refined-jpeg",
+            width=16,
+            height=24,
+            tile_dimensions=(16, 8),
+            mcu_dimensions=(8, 8),
+            mapping_sha256="child-mapping",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+                "component_quantization_selectors_equal": selectors_equal,
+            },
+            available=True,
+        )
+
+    monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
+    adapter = BookWalkerAdapter()
+    adapter._browser_pixel_exact = lambda *_args, **_kwargs: async_value(pixel_result)  # type: ignore[method-assign]
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url=f"https://{reconstruction_host}/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    candidate.width = 16
+    candidate.height = 24
+    adapter._original_candidates.add(candidate)
+
+    native = (CaptureResult(PNG_1X1, 16, 24),) * (2 if mixed_spread else 1)
+    draw_calls = [{"part": 1, "mappingId": "mapping-1"}]
+    if mixed_spread:
+        draw_calls.append({"part": 2, "mappingId": "mapping-2"})
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        native,
+        draw_calls,
+    )
+
+    part = result["parts"][0]
+    assert part["uniform_refinement_used"] is True
+    assert part["uniform_refinement_parent_mapping_sha256"] == "parent-mapping"
+    assert part["uniform_refinement_mapping_sha256"]
+    assert part["uniform_refinement_mapping_sha256"] != "parent-mapping"
+    assert len(reconstruct_mappings) == 1
+    assert reconstruct_mappings[0].tile_dimensions == (16, 8)
+    assert reconstruct_mappings[0].mapping_sha256 == part["uniform_refinement_mapping_sha256"]
+    assert reconstruct_mappings[0].mapping_sha256 != mapping.mapping_sha256
+    assert part["final_pixel_compare_performed"] is True
+    if mixed_spread:
+        assert len(result["parts"]) == 2
+        assert result["parts"][1]["mapping_proven"] is False
+    assert result["spread_ready"] is expected_ready
+
+
+@pytest.mark.asyncio
+async def test_nonuniform_cropped_mapping_keeps_legacy_codec_input(
+    monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
+) -> None:
+    monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+
+    class ShadowPage:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
+            return dict(EMPTY_COMPACT_PAYLOAD)
+
+    async def async_value(value: object) -> object:
+        return value
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {"source_x": 0, "source_y": 0, "destination_x": 0, "destination_y": 0, "width": 16, "height": 16},
+            {"source_x": 0, "source_y": 16, "destination_x": 0, "destination_y": 0, "width": 16, "height": 8},
+        ),
+        source_dimensions=(16, 24),
+        destination_dimensions=(16, 16),
+        tile_dimensions=(16, 16),
+        imagebitmap_source_id="bitmap-cropped",
+        mapping_sha256="cropped-parent",
+        mapping_provenance="direct",
+        coded_dimensions=(16, 24),
+        visible_dimensions=(16, 16),
+        tile_dimensions_uniform=False,
+        tile_dimension_variants=((16, 8), (16, 16)),
+    )
+    analysis = MappingAnalysis(
+        MAPPING_PROVEN, "ready", mapping, mapping_source="completed_segment"
+    )
+    monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", lambda *_args: analysis)
+    monkeypatch.setattr(adapter_module, "image_signature", lambda *_args: async_value("sig"))
+    monkeypatch.setattr(adapter_module, "imagebitmap_signature", lambda *_args: async_value("sig"))
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_pixel_exact_match",
+        lambda *_args: async_value({"available": True, "exact": True}),
+    )
+    reconstructed_mappings: list[PurchasedMapping] = []
+
+    def fake_reconstruct(*args: object, **_kwargs: object) -> LosslessJpegResult:
+        assert isinstance(args[1], PurchasedMapping)
+        reconstructed_mappings.append(args[1])
+        return LosslessJpegResult(
+            data=b"cropped-jpeg",
+            width=16,
+            height=16,
+            tile_dimensions=(16, 16),
+            mcu_dimensions=(8, 8),
+            mapping_sha256="cropped-parent",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+                "component_quantization_selectors_equal": True,
+            },
+            available=True,
+        )
+
+    monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
+    adapter = BookWalkerAdapter()
+    adapter._browser_pixel_exact = lambda *_args, **_kwargs: async_value(  # type: ignore[method-assign]
+        {"available": True, "dimensions_equal": True, "exact": True}
+    )
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url=f"https://{reconstruction_host}/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    candidate.width = 16
+    candidate.height = 24
+    adapter._original_candidates.add(candidate)
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 16, 16),),
+        [{"part": 1, "mappingId": "cropped-mapping"}],
+    )
+
+    assert result["spread_ready"] is True
+    assert len(reconstructed_mappings) == 1
+    assert reconstructed_mappings[0].mapping == mapping.mapping
+    assert reconstructed_mappings[0].mapping_sha256 == mapping.mapping_sha256
+    assert reconstructed_mappings[0].tile_dimensions_uniform is False
+    assert result["parts"][0]["uniform_refinement_used"] is False
 
 
 @pytest.mark.asyncio

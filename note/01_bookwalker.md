@@ -3876,3 +3876,155 @@ review completed with no BLOCKING findings; Ruff, compilation, and diff checks
 passed. Research/Probe and the full repository suite were not run because this
 was site-local and did not change PoC or shared Core; no approved isolated live
 target was identified, so live verification was not run.
+
+## Regular edge-tile expected-count correction (2026-11-10)
+
+The native trace still computes its first eligible `segmentExpectedTileCount`
+using the first matching tile.  At mapping freeze, a bounded producer-side
+check now corrects that value only when the existing value is non-null, coded
+source and tile target dimensions are equal, and every source rectangle and
+destination is an integer cell of one regular grid with right/bottom edge
+cells.  The corrected count is `ceil(width/base_width) *
+ceil(height/base_height)`.  Cropped source/target pairs, null expectations,
+non-regular geometry, fractional or out-of-bounds rectangles retain the prior
+value.  The Python complete-MCU bijection, provenance, pixel comparison,
+JPEG-candidate matching, retry/generation/negative-cache logic, and PNG
+fallback are unchanged; this is not a proof relaxation.
+
+The synthetic 40x40 equal-source/target case with 16px regular tiles and 8px
+right/bottom edges previously produced 9 tiles with expected=25 when the edge
+tile was first.  The corrected trace produces expected=9 for both edge-first
+and ordinary-first order, and the raw frozen mapping remains proven by
+`analyze_purchased_mapping`.  A deliberately non-grid destination retains
+expected=25 and is rejected by the analyzer.  Existing purchased-mapping
+tests continue to cover missing, duplicate, out-of-bounds, interior-split,
+cropped, null, and homogeneous fail-closed behavior.
+
+The user's operational observation is that the 2026-11-03 capture-local
+auxiliary PNG handle optimization reduced PNG fallback counts in practice;
+that observation is separate from the synthetic timing/transfer benchmark
+recorded in the 2026-11-03 section above and is not treated as proof that all
+remaining fallback causes are timing-related.
+
+A bounded live check on owned item 1890 (UUID omitted here) used an isolated
+output and a created CDP page.  The product page had no pre-initialize
+counter; the actual viewer anchor before the initial Home was 5/336.  The
+driver rewound to 1/336 for capture, ended at 5/336, verified the same
+counter/CID after a settle delay, and restored the created-tab count from four
+to four after close.  The postfix run captured one JPEG (1451x2048) and two
+PNGs (2048x1464).  The 2048x1464 mapping had 2944 tiles (2880 of 32x32 and
+64 of 32x24); the vertical-column proof corrected expected=3904 to 2944 and
+the complete mapping analyzer returned proven.  The two PNG artifacts and the
+normal second-page JPEG were byte-identical to the baseline, so no JPEG-vs-PNG
+Chromium RGBA comparison was triggered.  The bounded live output is isolated
+under the worktree `.tmp` directory; no Catalog, ZIP, or existing browser tab
+was changed.  Earlier CLI baseline runs did not record their pre-initialize
+viewer counter and must not be interpreted as original-position restoration
+evidence.
+
+The same postfix mapping was still not reconstruction-ready because the
+existing non-crop lossless path requires uniform tile dimensions; its
+32x32/32x24 variants therefore remained PNG.  This gate is intentionally not
+removed or weakened.  Any future equivalent-subtile refinement would need a
+separate strict design and mandatory Chromium native-PNG RGBA comparison;
+the narrowly bounded design below is the only subsequent implementation.
+
+The subsequent narrow vertical-remainder extension accepts only the observed
+single-axis shape where width divides by the base tile width and height has a
+remainder.  Source and destination rectangles are checked independently per
+x-column: starts must be unique and cursor-walked intervals must join exactly
+from zero to H, with the independently calculated normal-height count plus one
+remainder-height tile per column.  Missing, duplicate, gap, overlap, and
+interior-width-split variants retain the historical expected count and are
+still rejected by the complete mapping analyzer.  The accepted synthetic
+vertical case produces six tiles from a 32x40 frame with 16x16 base tiles and
+an internal 8px row; no actual tile count is substituted into the proof.
+
+## Uniform codec refinement for proven equal-frame mappings (2026-11-10)
+
+The live 1890 shape is now eligible for a separate codec-only refinement, but
+only after the direct completed mapping is already proven and coded, visible,
+source, destination, and native dimensions are all equal. A non-uniform tile
+set is split into exact source/destination subtiles using the positive 8px-
+aligned gcd of the observed widths and heights. The original mapping,
+provenance, operations, and parent hash remain unchanged; the lossless codec
+receives an immutable child mapping with its own hash and uniform tile shape.
+The child count is bounded by the existing 16,384 tile-record limit and the
+existing MCU-work limit before allocation. Cropped, scaled one-hop,
+homogeneous, and other non-eligible mappings continue through their previous
+path unchanged. The producer expected-count correction leaves a null expected
+value unchanged; the refinement itself is selected only after the existing
+analyzer has proven a direct, equal-frame, non-uniform mapping and does not
+reinterpret an observed tile count as producer evidence.
+
+An earlier post-refinement CLI invocation used the root editable installation
+instead of this worktree and is excluded from evidence. The corrected driver
+prepends the absolute worktree `src` path, asserts the imported adapter is
+inside that worktree, and records the adapter and draw-trace SHA-256 values.
+With that driver, the bounded 1890 run at anchor 5/336 (viewport 1920x1001,
+DPR 1, tabs 4 -> 5 -> 4) proved the 2944-tile 2048x1464 mapping with
+expected=2944. It produced JPEG for pages 2, 3, and 4; page 3/4 were the
+previous PNG fallback cases. The original anchor/CID was restored exactly to
+5/336 before closing the created page.
+
+For pages 3 and 4, the baseline r4 native PNG and the r6 reconstructed JPEG
+were decoded in the same Chromium `createImageBitmap`/Canvas RGBA path. Both
+were 2048x1464 with zero differing channels and maximum channel difference
+zero. The normal page-2 JPEG SHA-256 remained unchanged. The r6 output is
+isolated under the worktree `.tmp`; no Catalog, ZIP, or existing browser tab
+was modified.
+
+The refined path requires coefficient selector equality and a mandatory
+Chromium native-pixel comparison even when the ordinary final-pixel flag is
+off. Unavailable comparison, any differing pixel, selector mismatch, bound
+failure, or mixed-spread failure remains PNG/fail-closed. `lossless_jpeg.py`
+was not changed and its complete-MCU, uniqueness, bounds, and provenance
+checks remain authoritative. Synthetic tests cover exact 8px partition and
+source-to-destination offset preservation, parent/child hash separation,
+unsafe offsets/bounds/allocation, selector mismatch, unavailable/one-pixel
+native comparison, and final-flag-off mandatory comparison. The corrected live
+run verified the JPEG path; its same-Chromium RGBA result is recorded in
+`.tmp/bookwalker-live-refinement-1890-20261110-r7/rgba-comparison.json`.
+
+The final r7 timing keeps refinement, codec, native-pixel proof, and total
+capture separate. Page 3 was 4918.791 ms total, including 81.14 ms refinement,
+325.13 ms codec reconstruction, and 1489.81 ms native-pixel comparison; page 4
+was 5523.189 ms total, including 26.25 ms refinement, 360.37 ms codec, and
+1966.11 ms pixel comparison. These are proof-cost observations, not a speedup
+claim; the pre-refinement PNG captures were approximately 2.85/2.80 seconds.
+
+The bounded 1896 observation was not captured: strict direct entry observed
+only maruyomi/unknown/subscription controls and no owned-reader control, so it
+failed closed before viewer initialization. No viewer entry/page navigation or
+capture occurred; no Catalog/ZIP writes occurred, the created page was closed,
+and existing tabs were untouched.
+
+The final bounded 1940 strict-owned probe used the worktree adapter SHA above
+and captured pages 2/300, 3/300, and 4/300 at viewport 1920x1001, DPR 1. The
+initial anchor was 1/300 and was restored exactly to 1/300 with the same CID;
+tabs remained 4 after closing the created page. All three captures remained
+source-native PNG (960x1280). Existing debug reported
+`selected renderer draw mapping identity unavailable` with no mapping ID or
+proven mapping, so this probe provides no JPEG/proof evidence and caused no
+additional production change. Sanitized results are in
+`.tmp/bookwalker-live-manual-1940-20261110-r2/summary.json`.
+
+## Final independent validation (2026-11-10)
+
+The lead independently reran the affected BookWalker selection with an
+absolute worktree `src` path and an isolated temporary base directory:
+
+```text
+python -m pytest -q tests/unit/test_bookwalker_adapter.py tests/unit/test_bookwalker_original_capture.py tests/unit/test_bookwalker_native_capture.py tests/unit/test_bookwalker_native_source.py tests/unit/test_bookwalker_purchased_mapping.py tests/unit/test_bookwalker_lossless_jpeg.py tests/unit/test_bookwalker_terminal_match.py tests/integration/test_bookwalker_adapter_browser.py tests/integration/test_bookwalker_original_capture_browser.py --basetemp <isolated .tmp unique path>
+```
+
+Result: 508 passed, 0 skipped, 1184 warnings in 87.55 seconds. The warning
+set consists of the existing pytest-asyncio/Pillow deprecations plus one
+pytest temporary-cache `WinError 183` warning; no test failed. The raw output is
+retained at `.tmp/final-lead-validation-20261110.log`. Full repository pytest,
+Research/PoC suites, and an unrestricted live crawl were not run: this was a
+site-local adapter change with no shared Core/PoC changes, and live checks were
+limited to the approved bounded owned windows. The first CLI run without a
+recorded original counter and the r5 wrong-import run remain invalid evidence;
+the accepted r7 run records exact 5/336 start/restore and the worktree source
+hash. The three original ZIP SHA-256 values were independently unchanged.

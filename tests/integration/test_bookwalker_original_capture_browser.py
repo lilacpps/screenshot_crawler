@@ -905,6 +905,235 @@ async def test_dimension_reset_epoch_and_cropped_one_hop_snapshots_are_recorded(
     assert result["native"]["targetSnapshotId"]
 
 
+@pytest.mark.parametrize("edge_first", [True, False], ids=["edge-first", "ordinary-first"])
+async def test_mixed_tile_geometry_reproduces_first_tile_expected_count_mismatch(
+    browser_page: Page,
+    edge_first: bool,
+) -> None:
+    """A regular grid corrects an edge-first count without order dependence."""
+
+    await browser_page.add_init_script(
+        "window.__bookwalkerCaptureMode = 'native'; "
+        "window.__bookwalkerDirectOriginalEnabled = true;"
+    )
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async edgeFirst => {
+          const source = document.createElement('canvas');
+          source.width = 40; source.height = 40;
+          source.getContext('2d').fillRect(0, 0, 40, 40);
+          const bitmap = await createImageBitmap(source);
+          const tiled = document.createElement('canvas');
+          tiled.width = 40; tiled.height = 40;
+          const context = tiled.getContext('2d');
+          context.clearRect(0, 0, 40, 40);
+
+          const drawEdge = () => context.drawImage(
+            bitmap, 32, 32, 8, 8, 32, 32, 8, 8,
+          );
+          // The historical updateExpectedTileCount() derives 25 when the
+          // first eligible tile is an 8px edge; the regular grid has 9.
+          if (edgeFirst) drawEdge();
+          for (const y of [0, 16]) {
+            for (const x of [0, 16]) {
+              context.drawImage(bitmap, x, y, 16, 16, x, y, 16, 16);
+            }
+            context.drawImage(bitmap, 32, y, 8, 16, 32, y, 8, 16);
+          }
+          for (const x of [0, 16]) {
+            context.drawImage(bitmap, x, 32, 16, 8, x, 32, 16, 8);
+          }
+          if (!edgeFirst) drawEdge();
+
+          const renderer = document.createElement('canvas');
+          renderer.width = 40; renderer.height = 40;
+          renderer.getContext('2d').drawImage(tiled, 0, 0);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const mapping = (window.__bookwalkerTransformTrace.completedMappings || [])
+            .find(item => item.sourceCanvas?.width === 40);
+          return mapping ? {
+            rawMapping: mapping,
+            tileCount: mapping.segmentTileCount,
+            expectedTileCount: mapping.segmentExpectedTileCount,
+            tileDimensions: mapping.tileDraws.map(tile => [
+              tile.sourceRect.width, tile.sourceRect.height,
+            ]),
+          } : null;
+        }
+        """,
+        edge_first,
+    )
+    raw_mapping = result.pop("rawMapping")
+    assert result["tileCount"] == 9
+    assert result["expectedTileCount"] == 9
+    assert sorted(map(tuple, result["tileDimensions"])) == sorted(
+        [(8, 8), (16, 16), (16, 16), (8, 16),
+         (16, 16), (16, 16), (8, 16), (16, 8), (16, 8)]
+    )
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [raw_mapping]},
+        {
+            "mappingId": raw_mapping["mappingId"],
+            "traceOperationIndex": raw_mapping["rendererOperationIndex"],
+            "sourceCanvasId": raw_mapping["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert analysis.proven
+    assert analysis.segment_tile_count == 9
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "valid", "missing", "duplicate", "source_gap", "destination_gap",
+        "source_split", "destination_split",
+    ],
+)
+async def test_vertical_remainder_column_partition_is_strict(
+    browser_page: Page,
+    mutation: str,
+) -> None:
+    """Validate an internal short row without weakening MCU proof."""
+
+    await browser_page.add_init_script(
+        "window.__bookwalkerCaptureMode = 'native'; "
+        "window.__bookwalkerDirectOriginalEnabled = true;"
+    )
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async mutation => {
+          const source = document.createElement('canvas');
+          source.width = 32; source.height = 40;
+          source.getContext('2d').fillRect(0, 0, 32, 40);
+          const bitmap = await createImageBitmap(source);
+          const tiled = document.createElement('canvas');
+          tiled.width = 32; tiled.height = 40;
+          const context = tiled.getContext('2d');
+          context.clearRect(0, 0, 32, 40);
+          const rows = [];
+          for (const x of [0, 16]) {
+            rows.push({
+              source: {x, y: 16, width: 16, height: 8},
+              destination: {x, y: 0, width: 16, height: 8},
+            });
+            rows.push({
+              source: {x, y: 0, width: 16, height: 16},
+              destination: {x, y: 8, width: 16, height: 16},
+            });
+            rows.push({
+              source: {x, y: 24, width: 16, height: 16},
+              destination: {x, y: 24, width: 16, height: 16},
+            });
+          }
+          if (mutation === 'missing') rows.pop();
+          if (mutation === 'duplicate') rows.push({...rows[0]});
+          if (mutation === 'source_gap') rows[2].source.y = 25;
+          if (mutation === 'destination_gap') rows[2].destination.y = 25;
+          if (mutation === 'source_split') {
+            rows[2].source.width = 8;
+          }
+          if (mutation === 'destination_split') {
+            rows[2].destination.width = 8;
+          }
+          for (const row of rows) {
+            context.drawImage(
+              bitmap, row.source.x, row.source.y, row.source.width, row.source.height,
+              row.destination.x, row.destination.y,
+              row.destination.width, row.destination.height,
+            );
+          }
+          const renderer = document.createElement('canvas');
+          renderer.width = 32; renderer.height = 40;
+          renderer.getContext('2d').drawImage(tiled, 0, 0);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const mapping = (window.__bookwalkerTransformTrace.completedMappings || [])
+            .find(item => item.sourceCanvas?.width === 32);
+          return mapping ? {
+            rawMapping: mapping,
+            tileCount: mapping.segmentTileCount,
+            expectedTileCount: mapping.segmentExpectedTileCount,
+          } : null;
+        }
+        """,
+        mutation,
+    )
+    raw_mapping = result.pop("rawMapping")
+    expected = 6 if mutation == "valid" else 10
+    assert result == {"tileCount": len(raw_mapping["tileDraws"]), "expectedTileCount": expected}
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [raw_mapping]},
+        {
+            "mappingId": raw_mapping["mappingId"],
+            "traceOperationIndex": raw_mapping["rendererOperationIndex"],
+            "sourceCanvasId": raw_mapping["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert analysis.proven is (mutation == "valid")
+
+
+async def test_nonregular_tile_geometry_keeps_historical_expected_count(
+    browser_page: Page,
+) -> None:
+    """A non-grid destination must not broaden the expected-count proof."""
+
+    await browser_page.add_init_script(
+        "window.__bookwalkerCaptureMode = 'native'; "
+        "window.__bookwalkerDirectOriginalEnabled = true;"
+    )
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 40; source.height = 40;
+          source.getContext('2d').fillRect(0, 0, 40, 40);
+          const bitmap = await createImageBitmap(source);
+          const tiled = document.createElement('canvas');
+          tiled.width = 40; tiled.height = 40;
+          const context = tiled.getContext('2d');
+          context.clearRect(0, 0, 40, 40);
+          context.drawImage(bitmap, 32, 32, 8, 8, 32, 32, 8, 8);
+          for (const y of [0, 16]) {
+            for (const x of [0, 16]) {
+              context.drawImage(bitmap, x, y, 16, 16, x, y, 16, 16);
+            }
+            context.drawImage(bitmap, 32, y, 8, 16, 31, y, 8, 16);
+          }
+          for (const x of [0, 16]) {
+            context.drawImage(bitmap, x, 32, 16, 8, x, 32, 16, 8);
+          }
+          const renderer = document.createElement('canvas');
+          renderer.width = 40; renderer.height = 40;
+          renderer.getContext('2d').drawImage(tiled, 0, 0);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const mapping = (window.__bookwalkerTransformTrace.completedMappings || [])
+            .find(item => item.sourceCanvas?.width === 40);
+          return mapping ? {
+            rawMapping: mapping,
+            tileCount: mapping.segmentTileCount,
+            expectedTileCount: mapping.segmentExpectedTileCount,
+          } : null;
+        }
+        """
+    )
+    raw_mapping = result.pop("rawMapping")
+    assert result == {"tileCount": 9, "expectedTileCount": 25}
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [raw_mapping]},
+        {
+            "mappingId": raw_mapping["mappingId"],
+            "traceOperationIndex": raw_mapping["rendererOperationIndex"],
+            "sourceCanvasId": raw_mapping["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert not analysis.proven
+
+
 @pytest.mark.parametrize(
     "clear_mode",
     [

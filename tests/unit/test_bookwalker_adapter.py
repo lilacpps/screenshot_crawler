@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,14 +14,126 @@ from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
+    _refine_uniform_direct_mapping,
     clean_bookwalker_title,
     is_last_page_counter,
     split_bookwalker_title,
+)
+from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
+    PurchasedMapping,
+    mapping_sha256,
 )
 
 PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
 PRODUCT_URL = f"https://bookwalker.jp/de{PRODUCT_ID}/"
 VIEWER_BASE = "https://viewer.bookwalker.jp/03/21/viewer.html"
+
+
+def _nonuniform_equal_frame_mapping(
+    *,
+    items: tuple[dict[str, int], ...] | None = None,
+) -> PurchasedMapping:
+    if items is None:
+        items = (
+            {"source_x": 0, "source_y": 0, "destination_x": 32, "destination_y": 0, "width": 32, "height": 32},
+            {"source_x": 32, "source_y": 0, "destination_x": 0, "destination_y": 0, "width": 32, "height": 32},
+            {"source_x": 0, "source_y": 32, "destination_x": 32, "destination_y": 32, "width": 32, "height": 8},
+            {"source_x": 32, "source_y": 32, "destination_x": 0, "destination_y": 32, "width": 32, "height": 8},
+        )
+    return PurchasedMapping(
+        mapping=items,
+        source_dimensions=(64, 40),
+        destination_dimensions=(64, 40),
+        tile_dimensions=(32, 32),
+        mapping_sha256=mapping_sha256(items),
+        mapping_provenance="direct",
+        coded_dimensions=(64, 40),
+        visible_dimensions=(64, 40),
+        tile_dimensions_uniform=False,
+        tile_dimension_variants=((32, 8), (32, 32)),
+    )
+
+
+def test_uniform_refinement_preserves_parent_and_exactly_partitions_mcus() -> None:
+    parent = _nonuniform_equal_frame_mapping()
+    refinement = _refine_uniform_direct_mapping(parent)
+
+    assert refinement is not None
+    child = refinement.mapping
+    assert parent.mapping == _nonuniform_equal_frame_mapping().mapping
+    assert parent.mapping_sha256 == refinement.parent_mapping_sha256
+    assert child.mapping_sha256 == refinement.refinement_mapping_sha256
+    assert child.mapping_sha256 != parent.mapping_sha256
+    assert child.tile_dimensions == (32, 8)
+    assert child.tile_dimensions_uniform is True
+    assert len(child.mapping) == 10
+    assert all((item["width"], item["height"]) == (32, 8) for item in child.mapping)
+
+    parent_cells = {
+        (x, y, item["destination_x"] + (x - item["source_x"]), item["destination_y"] + (y - item["source_y"]))
+        for item in parent.mapping
+        for y in range(item["source_y"], item["source_y"] + item["height"], 8)
+        for x in range(item["source_x"], item["source_x"] + item["width"], 8)
+    }
+    child_cells = {
+        (x, y, item["destination_x"] + (x - item["source_x"]), item["destination_y"] + (y - item["source_y"]))
+        for item in child.mapping
+        for y in range(item["source_y"], item["source_y"] + item["height"], 8)
+        for x in range(item["source_x"], item["source_x"] + item["width"], 8)
+    }
+    assert child_cells == parent_cells
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("bad_offset", "out_of_bounds", "allocation_limit", "scaled", "cropped"),
+)
+def test_uniform_refinement_rejects_unsafe_shapes(mutation: str) -> None:
+    parent = _nonuniform_equal_frame_mapping()
+    if mutation == "bad_offset":
+        items = list(parent.mapping)
+        items[0] = {**items[0], "source_x": 4}
+        parent = _nonuniform_equal_frame_mapping(items=tuple(items))
+    elif mutation == "out_of_bounds":
+        items = list(parent.mapping)
+        items[0] = {**items[0], "source_x": 40}
+        parent = _nonuniform_equal_frame_mapping(items=tuple(items))
+    elif mutation == "allocation_limit":
+        item = {
+            "source_x": 0,
+            "source_y": 0,
+            "destination_x": 0,
+            "destination_y": 0,
+            "width": 131080,
+            "height": 8,
+        }
+        tail = {
+            "source_x": 131080,
+            "source_y": 0,
+            "destination_x": 131080,
+            "destination_y": 0,
+            "width": 8,
+            "height": 8,
+        }
+        items = (item, tail)
+        parent = PurchasedMapping(
+            mapping=items,
+            source_dimensions=(131088, 8),
+            destination_dimensions=(131088, 8),
+            tile_dimensions=(131080, 8),
+            mapping_sha256=mapping_sha256(items),
+            mapping_provenance="direct",
+            coded_dimensions=(131088, 8),
+            visible_dimensions=(131088, 8),
+            tile_dimensions_uniform=False,
+            tile_dimension_variants=((8, 8), (131080, 8)),
+        )
+    elif mutation == "scaled":
+        parent = replace(parent, mapping_provenance="scaled_canvas_source_1hop")
+    else:
+        parent = replace(parent, visible_dimensions=(64, 39))
+
+    assert _refine_uniform_direct_mapping(parent) is None
 
 
 @pytest.mark.asyncio

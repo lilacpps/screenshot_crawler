@@ -60,9 +60,13 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     is_reconstruction_jpeg_candidate,
 )
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
+    MAX_MCU_WORK,
+    MAX_TILE_DRAW_RECORDS,
     MappingAnalysis,
+    PurchasedMapping,
     analyze_purchased_mapping,
     decode_compact_completed_mappings,
+    mapping_sha256,
     resolve_scaled_canvas_source_candidate,
     validate_scaled_canvas_source_analysis,
 )
@@ -77,6 +81,135 @@ from screenshot_crawler.site_adapters.bookwalker.terminal_match import (
     describe_terminal_png,
     match_terminal_descriptor,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _UniformMappingRefinement:
+    """Codec-only uniform view of a proven direct tile mapping.
+
+    The original mapping remains the provenance authority.  This view exists
+    solely because the lossless JPEG codec consumes one uniform tile shape.
+    """
+
+    mapping: PurchasedMapping
+    parent_mapping_sha256: str
+    refinement_mapping_sha256: str
+    refined_tile_count: int
+
+
+def _refine_uniform_direct_mapping(
+    mapping: PurchasedMapping,
+) -> _UniformMappingRefinement | None:
+    """Split a proven equal-frame non-uniform mapping into uniform MCU tiles.
+
+    This is intentionally strict and bounded.  It accepts only an already
+    proven direct permutation whose coded, visible, source, and destination
+    frames are identical.  Every child tile keeps the parent's source and
+    destination offset, and both axes must be divisible by an 8-aligned gcd.
+    """
+
+    coded = mapping.coded_dimensions or mapping.source_dimensions
+    visible = mapping.visible_dimensions or mapping.destination_dimensions
+    if (
+        mapping.mapping_provenance != "direct"
+        or mapping.tile_dimensions_uniform
+        or coded != visible
+        or coded != mapping.source_dimensions
+        or visible != mapping.destination_dimensions
+        or not mapping.mapping
+        or coded[0] % 8
+        or coded[1] % 8
+    ):
+        return None
+    variants = tuple(mapping.tile_dimension_variants)
+    if not variants:
+        variants = tuple(
+            (int(item["width"]), int(item["height"])) for item in mapping.mapping
+        )
+    widths = [width for width, _ in variants if width > 0]
+    heights = [height for _, height in variants if height > 0]
+    if len(widths) != len(variants) or len(heights) != len(variants):
+        return None
+    gcd_width = math.gcd(*widths)
+    gcd_height = math.gcd(*heights)
+    if gcd_width <= 0 or gcd_height <= 0 or gcd_width % 8 or gcd_height % 8:
+        return None
+
+    refined_count = 0
+    tile_mcu_work = 0
+    for item in mapping.mapping:
+        try:
+            width = int(item["width"])
+            height = int(item["height"])
+            source_x = int(item["source_x"])
+            source_y = int(item["source_y"])
+            destination_x = int(item["destination_x"])
+            destination_y = int(item["destination_y"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (
+            width <= 0
+            or height <= 0
+            or width % gcd_width
+            or height % gcd_height
+            or any(value % 8 for value in (
+                source_x, source_y, destination_x, destination_y,
+                width, height,
+            ))
+            or source_x < 0
+            or source_y < 0
+            or destination_x < 0
+            or destination_y < 0
+            or source_x + width > coded[0]
+            or source_y + height > coded[1]
+            or destination_x + width > visible[0]
+            or destination_y + height > visible[1]
+        ):
+            return None
+        refined_count += (width // gcd_width) * (height // gcd_height)
+        tile_mcu_work += (width // 8) * (height // 8)
+        if refined_count > MAX_TILE_DRAW_RECORDS:
+            return None
+    coded_mcu_work = (coded[0] // 8) * (coded[1] // 8)
+    if (
+        refined_count <= 0
+        or coded_mcu_work + tile_mcu_work > MAX_MCU_WORK
+    ):
+        return None
+
+    refined_items: list[dict[str, int]] = []
+    for item in mapping.mapping:
+        width = int(item["width"])
+        height = int(item["height"])
+        for offset_y in range(0, height, gcd_height):
+            for offset_x in range(0, width, gcd_width):
+                refined_items.append({
+                    "source_x": int(item["source_x"]) + offset_x,
+                    "source_y": int(item["source_y"]) + offset_y,
+                    "destination_x": int(item["destination_x"]) + offset_x,
+                    "destination_y": int(item["destination_y"]) + offset_y,
+                    "width": gcd_width,
+                    "height": gcd_height,
+                })
+    if len(refined_items) != refined_count:
+        return None
+    refined_hash = mapping_sha256(tuple(refined_items))
+    refined_mapping = replace(
+        mapping,
+        mapping=tuple(refined_items),
+        tile_dimensions=(gcd_width, gcd_height),
+        mapping_sha256=refined_hash,
+        segment_tile_count=refined_count,
+        segment_expected_tile_count=refined_count,
+        tile_dimensions_uniform=True,
+        tile_dimension_variants=((gcd_width, gcd_height),),
+    )
+    return _UniformMappingRefinement(
+        mapping=refined_mapping,
+        parent_mapping_sha256=mapping.mapping_sha256,
+        refinement_mapping_sha256=refined_hash,
+        refined_tile_count=refined_count,
+    )
 
 _DRAW_TRACE_SCRIPT = """
 (() => {
@@ -692,6 +825,116 @@ _DRAW_TRACE_SCRIPT = """
     segment.expectedTileCount =
       (target.width / sourceRect.width) * (target.height / sourceRect.height);
   };
+  // A first tile may be a right/bottom edge tile.  Keep the historical
+  // expected count as the default, but correct it at freeze time only when
+  // every recorded source and destination rectangle independently proves the
+  // same regular grid.  The Python MCU/provenance proof remains authoritative.
+  const regularGridExpectedTileCount = segment => {
+    if (segment.expectedTileCount === null) return null;
+    const tiles = Array.isArray(segment.tileDraws) ? segment.tileDraws : [];
+    const target = segment.tileTarget || segment.target;
+    if (!target || !tiles.length
+        || !Number.isInteger(target.width) || !Number.isInteger(target.height)
+        || target.width <= 0 || target.height <= 0) return null;
+    let baseWidth = 0;
+    let baseHeight = 0;
+    for (const tile of tiles) {
+      const source = tile?.source;
+      const sourceRect = tile?.sourceRect;
+      const destination = tile?.destination;
+      if (!source || !sourceRect || !destination
+          || source.width !== target.width || source.height !== target.height
+          || sourceRect.width !== destination.width
+          || sourceRect.height !== destination.height) return null;
+      baseWidth = Math.max(baseWidth, sourceRect.width);
+      baseHeight = Math.max(baseHeight, sourceRect.height);
+    }
+    if (!Number.isInteger(baseWidth) || !Number.isInteger(baseHeight)
+        || baseWidth <= 0 || baseHeight <= 0) return null;
+    const isGridCell = (rectangle, width, height) => {
+      const values = [rectangle?.x, rectangle?.y, rectangle?.width, rectangle?.height];
+      if (!values.every(value => Number.isInteger(value))) return false;
+      const [x, y, cellWidth, cellHeight] = values;
+      if (x < 0 || y < 0 || cellWidth <= 0 || cellHeight <= 0
+          || x + cellWidth > width || y + cellHeight > height
+          || x % baseWidth !== 0 || y % baseHeight !== 0) return false;
+      return cellWidth === Math.min(baseWidth, width - x)
+        && cellHeight === Math.min(baseHeight, height - y);
+    };
+    for (const tile of tiles) {
+      if (!isGridCell(tile.sourceRect, target.width, target.height)
+          || !isGridCell(tile.destination, target.width, target.height)) return null;
+    }
+    return Math.ceil(target.width / baseWidth) * Math.ceil(target.height / baseHeight);
+  };
+  // Some sources place the short final-height tile inside a column.  Keep
+  // this narrower than the global grid proof: width must divide evenly, while
+  // each source/destination x-column must join heights from zero to H with
+  // exactly one remainder tile.
+  const verticalRemainderExpectedTileCount = segment => {
+    if (segment.expectedTileCount === null) return null;
+    const tiles = Array.isArray(segment.tileDraws) ? segment.tileDraws : [];
+    const target = segment.tileTarget || segment.target;
+    if (!target || !tiles.length
+        || !Number.isInteger(target.width) || !Number.isInteger(target.height)
+        || target.width <= 0 || target.height <= 0) return null;
+    let baseWidth = 0;
+    let baseHeight = 0;
+    for (const tile of tiles) {
+      const source = tile?.source;
+      const sourceRect = tile?.sourceRect;
+      const destination = tile?.destination;
+      if (!source || !sourceRect || !destination
+          || source.width !== target.width || source.height !== target.height
+          || sourceRect.width !== destination.width
+          || sourceRect.height !== destination.height) return null;
+      baseWidth = Math.max(baseWidth, sourceRect.width);
+      baseHeight = Math.max(baseHeight, sourceRect.height);
+    }
+    if (!Number.isInteger(baseWidth) || !Number.isInteger(baseHeight)
+        || baseWidth <= 0 || baseHeight <= 0
+        || target.width % baseWidth !== 0
+        || target.height % baseHeight === 0) return null;
+    const remainderHeight = target.height % baseHeight;
+    const expectedColumns = target.width / baseWidth;
+    const expectedRows = Math.ceil(target.height / baseHeight);
+    const axisIsComplete = rectangleKey => {
+      const columns = new Map();
+      for (const tile of tiles) {
+        const rectangle = tile[rectangleKey];
+        const values = [rectangle?.x, rectangle?.y, rectangle?.width, rectangle?.height];
+        if (!values.every(value => Number.isInteger(value))) return false;
+        const [x, y, width, height] = values;
+        if (x < 0 || y < 0 || width !== baseWidth || height <= 0
+            || x + width > target.width || y + height > target.height
+            || x % baseWidth !== 0) return false;
+        let rows = columns.get(x);
+        if (!rows) {
+          rows = new Map();
+          columns.set(x, rows);
+        }
+        if (rows.has(y)) return false;
+        rows.set(y, height);
+      }
+      if (columns.size !== expectedColumns) return false;
+      for (const rows of columns.values()) {
+        if (rows.size !== expectedRows) return false;
+        let cursor = 0;
+        let remainderCount = 0;
+        for (let rowIndex = 0; rowIndex < expectedRows; rowIndex += 1) {
+          const height = rows.get(cursor);
+          if (height === undefined) return false;
+          if (height === remainderHeight) remainderCount += 1;
+          else if (height !== baseHeight) return false;
+          cursor += height;
+        }
+        if (cursor !== target.height || remainderCount !== 1) return false;
+      }
+      return true;
+    };
+    if (!axisIsComplete('sourceRect') || !axisIsComplete('destination')) return null;
+    return expectedColumns * expectedRows;
+  };
   const retainCompletedMapping = mapping => {
     const trace = window.__bookwalkerTransformTrace;
     const tileCount = mapping.tileDraws.length;
@@ -726,6 +969,9 @@ _DRAW_TRACE_SCRIPT = """
       sourceSnapshotId = snapshot.snapshotId;
       sourceSnapshotError = snapshot.error;
     }
+    const correctedExpectedTileCount =
+      regularGridExpectedTileCount(segment)
+      ?? verticalRemainderExpectedTileCount(segment);
     const mapping = {
       mappingId,
       rendererOperationIndex: operation.index,
@@ -744,7 +990,7 @@ _DRAW_TRACE_SCRIPT = """
       segmentLastTileOperationIndex: segment.tileDraws.length
         ? segment.tileDraws[segment.tileDraws.length - 1].operationIndex : null,
       segmentTileCount: segment.tileDraws.length,
-      segmentExpectedTileCount: segment.expectedTileCount,
+      segmentExpectedTileCount: correctedExpectedTileCount ?? segment.expectedTileCount,
       tileDraws: segment.tileDraws.map(tile => ({...tile, source: {...tile.source}, target: {...tile.target}})),
       sourceIds: [...segment.sourceIds],
       nonImageBitmapDraws: segment.nonImageBitmapDraws.map(draw => ({
@@ -3289,6 +3535,7 @@ def _elapsed_ms(start: float) -> float:
 def _part_timing_defaults() -> dict[str, float]:
     return {
         "mapping_analysis_ms": 0.0,
+        "uniform_mapping_refinement_ms": 0.0,
         "imagebitmap_signature_ms": 0.0,
         "candidate_signature_ms_total": 0.0,
         "raw_full_resolution_compare_ms": 0.0,
@@ -3336,6 +3583,7 @@ def _evaluation_timing_defaults() -> dict[str, float]:
         "trace_decode_ms": 0.0,
         "trace_python_analysis_ms": 0.0,
         "mapping_analysis": 0.0,
+        "uniform_mapping_refinement": 0.0,
         "imagebitmap_signature": 0.0,
         "candidate_signature_total": 0.0,
         "raw_full_resolution_compare": 0.0,
@@ -6502,6 +6750,10 @@ class BookWalkerAdapter(SiteAdapter):
             "visible_dimensions": None,
             "tile_dimensions_uniform": None,
             "tile_dimension_variants": [],
+            "uniform_refinement_used": False,
+            "uniform_refinement_parent_mapping_sha256": None,
+            "uniform_refinement_mapping_sha256": None,
+            "uniform_refinement_tile_count": 0,
             "mapping_source": None,
             "mapping_id": None,
             "selected_mapping_id": None,
@@ -8037,6 +8289,38 @@ class BookWalkerAdapter(SiteAdapter):
             part["visible_dimensions"] = list(visible_dimensions)
             part["tile_dimensions_uniform"] = mapping.tile_dimensions_uniform
             part["tile_dimension_variants"] = [list(item) for item in mapping.tile_dimension_variants]
+            codec_mapping = mapping
+            uniform_refinement: _UniformMappingRefinement | None = None
+            refinement_eligible = (
+                mapping.mapping_provenance == "direct"
+                and coded_dimensions == visible_dimensions
+                and coded_dimensions == mapping.source_dimensions
+                and visible_dimensions == mapping.destination_dimensions
+                and (native.width, native.height) == coded_dimensions
+            )
+            if not mapping.tile_dimensions_uniform and refinement_eligible:
+                refinement_started = time.perf_counter()
+                uniform_refinement = _refine_uniform_direct_mapping(mapping)
+                refinement_elapsed = _elapsed_ms(refinement_started)
+                part_timing["uniform_mapping_refinement_ms"] = refinement_elapsed
+                evaluation_timing["uniform_mapping_refinement"] += refinement_elapsed
+                if uniform_refinement is None:
+                    part["reason"] = "non-uniform mapping cannot be safely refined"
+                    parts.append(part)
+                    continue
+                codec_mapping = uniform_refinement.mapping
+                part["uniform_refinement_used"] = True
+                part["uniform_refinement_parent_mapping_sha256"] = (
+                    uniform_refinement.parent_mapping_sha256
+                )
+                part["uniform_refinement_mapping_sha256"] = (
+                    uniform_refinement.refinement_mapping_sha256
+                )
+                part["uniform_refinement_tile_count"] = (
+                    uniform_refinement.refined_tile_count
+                )
+            else:
+                part["uniform_refinement_used"] = False
             part["strict_mcu_aligned"] = all(
                 value % 8 == 0
                 for item in mapping.mapping
@@ -8115,7 +8399,7 @@ class BookWalkerAdapter(SiteAdapter):
             result: LosslessJpegResult = await asyncio.to_thread(
                 reconstruct_lossless_jpeg,
                 candidate.data,
-                mapping,
+                codec_mapping,
             )
             reconstruction_elapsed = _elapsed_ms(reconstruction_started)
             part_timing["lossless_reconstruction_ms"] = reconstruction_elapsed
@@ -8168,7 +8452,11 @@ class BookWalkerAdapter(SiteAdapter):
                     else "intrinsic"
                 )
                 mandatory_intrinsic_verify = coded_dimensions != visible_dimensions
-                if self.final_pixel_verify_enabled or mandatory_intrinsic_verify:
+                if (
+                    self.final_pixel_verify_enabled
+                    or mandatory_intrinsic_verify
+                    or uniform_refinement is not None
+                ):
                     final_compare_started = time.perf_counter()
                     if (
                         provenance_candidate is not None
@@ -8379,6 +8667,13 @@ class BookWalkerAdapter(SiteAdapter):
                 part.get("component_quantization_selectors_equal") is True
                 if part.get("coded_dimensions") != part.get("visible_dimensions")
                 else True
+            )
+            and (
+                part.get("uniform_refinement_used") is not True
+                or (
+                    part.get("component_quantization_selectors_equal") is True
+                    and part.get("native_pixel_exact") is True
+                )
             )
             and (
                 part.get("reconstructed_source_dimensions_match") is True
