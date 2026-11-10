@@ -1,9 +1,12 @@
 import asyncio
+import io
 import json
 import os
+import zipfile
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 import screenshot_crawler.core.runner as runner_module
 from screenshot_crawler.core.access_guard import AccessGuard
@@ -19,10 +22,14 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunConfig
+from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import ProgressStore, atomic_write_json
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
+from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _encode_native_lossless_webp,
+)
 
 
 def test_fingerprint_is_sha256() -> None:
@@ -263,6 +270,47 @@ class NativeWebPAdapter(NativeCaptureAdapter):
                 file_extension=".webp",
             ),
         )
+
+
+class BookWalkerNativeWebPAdapter(NativeCaptureAdapter):
+    """Feed the Core runner the actual BookWalker helper's WebP result."""
+
+    def __init__(self, states: list[PageState], identities: list[ContentIdentity]) -> None:
+        super().__init__(states, identities)
+        source = Image.new(
+            "RGBA",
+            (4, 3),
+            ((0, 0, 0, 0)),
+        )
+        source.putdata(
+            [
+                (255, 0, 0, 255),
+                (0, 255, 0, 255),
+                (0, 0, 255, 255),
+                (255, 255, 0, 128),
+                (0, 255, 255, 255),
+                (255, 0, 255, 128),
+                (255, 255, 255, 255),
+                (0, 0, 0, 64),
+                (32, 64, 128, 192),
+                (128, 64, 32, 96),
+                (64, 128, 32, 224),
+                (16, 32, 48, 80),
+            ]
+        )
+        png = io.BytesIO()
+        source.save(png, format="PNG")
+        self.source_png = png.getvalue()
+        self.source_rgba = source.tobytes()
+        converted, debug = _encode_native_lossless_webp(
+            (CaptureResult(data=self.source_png, width=4, height=3),)
+        )
+        assert debug["used"] is True
+        self.webp_capture = converted[0]
+
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        return (self.webp_capture,)
 
 
 async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
@@ -841,6 +889,51 @@ async def test_runner_uses_native_artifact_extension_and_manifest_metadata(
     manifest = json.loads((tmp_path / "run" / "manifest.json").read_text())
     assert manifest["pages"][0]["mime_type"] == "image/webp"
     assert manifest["pages"][0]["file_extension"] == ".webp"
+
+
+async def test_bookwalker_native_webp_flows_through_manifest_and_zip(
+    tmp_path: Path,
+) -> None:
+    adapter = BookWalkerNativeWebPAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    run = await CrawlerRunner(
+        RunConfig(
+            site="bookwalker",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text())
+    page = manifest["pages"][0]
+    output_bytes = (tmp_path / "run" / page["file"]).read_bytes()
+    assert page["sequence"] == 1
+    assert page["page_number"] == 1
+    assert page["mime_type"] == "image/webp"
+    assert page["file_extension"] == ".webp"
+    assert (page["width"], page["height"]) == (4, 3)
+    assert run.pages[0].file.name == "page-0001.webp"
+    assert output_bytes == adapter.webp_capture.data
+    with Image.open(io.BytesIO(output_bytes)) as decoded:
+        assert decoded.size == (4, 3)
+        assert decoded.convert("RGBA").tobytes() == adapter.source_rgba
+
+    package = package_crawl_output(
+        tmp_path / "run",
+        {"title": "synthetic-bookwalker", "genre": "test"},
+        library_dir=tmp_path / "Books",
+    )
+    with zipfile.ZipFile(package.archive_path) as archive:
+        assert archive.namelist() == ["page-0001.webp"]
+        archived_bytes = archive.read("page-0001.webp")
+    assert archived_bytes == output_bytes
+    with Image.open(io.BytesIO(archived_bytes)) as decoded:
+        assert decoded.size == (4, 3)
+        assert decoded.convert("RGBA").tobytes() == adapter.source_rgba
 
 
 async def test_runner_preserves_native_spread_order_and_metadata(

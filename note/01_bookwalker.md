@@ -408,6 +408,7 @@ The current production priority remains unchanged:
 ```text
 verified original JPEG
     -> verified lossless reconstructed JPEG
+    -> verified native lossless WebP derived from native PNG
     -> verified source-native PNG
     -> rendered-canvas PNG fallback
 ```
@@ -2444,7 +2445,10 @@ changed; those bytes were identical across the revision A/B runs.
   native-path stability becomes a requirement; it is not a reason to loosen
   original-JPEG matching.
 
-#### Recommended minimal fix (not implemented)
+#### Historical recommended minimal fix (superseded)
+
+This proposal predates the current native lossless-WebP fallback described
+above; its PNG-only priority is retained only as historical context.
 
 Keep the capture priority unchanged:
 
@@ -2506,6 +2510,7 @@ P1 shadow-only behavior. When ON, the priority is:
 ```text
 verified original JPEG
     -> verified lossless reconstructed JPEG
+    -> verified native lossless WebP derived from native PNG
     -> native PNG
     -> rendered canvas PNG
 ```
@@ -2515,8 +2520,9 @@ as `.jpg`; they are not called original JPEG and are not re-encoded in Pillow.
 The output gate requires the completed-segment proof, no overflow/eviction,
 unique full-resolution raw match, strict supported JPEG layout, exact
 coefficients and quantization tables, browser pixel exactness, and matching
-native dimensions. Spread output is all-or-none: if one part is not ready,
-all parts remain native PNG and any temporary reconstructed result is discarded.
+native dimensions. Spread output is all-or-none: if one part is not ready, no
+reconstructed JPEG is returned; the later native fallback is either all WebP
+or the original all-PNG tuple.
 Trial original JPEG, trial cover, and purchased direct-original JPEG remain
 first-priority byte-preserving paths and do not invoke reconstruction. p.1,
 crop, partial-edge, overflow, unavailable mapping, and other unsupported
@@ -2525,10 +2531,105 @@ the entire native/original/lossless path and continues to use rendered-canvas
 fallback.
 
 P2 debug metadata keeps the compatibility key `lossless_shadow` and adds
-`output_enabled` and `output_used`; `bookwalker_capture.returned_path` is
-`original_jpeg`, `reconstructed_jpeg`, `native_png`, or `rendered_canvas`.
+`output_enabled` and `output_used`. The native fallback now performs one
+site-local, all-or-none lossless WebP conversion after every JPEG path fails:
+`bookwalker_capture.returned_path` can be `native_lossless_webp` when the
+Pillow lossless/exact WebP round-trip has matching dimensions and RGBA bytes;
+otherwise the original native PNG tuple is retained as `native_png`.
+The PNG bytes remain the proof input. `native_webp` records only bounded
+numeric/enum metadata (reason, timing, PNG/WebP sizes and ratio); no image
+bytes are stored. JPEG routes, rendered-canvas mode, strict UNKNOWN behavior,
+and spread all-or-none semantics remain unchanged. High-precision PNG modes
+such as `I;16` are retained as PNG rather than reduced to RGBA8.
 Reconstructed bytes, base64, and raw candidates are never stored in debug or
 manifest metadata.
+
+### Current native PNG lossless-WebP fallback (2026-11-11)
+
+After all original/direct/reconstructed JPEG paths fail, the existing verified
+native PNG tuple is retained as the proof input. `capture_page()` performs no
+additional browser read, candidate match, or retry. After the existing final
+proof and geometry cleanup, a small adapter-local Pillow helper attempts an
+all-or-none conversion using `lossless=True`, `exact=True`, `method=4`, and
+`quality=80`. It reopens the WebP and requires identical dimensions and exact
+decoded RGBA bytes. Any codec, decode, high-precision PNG (IHDR bit depth > 8),
+or pixel-verification failure returns the original PNG tuple unchanged. JPEG
+returns, rendered-canvas mode, strict UNKNOWN, and mixed JPEG/PNG tuples are
+not converted.
+
+The helper records only fixed reasons plus bounded timing and size/ratio
+metrics under `native_webp`; successful output uses
+`returned_path=native_lossless_webp`, while failure remains
+`returned_path=native_png`. The actual helper was measured with Pillow 12.3.0
+and libwebp 1.6.0 over three existing 960x1280 PNGs (read-only):
+1,493,296 -> 918,000 bytes / 507.85 ms,
+960,161 -> 527,020 bytes / 340.58 ms, and
+1,190,108 -> 688,742 bytes / 358.92 ms. All decoded RGBA comparisons were
+zero-difference; ratios were 0.614748, 0.548887, and 0.578722. Timings include
+encode, decode, and verification, with the first sample including cold-start
+cost. This is a local codec measurement, not live-site evidence; no experiment
+image or archive is stored.
+
+`scripts/prepare_recrawl.py` treats `.webp` as a known BookWalker fallback.
+The existing five-page tail exception remains PNG-only. Core runner,
+manifest, and ZIP packaging already accept `.webp`; no schema or CLI setting
+was added.
+
+### Final native WebP validation (2026-11-11)
+
+The final affected validation used the absolute root virtual environment and
+absolute worktree `PYTHONPATH`, with the short OS temporary directory
+`C:/Users/kensu/AppData/Local/Temp/bww-adaaf1` as `--basetemp`. The 12-file
+command was run from
+`C:/Users/kensu/projects/screenshot_crawler_starter/.worktrees/bookwalker-jpeg-fallback-20261110`:
+
+```text
+$env:PYTHONPATH='C:/Users/kensu/projects/screenshot_crawler_starter/.worktrees/bookwalker-jpeg-fallback-20261110/src'
+C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m pytest -q
+tests/unit/test_bookwalker_adapter.py
+tests/unit/test_bookwalker_original_capture.py
+tests/unit/test_bookwalker_native_capture.py
+tests/unit/test_bookwalker_native_source.py
+tests/unit/test_bookwalker_purchased_mapping.py
+tests/unit/test_bookwalker_lossless_jpeg.py
+tests/unit/test_bookwalker_terminal_match.py
+tests/integration/test_bookwalker_adapter_browser.py
+tests/integration/test_bookwalker_original_capture_browser.py
+tests/unit/test_core_features.py
+tests/unit/test_packaging.py
+tests/unit/test_prepare_recrawl.py
+--basetemp C:/Users/kensu/AppData/Local/Temp/bww-adaaf1
+```
+
+It passed with `686 passed, 0 skipped, 1554 warnings` in 131.58 seconds.
+The warnings are pytest-asyncio and Pillow deprecations (including the new
+high-precision PNG fixture's I-mode save warning), plus a benign pytest-cache
+`WinError 183`; they are not all pre-existing warnings.
+The raw PowerShell-encoded log is `.tmp/final-lead-webp-20261111.log`; the
+readable transcript is `.tmp/final-lead-webp-20261111.utf8.log`. The earlier
+long-title packaging error is not treated as a known product failure: all
+packaging tests passed with the short OS temporary path, so it was a test
+environment/path-length constraint. The independent durable
+BookWalker-helper-to-Runner-to-manifest-to-ZIP test
+`tests/unit/test_core_features.py::test_bookwalker_native_webp_flows_through_manifest_and_zip`
+passed separately with `1 passed, 11 warnings` in 0.63 seconds; its raw log is
+`.tmp/final-lead-webp-e2e-20261111.log`.
+
+The final collection contained 687 unique tests with zero skips; collection
+output is `.tmp/final-lead-webp-collection-20261111.log`. The validated
+adapter source SHA-256 is
+`bfc35ad56db5be33b701e0b491a6ea0a2ac23b1656e8e9392f66addbb6961404`.
+Ruff, compile checks, diff checks, and ZIP integrity checks passed in the
+final validation. Full-repository/Research suites were not run because this
+is a site-local output-format change with no Core production change; no new
+live/CDP run was needed. The same branch can be rolled back as one change to
+baseline `60296d7`.
+
+The actual helper measurement remains limited to three existing 960x1280 PNGs
+with Pillow 12.3.0/libwebp 1.6.0: encoded sizes were 61.475%, 54.889%, and
+57.872% of PNG (39--45% reduction), with total encode/decode/RGBA-verification
+times of 507.85, 340.58, and 358.92 ms. This is local codec evidence only;
+PNG inputs with IHDR bit depth over 8 remain PNG.
 
 ### 20.15 Phase P2 live verification (2026-10-01)
 

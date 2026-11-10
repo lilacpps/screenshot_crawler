@@ -10,6 +10,7 @@ import asyncio
 import base64
 import copy
 import hashlib
+import io
 import json
 import math
 import os
@@ -22,6 +23,7 @@ from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from PIL import Image, features
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -4365,6 +4367,128 @@ def _capture_from_data_url(value: object) -> CaptureResult:
         ) from exc
 
 
+def _native_webp_debug_defaults() -> dict[str, Any]:
+    return {
+        "attempted": False,
+        "used": False,
+        "lossless": True,
+        "exact": True,
+        "method": 4,
+        "quality": 80,
+        "reason": None,
+        "elapsed_ms": 0.0,
+        "png_bytes": 0,
+        "webp_bytes": 0,
+        "compression_ratio": None,
+        "parts": [],
+    }
+
+
+def _encode_native_lossless_webp(
+    captures: tuple[CaptureResult, ...],
+) -> tuple[tuple[CaptureResult, ...], dict[str, Any]]:
+    """Encode a verified native-PNG tuple as exact lossless WebP, all-or-none.
+
+    The PNG bytes remain the source/proof input.  This helper only runs after
+    all JPEG paths have failed and never performs browser work or retries.
+    """
+
+    started = time.perf_counter()
+    debug = _native_webp_debug_defaults()
+    debug["attempted"] = True
+    debug["png_bytes"] = sum(len(capture.data) for capture in captures)
+
+    def failed(reason: str) -> tuple[tuple[CaptureResult, ...], dict[str, Any]]:
+        debug["reason"] = reason
+        debug["parts"] = []
+        debug["elapsed_ms"] = _elapsed_ms(started)
+        return captures, debug
+
+    if not captures:
+        return failed("empty_capture_tuple")
+    if any(
+        capture.mime_type != "image/png" or capture.file_extension != ".png"
+        for capture in captures
+    ):
+        return failed("non_png_capture_tuple")
+    if not features.check("webp"):
+        return failed("webp_codec_unavailable")
+
+    converted: list[CaptureResult] = []
+    for index, capture in enumerate(captures):
+        if (
+            len(capture.data) < 29
+            or capture.data[:8] != b"\x89PNG\r\n\x1a\n"
+            or capture.data[8:12] != b"\x00\x00\x00\r"
+            or capture.data[12:16] != b"IHDR"
+        ):
+            return failed("native_png_header_invalid")
+        if capture.data[24] > 8:
+            return failed("native_png_high_precision_unsupported")
+        try:
+            with Image.open(io.BytesIO(capture.data)) as source:
+                if source.format != "PNG":
+                    return failed("native_png_format_invalid")
+                if source.size != (capture.width, capture.height):
+                    return failed("native_png_dimensions_invalid")
+                source_rgba = source.convert("RGBA")
+                source_bytes = source_rgba.tobytes()
+        except Exception:  # noqa: BLE001 - the original PNG is the fallback
+            return failed("native_png_decode_failed")
+        encoded = io.BytesIO()
+        try:
+            source_rgba.save(
+                encoded,
+                format="WEBP",
+                lossless=True,
+                exact=True,
+                method=4,
+                quality=80,
+            )
+        except Exception:  # noqa: BLE001 - the original PNG is the fallback
+            return failed("native_webp_encode_failed")
+        webp_bytes = encoded.getvalue()
+        try:
+            with Image.open(io.BytesIO(webp_bytes)) as decoded:
+                if decoded.format != "WEBP" or decoded.size != source_rgba.size:
+                    return failed("native_webp_dimensions_invalid")
+                decoded_bytes = decoded.convert("RGBA").tobytes()
+        except Exception:  # noqa: BLE001 - the original PNG is the fallback
+            return failed("native_webp_decode_failed")
+        if decoded_bytes != source_bytes:
+            return failed("native_webp_pixel_mismatch")
+        converted.append(
+            CaptureResult(
+                data=webp_bytes,
+                width=capture.width,
+                height=capture.height,
+                mime_type="image/webp",
+                file_extension=".webp",
+            )
+        )
+        debug["parts"].append(
+            {
+                "index": index,
+                "png_bytes": len(capture.data),
+                "webp_bytes": len(webp_bytes),
+                "compression_ratio": round(len(webp_bytes) / len(capture.data), 6)
+                if capture.data
+                else None,
+            }
+        )
+
+    webp_bytes_total = sum(len(capture.data) for capture in converted)
+    debug["used"] = True
+    debug["webp_bytes"] = webp_bytes_total
+    debug["compression_ratio"] = (
+        round(webp_bytes_total / debug["png_bytes"], 6)
+        if debug["png_bytes"]
+        else None
+    )
+    debug["elapsed_ms"] = _elapsed_ms(started)
+    return tuple(converted), debug
+
+
 def parse_bookwalker_lossless_jpeg_output(value: str | None) -> bool:
     """Parse the BookWalker-local reconstructed-JPEG output switch.
 
@@ -4429,6 +4553,7 @@ def _capture_timing_defaults() -> dict[str, float]:
         "original_total_ms": 0.0,
         "direct_original_jpeg_ms": 0.0,
         "lossless_evaluation_total_ms": 0.0,
+        "native_webp_conversion_ms": 0.0,
         "capture_total_ms": 0.0,
         "capture_unaccounted_ms": 0.0,
     }
@@ -4978,6 +5103,7 @@ class BookWalkerAdapter(SiteAdapter):
                     "final_pixel_compare_performed": False,
                     "parts": [],
                 },
+                "native_webp": _native_webp_debug_defaults(),
             }
         }
 
@@ -5852,6 +5978,9 @@ class BookWalkerAdapter(SiteAdapter):
                 ),
                 "lossless_shadow": self._safe_diagnostic_value(
                     capture.get("lossless_shadow")
+                ),
+                "native_webp": self._safe_diagnostic_value(
+                    capture.get("native_webp")
                 ),
                 "diagnostic_history": self._safe_diagnostic_value(
                     capture.get("diagnostic_history")
@@ -7596,6 +7725,7 @@ class BookWalkerAdapter(SiteAdapter):
                     "final_pixel_compare_performed": False,
                     "parts": [],
                 },
+                "native_webp": _native_webp_debug_defaults(),
             }
         }
 
@@ -10528,7 +10658,11 @@ class BookWalkerAdapter(SiteAdapter):
         p4b_renderer_handle: Any | None = None
         capture_window_roi_baseline: Any | None = None
 
-        async def finish(captures: tuple[CaptureResult, ...]) -> tuple[CaptureResult, ...]:
+        async def finish(
+            captures: tuple[CaptureResult, ...],
+            *,
+            native_png_fallback: bool = False,
+        ) -> tuple[CaptureResult, ...]:
             final_join: dict[str, Any] | None = None
             if selected_capture_window_retained:
                 try:
@@ -10588,6 +10722,18 @@ class BookWalkerAdapter(SiteAdapter):
                     raise UnknownPageStateError("BookWalker initial batch retry final ROI proof failed")
                 retry["output_verified"] = True
             await self._clear_geometry_trace(page)
+            if native_png_fallback:
+                captures, native_webp_debug = _encode_native_lossless_webp(captures)
+                self._capture_debug["bookwalker_capture"]["native_webp"] = (
+                    native_webp_debug
+                )
+                self._capture_debug["bookwalker_capture"]["timing_ms"][
+                    "native_webp_conversion_ms"
+                ] = float(native_webp_debug.get("elapsed_ms", 0.0))
+                if native_webp_debug.get("used") is True:
+                    self._capture_debug["bookwalker_capture"][
+                        "returned_path"
+                    ] = "native_lossless_webp"
             return captures
 
         try:
@@ -10936,7 +11082,8 @@ class BookWalkerAdapter(SiteAdapter):
                     )
                 captures.append(capture)
             if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
-                return await finish(tuple(captures))
+                self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
+                return await finish(tuple(captures), native_png_fallback=True)
             native_captures = tuple(captures)
             original_match_started = time.perf_counter()
             original_captures = await self._capture_original_jpegs(
@@ -11174,7 +11321,10 @@ class BookWalkerAdapter(SiteAdapter):
                     "reason"
                 ] = "no JPEG candidates from supported reconstruction hosts"
             self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
-            return await finish(native_captures)
+            return await finish(
+                native_captures,
+                native_png_fallback=True,
+            )
         except CaptureUnavailableError as exc:
             self._capture_debug["bookwalker_capture"]["failure_reason"] = str(exc)
             if selected_capture_window_retained:
@@ -11224,7 +11374,8 @@ class BookWalkerAdapter(SiteAdapter):
                 capture_timing["capture_total_ms"]
                 - capture_timing.get("native_materialization_ms", 0.0)
                 - capture_timing.get("original_jpeg_match_ms", 0.0)
-                - capture_timing.get("lossless_evaluation_total_ms", 0.0),
+                - capture_timing.get("lossless_evaluation_total_ms", 0.0)
+                - capture_timing.get("native_webp_conversion_ms", 0.0),
                 2,
             )
             try:

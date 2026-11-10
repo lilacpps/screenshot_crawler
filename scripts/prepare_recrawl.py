@@ -75,7 +75,7 @@ class ArchivePolicy:
 SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
     "bookwalker": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
-        fallback_extensions=frozenset({".png"}),
+        fallback_extensions=frozenset({".png", ".webp"}),
         # Accepted PNG positions are an archive recrawl policy, independent
         # of whether capture can identify a terminal notice/logo.
         allowed_head_png_pages=0,

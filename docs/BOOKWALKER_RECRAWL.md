@@ -1,16 +1,18 @@
 # BookWalker legacy PNG re-crawl
 
 Use the existing `scripts/prepare_recrawl.py` Catalog-driven scanner. BookWalker
-prefers JPEG (`.jpg` / `.jpeg`), with a PNG exception only for the last five
+prefers JPEG (`.jpg` / `.jpeg`), and treats native lossless WebP (`.webp`) as a
+known fallback alongside PNG. PNG has an exception only for the last five
 saved pages **when at least one JPEG page is present**. PNGs in the first ten
 saved pages are fallback candidates unless they also fall within that tail.
 This exception does not convert PNGs or modify the BookWalker
-adapter's source-preserving fallback behavior.
+adapter's source-preserving fallback behavior. The existing tail exception
+remains PNG-only.
 
 - JPEG-only archives and archives whose PNGs occur only in the last five
   saved pages are `PREFERRED_ONLY` and excluded by default. Explicit Item IDs
   with `--force` can prepare them when a visual defect requires another capture.
-- Other body PNGs, PNG-only archives, and unsupported image formats are flagged.
+- Other body PNGs/WebPs, PNG/WebP-only archives, and unsupported image formats are flagged.
 - The scanner checks ZIP CRC and ignores known operating-system metadata.
 
 Run in the repository root (PowerShell):

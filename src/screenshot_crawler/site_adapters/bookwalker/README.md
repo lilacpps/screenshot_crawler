@@ -202,8 +202,10 @@ fallback until their reconstruction path is verified. The purchased viewer's int
 `HTMLCanvasElement` source is accepted only with the existing identity-transform and
 composition checks, and its mutable source canvas uses eager per-draw crop capture.
 An `HTMLCanvasElement` without an eager crop is rejected before deferred materialization.
-When a raw tile cannot be uniquely matched, the verified source-native PNG is returned as-is;
-the adapter does not re-encode it as JPEG. A direct completed tile mapping may instead
+When a raw tile cannot be uniquely matched, the verified source-native PNG remains the
+proof input. After all JPEG paths fail, the adapter may derive a verified lossless WebP
+from that PNG; if encoding or RGBA round-trip verification fails, the original PNG is
+returned. It does not re-encode the PNG as JPEG. A direct completed tile mapping may instead
 produce a lossless reconstructed JPEG when the coded source frame `S` and visible
 intermediate frame `V` are proven separately. The supported cropped shape is limited
 to a right or bottom final-MCU crop of fewer than eight pixels, integer 8-pixel-aligned
@@ -223,7 +225,8 @@ returns the associated native PNG only while the selected native association
 and current page identity remain valid; a stale, missing, or ambiguous proof
 remains UNKNOWN and cannot reuse an old buffer. The current source-native
 priority is verified original JPEG, verified lossless reconstructed JPEG,
-source/native PNG, then rendered-canvas PNG fallback. Unavailable spread-native
+verified native lossless WebP derived from PNG, source/native PNG, then
+rendered-canvas PNG fallback. Unavailable spread-native
 capture falls back to the complete Core PNG path only after the normal current
 identity checks pass.
 

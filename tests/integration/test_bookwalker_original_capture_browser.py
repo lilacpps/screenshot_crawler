@@ -206,7 +206,7 @@ async def test_terminal_native_ad_unknown_or_pixel_mismatch_stays_content(
     captures = await adapter.capture_page(browser_page)
     assert captures is not None
     assert len(captures) == 1
-    assert captures[0].mime_type == "image/png"
+    assert captures[0].mime_type == "image/webp"
     assert (captures[0].width, captures[0].height) == (8, 600)
     image = Image.open(BytesIO(captures[0].data)).convert("RGBA")
     assert image.getpixel((0, 0)) == (12, 34, 56, 255)
@@ -2914,9 +2914,9 @@ async def test_retained_capture_page_final_join_is_atomic(
         result = await adapter.capture_page(browser_page)
         assert result is not None
         assert len(result) == 1
-        assert result[0].mime_type == "image/png"
+        assert result[0].mime_type == "image/webp"
         capture_debug = adapter._capture_debug["bookwalker_capture"]
-        assert capture_debug["returned_path"] == "native_png"
+        assert capture_debug["returned_path"] == "native_lossless_webp"
         part = capture_debug["lossless_shadow"]["parts"][0]
         assert part["final_pixel_verify_enabled"] is False
         if mode in {"native_pixel_mismatch", "native_pixel_unavailable"}:
@@ -2937,7 +2937,7 @@ async def test_retained_capture_page_final_join_is_atomic(
                 "executed_clear_provenance"
             ] is False
         else:
-            assert result[0].mime_type == "image/png"
+            assert result[0].mime_type == "image/webp"
 
 
 async def test_retained_capture_page_original_jpeg_return_still_runs_final_join(
@@ -4535,9 +4535,9 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
         assert retry["final_roi_proof"]["exact"] is True
     if candidate_mode == "first_only":
         assert [capture.mime_type for capture in captures] == [
-            "image/png", "image/png"
+            "image/webp", "image/webp"
         ], adapter._capture_debug
-        assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == "native_png"
+        assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == "native_lossless_webp"
         shadow = adapter._capture_debug["bookwalker_capture"]["lossless_shadow"]
         if clear_mode != "legacy":
             assert shadow["p4b_batch_atomic_proof"]["exact"] is True, shadow

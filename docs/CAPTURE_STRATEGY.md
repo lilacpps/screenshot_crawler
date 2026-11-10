@@ -373,7 +373,8 @@ Preferred path:
 ```text
 verified original JPEG
     -> verified source-native reconstructed JPEG
-    -> source-native PNG
+    -> source-native lossless WebP derived from verified native PNG
+        -> source-native PNG
         -> rendered canvas PNG
 ```
 

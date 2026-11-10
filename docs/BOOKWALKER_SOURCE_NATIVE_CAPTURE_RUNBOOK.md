@@ -5,10 +5,11 @@
 This runbook defines the default autonomous workflow for investigating and improving
 BookWalker capture behavior in the existing adapter.
 
-The objective is **source-native preservation**, not JPEG conversion:
+The objective is **source-native preservation**, not unsafe JPEG conversion:
 
 - source JPEG -> preserve/recover JPEG when exact visible-page provenance is proven;
-- source PNG -> keep PNG;
+- source PNG -> keep the verified PNG as proof input; after all JPEG paths fail,
+  a verified lossless WebP may be emitted as the final derived fallback;
 - provenance insufficient -> keep the existing fail-closed native/rendered fallback.
 
 This runbook complements `AGENTS.md`, `docs/CAPTURE_STRATEGY.md`,
@@ -106,7 +107,8 @@ Conceptually:
 ```text
 verified source-native artifact
     ├─ JPEG -> byte-preserving original JPEG when possible
-    └─ PNG  -> source/native PNG
+    └─ PNG  -> verified lossless WebP derived from source/native PNG
+                 -> source/native PNG on codec/round-trip failure
         ↓
 verified source-native reconstruction
         ↓
@@ -118,6 +120,8 @@ rendered canvas fallback
 Required rules:
 
 - Never re-encode source PNG to JPEG just to produce `.jpg`.
+- Native PNG -> WebP is allowed only as the final all-JPEG-failed fallback;
+  the original PNG remains the proof input and spread parts are all-or-none.
 - Never treat PNG output itself as evidence of a PNG source.
 - Never bind a candidate from dimensions alone.
 - Never bind a candidate from filename/path proximity alone.

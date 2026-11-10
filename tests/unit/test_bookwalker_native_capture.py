@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import struct
+import zlib
 from io import BytesIO
 
 import pytest
@@ -17,6 +19,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
     BookWalkerAdapter,
     _capture_from_data_url,
+    _encode_native_lossless_webp,
     _native_call_is_safe,
     _p4b_stable_batch_fallback_authority,
     _p4b_stable_current_fallback_authority,
@@ -52,6 +55,136 @@ JPEG_1X1 = (
     b"\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x03"
     b"\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
 )
+
+
+def _png_bytes(image: Image.Image, **save_kwargs: object) -> bytes:
+    output = BytesIO()
+    image.save(output, format="PNG", **save_kwargs)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "P"])
+def test_native_png_fallback_webp_round_trip_is_rgba_exact(mode: str) -> None:
+    if mode == "P":
+        image = Image.new("P", (2, 1))
+        image.putpalette([10, 20, 30, 200, 100, 50] + [0] * 762)
+        image.putdata([0, 1])
+        image.info["transparency"] = 0
+    else:
+        image = Image.new(mode, (2, 1), (10, 20, 30, 90) if mode == "RGBA" else (10, 20, 30))
+    png = _png_bytes(image)
+    capture = capture_png_bytes(png)
+
+    converted, debug = _encode_native_lossless_webp((capture,))
+
+    assert converted[0].mime_type == "image/webp"
+    assert converted[0].file_extension == ".webp"
+    assert debug["used"] is True
+    with Image.open(BytesIO(png)) as expected, Image.open(BytesIO(converted[0].data)) as actual:
+        assert actual.size == expected.size
+        assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+
+
+def test_native_png_fallback_webp_keeps_high_precision_png() -> None:
+    image = Image.new("I", (2, 1))
+    image.putdata([0, 65535])
+    capture = capture_png_bytes(_png_bytes(image))
+
+    converted, debug = _encode_native_lossless_webp((capture,))
+
+    assert converted == (capture,)
+    assert debug["used"] is False
+    assert debug["reason"] == "native_png_high_precision_unsupported"
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+def test_native_png_fallback_webp_rejects_16bit_ihdr_without_mutating_png(
+    mode: str,
+) -> None:
+    png = bytearray(_png_bytes(Image.new(mode, (2, 1), 12)))
+    png[24] = 16
+    png[29:33] = struct.pack(">I", zlib.crc32(png[12:29]) & 0xFFFFFFFF)
+    capture = capture_png_bytes(bytes(png))
+
+    converted, debug = _encode_native_lossless_webp((capture,))
+
+    assert converted == (capture,)
+    assert converted[0].data == bytes(png)
+    assert debug["reason"] == "native_png_high_precision_unsupported"
+
+
+@pytest.mark.parametrize("failure", ["encode", "decode", "pixel"])
+def test_native_png_fallback_webp_is_all_or_none_on_verification_failure(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    first = capture_png_bytes(PNG_BLUE_1X1)
+    second = capture_png_bytes(PNG_BLUE_1X1)
+    original_save = Image.Image.save
+    original_open = adapter_module.Image.open
+    original_tobytes = Image.Image.tobytes
+    open_count = 0
+    tobytes_count = 0
+
+    if failure == "encode":
+        def fail_save(self: Image.Image, fp: object, *args: object, **kwargs: object) -> None:
+            if kwargs.get("format") == "WEBP":
+                raise OSError("synthetic_webp_encode_failure")
+            original_save(self, fp, *args, **kwargs)
+
+        monkeypatch.setattr(Image.Image, "save", fail_save)
+    elif failure == "decode":
+        def fail_decode(fp: object, *args: object, **kwargs: object) -> Image.Image:
+            nonlocal open_count
+            open_count += 1
+            if open_count == 2:
+                raise OSError("synthetic_webp_decode_failure")
+            return original_open(fp, *args, **kwargs)
+
+        monkeypatch.setattr(adapter_module.Image, "open", fail_decode)
+    else:
+        def mismatch_tobytes(self: Image.Image, *args: object, **kwargs: object) -> bytes:
+            nonlocal tobytes_count
+            tobytes_count += 1
+            data = original_tobytes(self, *args, **kwargs)
+            if tobytes_count == 2:
+                return bytes([data[0] ^ 1]) + data[1:]
+            return data
+
+        monkeypatch.setattr(Image.Image, "tobytes", mismatch_tobytes)
+
+    converted, debug = _encode_native_lossless_webp((first, second))
+
+    assert converted == (first, second)
+    assert debug["used"] is False
+    assert debug["parts"] == []
+
+
+def test_native_png_fallback_webp_keeps_all_png_when_second_part_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = capture_png_bytes(PNG_BLUE_1X1)
+    second = capture_png_bytes(PNG_BLUE_1X1)
+    original_save = Image.Image.save
+    save_count = 0
+
+    def fail_second_save(
+        self: Image.Image, fp: object, *args: object, **kwargs: object
+    ) -> None:
+        nonlocal save_count
+        if kwargs.get("format") == "WEBP":
+            save_count += 1
+            if save_count == 2:
+                raise OSError("synthetic_second_part_encode_failure")
+        original_save(self, fp, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", fail_second_save)
+
+    converted, debug = _encode_native_lossless_webp((first, second))
+
+    assert converted == (first, second)
+    assert debug["used"] is False
+    assert debug["reason"] == "native_webp_encode_failed"
+    assert debug["parts"] == []
 
 
 @pytest.fixture(params=(
@@ -517,9 +650,8 @@ async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace()
     result = await adapter.capture_page(success_page)  # type: ignore[arg-type]
 
     assert result is not None
-    assert result[0].data == PNG_1X1
-    assert result[0].mime_type == "image/png"
-    assert result[0].file_extension == ".png"
+    assert result[0].mime_type == "image/webp"
+    assert result[0].file_extension == ".webp"
     assert success_page.native_cleared
     assert success_page.geometry_cleared
 
@@ -607,10 +739,35 @@ async def test_direct_cover_path_respects_original_jpeg_capture_flag() -> None:
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is not None
-    assert result[0].mime_type == "image/png"
+    assert result[0].mime_type == "image/webp"
     assert adapter._capture_debug["bookwalker_capture"]["returned_path"] == (
-        "native_png"
+        "native_lossless_webp"
     )
+
+
+async def test_native_webp_encode_failure_keeps_native_png_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+
+    def fail_webp(captures: tuple[CaptureResult, ...]) -> tuple[tuple[CaptureResult, ...], dict[str, object]]:
+        return captures, {
+            "attempted": True,
+            "used": False,
+            "reason": "synthetic_webp_encode_failure",
+            "elapsed_ms": 1.0,
+        }
+
+    monkeypatch.setattr(adapter_module, "_encode_native_lossless_webp", fail_webp)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].mime_type == "image/png"
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["returned_path"] == "native_png"
+    assert debug["native_webp"]["reason"] == "synthetic_webp_encode_failure"
 
 
 async def test_canvas_source_snapshot_is_materialized_after_selection() -> None:
@@ -1006,7 +1163,7 @@ async def test_strict_executed_clear_stable_proof_failure_keeps_png_fallback(
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is not None
-    assert result[0].mime_type == "image/png"
+    assert result[0].mime_type == "image/webp"
 
 
 def test_strict_png_fallback_requires_exact_current_roi_and_association() -> None:
@@ -1305,9 +1462,9 @@ async def test_unsupported_host_skips_reconstruction_and_explains_native_fallbac
 
     monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", unexpected_evaluation)
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
-    assert result == (CaptureResult(PNG_1X1, 1, 1),)
+    assert result is not None and result[0].mime_type == "image/webp"
     debug = (await adapter.collect_debug_metadata(page))["bookwalker_capture"]  # type: ignore[arg-type]
-    assert debug["returned_path"] == "native_png"
+    assert debug["returned_path"] == "native_lossless_webp"
     assert debug["lossless_shadow"]["attempted"] is False
     assert debug["lossless_shadow"]["reason"] == (
         "no JPEG candidates from supported reconstruction hosts"
@@ -1324,7 +1481,6 @@ async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
     adapter = _TestBookWalkerAdapter()
     _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
-    native = CaptureResult(PNG_1X1, 1, 1)
     reconstructed = CaptureResult(
         b"verified-reconstructed-jpeg", 1, 1, "image/jpeg", ".jpg"
     )
@@ -1341,13 +1497,13 @@ async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is not None
-    assert result == (native,)
+    assert result is not None and result[0].mime_type == "image/webp"
     debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
     shadow = debug["bookwalker_capture"]["lossless_shadow"]
-    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert debug["bookwalker_capture"]["returned_path"] == "native_lossless_webp"
     assert shadow["output_enabled"] is False
     assert shadow["output_used"] is False
-    assert result[0].mime_type == "image/png"
+    assert result[0].mime_type == "image/webp"
 
 
 @pytest.mark.asyncio
@@ -1464,9 +1620,9 @@ async def test_lossless_output_spread_is_all_or_none(
 
     assert fallback is not None
     assert len(fallback) == 2
-    assert all(capture.mime_type == "image/png" for capture in fallback)
+    assert all(capture.mime_type == "image/webp" for capture in fallback)
     debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
-    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert debug["bookwalker_capture"]["returned_path"] == "native_lossless_webp"
     assert debug["bookwalker_capture"]["lossless_shadow"]["output_used"] is False
 
 
@@ -1496,9 +1652,9 @@ async def test_cropped_chain_pixel_gate_failure_returns_native_png(
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is not None
-    assert result[0].mime_type == "image/png"
+    assert result[0].mime_type == "image/webp"
     debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
-    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert debug["bookwalker_capture"]["returned_path"] == "native_lossless_webp"
     assert debug["bookwalker_capture"]["lossless_shadow"]["spread_ready"] is False
 
 
