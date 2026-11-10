@@ -856,7 +856,7 @@ async def test_comicdays_dummy_two_front_leading_tail_requires_exact_structure(
         assert await browser_page.evaluate("window.prefixForwardClicks") == 1
 
 
-async def _dummy_front_double_page(browser_page, monkeypatch):
+async def _dummy_front_double_page(browser_page, monkeypatch, *, odd_body=False):
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
     monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
@@ -888,22 +888,40 @@ async def _dummy_front_double_page(browser_page, monkeypatch):
         document.querySelector('.js-slide-backward').disabled = true;
       };
     }""")
+    if odd_body:
+        await browser_page.evaluate("""() => {
+          document.querySelector('#body-four').remove();
+          document.querySelector('.js-viewer-slider-pagenum-last').textContent = '7';
+          document.querySelector('.js-slide-forward').onclick = () => {
+            window.prefixForwardClicks++;
+            const now = document.querySelector('.js-viewer-slider-pagenum-now');
+            const next = ({1:2, 2:4, 4:6})[Number(now.textContent)];
+            now.textContent = String(next);
+            document.querySelector('.js-slide-backward').disabled = false;
+            const groups = {2:['body-one','body-two'], 4:['body-three','back-half'],
+                            6:['tail-ad','viewer-colophon']};
+            document.querySelectorAll('.page-area').forEach(a => a.style.display = 'none');
+            groups[next].forEach(id => document.getElementById(id).style.display = 'block');
+          };
+        }""")
     await _paint_sources(browser_page, "canvas.page-image")
     return adapter
 
 
 @pytest.mark.parametrize("lazy_unmount", [False, True])
 @pytest.mark.parametrize("resume_at_end", [False, True])
+@pytest.mark.parametrize("odd_body", [False, True])
 async def test_comicdays_dummy_front_double_prefix_skips_only_prefix_and_reaches_end(
-    browser_page, monkeypatch, lazy_unmount, resume_at_end,
+    browser_page, monkeypatch, lazy_unmount, resume_at_end, odd_body,
 ):
-    adapter = await _dummy_front_double_page(browser_page, monkeypatch)
+    adapter = await _dummy_front_double_page(browser_page, monkeypatch, odd_body=odd_body)
     initial = await adapter._active(browser_page)
     assert initial.get("reason") == "front_link_prefix"
     assert initial.get("frontPrefixMode") == "dummy-front-double"
     if resume_at_end:
         await browser_page.evaluate("""() => {
-          document.querySelector('.js-viewer-slider-pagenum-now').textContent = '8';
+          const last = document.querySelector('.js-viewer-slider-pagenum-last').textContent;
+          document.querySelector('.js-viewer-slider-pagenum-now').textContent = last;
           document.querySelectorAll('.page-area').forEach(a => a.style.display = 'none');
           document.querySelector('#viewer-colophon').style.display = 'block';
           document.querySelector('.js-slide-backward').disabled = false;
@@ -920,12 +938,13 @@ async def test_comicdays_dummy_front_double_prefix_skips_only_prefix_and_reaches
     await adapter.wait_for_change(browser_page, identity)
     assert await adapter.detect_state(browser_page) is PageState.CONTENT
     identity = await adapter.get_content_identity(browser_page)
-    assert set(identity.page_id.split(",")) == {"4", "5"}
+    assert set(identity.page_id.split(",")) == ({"4"} if odd_body else {"4", "5"})
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, identity)
-    assert await adapter.detect_state(browser_page) is PageState.AD
-    await adapter.go_next(browser_page)
-    await adapter.wait_for_change(browser_page, identity)
+    if not odd_body:
+        assert await adapter.detect_state(browser_page) is PageState.AD
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, identity)
     assert await adapter.detect_state(browser_page) is PageState.END
     assert await browser_page.evaluate("window.frontLinkClicks") == 0
 
@@ -936,9 +955,13 @@ async def test_comicdays_dummy_front_double_prefix_skips_only_prefix_and_reaches
     "document.querySelector('#front-one .page').appendChild(document.createElement('iframe'))",
     "document.querySelector('#body-one').appendChild(document.createElement('div'))",
     "document.querySelector('#back-half .link-page-content').appendChild(document.createElement('img'))",
+    "document.querySelector('.js-viewer-slider-pagenum-last').textContent = '9'",
 ])
-async def test_comicdays_malformed_dummy_front_prefix_never_advances(browser_page, monkeypatch, mutation):
-    adapter = await _dummy_front_double_page(browser_page, monkeypatch)
+@pytest.mark.parametrize("odd_body", [False, True])
+async def test_comicdays_malformed_dummy_front_prefix_never_advances(
+    browser_page, monkeypatch, mutation, odd_body,
+):
+    adapter = await _dummy_front_double_page(browser_page, monkeypatch, odd_body=odd_body)
     await browser_page.evaluate(mutation)
     assert (await adapter._active(browser_page)).get("frontPrefixMode") != "dummy-front-double"
     adapter.page_change_timeout_ms = 150

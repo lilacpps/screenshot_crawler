@@ -34,6 +34,57 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Comic DAYS
 
+## Odd body count after dummy/front prefix (2026-11-10)
+
+Item/source `22017`, episode `3269632237261316428` (スキップとローファー
+Scene 29), failed during initialization in metric run
+`5f49f35db7c849d4913225901dceff7b`: 11.50 seconds candidate elapsed,
+zero retries and no HTTP 403/429/5xx. Shared-CDP production direct initialization
+reproduced the 10-second viewer normalization timeout. The viewer has empty
+dummy 0, one full front link 1, **15** body areas 2..16, half back-link 17,
+ad 18, Colophon 19, and sliderLast 19. The previous `dummy-front-double`
+predicate required an even body count, so it never exposed the known prefix
+advance. A validated normal forward action reached slider 2 / ready areas 2/3.
+
+The predicate now accepts either body-count parity with the existing minimum
+of two body areas, exact empty dummy/full front-link, contiguous body shells,
+strict half-back/ad/Colophon tail and matching area/slider counts. Its first
+transition still requires exactly two consecutive render-ready body canvases.
+Ordinary spread selection and final single body/END remain governed by the
+existing leading-area-tail logic. No timeout, CLI/configuration, access,
+capture-provenance, output or shared Core contract changed.
+
+Post-fix production direct initialization completed in 1.43 seconds, followed
+by metadata-only traversal of areas 2..16 exactly once at sliders 2,4,..16,
+with the final single body beside the half back-link and END at slider 18/19.
+`resource_consumed=false`. Dedicated Pages were closed; shared Chrome remained
+open. Sanitized evidence: `.tmp/comicdays-22017-20261110/before-fix.json` and
+`report.json`. No ticket/purchase or front-link anchor was clicked, and no
+operational Catalog/Watchlist/archive was changed by the probe.
+
+A separate production Runner/direct crawl under the same isolated directory
+saved **15 reconstructed PNG pages**, reached END, and produced a valid ZIP
+with 15 entries. Manifest identity groups are `2,3`, `4,5`, ..., `14,15`, `16`,
+covering every body area once; ZIP CRC validation passed. The normal 1-second
+page-turn pacing, max-pages (15) and same-content guards remained enabled.
+`resource_consumed=false`; shared Chrome remained open. The isolated Runner
+and packaging check does not mark the operational Catalog Item completed or
+rerun the whole 25-candidate Batch. Evidence: `crawl-report.json`, `crawl/` and
+`library/` under `.tmp/comicdays-22017-20261110/`.
+
+Existing artificial browser traversal cases now cover both body parities,
+lazy canvas unmount and resume-from-end, with malformed dummy/front/body/back
+and slider-count variants asserting zero prefix advances. Before the fix the
+new odd cases failed (4 failed, 4 passed); the focused post-fix group passed
+20 cases, zero skips. Final affected validation passed **395 cases in 120.67
+seconds**, zero skips: Comic DAYS native-capture/live-access/Batch/policy/
+Discovery Unit tests and all three artificial-browser Integration files.
+`ruff check src tests --no-cache` and changed-file `git diff --check` passed.
+Full suite/Research were not run for this site-local predicate change; no
+shared implementation or PoC contract changed. Operational Batch/Catalog
+completion remains for the user's normal rerun; isolated capture/END/packaging
+are verified.
+
 ## Quota-to-free transition before free-feed inclusion (2026-11-06)
 
 Discovery accepts a currently coherent, non-rented free readable-product row
@@ -319,7 +370,7 @@ At slider 1/26 the old hook requested body area 2 while no body area met the
 viewport threshold. A normal forward action reached slider 2 and ready areas
 2/3; the next reached slider 4 and ready areas 4/5.
 
-The new `dummy-front-double` mode requires that exact prefix plus an even,
+The `dummy-front-double` mode requires that exact prefix plus a
 contiguous body-shell run, strict half-back shape, known ad/Colophon,
 sliderLast equal to the Colophon index and area count equal to sliderLast+1.
 The hook reports a front prefix at slider 1; initialization uses the existing

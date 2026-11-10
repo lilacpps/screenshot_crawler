@@ -120,10 +120,11 @@ COMICDAYS_CAPTURE_HOOK = r"""
     const twoFrontDoublePrefix=areas.length>2&&isFrontArea(areas[0])&&isFrontArea(areas[1])&&twoFrontBodyShell&&
       !isTail(areas[2])&&!areas.slice(2).some(area=>area.querySelector('.front-link-page'))&&
       !([...areas[2].children].some(page=>page.classList.contains('page')&&page.classList.contains('js-page')));
-    // Observed single front-link prefix: dummy + one front page, then an even
-    // body run and the existing half-back/ad/Colophon leading-area tail.
+    // Observed single front-link prefix: dummy + one front page, then a
+    // contiguous body run and the existing half-back/ad/Colophon leading tail.
+    // Odd body counts end on a single body canvas beside the half-back page.
     const dummyFrontDoublePrefix=Number.isInteger(last)&&last>=6&&last===colophon&&areas.length===last+1&&
-      (last-4)%2===0&&isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&isFrontArea(areas[1])&&
+      isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&isFrontArea(areas[1])&&
       areas.slice(2,last-2).every(isBodyAreaShell)&&pageChild(areas[last-2],isBackHalfPage)&&
       isAdArea(areas[last-1])&&isColophonArea(areas[last]);
     // Observed dummy + two front links with a half-back-only leading tail.

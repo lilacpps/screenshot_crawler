@@ -125,15 +125,21 @@ questionnaire/premium blocks, blank areas, dummy/front-link areas, and the
   full/half back-link pair; this exception does not relax ordinary spread
   validation.
 The `dummy-front-double` mode handles the separately observed leading-area tail
-with one empty dummy, one exact full front-link page, an even contiguous body
+with one empty dummy, one exact full front-link page, a contiguous body
 run, one half back-link, ad and validated Colophon. Slider 1 is the prefix; one
 validated forward action reaches slider 2 and requires both first body canvases
 to be ready. The body starts at area 2 independently of lazy canvas mounts.
+Both even and odd body counts are supported; an odd run ends on a single body
+canvas beside the half back-link before the existing Colophon END transition.
 Malformed prefixes/body shells/tails do not qualify. Subsequent body selection
 and AD/END use the existing leading-area-tail rules; no front-link is clicked.
 This corrected item 22405's normalization timeout: read-only shared-Chrome
 verification reached all 22 body areas and END without consuming a resource or
 writing images/Catalog/ZIP. See `note/08_comicdays.md` for the evidence bounds.
+Item 22017 exposed the odd-count variant (15 body pages); shared-CDP verification
+initialized in 1.43 seconds and traversed areas 2..16 exactly once through END.
+An isolated production Runner/direct crawl also saved all 15 pages and packaged
+a CRC-validated 15-entry ZIP without resource consumption or Catalog writes.
 The `dummy-two-front-single` mode covers the observed combination of an empty
 dummy, two exact full front links, an even contiguous body run and the same
 half-back/ad/Colophon leading tail. It requires exact area/slider counts and
