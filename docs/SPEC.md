@@ -1,5 +1,40 @@
 # Screenshot Crawler 仕様書 v1.4
 
+## Hanayume Catalog修復 Stage 01 / 02（2026-11-11）
+
+作品管理GUIの「Catalog修復」はhanayume専用の読み取り専用解析・確認画面。
+全Run/Artifact履歴、旧unavailable/現行availableのpending/completedを比較し、
+API identity証拠とmetadataによる候補、人間の対応メモを区別する。
+通常Discoveryのmissing-ID最大16件は維持し、修復API解析は独立した件数/GET数/
+offset/総時間/間隔の上限と停止操作を持つ。API identityでも本文改訂はあり得る。
+Stage 01は新規JSONへの確認結果保存だけでCatalog/Watchlist/ZIP/チケット状態を変更しない。
+Stage 02は保存報告の現Work graphを検証し、人間が採用した対応・方針のdry-runと
+backup付き明示applyを提供する。本文同一性の技術的証明と人間の既存取得利用判断は区別する。
+pristineな1対1は旧completed Item/Sourceを既存identity maintenanceで保持する。
+複雑な旧取得利用は新Itemをexternalとし、旧Artifact参照をnoteへ記録する。偽のcompletedや
+新しいCrawlRun/Artifactは作らない。新側採用・再取得・保留・対応無しの履歴保管も指定できる。
+旧Sourceは取得担当OFF・非現行履歴bindingへ移し、元identityと取得履歴を保持する。
+例外として、新旧ともpendingで新側を採用するとき、旧ItemにCrawlRun/Artifact/利用履歴/権利・
+手動title/note・別Source・個別Target設定がなければ旧Item/Source/Targetを削除し新側だけを残す。
+pendingでも保護対象があれば理由を表示して履歴保管する。削除IDはdry-run/tokenへ含め、
+適用前とtransaction内で再検証する。旧取得済みの履歴・ZIPはこの削除対象に含めない。
+履歴bindingは既存scope configuration historyへ明示登録し、通常Full/Scope Syncで再有効化しない。
+identity変更時に空く旧IDは、quota timestampを複製しない履歴aliasで予約する。
+通常GUIは検証できる保管Sourceを「履歴保管（旧話）」、現行Itemを指す旧IDを
+「移行済み旧ID（参照用）」として表示し、未管理/所属不明とは区別する。
+実行対象外・親進捗に二重計上しない表示であり、Catalog/Batchの状態や取得規則は変更しない。
+Catalog/Watchlist lock、事前条件token再検証、verified backup、単一DB transaction、
+監査noteの操作IDによる再実行no-opを必須とする。Watchlist/ZIP/チケット状態は書き込まない。
+Stage 03採番/ZIP削除は未実装。運用Catalogへのapplyはプレビュー確認後の別の明示操作とする。
+追加のStage 03Aは履歴専用ZIPの別フォルダ分離を独立したpreview/applyとして提供する。
+既定の `output/Books-history/hanayume/<work_key>/artifact-<id>/<元名>` へZIPを移動し、全参照Artifactの
+locatorを更新する。現行Sourceと同じItemのZIP、現行external coverage参照、他Item/Work共有pathは維持する。
+Stage 02未適用でも投影previewを表示できるがapplyは禁止。移行後の実Catalogから再検証して適用する。
+backup・復旧journal・hash/path境界/全参照検証を必須とし、移動先を上書きしない。
+通常失敗時はDB/ファイルを復元し、不明/復元失敗時はRECOVERY_REQUIREDで停止する。
+ZIP内容/名前・Item/Source/Run/quota履歴・Watchlistは維持する。採番・削除とは別機能とする。
+詳細契約は `runbooks/hanayume-catalog-repair/README.md` を参照。
+
 ## Phase 4A status
 
 The Manga ONE Discovery adapter and minimal `discover` command are implemented.

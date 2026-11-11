@@ -9,6 +9,8 @@ from datetime import datetime
 from screenshot_crawler.catalog.models import Artifact, CrawlRun, Item, Source, SourceTarget
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
+HISTORY_STATUSES = frozenset({"history", "identity_alias"})
+
 
 @dataclass(frozen=True, slots=True)
 class InventoryCounts:

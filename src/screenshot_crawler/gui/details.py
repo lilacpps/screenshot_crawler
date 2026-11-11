@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from screenshot_crawler.management.inventory import display_time
-from screenshot_crawler.management.models import InventorySnapshot, KeyInventory
+from screenshot_crawler.management.models import HISTORY_STATUSES, InventorySnapshot, KeyInventory
 
 from .model import TreeNode
 
@@ -31,6 +32,8 @@ def _short(value: object | None, limit: int = 300) -> str:
 
 
 def _sync_label(value: str, diagnostics: tuple[str, ...] = ()) -> str:
+    if value in HISTORY_STATUSES:
+        return "履歴保管" if value == "history" else "移行済み旧ID"
     if value.startswith("stale"):
         reason = " / ".join(diagnostics)
         if "削除した登録" in reason:
@@ -161,9 +164,10 @@ class MembershipTableModel(QAbstractTableModel):
         scope = target.discovery_scope if target is not None else None
         values = (
             key.site,
-            key.identity if target is None else target.key,
+            "—" if key.summary.sync_status in HISTORY_STATUSES else key.identity if target is None else target.key,
             key.label,
             _text(target.archive_order if target else None),
+            "対象外" if key.summary.sync_status in HISTORY_STATUSES else
             f"{counts.completed}/{counts.total_assigned}" if counts is not None else "—",
             _sync_label(key.summary.sync_status, key.summary.diagnostics),
             _short(scope.from_url, 100) if scope else "—",
@@ -253,10 +257,19 @@ class DetailPane(QWidget):
         else:
             fields.update({name: "—" for name in ("取得済 / 対象", "直取候補", "Quota対象残", "有償未取得", "外部取得", "スキップ", "利用不可", "要確認", "担当外 Source")})
         if summary is not None:
-            fields["Scope同期"] = _sync_label(summary.sync_status, summary.diagnostics)
+            fields["管理区分" if summary.sync_status in HISTORY_STATUSES else "Scope同期"] = _sync_label(summary.sync_status, summary.diagnostics)
             fields["最終確認"] = display_time(summary.last_access)
             if summary.diagnostics:
                 fields["診断"] = " / ".join(item[:300] for item in summary.diagnostics[:5])
+        if key is not None and key.summary.sync_status in HISTORY_STATUSES and self.snapshot is not None:
+            item_ids = {self.snapshot.sources[id_].item_id for id_ in key.summary.source_ids}
+            states = Counter(self.snapshot.items[id_].status for id_ in item_ids)
+            for name in ("取得済 / 対象", "直取候補", "Quota対象残", "有償未取得", "外部取得", "スキップ", "利用不可", "要確認", "担当外 Source"):
+                fields.pop(name, None)
+            fields.update({"取得対象": "対象外（取得担当OFF）", "Source数": str(len(key.summary.source_ids)),
+                           "Item取得状態": " / ".join(f"{_item_status_label(state)} {count}" for state, count in states.items()),
+                           "Catalog所属key": ", ".join(sorted({self.snapshot.sources[id_].discovery_key or "—" for id_ in key.summary.source_ids})),
+                           "Watchlist登録": "なし（Catalog内部の履歴・参照用区分）"})
         if self.snapshot is not None and node.site is not None:
             resource = self.snapshot.resources.get(node.site) if node.kind == "site" else None
             if resource is not None:

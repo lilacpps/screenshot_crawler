@@ -380,6 +380,9 @@ class MainWindow(QMainWindow):
         self.url_registration_button = QPushButton("URLから登録")
         self.url_registration_button.clicked.connect(self._open_url_registration)
         toolbar.addWidget(self.url_registration_button)
+        self.catalog_repair_button = QPushButton("Catalog修復")
+        self.catalog_repair_button.clicked.connect(self._open_catalog_repair)
+        toolbar.addWidget(self.catalog_repair_button)
         self.expand_button = QPushButton("全展開")
         self.expand_button.clicked.connect(self.tree.expandAll)
         toolbar.addWidget(self.expand_button)
@@ -1217,8 +1220,8 @@ class MainWindow(QMainWindow):
             plan_fingerprint=ExecutionPlanService().input_fingerprint(request),
         )
         if not after_watchlist_save:
-            self._start_execution(request)
-            self.statusBar().showMessage('実行ジョブをキューに登録しました')
+            if self._submit_execution(request):
+                self.statusBar().showMessage('実行ジョブをキューに登録しました')
             return
         title = 'Full Discovery'
         selected = ', '.join(
@@ -1246,10 +1249,36 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self._start_execution(request)
-            self.statusBar().showMessage('Full Discoveryジョブをキューに登録しました')
+            if self._submit_execution(request):
+                self.statusBar().showMessage('Full Discoveryジョブをキューに登録しました')
         else:
             self.statusBar().showMessage('Watchlist保存済み。Full Discovery未実行・Catalog未同期です')
+    def _report_job_error(self, exc: Exception, *, queued_job_id: str | None = None) -> None:
+        from screenshot_crawler.management.job_controller import ControllerOwnershipError
+
+        LOGGER.exception("GUI job submission or controller initialization failed")
+        if isinstance(exc, ControllerOwnershipError):
+            message = ("別の作品管理GUIが同じ実行管理DBを使用しています。"
+                       "もう一方のGUIで実行中ジョブの終了を確認し、そのGUIを閉じて再度操作してください。"
+                       f" 管理DB: {self.management_path}")
+        else:
+            message = f"実行管理の処理に失敗しました: {type(exc).__name__}: {exc}"
+        if queued_job_id:
+            message += f" ジョブ {queued_job_id} は登録済みです。再実行せず、ジョブ一覧で状態を確認してください。"
+        self.error_label.setText(message)
+        self.statusBar().showMessage(message)
+
+    def _submit_execution(self, request: JobExecutionRequest) -> bool:
+        before = len(self._session_job_ids)
+        try:
+            self._start_execution(request)
+        except Exception as exc:  # noqa: BLE001 - Qt signal boundary must show startup failures
+            queued = self._session_job_ids[-1] if len(self._session_job_ids) > before else None
+            self._report_job_error(exc, queued_job_id=queued)
+            return False
+        self.error_label.clear()
+        return True
+
     @Slot(object)
     def _start_execution(self, request: object) -> None:
         if self._discovery_busy() or self._registration_open():
@@ -1342,9 +1371,14 @@ class MainWindow(QMainWindow):
             from screenshot_crawler.management.job_controller import JobController
             from screenshot_crawler.management.jobs import JobStore
 
-            self._job_store = JobStore(self.management_path)
-            self._job_controller = JobController(self._job_store)
-            self._job_controller.reconcile()
+            store = JobStore(self.management_path)
+            controller = JobController(store)
+            try:
+                controller.reconcile()
+            except Exception:
+                controller.close()
+                raise
+            self._job_store, self._job_controller = store, controller
             try:
                 self.execution_monitor.set_store(self._job_store)
             except Exception:
@@ -1360,7 +1394,11 @@ class MainWindow(QMainWindow):
         return self._job_controller
 
     def _open_jobs(self) -> None:
-        self._ensure_jobs()
+        try:
+            self._ensure_jobs()
+        except Exception as exc:  # noqa: BLE001 - keep ownership errors visible in GUI
+            self._report_job_error(exc)
+            return
         if self._jobs_page is None:
             self.error_label.setText("Job history view unavailable; supervisor remains active")
             return
@@ -1399,6 +1437,19 @@ class MainWindow(QMainWindow):
         self._watchlist_editor.show()
         self._watchlist_editor.raise_()
         self._watchlist_editor.activateWindow()
+
+    def _open_catalog_repair(self) -> None:
+        reason = self._discovery_block_reason()
+        if reason:
+            self.error_label.setText(reason)
+            return
+        from .catalog_repair import CatalogRepairDialog
+
+        # Modal ownership excludes other GUI browser operators and job starts.
+        dialog = CatalogRepairDialog(self.catalog_path, self.watchlist_path, parent=self)
+        dialog.catalogChanged.connect(self.reload)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _open_work_editor(self) -> None:
         if self._discovery_busy() or self._registration_open():
@@ -1604,6 +1655,10 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", default="catalog.sqlite", help="Catalog v7 SQLite path")
     parser.add_argument("--watchlist", default="watchlist.yaml", help="Watchlist YAML path")
     parser.add_argument("--runtime", default="crawler.yaml", help="Runtime policy configuration path")
+    parser.add_argument("--catalog-repair", action="store_true",
+                        help="Open only the read-only Hanayume Catalog repair window")
+    parser.add_argument("--repair-work", help="Initial work_key for Catalog repair")
+    parser.add_argument("--repair-migration", help="Open the Stage 02 preview for a saved repair JSON")
     parser.add_argument(
         "--management",
         default="output/management/management.sqlite",
@@ -1611,7 +1666,14 @@ def run(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    window = MainWindow(args.catalog, args.watchlist, args.runtime, management_path=args.management)
+    if args.repair_migration:
+        from .repair_migration import RepairMigrationDialog
+        window = RepairMigrationDialog(args.catalog, args.watchlist, report=args.repair_migration)
+    elif args.catalog_repair:
+        from .catalog_repair import CatalogRepairDialog
+        window = CatalogRepairDialog(args.catalog, args.watchlist, work_key=args.repair_work)
+    else:
+        window = MainWindow(args.catalog, args.watchlist, args.runtime, management_path=args.management)
     window.show()
     return app.exec()
 

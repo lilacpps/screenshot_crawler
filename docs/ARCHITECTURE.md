@@ -1,5 +1,58 @@
 # Architecture
 
+## Hanayume repair analysis (Stage 01)
+
+`gui/catalog_repair.py` is a separate optional Qt dialog, opened from Inventory
+or `--catalog-repair`. Workers read Catalog/Watchlist, generate candidates and
+perform bounded API research; GUI-thread callbacks render immutable results.
+`maintenance/hanayume_repair.py` owns the read-only analysis and annotations,
+not identity apply. `CatalogInventoryReader.read(include_history=True)` reads
+all runs and artifacts in the same read-only transaction; the default latest
+projection is unchanged. The site-local `hanayume/repair_probe.py` owns exact
+metadata endpoints/parsing/network allowlisting; the GUI orchestrates shared
+CDP BrowserSession lifecycle and closes only its owned Page. It never opens
+the viewer or calls DiscoveryService/Batch/Grant-only. Catalog schema stays v7.
+Manual annotations are review data, not body-equivalence or acquisition state.
+
+Stage 02 is a separate `gui/repair_migration.py` dialog backed by
+`maintenance/hanayume_migration.py`. It validates saved review bindings, verifies
+current ZIP facts and constructs a token-bound migration preview. Only explicit
+apply takes Catalog/Watchlist locks, makes a standalone backup and commits one
+Catalog transaction. `SourceIdentityMaintenance._apply_connection` shares the
+existing per-identity validation inside that caller-owned transaction; its public
+apply contract remains unchanged. Site-local maintenance moves inactive Sources
+to historical bindings registered in existing scope configuration history, so
+ordinary Discovery, Scope Sync, Batch and archive ordering need no site branch.
+Unchanged historical identities are retained; vacated IDs get inactive aliases
+without copied quota timestamps. Complex reuse records old Artifact references
+as manual external coverage; no Run or Artifact is merged or manufactured.
+Schema remains v7; Watchlist and ZIP bytes are never changed by Stage 02.
+When adopting pending current rows, maintenance may delete obsolete pending
+Items/Sources/Targets only if they have no runs, artifacts, usage/grants,
+manual title/note, sibling Sources or custom Targets. Exact old IDs are bound
+to the preview and revalidated before backed-up transactional deletion. Audit
+receipts are written to surviving current Items. Protected pending rows keep
+their historical binding. This introduces no ordinary Discovery/Batch branch.
+
+`maintenance/hanayume_history.py` and `gui/repair_history.py` implement separate
+Stage 03A history-only ZIP relocation. Source/Item ownership, coverage-note
+references and every Artifact locator are checked before moving a file. Stage 02
+plans can project future ownership for preview only. Real apply takes a Catalog
+job lock, verifies a fresh snapshot inside BEGIN IMMEDIATE, creates a standalone
+backup and recovery journal, moves ZIPs with exclusive same-filesystem hardlinks
+and updates every matching Artifact locator. Exceptions verify DB rollback and
+restore files; ambiguous commit/recovery leaves a journal and blocks reapply.
+No shared renumber or ordinary Discovery/Batch contract is changed.
+Inventory uses the read-only site-local repair helper `inventory_history_kinds`
+to recognize maintained history/old-ID references from saved bindings and
+receipts. Generic Inventory/Qt project these as unselectable neutral states;
+no Watchlist target or executable identity is synthesized. Invalid/unproven
+ownership still follows the existing unmanaged projection.
+Inventory tree nodes cache visible child lists per projection/filter state,
+invalidated on search/filter/snapshot/sort changes. Qt row lookups reuse those
+lists during painting rather than walking every Work sibling. The site-local
+history projection indexes only candidate historical Items and bindings.
+
 ## Optional inventory, execution, and job-management GUI (P1-P3)
 
 `gui/` contains the PySide6 application and Qt models; `management/` contains
@@ -693,6 +746,12 @@ JobController and JobStore. They share the bounded fixed-path LogTailReader and
 Qt-free result Presenter; controller/DB state remains authoritative. View
 initialization and refresh failures are isolated from queue advancement and
 safety operations, while controller/database failures remain fail-closed.
+GUI submission catches controller-ownership/queue/worker-start exceptions at
+the Qt action boundary and reports them in-window. The controller exposes a
+RuntimeError-compatible ownership exception; it keeps the existing OS lease.
+Initialization publishes store/controller only after successful reconciliation
+and releases the lease if reconciliation fails. Registered-but-unstarted jobs
+are identified explicitly and never retried automatically.
 Events use bounded latest/keyset reads and metrics use authorized incremental
 JSONL reads. Raw stdout/stderr remain separate, and the upper inventory layout
 and execution controls retain their existing order and meaning.

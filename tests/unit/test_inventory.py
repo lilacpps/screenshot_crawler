@@ -80,6 +80,69 @@ def test_archiving_changes_only_inventory_visibility_metadata(inventory_inputs):
         assert getattr(after, field) == getattr(before, field)
 
 
+@pytest.mark.parametrize("kind", ["identity_alias", "history"])
+def test_repaired_history_is_distinct_from_unmanaged_and_neutral_for_parent_counts(hanayume_repair_inputs, kind):
+    from screenshot_crawler.maintenance.hanayume_migration import (
+        apply_migration_plan,
+        build_migration_plan,
+    )
+    from screenshot_crawler.maintenance.hanayume_repair import export_report, load_analysis
+
+    x = hanayume_repair_inputs
+    if kind == "history":
+        x.history(x.new, x.new_target)
+        x.catalog.set_item_status(x.new.item_id, "completed")
+    path = x.catalog.path.parent / "review.json"
+    export_report(load_analysis(x.catalog.path, x.watchlist, x.work.work_key), path)
+    p = build_migration_plan(x.catalog.path, x.watchlist, path, accepted=True)
+    apply_migration_plan(p, expected_token=p.token, backup_dir=x.catalog.path.parent / "backups")
+    before = fingerprints((x.catalog.path, x.watchlist, x.archive))
+    snapshot = load((x.catalog.path, x.watchlist))
+    history = next(k for k in snapshot.keys if k.summary.sync_status == kind)
+    assert history.target is None and len(history.summary.source_ids) == 1
+    assert "未管理" not in history.label
+    assert history.summary.counts.total_assigned == 0 and history.summary.counts.out_of_scope == 1
+    parent = snapshot.summaries[("work", x.work.work_key)]
+    assert parent.sync_status == "synced" and not parent.diagnostics
+    assert parent.counts.total_assigned == parent.counts.completed == 1
+    assert fingerprints((x.catalog.path, x.watchlist, x.archive)) == before
+    # An unknown Catalog-only Source must not be relabelled as a repair history.
+    unknown, _, _ = x.add(999, "不明な話", available=False, key="unknown-owner")
+    updated = load((x.catalog.path, x.watchlist))
+    unmanaged = next(k for k in updated.keys if k.summary.sync_status == "unmanaged")
+    assert unmanaged.summary.source_ids == (unknown.id,)
+    assert any(k.summary.sync_status == kind for k in updated.keys)
+
+
+@pytest.mark.parametrize("fault", ["prefix_only", "enabled", "no_receipt", "foreign_site"])
+def test_invalid_history_markers_do_not_hide_ownership_problems(hanayume_repair_inputs, fault):
+    from screenshot_crawler.maintenance.hanayume_migration import (
+        apply_migration_plan,
+        build_migration_plan,
+    )
+    from screenshot_crawler.maintenance.hanayume_repair import export_report, load_analysis
+
+    x = hanayume_repair_inputs
+    path = x.catalog.path.parent / "review.json"
+    export_report(load_analysis(x.catalog.path, x.watchlist, x.work.work_key), path)
+    p = build_migration_plan(x.catalog.path, x.watchlist, path, accepted=True)
+    apply_migration_plan(p, expected_token=p.token, backup_dir=x.catalog.path.parent / "backups")
+    alias = x.catalog.find_source("hanayume", x.old.external_id)
+    with x.catalog._connection() as connection:
+        if fault == "prefix_only":
+            connection.execute("UPDATE sources SET discovery_key='history:hanayume-repair:unknown' WHERE id=?", (alias.id,))
+        elif fault == "enabled":
+            connection.execute("UPDATE sources SET acquisition_enabled=1 WHERE id=?", (alias.id,))
+        elif fault == "no_receipt":
+            connection.execute("UPDATE items SET note=NULL WHERE id=?", (alias.item_id,))
+        else:
+            connection.execute("UPDATE sources SET site='other-site' WHERE id=?", (alias.id,))
+    snapshot = load((x.catalog.path, x.watchlist))
+    key = next(k for k in snapshot.keys if alias.id in k.summary.source_ids and k.target is None)
+    assert key.summary.sync_status not in {"history", "identity_alias"}
+    assert "未管理" in key.label
+
+
 def test_no_write_capability_and_one_read_transaction(inventory_inputs, tmp_path, monkeypatch):
     db, watchlist = inventory_inputs
     zip_path, status, metrics = (tmp_path / name for name in ("sentinel.zip", "status.json", "m.json"))

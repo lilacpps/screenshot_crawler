@@ -100,81 +100,92 @@ class SourceIdentityMaintenance:
         between preflight and mutation cannot be silently overwritten.
         """
 
-        expected = expected_token or plan.token
         with self.catalog.job_lock(), self.catalog._connection() as connection:  # type: ignore[attr-defined]
             connection.execute("BEGIN IMMEDIATE")
-            current = self._plan_connection(
-                connection,
-                site=plan.site,
-                work_key=plan.work_key,
-                old_external_id=plan.old_external_id,
-                new_external_id=plan.new_external_id,
-                new_locator=plan.new_locator,
-                reason=plan.reason,
-                body_revision_possible=plan.body_revision_possible,
+            return self._apply_connection(connection, plan, expected_token=expected_token)
+
+    def _apply_connection(
+        self, connection: sqlite3.Connection, plan: SourceIdentityPlan,
+        *, expected_token: str | None = None,
+    ) -> SourceIdentityPlan:
+        """Apply inside a caller-owned job lock/transaction, rechecking this plan.
+
+        Bulk maintenance uses this boundary so all changes roll back together.
+        Public callers must continue to use apply().
+        """
+        expected = expected_token or plan.token
+        current = self._plan_connection(
+            connection,
+            site=plan.site,
+            work_key=plan.work_key,
+            old_external_id=plan.old_external_id,
+            new_external_id=plan.new_external_id,
+            new_locator=plan.new_locator,
+            reason=plan.reason,
+            body_revision_possible=plan.body_revision_possible,
+        )
+        if current.token != expected or current.token != plan.token or current != plan:
+            raise SourceIdentityError(
+                "Catalog changed since the identity plan was created; rerun dry-run"
             )
-            if current.token != expected or current.token != plan.token or current != plan:
-                raise SourceIdentityError(
-                    "Catalog changed since the identity plan was created; rerun dry-run"
-                )
-            # Use only the transaction-recomputed plan after validation;
-            # callers cannot forge row IDs inside an otherwise valid token.
-            plan = current
-            if current.donor_source_id is not None and not current.donor_pristine:
-                raise SourceIdentityError("Existing new Source is not pristine; refusing merge")
-            timestamp = format_timestamp(now_jst())
-            old = connection.execute(
-                "SELECT s.*, i.work_id FROM sources s JOIN items i ON i.id = s.item_id "
-                "WHERE s.id = ?",
-                (plan.old_source_id,),
-            ).fetchone()
-            if old is None:
-                raise SourceIdentityError("Old Source disappeared during precondition check")
-            donor = plan.donor_source_id
-            # Remove only a validated, history-free donor before changing
-            # the unique (site, external_id) key on the retained Source.
-            if donor is not None:
-                connection.execute("DELETE FROM source_targets WHERE source_id = ?", (donor,))
-                connection.execute("DELETE FROM sources WHERE id = ?", (donor,))
-                if plan.donor_item_id is not None:
-                    connection.execute("DELETE FROM items WHERE id = ?", (plan.donor_item_id,))
+        # Use only the transaction-recomputed plan after validation;
+        # callers cannot forge row IDs inside an otherwise valid token.
+        plan = current
+        if current.donor_source_id is not None and not current.donor_pristine:
+            raise SourceIdentityError("Existing new Source is not pristine; refusing merge")
+        timestamp = format_timestamp(now_jst())
+        old = connection.execute(
+            "SELECT s.*, i.work_id FROM sources s JOIN items i ON i.id = s.item_id "
+            "WHERE s.id = ?",
+            (plan.old_source_id,),
+        ).fetchone()
+        if old is None:
+            raise SourceIdentityError("Old Source disappeared during precondition check")
+        donor = plan.donor_source_id
+        # Remove only a validated, history-free donor before changing
+        # the unique (site, external_id) key on the retained Source.
+        if donor is not None:
+            connection.execute("DELETE FROM source_targets WHERE source_id = ?", (donor,))
+            connection.execute("DELETE FROM sources WHERE id = ?", (donor,))
+            if plan.donor_item_id is not None:
+                connection.execute("DELETE FROM items WHERE id = ?", (plan.donor_item_id,))
+        connection.execute(
+            "UPDATE sources SET external_id = ?, updated_at = ? WHERE id = ?",
+            (plan.new_external_id, timestamp, plan.old_source_id),
+        )
+        targets = connection.execute(
+            "SELECT * FROM source_targets WHERE source_id = ? ORDER BY id",
+            (plan.old_source_id,),
+        ).fetchall()
+        matching = [
+            row for row in targets if row["backend"] == "web" and row["target_key"] == "default"
+        ]
+        if matching:
             connection.execute(
-                "UPDATE sources SET external_id = ?, updated_at = ? WHERE id = ?",
-                (plan.new_external_id, timestamp, plan.old_source_id),
+                "UPDATE source_targets SET locator = ?, updated_at = ? WHERE id = ?",
+                (plan.new_locator, timestamp, matching[0]["id"]),
             )
-            targets = connection.execute(
-                "SELECT * FROM source_targets WHERE source_id = ? ORDER BY id",
-                (plan.old_source_id,),
-            ).fetchall()
-            matching = [
-                row for row in targets if row["backend"] == "web" and row["target_key"] == "default"
-            ]
-            if matching:
-                connection.execute(
-                    "UPDATE source_targets SET locator = ?, updated_at = ? WHERE id = ?",
-                    (plan.new_locator, timestamp, matching[0]["id"]),
-                )
-            else:
-                connection.execute(
-                    "INSERT INTO source_targets "
-                    "(source_id, backend, target_key, locator, priority, enabled, created_at, updated_at) "
-                    "VALUES (?, 'web', 'default', ?, 100, 1, ?, ?)",
-                    (plan.old_source_id, plan.new_locator, timestamp, timestamp),
-                )
-            # Identity changes invalidate every listing proof for this Work
-            # and site.  A later complete Full Discovery rebuilds evidence for
-            # all current discovery keys, including keys other than the one
-            # that first observed the old identity.
+        else:
             connection.execute(
-                "DELETE FROM discovery_inventory_evidence WHERE work_id = ? AND site = ?",
-                (old["work_id"], plan.site),
+                "INSERT INTO source_targets "
+                "(source_id, backend, target_key, locator, priority, enabled, created_at, updated_at) "
+                "VALUES (?, 'web', 'default', ?, 100, 1, ?, ?)",
+                (plan.old_source_id, plan.new_locator, timestamp, timestamp),
             )
-            connection.execute(
-                "UPDATE acquisition_scope_sync SET status = 'stale' "
-                "WHERE work_id = (SELECT work_id FROM items WHERE id = ?)",
-                (plan.old_item_id,),
-            )
-            return current
+        # Identity changes invalidate every listing proof for this Work
+        # and site.  A later complete Full Discovery rebuilds evidence for
+        # all current discovery keys, including keys other than the one
+        # that first observed the old identity.
+        connection.execute(
+            "DELETE FROM discovery_inventory_evidence WHERE work_id = ? AND site = ?",
+            (old["work_id"], plan.site),
+        )
+        connection.execute(
+            "UPDATE acquisition_scope_sync SET status = 'stale' "
+            "WHERE work_id = (SELECT work_id FROM items WHERE id = ?)",
+            (plan.old_item_id,),
+        )
+        return current
 
     @staticmethod
     def _validate_args(*values: str) -> None:

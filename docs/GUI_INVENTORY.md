@@ -24,6 +24,15 @@ hold Work, Item, Source, target, scope evidence, resource state and recent histo
 One aware JST `now` is used per reload. `KeyInventory` retains Watchlist identity,
 scope, enabled-for-discovery and archive_order. Synthetic, unselectable unmanaged
 groups retain Catalog-only Sources without inventing Watchlist identities.
+Verified Hanayume repair histories have separate unselectable Catalog groups:
+`履歴保管（旧話）` for retired Items and `移行済み旧ID（参照用）` for old IDs
+pointing to a current managed Item. Recognition requires the repair receipt,
+saved history binding, matching Work/site and disabled/unavailable Source state;
+a key prefix alone is insufficient. Unknown ownership remains unmanaged.
+These groups show `対象外` progress, not acquisition candidates or review
+warnings. They are neutral to parent sync/review status and duplicate-Item
+diagnostics; assigned-Item totals remain based on current acquisition flags.
+Details show actual retained Item statuses and Source counts separately.
 
 Counts use unique Item IDs with at least one assigned Source in that group:
 
@@ -129,6 +138,12 @@ display a dash. A painted delegate supports switch clicks and Space/Select;
 switch interaction does not change execution checks or focused details. Editor
 Inventory trees retain read-only Discovery values.
 
+Visible child lists and node visibility are cached for each projection/filter
+state so Work-view row lookup does not rescan every sibling during scrolling.
+Search, status/archive filters and snapshot replacement invalidate visibility;
+sorting invalidates child order; changing projection builds fresh nodes. This
+does not cache Catalog reads or change execution/Discovery eligibility.
+
 Switching immediately saves only Watchlist enabled through a worker and the
 existing path lock, expected revision and atomic replace. Inventory carries a
 revision read from the same content as its targets. Pending saves are serialized;
@@ -205,6 +220,14 @@ The queue supervisor owns all execution and safety decisions. Monitor or
 history initialization and refresh errors are isolated from queue advancement,
 while controller/database failures remain fail-closed. This GUI behavior is
 validated with synthetic jobs and offscreen/native Windows captures only.
+Controller ownership, queue submission and worker-start exceptions are shown
+in the main window and status bar, not only on stderr. A second GUI must close
+the existing supervisor window after its jobs finish; the OS lease is never
+removed or bypassed. A request already queued before startup failure is shown
+with its job ID for inspection rather than being reported as successful or
+automatically retried. Failed reconciliation releases the newly acquired lease
+before retrying initialization. Passive Jobs opening reports the same ownership
+failure without creating a job.
 
 
 Phase 04 live-monitor evidence uses only synthetic management jobs. The lower

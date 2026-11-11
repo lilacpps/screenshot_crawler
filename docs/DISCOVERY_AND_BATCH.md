@@ -1,5 +1,58 @@
 # Discovery / Catalog / Batch Design
 
+## Hanayume read-only Catalog repair
+
+Stage 01 repair is independent of normal Discovery reconciliation and the
+16-missing-ID automatic identity limit. It compares all stored histories,
+including an already completed new Source, and emits candidates/annotations
+only. An exact two-endpoint API identity is distinct from equal body bytes;
+no Item status or Source identity is inherited. Availability is a comparison
+partition, not a durable generation marker. Reports do not affect Batch,
+acquisition flags, scope, archive_order or archive_segments. Persistent
+retirement across later Full Discovery is implemented by Stage 02 as an explicit
+local maintenance action, documented in the repair Runbook.
+
+Stage 02 consumes a human-adopted report, not an automatic equivalence claim.
+It retains old completed identity graphs only with verified existing ZIP facts
+and a pristine donor; otherwise the operator may retain the old acquisition as
+external coverage on current Items or use/reacquire the current structure.
+No new completed Item is fabricated from a split/merge guess. Old Sources are
+assigned to `history:hanayume-repair:<original-key>` with acquisition disabled.
+The maintenance registers this noncurrent local binding in the existing
+acquisition-scope configuration history, not in native listing evidence. Scope
+Sync therefore classifies it through the existing removed-key rule. Ordinary
+Full only enables its current key, leaving retained histories disabled.
+Vacated old IDs receive inactive aliases; if the site lists such an old ID
+again, the existing key-ownership guard stops incomplete rather than creating
+a duplicate pending acquisition. Explicit re-review is then required.
+Run/Artifact/resource histories and archive locators remain intact. Identity
+maintenance may remove only an already validated history-free donor. Apply is
+backed up, token-bound, one transaction and idempotent; no Watchlist edit or
+normal Discovery/Batch/Grant-only contract changes are introduced.
+For old/new pending pairs adopting the current side, obsolete old rows without
+any acquisition/usage history, grants, manual edits, sibling Sources or custom
+Targets are explicitly deleted instead of archived. Pending rows with protected
+state are retained with a reason. The current `(site, external_id)` remains,
+so repeated current Full listings update it without recreating a duplicate.
+Deleted obsolete IDs have no alias reservation; if the site publishes such an
+old ID again, ordinary Discovery can create a new pending acquisition for it.
+This differs from completed identity reuse, whose old IDs remain reserved.
+The history key is a local Catalog binding, never a new Watchlist target or
+Work. Ordinary unbounded Full currently enables all Sources under its key,
+including missing/unavailable rows; availability and acquisition assignment are
+separate. Scope Sync also assigns every unbounded-key Source as owner. Moving
+retained rows to a noncurrent binding preserves OFF without changing these rules.
+Completed Items would still be excluded from Batch even if this flag were ON.
+
+Stage 03A can separately move history-only ZIP files into Books-history and
+update all matching Artifact locators after backup/hash/reference preflight.
+Current Items (including retained old acquisitions now serving new IDs), active
+external coverage and shared paths are preserved. Pre-migration projections are
+read-only. Existing Run/status/manifest snapshots are not rewritten; historical
+status sidecars may still require separate numbering/collision maintenance.
+File/DB updates have a recovery journal, not a cross-filesystem atomic commit;
+forced termination requires explicit recovery from that journal and backup.
+
 ## Hanayume coin-only episode classification (2026-10-25)
 
 During its existing listing traversal, Hanayume Discovery classifies an otherwise

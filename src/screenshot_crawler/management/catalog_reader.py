@@ -43,7 +43,13 @@ class CatalogSnapshot:
 class CatalogInventoryReader:
     """Reads only existing v7 files, including history in the same transaction."""
 
-    def read(self, path: str | Path) -> CatalogSnapshot:
+    def read(self, path: str | Path, *, include_history: bool = False) -> CatalogSnapshot:
+        """Read one snapshot; repair callers may request all runs/artifacts.
+
+        With ``include_history=True``, ``latest_runs`` contains the complete
+        run history instead of the inventory's latest-per-Item projection.
+        No history is discarded from the database in either mode.
+        """
         path = Path(path).resolve()
         if not path.is_file():
             raise InventoryLoadError(f"Catalogが見つかりません（新規作成しません）: {path}")
@@ -110,11 +116,11 @@ class CatalogInventoryReader:
                     syncs=tuple(syncs),
                     evidence=tuple(evidence),
                     resource_states=rows("quota_resource_states", QuotaResourceState),
-                    latest_runs=rows("crawl_runs", CrawlRun, sql=(
+                    latest_runs=rows("crawl_runs", CrawlRun, sql=None if include_history else (
                         "SELECT * FROM crawl_runs WHERE id IN "
                         "(SELECT MAX(id) FROM crawl_runs GROUP BY item_id)"
                     )),
-                    artifacts=rows("artifacts", Artifact, sql=(
+                    artifacts=rows("artifacts", Artifact, sql=None if include_history else (
                         "SELECT * FROM artifacts WHERE id IN (SELECT MAX(id) FROM artifacts "
                         "GROUP BY item_id, kind, format, storage_backend)"
                     )),

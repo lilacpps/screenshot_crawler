@@ -108,6 +108,46 @@ def test_same_work_is_projected_both_ways_and_selection_survives(qt_app):
     assert model.checked_keys == {"wk-1", "wk-2"}
 
 
+def test_work_view_row_lookups_do_not_rescan_all_works_and_cache_tracks_view_changes(qt_app, monkeypatch):
+    base = _snapshot()
+    keys = tuple(replace(base.keys[i % 2], identity=f"key-{i}", work_key=f"work-{i:04d}",
+                         title=f"作品{i:04d}", target=replace(base.keys[i % 2].target, key=f"key-{i}", work_key=f"work-{i:04d}"))
+                 for i in range(300))
+    snapshot = replace(base, keys=keys)
+    model = InventoryTreeModel(snapshot)
+    model.set_view_mode(ViewMode.WORK)
+    calls = []
+    original = model._is_visible
+    def is_visible(node):
+        calls.append(node.node_id)
+        return original(node)
+    monkeypatch.setattr(model, "_is_visible", is_visible)
+    assert model.rowCount() == 300
+    for _ in range(1000):
+        assert model.node_for_index(model.index(150, 0)).work_key == "work-0150"
+    assert len(calls) < 1000  # Repainting rows must not walk 300 siblings per lookup.
+    model.set_search("work-0100")
+    assert model.rowCount() == 1 and model.node_for_index(model.index(0, 0)).work_key == "work-0100"
+    model.set_search("")
+    model.set_status_filter(StatusFilter.OUT_OF_SCOPE)
+    assert model.rowCount() == 0
+    model.set_status_filter(StatusFilter.ALL)
+    assert model.rowCount() == 300
+    model.sort(0, Qt.SortOrder.DescendingOrder)
+    assert model.node_for_index(model.index(0, 0)).work_key == "work-0299"
+    model.set_snapshot(replace(snapshot, archived_work_keys=frozenset({"work-0000"})))
+    assert model.rowCount() == 299
+    model.set_archive_filter(ArchiveFilter.ARCHIVED)
+    assert model.rowCount() == 1 and model.node_for_index(model.index(0, 0)).work_key == "work-0000"
+    model.set_archive_filter(ArchiveFilter.ALL)
+    assert model.rowCount() == 300
+    model.set_view_mode(ViewMode.SITE)
+    assert model.rowCount() == 2
+    model.set_snapshot(base)
+    model.set_view_mode(ViewMode.WORK)
+    assert model.rowCount() == 1
+
+
 def test_parent_tri_state_and_filter_keep_hidden_selection(qt_app):
     model = InventoryTreeModel(_snapshot())
     site = model.index(0, 0)
@@ -182,6 +222,52 @@ def test_terminal_external_or_skipped_is_not_unfinished(qt_app, field):
     model = InventoryTreeModel(snapshot)
     model.set_status_filter(StatusFilter.UNFINISHED)
     assert model.rowCount() == 0
+
+
+@pytest.mark.parametrize("kind", ["identity_alias", "history"])
+def test_repaired_history_labels_details_filters_and_selection(qt_app, hanayume_repair_inputs, kind):
+    from screenshot_crawler.gui.details import DetailPane, MembershipTableModel
+    from screenshot_crawler.maintenance.hanayume_migration import (
+        apply_migration_plan,
+        build_migration_plan,
+    )
+    from screenshot_crawler.maintenance.hanayume_repair import export_report, load_analysis
+    from screenshot_crawler.management.inventory import InventoryService
+
+    x = hanayume_repair_inputs
+    if kind == "history":
+        x.history(x.new, x.new_target)
+        x.catalog.set_item_status(x.new.item_id, "completed")
+    path = x.catalog.path.parent / "review.json"
+    export_report(load_analysis(x.catalog.path, x.watchlist, x.work.work_key), path)
+    p = build_migration_plan(x.catalog.path, x.watchlist, path, accepted=True)
+    apply_migration_plan(p, expected_token=p.token, backup_dir=x.catalog.path.parent / "backups")
+    snapshot = InventoryService().load(x.catalog.path, x.watchlist, runtime_path="missing-runtime")
+    key = next(k for k in snapshot.keys if k.summary.sync_status == kind)
+    model = InventoryTreeModel(snapshot)
+    node = model.node_by_key_identity(key.identity)
+    index = model.index_for_node(node.node_id)
+    assert "履歴保管" in key.label if kind == "history" else "移行済み旧ID" in key.label
+    assert not model.flags(index) & Qt.ItemFlag.ItemIsUserCheckable
+    assert model.data(model.index(index.row(), 1, index.parent())) == "対象外"
+    assert model.data(model.index(index.row(), 2, index.parent())) == "—"
+    assert model.data(model.index(index.row(), 9, index.parent())) == "1"
+    assert "未管理" not in model.tooltip(node)
+    model.set_checked_keys({k.identity for k in snapshot.keys})
+    assert model.checked_keys == {x.work.work_key}
+    model.set_status_filter(StatusFilter.REVIEW)
+    assert not model._status_matches(node)
+    model.set_status_filter(StatusFilter.OUT_OF_SCOPE)
+    assert model._status_matches(node)
+    pane = DetailPane()
+    pane.set_snapshot(snapshot)
+    pane.set_node(node, key, key.summary)
+    assert pane._field_labels["取得対象"].text() == "対象外（取得担当OFF）"
+    assert "取得済み 1" == pane._field_labels["Item取得状態"].text()
+    assert "Scope同期" not in pane._field_labels
+    membership = MembershipTableModel((key,))
+    assert membership.data(membership.index(0, 1)) == "—"
+    assert membership.data(membership.index(0, 4)) == "対象外"
 
 
 @pytest.mark.parametrize("mode", [ViewMode.SITE, ViewMode.WORK])

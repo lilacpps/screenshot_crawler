@@ -84,6 +84,10 @@ def _terminate_pid(pid: int, *, timeout: float = 10.0) -> bool:
     return not _pid_alive(pid)
 
 
+class ControllerOwnershipError(RuntimeError):
+    """Another GUI already supervises this management database."""
+
+
 class JobController:
     """Queue and supervise exactly one worker process at a time.
 
@@ -104,7 +108,7 @@ class JobController:
         self.store = store
         store_key = str(store.path.resolve())
         if store_key in self._claimed_stores:
-            raise RuntimeError("another JobController already owns this management DB")
+            raise ControllerOwnershipError("another JobController already owns this management DB")
         self._claimed_store_key = store_key
         self._claimed_stores.add(store_key)
         self._lease_token = secrets.token_urlsafe(16)
@@ -171,7 +175,7 @@ class JobController:
             return handle
         except OSError:
             handle.close()
-            raise RuntimeError("another JobController already owns this management DB") from None
+            raise ControllerOwnershipError("another JobController already owns this management DB") from None
 
     def _release_lease(self) -> None:
         if self._lease_handle is None:

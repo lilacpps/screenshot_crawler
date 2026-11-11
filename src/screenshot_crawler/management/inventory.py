@@ -11,8 +11,10 @@ from types import MappingProxyType
 
 from screenshot_crawler.archive_order import build_work_archive_position_plan
 from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.maintenance.hanayume_repair import inventory_history_kinds
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader, InventoryLoadError
 from screenshot_crawler.management.models import (
+    HISTORY_STATUSES,
     AccessClassification,
     GrantEstimate,
     InventoryCounts,
@@ -268,12 +270,13 @@ class InventoryService:
                 work.title if work else target.work_key, target.label, summary,
                 proof.completed_at if proof else None,
             ))
+        history_kinds = inventory_history_kinds(data, managed_source_ids)
         unmanaged = defaultdict(list)
         for source in data.sources:
             if source.id not in managed_source_ids:
                 work = works[items[source.item_id].work_id]
-                unmanaged[(source.site, work.work_key)].append(source.id)
-        for (site, work_key), ids in sorted(unmanaged.items()):
+                unmanaged[(source.site, work.work_key, history_kinds.get(source.id, "unmanaged"))].append(source.id)
+        for (site, work_key, kind), ids in sorted(unmanaged.items()):
             sync = syncs.get(work_key)
             try:
                 known = {row["key"] for row in json.loads(sync.configuration_json)} if sync else set()
@@ -283,18 +286,26 @@ class InventoryService:
                 sources[source_id].discovery_key in known - current_keys
                 and sources[source_id].acquisition_enabled for source_id in ids
             )
-            summary = summarize(
-                ids, (), "stale" if pending else "unmanaged",
-                ("削除した登録の反映待ち：scope-syncで取得対象外にしてください",)
-                if pending else ("Watchlistに一致する所属なし（未管理）",),
-            )
+            if kind in HISTORY_STATUSES:
+                label = "履歴保管（旧話）" if kind == "history" else "移行済み旧ID（参照用）"
+                reason = ("現行構成から外した旧話を保管。取得担当OFF・実行対象外。取得履歴とArtifact参照を保持。"
+                          if kind == "history" else
+                          "現行Itemを参照する移行済み旧episode ID。取得担当OFF・実行対象外。現役の取得済み話とは重複計上しません。")
+                summary = summarize(ids, (), kind, (reason,))
+            else:
+                label = "未管理 / 所属不明"
+                summary = summarize(
+                    ids, (), "stale" if pending else "unmanaged",
+                    ("削除した登録の反映待ち：scope-syncで取得対象外にしてください",)
+                    if pending else ("Watchlistに一致する所属なし（未管理）",),
+                )
             # Tuple group identities in Qt distinguish this from an actual key.
-            identity = f"unmanaged:{site}:{work_key}"
+            identity = f"{kind}:{site}:{work_key}"
             while any(key.identity == identity for key in keys):
                 identity += "#"
             keys.append(KeyInventory(
                 identity, None, work_key, site,
-                works_by_key[work_key].title, "未管理 / 所属不明", summary,
+                works_by_key[work_key].title, label, summary,
             ))
         grouped = defaultdict(list)
         for key in keys:
@@ -303,12 +314,13 @@ class InventoryService:
                 grouped[group].append(key)
         summaries = {}
         for group, members in grouped.items():
-            statuses = {member.summary.sync_status for member in members}
+            active_members = [member for member in members if member.summary.sync_status not in HISTORY_STATUSES]
+            statuses = {member.summary.sync_status for member in active_members} or {"history"}
             status = "synced" if statuses == {"synced"} else "/".join(sorted(statuses))
             ids = [source_id for member in members for source_id in member.summary.source_ids]
-            notes = [note for member in members for note in member.summary.diagnostics]
+            notes = [note for member in active_members for note in member.summary.diagnostics]
             item_keys = defaultdict(set)
-            for member in members:
+            for member in active_members:
                 for source_id in member.summary.source_ids:
                     item_keys[sources[source_id].item_id].add(member.identity)
             if any(len(value) > 1 for value in item_keys.values()):

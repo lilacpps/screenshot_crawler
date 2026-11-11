@@ -532,6 +532,83 @@ def test_start_execution_starts_after_monitor_follow_failure(qt_app):
     window.close()
 
 
+def test_batch_button_shows_controller_conflict_and_retries_without_selection_loss(qt_app, tmp_path, monkeypatch):
+    from screenshot_crawler.management.inventory import InventoryService
+    from screenshot_crawler.management.job_controller import JobController
+    from screenshot_crawler.management.jobs import JobStore
+    from tools.gui_sample import create_sample
+
+    db, watchlist = create_sample(tmp_path / "inputs")
+    runtime = db.parent / "sample-runtime.yaml"
+    store = JobStore(tmp_path / "management.sqlite")
+    owner = JobController(store)
+    window = MainWindow(db, watchlist, runtime, auto_load=False, management_path=store.path)
+    window.set_snapshot(InventoryService().load(db, watchlist, runtime_path=runtime))
+    window.model.set_checked_keys({"sample-0004"})
+    started = []
+    monkeypatch.setattr(JobController, "start_job", lambda self, id_: started.append(id_))
+    try:
+        window.batch_run_button.click()
+        assert "別の作品管理GUI" in window.error_label.text()
+        assert str(store.path) in window.error_label.text()
+        assert "キューに登録しました" not in window.statusBar().currentMessage()
+        assert not store.list_jobs() and not started
+        assert window._job_controller is None and window._job_store is None
+        assert window.model.selected_keys == frozenset({"sample-0004"})
+        window._open_jobs()
+        assert "別の作品管理GUI" in window.error_label.text()
+        owner.close()
+        window.batch_run_button.click()
+        assert len(started) == 1 and len(store.list_jobs()) == 1
+        assert not window.error_label.text()
+        assert "キューに登録しました" in window.statusBar().currentMessage()
+    finally:
+        owner.close()
+        window.close()
+
+
+def test_batch_start_failure_shows_already_queued_job_and_never_claims_success(qt_app, tmp_path, monkeypatch):
+    from screenshot_crawler.management.inventory import InventoryService
+    from screenshot_crawler.management.job_controller import JobController
+    from tools.gui_sample import create_sample
+
+    db, watchlist = create_sample(tmp_path / "inputs")
+    runtime = db.parent / "sample-runtime.yaml"
+    window = MainWindow(db, watchlist, runtime, auto_load=False, management_path=tmp_path / "management.sqlite")
+    window.set_snapshot(InventoryService().load(db, watchlist, runtime_path=runtime))
+    window.model.set_checked_keys({"sample-0004"})
+    def fail_start(self, id_):
+        raise OSError("synthetic worker spawn failure")
+    monkeypatch.setattr(JobController, "start_job", fail_start)
+    try:
+        window.batch_run_button.click()
+        assert len(window._session_job_ids) == 1
+        assert window._session_job_ids[0] in window.error_label.text()
+        assert "登録済み" in window.error_label.text() and "synthetic worker spawn failure" in window.error_label.text()
+        assert "キューに登録しました" not in window.statusBar().currentMessage()
+        assert len(window._job_store.list_jobs()) == 1
+    finally:
+        window.close()
+
+
+def test_failed_controller_reconciliation_releases_lease_before_retry(qt_app, tmp_path, monkeypatch):
+    from screenshot_crawler.management.job_controller import JobController
+    from screenshot_crawler.management.jobs import JobStore
+
+    window = MainWindow("unused.sqlite", "unused.yaml", auto_load=False, management_path=tmp_path / "management.sqlite")
+    def fail_reconcile(self):
+        raise OSError("synthetic reconciliation failure")
+    monkeypatch.setattr(JobController, "reconcile", fail_reconcile)
+    try:
+        window._open_jobs()
+        assert "synthetic reconciliation failure" in window.error_label.text()
+        assert window._job_controller is None and window._job_store is None
+        other = JobController(JobStore(window.management_path))
+        other.close()
+    finally:
+        window.close()
+
+
 def test_monitor_auto_follow_only_on_active_job_transition(qt_app):
     class Monitor:
         def __init__(self):

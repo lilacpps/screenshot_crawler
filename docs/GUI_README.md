@@ -14,6 +14,127 @@ python -m pip install -e ".[gui,dev]"
 screenshot-crawler-gui --catalog catalog.sqlite --watchlist watchlist.yaml --runtime crawler.yaml
 ```
 
+同じ実行管理DBを使うGUIでジョブを実行できるのは1つだけです。Batch Run等で
+「別の作品管理GUIが同じ実行管理DBを使用」と表示された場合は、先に開いていたGUIで
+実行中ジョブの終了を確認してそのGUIを閉じ、残したGUIで同じ選択のまま操作し直します。
+ロックファイルの削除や管理DBの変更は不要です。ジョブID付きで「登録済み」と表示された場合は、
+再度登録せずジョブ一覧で状態を確認してください。失敗時に成功メッセージは表示しません。
+
+## 花とゆめ＋のCatalog修復（Stage 01・読み取り専用）
+
+修復適用後の通常一覧では、現行keyとは別に「履歴保管（旧話）」と「移行済み旧ID（参照用）」を表示します。
+前者は現行構成から外した旧話、後者は現行Itemに引き継いだ後の旧episode ID参照です。
+どちらも実行選択・Discovery切替はできず、進捗は「対象外」、詳細にSource数と元Itemの取得状態を表示します。
+履歴があるだけでは親作品を「未管理」「要確認」「暫定進捗」にしません。真正の所属不明は従来どおり別表示します。
+内部keyの接頭辞だけでは判断せず、修復監査marker・保存binding・Work/site・担当OFF/非公開状態を照合します。
+既に起動している古いGUIにはコード変更が反映されないため、更新版GUIを起動し直してください。
+作品ビューのスクロールでは表示行一覧を再利用し、検索/絞り込み/並べ替え/再読込時に更新します。
+この性能修正もGUIの起動し直しで反映されます。
+
+ツールバーの「Catalog修復」で開き、作品を選んで「作品を解析（ローカル）」を押します。
+Full済みの作品、無効key、アーカイブ作品、Catalogだけに残る作品も対象です。
+左はunavailable、右はavailable。これは刷新世代の確定ではありません。
+話名、Source/Item ID、key/位置、status、ZIP記録/Run件数、担当flags、external_id、URLを
+左右表と横スクロールで確認します。行の選択で全履歴・note・設定・候補根拠を下部に表示します。
+ZIP記録は全Artifactの記録で、実ファイルの存在・ハッシュ・本文は未検証です。
+
+「API対応解析」は共有Crawler ChromeへCDP接続し、本文やviewerを開かずmetadataだけを読みます。
+旧ID上限、API GET上限、総時間、GET開始間隔、開始offsetを設定可能です。
+既定は旧100件/GET200回/180秒/2秒間隔。途中停止もでき、部分結果と次offsetを表示します。
+API上のID対応、推測候補、手動指定は別表示。APIの一致も本文同一性を証明しません。
+話数ラベル（①/②等のpartを含む）と話数番号が一致し、旧新の両側で対応が一意なら、
+「ラベル一致で1対1推測」として最初に分けます。番号だけが同じ別partとの辺で3対3に
+まとめません。同ラベルが重複する場合や完全ラベルが合わない分割・統合候補は複数対応を残します。
+この推測はAPI証拠や本文同一性の確定とは区別し、completedの引き継ぎには使いません。
+403/429等では停止し、再試行しません。通常Discoveryの16件上限は変更しません。
+
+左右の複数行をCtrl/Shiftで選択し、判断理由を入力して対応指定・保留・再取得メモを作れます。
+不明な旧側だけの保留、新側だけの再取得指定も可能です。候補グループの選択で左右を選択し、
+「選択グループを解除」で対応を外せます。複数候補を分割/統合確定とみなさないでください。
+同作品・同native work・同key・正しい側のID/URLを検証し、他作品/別keyは拒否します。
+本文の意味上の誤対応はStage 01では検出できず、すべての指定は適用効果のない確認用メモです。
+
+「確認結果を新規JSONに保存」は上書きせず全根拠・設定・snapshot tokenを保存します。
+保存JSONはStage 02の画面から読み込めます。Stage 01の直接再読込ボタンはありません。
+作品の再解析や終了で未保存メモ/API結果は失われるため先に保存してください。
+Catalog/Watchlist/ZIP/チケット状態は変更しません。ZIP画像プレビュー、移行apply、
+採番修復、ZIP削除はこのStage 01では行いません。移行applyは下記の別画面です。
+主画面から開く際は実行中Job/未保存編集等を既存guardで拒否し、
+modal表示中は他のGUI操作と実ブラウザ操作を重ねられません。
+
+修復画面だけを起動する場合:
+
+```powershell
+.venv/Scripts/python.exe -m screenshot_crawler.gui --catalog-repair --repair-work ng-life
+```
+
+外部CLI等の実サイト操作はこの画面と同時実行しないでください。Catalogはsnapshot表示で、
+読み込み後の外部更新は自動追従しません。WAL形式や旧schemaは書き換えず読込を拒否します。
+詳細・Stage 02/03の設計は [修復Runbook](../runbooks/hanayume-catalog-repair/README.md) を参照。
+
+## 保存報告からの移行プレビュー・適用（Stage 02）
+
+修復画面上部の「Stage 02 移行プレビュー」で開き、保存した報告JSONを読み込みます。
+直接起動も可能です。
+
+```powershell
+.venv/Scripts/python.exe -m screenshot_crawler.gui --repair-migration output/hanayume-repair.json
+```
+
+1. 報告のWork/全Source/Item/Target/取得履歴と現在Catalogを照合します。その作品が変化していたら
+   再解析・報告保存をやり直してください。無関係な作品だけの更新は読み込みを妨げません。
+2. 対応を人間の判断として採用するcheckboxを確認し、各グループを「自動方針／旧取得を利用／
+   新側を利用／新側を再取得／保留／対応無し・履歴保管」から選びます。方針変更はプレビューを無効化します。
+   「すべて新側を採用」も選べます。保留・未対応の旧側は適用できません。
+3. 対応自体が違う場合は「対応関係をGUIで編集」で左右を修正し、新しいJSONに保存して読み直します。
+   Stage 01の「旧側は対応無し・履歴保管」で旧だけの対応無しを記録できます。
+4. 「移行プレビューを作成・再検証」でZIPの最新Artifact・成功Run・存在/サイズ/SHA-256/ZIP形式を確認し、
+   適用前の旧/新状態と、適用後の現行Item/Source ID・取得状態、残す/物理削除するDB行、fallback理由を表示します。
+   行を選ぶと「適用後・DB行の説明」に正確なItem/Source/Target ID、新URL、旧ID保管alias、採用ZIPを表示します。
+   全体の適用後状態・物理削除件数も集計し、新規JSONには `outcomes` / `after_summary` を含めます。
+   方針変更時は古い結果を消し、再プレビューを要求します。
+5. 内容とbackup先を確認して「バックアップして適用」を押すと、確認ダイアログの後にapplyします。
+   新規backupを検証し、Catalog/Watchlist lock、事前条件再検証、単一DB transactionで適用します。
+   失敗時は全DB変更をrollbackし、backupを残します。同じplanの再適用はno-opです。
+
+自動方針は、旧全件completed＋検証できる旧ZIP＋新全件pendingなら旧利用、両側取得済みなら新を採用、
+その他は新側を維持して未取得分を通常Batchへ残します。pristineでないdonorは自動統合せず新側へ回します。
+明示旧利用や分割/統合では、旧Artifact参照を新Item noteへ記録してexternal扱いにできます。
+新しいCrawlRun/Artifactや偽のcompletedは作りません。旧の一部しか取得済みでなければ旧利用は拒否します。
+同Itemに変更群外のSourceがある取得状態変更、旧IDがscope/segment anchorの計画もblockします。
+
+旧DB行は一律削除しません。1対1の旧取得継承では旧Item/Source IDを現行に残し、新側の履歴/編集のない
+空Item/Source/Targetだけを物理削除し、旧episode IDの保管aliasを新設します。
+新側採用/複雑ケースでは旧Sourceを取得担当OFF・非現行の履歴bindingへ移し、旧Itemと全履歴を残します。
+新旧pendingで新側を採用する場合は、履歴・利用権利・手動編集・別Source・個別Target設定のない
+旧Item/Source/Targetを物理削除し、新側pendingだけを残します。保護対象がある旧pendingは
+理由を表示して保管します。表・右側の説明・JSONに削除する旧IDと残る新ID、全体の旧/新削除件数を表示します。
+次のFull/Scope Syncで履歴Sourceを再有効化しません。
+
+### 履歴専用ZIPの分離（Stage 03A）
+
+Stage 02の「履歴ZIPの分離（Stage 03A）」から、現在のpathと履歴先を比較できます。
+Stage 02未適用では移行planに基づく**投影予定のみ**で、分離applyはできません。
+Catalog移行後に開き直すか「移行後の実Catalogから再検証」で実際の移動planを作成してください。
+既定の履歴先は `output/Books-history/hanayume/<work_key>/artifact-<id>/<元ファイル名>` です。
+現役libraryと履歴先は別々のフォルダを指定します。新規JSONへのpreview保存も可能です。
+
+旧completedを新IDで再利用しているZIPと、現行external Itemが参照する旧Artifactは現役として残します。
+他Item/Workと同じpathを共有するZIPも移動せず、理由を表示します。
+移動する場合は全Artifact参照を新pathへ更新し、ZIP内容・名前、Item/Source/Run/チケット履歴を保持します。
+
+「バックアップして履歴ZIPを分離」はCatalog移行とは別の明示操作です。backupとmanifest/journalを作り、
+同一filesystemでhardlinkできる保存先に移動します。移動先が既存なら上書きせず停止します。
+通常の例外ではDB rollbackとZIPの復元を確認します。`RECOVERY_REQUIRED` の場合は自動再試行せず、
+表示されたjournal/backup/manifestを確認してください。process強制終了・電源断時も明示復旧が必要です。
+過去のstatus/manifest snapshotは変更しません。採番とstatus衝突の整理・不要ZIP削除は別Stageです。
+旧Item・取得履歴・ZIPは保持します（noteへ監査追記）。identity移行で空く旧IDも履歴aliasで予約します。
+履歴IDがサイト上で再登場したら所有権guardで停止するため、その場合は再度対応を確認します。
+external coverageのZIPは旧Artifactのままなので、新ItemのZIP件数は0でもnote/移行planから出典を確認できます。
+
+Watchlist・ZIP・チケット状態は変更せず、Batch/Grant-onlyも起動しません。再取得対象が既存ZIPと衝突する
+場合は既存の出力guardが停止します。採番/不要ZIP整理はStage 03の独立した確認後に行います。
+
 ## 取り込みを終えた作品をアーカイブする
 
 作品名の行を右クリックし「作品をアーカイブする（全サイト共通）」を選びます。

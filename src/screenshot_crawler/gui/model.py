@@ -17,6 +17,7 @@ from PySide6.QtCore import QAbstractItemModel, QModelIndex, QSortFilterProxyMode
 
 from screenshot_crawler.management.inventory import aware_timestamp, display_time
 from screenshot_crawler.management.models import (
+    HISTORY_STATUSES,
     InventoryCounts,
     InventorySnapshot,
     InventorySummary,
@@ -62,6 +63,7 @@ class TreeNode:
     parent: TreeNode | None = None
     children: list[TreeNode] = field(default_factory=list)
     _visible_cache: bool | None = None
+    _visible_children_cache: list[TreeNode] | None = field(default=None, repr=False, compare=False)
 
     def descendants(self) -> Iterable[TreeNode]:
         for child in self.children:
@@ -281,6 +283,7 @@ class InventoryTreeModel(QAbstractItemModel):
         return order, self._key_order.get(key.identity, 10**9), key.identity.casefold()
 
     def _sort_children(self, parent: TreeNode) -> None:
+        parent._visible_children_cache = None
         reverse = self.sort_order == Qt.SortOrder.DescendingOrder
         if self.sort_column == 0:
             def default_key(node: TreeNode) -> tuple[Any, ...]:
@@ -322,6 +325,7 @@ class InventoryTreeModel(QAbstractItemModel):
     def _invalidate_visibility(self) -> None:
         for node in self._nodes.values():
             node._visible_cache = None
+            node._visible_children_cache = None
 
     def _text_matches(self, node: TreeNode) -> bool:
         if not self.search_text:
@@ -362,7 +366,8 @@ class InventoryTreeModel(QAbstractItemModel):
             return counts.total_assigned > terminal
         if self.status_filter is StatusFilter.OUT_OF_SCOPE:
             return counts.out_of_scope > 0
-        return bool(summary and (summary.sync_status not in ("synced", "ok") or summary.diagnostics or counts.unknown))
+        return bool(summary and summary.sync_status not in HISTORY_STATUSES
+                    and (summary.sync_status not in ("synced", "ok") or summary.diagnostics or counts.unknown))
 
     def _matches(self, node: TreeNode) -> bool:
         return self._text_matches(node) and self._status_matches(node)
@@ -373,21 +378,27 @@ class InventoryTreeModel(QAbstractItemModel):
         return self._status_matches(node) or any(self._status_visible_subtree(child) for child in node.children)
 
     def _is_visible(self, node: TreeNode) -> bool:
-        if not self._archive_matches_node(node):
-            return False
         if node._visible_cache is not None:
             return node._visible_cache
+        if not self._archive_matches_node(node):
+            node._visible_cache = False
+            return False
         own = self._matches(node)
         child = any(self._is_visible(c) for c in node.children)
         node._visible_cache = own or child
         return node._visible_cache
 
     def visible_children(self, parent: TreeNode) -> list[TreeNode]:
+        if parent._visible_children_cache is not None:
+            return parent._visible_children_cache
         if parent.kind != "root" and self._text_matches(parent) and self.search_text:
             # A matching parent retains its complete context, while the status
             # filter still applies to descendants.
-            return [child for child in parent.children if self._status_visible_subtree(child)]
-        return [child for child in parent.children if self._is_visible(child)]
+            children = [child for child in parent.children if self._status_visible_subtree(child)]
+        else:
+            children = [child for child in parent.children if self._is_visible(child)]
+        parent._visible_children_cache = children
+        return children
 
     # --- Qt model ---------------------------------------------------------------
 
@@ -578,8 +589,13 @@ class InventoryTreeModel(QAbstractItemModel):
             return f"有効{sum(target.enabled for target in targets)}／全{len(targets)}件" if targets else "—"
         summary = self.summary_for(node)
         counts = _summary_counts(summary)
-        stale = bool(summary and (summary.sync_status not in ("synced", "ok") or summary.diagnostics))
+        historical = bool(summary and summary.sync_status in HISTORY_STATUSES)
+        stale = bool(summary and not historical and (summary.sync_status not in ("synced", "ok") or summary.diagnostics))
+        if historical and column in (2, 3, 4, 7, 8):
+            return "—"
         if column == 1:
+            if summary and summary.sync_status in HISTORY_STATUSES:
+                return "対象外"
             return "—" if counts is None else f"{'~' if stale else ''}{counts.completed}/{counts.total_assigned}"
         if column == 2:
             return _count_text(counts.direct if counts else None, stale=stale)
@@ -605,6 +621,8 @@ class InventoryTreeModel(QAbstractItemModel):
 
     @staticmethod
     def _status_label(summary: InventorySummary | None, counts: InventoryCounts | None) -> str:
+        if summary and summary.sync_status in HISTORY_STATUSES:
+            return "履歴保管" if summary.sync_status == "history" else "移行済み旧ID"
         if summary is None:
             return "未確認"
         if summary.sync_status.startswith("stale"):
@@ -658,7 +676,8 @@ class InventoryTreeModel(QAbstractItemModel):
             lines.append(f"Scope: {summary.sync_status}")
             lines.extend(summary.diagnostics[:3])
         if node.kind == "key" and not self._managed(node):
-            lines.append("未管理のCatalog Source（選択不可）")
+            lines.append("履歴・参照用のCatalog Source（実行対象外）" if summary and summary.sync_status in HISTORY_STATUSES
+                         else "未管理のCatalog Source（選択不可）")
         return "\n".join(lines)
 
     def node_for_index(self, index: QModelIndex) -> TreeNode | None:

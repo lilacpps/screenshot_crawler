@@ -26,6 +26,22 @@ Watchlist bindings. `ruff check src tests` and scoped `git diff --check` passed.
 Browser Integration, Live, Research and repository-wide pytest were not run
 for this display-only change; execution, identity and browser behavior are unchanged.
 
+## GUI実行開始エラーの表示（2026-11-11）
+
+同じmanagement DBを使う2つ目のGUIでBatch Run等を押すと、JobControllerの排他例外がQt callbackから
+コンソールへだけ出ていた。実行管理DBの所有競合をRuntimeError互換のControllerOwnershipErrorで表し、
+通常実行/Watchlist保存後Full/ジョブ一覧の入口で画面内error_labelとstatus barへ日本語表示する。
+queue/worker起動失敗も画面表示し、失敗を「登録成功」表示で上書きしない。
+queue登録後に開始・監視で失敗した場合は既存job IDと登録済みである旨を示し、自動再登録はしない。
+初期reconcile成功後だけstore/controllerをWindowへ公開し、初期化失敗時は新たに取ったleaseを解放する。
+正規の排他lockは維持し、削除/回避しない。選択済みkeyは失敗しても保持し、競合解消後の再操作で古いエラーを消す。
+実環境では確認用の旧GUIがDBを保持していた。ジョブ終了済みを確認して旧GUIだけを閉じ、
+選択12 keyの新GUIを保持。排他byte lockを一時取得/解放して、内容を書かずに空きを確認した。
+本修正で実サイトBatch/チケット操作は実行していない。ユーザーによる別CLI取得も停止していない。
+Qt smoke/実行inputs、管理jobs、両editorのaffected125件PASS（skip0、1 warning、76.78秒）。
+二重GUIの無登録/画面エラー→同選択で再操作、開始失敗時の既存job ID表示、reconcile失敗時lease解放を追加検証。
+ruffと対象diff-checkもPASS。full suite/Research/LiveはGUI開始エラー処理だけのため未実行。
+
 ## Stage07 complete-list preview coverage (2026-11-03)
 
 BookWalker/Piccoma/Hanayume/Younganimal now join Magapoke/Jump+/Zeblack/ComicDAYS for read-only complete-list
@@ -3425,3 +3441,96 @@ direct-only policy is a Catalog planning filter; the Reader adapter still
 rechecks current owned rights. Local CLI, policy, inventory parity, worker,
 presenter, and GUI tests passed (207 passed, 0 skipped); independent review and
 a live Batch run are still pending.
+# Hanayume Catalog修復 Stage 01（2026-11-11）
+
+作品管理GUIに専用の読み取り専用Dialog `gui/catalog_repair.py` を追加。
+主画面「Catalog修復」または `python -m screenshot_crawler.gui --catalog-repair
+--repair-work <work_key>` で開く。workerでCatalog/Watchlistを読み、全Run/Artifactを含む
+immutable解析結果をGUI threadで表示する。既存Catalog readerの
+`read(include_history=True)` だけが全履歴を返す拡張で、通常Inventoryの最新projectionは維持。
+このオプションではDTOの既存フィールド名 `latest_runs` に全Runが入る。
+WALを事前拒否、mode=ro/query_only/BEGINとv7/FK検証は維持し、CatalogServiceを構築しない。
+
+Stage 01解析/メモではCatalog/Watchlist/ZIP/取得status/flags/チケットへ書き込まない。
+候補・手動メモは新規JSONへ明示保存（上書き拒否）。保存JSONはStage 02から読込/編集できる。
+通常Discovery/Batch/Grant-only、schema、renumberは変更しない。旧unavailableの履歴も比較対象。
+Stage 02を別画面として実装し、Stage 03は未実装。本文証明は行わず、人間が対応と旧取得利用を採用する。
+ユーザー確認後の候補方式は、話数ラベル全体・番号の両方向一意一致を1対1推測として優先する。
+残りだけを複数候補にまとめる。API証拠/手動メモ/本文未証明の区別と読み取り専用は維持。
+GUIに推測方式と件数を表示し、JSONのRepairLinkへmatch_ruleを保存する。これは共通Catalogや
+Batchの状態・取得担当を候補生成だけで変更しない。履歴保管・移行applyはStage 02の明示操作。
+詳細は `runbooks/hanayume-catalog-repair/README.md`、site-local判定/通信/実確認は
+`note/10_hanayume.md`。検証結果は同RunbookのPROGRESS.mdを参照。
+
+Stage 02: `maintenance/hanayume_migration.py` / `gui/repair_migration.py` を追加。
+`--repair-migration <報告JSON>` またはStage 01上部ボタンから開く。報告の現在Work bindingを検証し、
+ZIPの最新Artifact・成功Run・存在/size/SHA/形式を検証してpreviewする。Catalog全snapshotと
+Watchlist revision・報告digest・選択・ZIPにtokenを結び付け、適用前とBEGIN IMMEDIATE内で再検証。
+GUIは適用前と適用後を分離し、現行Item/Source ID・状態、残す/物理削除するItem/Source/Target ID、
+旧ID保管alias、採用ZIPを説明する。新規preview JSONにoutcomes/after_summaryを追加。
+旧DB行の一律削除はせず、1対1継承は旧Item/Sourceを現行に維持し新側のpristine donorだけを削除する。
+Discoveryの照合keyはDB内部Source IDではなく(site, external_id)。保持した旧Sourceのexternal_id/URLを
+新側に更新するので、新episode IDは旧completed Itemを参照し続ける。空donor削除だけを行う処理ではない。
+合成Fullを連続2回実行する回帰テストで、新IDのSource一意性・旧DB ID維持・completed維持・
+pending Item再生成なし・全Run/Artifact/resource履歴不変を通常/order/segmentsの3構成で確認する。
+新旧pendingで新側を採用/再取得する場合、履歴/権利/手動title/note/別Source/個別Targetのない旧側は
+Item/Source/Targetを削除する。CrawlRunは失敗分も保護し、保護理由をGUIに表示する。
+削除旧IDをplan/tokenへ含め、残す新Itemへ監査markerを記録する（方針version 2）。
+alias採番後に旧Target→Source→Itemを削除し、当該Work/siteのlisting証拠を無効化する。
+旧ID保管aliasは作らず、その旧IDがサイトへ再公開された場合は通常Discoveryが新規pendingとして扱える。
+保護対象のある旧DB行は非現行履歴bindingで残す。方針変更/失敗時は古い表示を消して再previewを要求する。
+Catalog job lock＋Watchlist edit lock、verified standalone backup、単一DB transaction、
+Item note監査markerによる再実行no-opを実装。Watchlist/ZIP/全Run/Artifact/quota履歴は書き換えない。
+
+既存SourceIdentityMaintenanceのpublic plan/applyは同じ制約を維持し、検証・変更本体を
+private `_apply_connection` に切り出して一括transactionから呼べるようにした。
+pristine donor以外のmergeは行わず、旧採用を明示する複雑ケースは現在Itemをexternalにして
+旧Artifact参照をnoteへ残す。新しいRun/Artifactやsplit/mergeからのcompletedは作らない。
+
+履歴Sourceは非現行key＋担当OFFにし、既存scope configuration historyへlocal保管bindingを登録。
+通常Fullは現行keyだけを更新し、既存ScopeReconcilerはremoved-key規則で履歴をOFFに維持する。
+site listing proofは偽造しない。旧IDが空くidentity移行ではquotaを複製しないaliasで予約する。
+履歴IDが再登場すれば既存所有権guardでfail-closed停止する。Source IDsを恣意的にmergeしない。
+旧scope/segment anchor、変更群外の兄弟Sourceを巻き込むItem status変更はblockする。
+実Catalogの隔離copyでは13組を旧利用、現行completed21/pending133。
+元の旧Source13件を現行に継承し、履歴等のない旧pending132件を削除、16件を履歴保管。
+旧ID保管alias13件を追加（履歴合計29）。旧pending分と新側pristine donor13件の
+Item/Source/Targetを削除する。scene15③の旧pendingはRun1件のため保護。Scope preview成功、
+Batch plan重複なしを確認。運用Catalog/Watchlist/報告のSHA不変。運用applyは未実施。
+現行の隔離copy証拠は `output/hanayume-repair-stage02-pending/copy-verification.json`。
+
+Stage 03Aの履歴専用ZIP分離は `maintenance/hanayume_history.py` / `gui/repair_history.py`。
+Stage 02上部の「履歴ZIPの分離」から開く。移行前はplan投影previewだけでapply不能、移行後は実Catalogを再検証。
+既定先は `output/Books-history/hanayume/<work_key>/artifact-<id>/<元名>`。同pathの全Artifact locatorを更新する。
+Itemに現行Sourceがあれば旧ID保管aliasがあってもZIPを動かさない。現行external coverageのArtifact参照、
+他Item/Work/path共有も移動から除外する。通常Fullの同key一括ON（missing/unavailableも含む）と
+Scope Syncの無範囲key全Source担当ONは変更しない。履歴keyはDB内部bindingでWatchlistには追加しない。
+ZIP存在/size/SHA/形式、全参照、path境界・symlink/junction・既存hardlink・移動先衝突を検証する。
+Catalog lock、snapshot再検証、verified backup、BEGIN IMMEDIATE内再検証、persistent journalを先行。
+同一filesystemのhardlink排他作成＋元path解除で上書きせず移動し、全locatorをCAS更新する。
+通常例外はDB rollback/file復元を確認。不明/復旧失敗はRECOVERY_REQUIREDとしjournalを残して再apply拒否。
+ZIP bytes/名前、Item/Source/Target/Run/quota、Watchlist、過去status/manifestは不変。
+過去sidecarが現行出力名と衝突する場合の整理と採番/削除は別Stage。強制終了はjournalによる明示復旧が必要。
+
+通常Inventoryは修復後の保管行を「未管理 / 所属不明」へ混ぜず、`history`＝「履歴保管（旧話）」、
+`identity_alias`＝「移行済み旧ID（参照用）」の選択不能なCatalog行へ分ける。
+判定はsite-localな `maintenance.hanayume_repair.inventory_history_kinds`。修復receiptと保存済み履歴binding、
+Work/site一致、担当OFF・unavailableを要求し、prefixだけでは認定しない。現行managed Itemとの共有で旧ID参照を識別する。
+真正の所属不明/無効bindingは従来の未管理/要確認表示を維持。CatalogやWatchlistへ補完writeはしない。
+履歴行の進捗は「対象外」、候補列は「—」、Source数とItem取得状態を詳細表示。Watchlist key欄に内部identityを出さない。
+親のsync/review/重複Item診断は履歴を中立として扱い、現行担当Itemの進捗と既存out_of_scope数を維持する。
+確認済み履歴だけで「要確認」filterへ入れず、担当外filterでは表示する。実行/Discovery切替は引き続き不可。
+2026-11-11、ユーザー適用後のNGライフをread-only確認。現行154、旧話履歴16、旧ID参照13を正しく分離。
+Artifact locatorの履歴先登録は15 ZIP。今回の表示修正ではCatalog/Watchlist/ZIPを変更していない。
+
+作品ビューのスクロール性能を改善（2026-11-11）。従来はQtのindex()/rowCount()/parent()から呼ぶ
+visible_childrenが毎回全兄弟の表示判定を走査していた。各TreeNodeに表示子一覧をcacheし、
+検索/状態filter/Archive filter/snapshot更新ではvisibilityと一覧を、sortでは一覧順を失効させる。
+projection切替は新nodeを作る。archive非表示のFalse判定もcacheする。取得/Discovery/選択の意味は変えない。
+実Catalog（271作品/292 key/47,646 Source）の隔離offscreen計測で、作品ビュー30 scroll描画は
+2.217秒→0.340秒、最遅frame86.5ms→20.8ms。cProfile計測下の比較で、desktop FPSの保証ではない。
+履歴分類は再読込時だけ。候補の旧Source/Item/bindingだけをindexするよう絞り、約36〜46ms→約5.2ms。
+通常GUIでZIP読取/hashや実サイト通信を増やしていない。証拠はoutput/gui-performance/のbefore/after JSON。
+同process・計測器なしのoffscreen A/Bでは30 scrollが3.056秒→0.630秒（約4.85倍）。実desktop FPSの保証ではない。
+Qt/Inventory/両editor/GUI archive・toggle・smoke・executionのaffected188件PASS、skip0。モデル回帰テストで
+大量index参照の走査数上限と全cache失効契機を検証した。詳細は修復Runbook PROGRESSの性能節。

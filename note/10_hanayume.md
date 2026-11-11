@@ -1034,3 +1034,135 @@ The Tester summary is `output/hanayume_experiment/tester/runs/r8-standard-summar
 Episode `c8904d8e3f912` completed 11 physical body pages; ordinary-layout control `90868f4de278f` completed 12. Both runs reached END, succeeded, completed their isolated Catalog Items, and produced present ZIP Artifacts with verified CRC, member order, member hashes/sizes, and whole-ZIP hash/size. Read-only SQLite audit passed. All 23 output members were 960x1540 single-chunk VP8L lossless WebP. Six independent visual samples (first/middle/final for both episodes) passed. The standard capture gate completed, but `capture_mode` was not persisted and the Tester did not independently compare source-canvas RGBA for these 23 pages; exact source-pixel equality is therefore not claimed here. This differs from the prior 134-page E2E, which had independent RGBA proof.
 
 The two metric summaries recorded 610 and 448 requests, respectively, with zero 403, 429, or 5xx responses and zero CLI-reported retries. Aggregate `batch_summary` counters reported zero challenge/CAPTCHA events; this does not prove detection of every possible challenge UI. Quota-resource states were zero and no grant timestamps or entitlement changes were found. Independent read-only audit confirmed ZIP/member hashes and sizes, CRC/order, SQLite integrity, exact target eligibility, END/page counts, completed items, and present Artifacts: PASS / BLOCKING 0. Final documentation review: PASS / BLOCKING 0.
+# Catalog修復 Stage 01（2026-11-11）
+
+`maintenance/hanayume_repair.py` と `gui/catalog_repair.py` はFull済み作品も含め、
+旧unavailable/現行availableのpending/completed、手動Item title/note、全Run/Artifact、
+Target、flags/position、Watchlist scope/order/segmentsを比較する。availableは現行候補であり
+ID刷新世代を証明しない。strict native work ID/episode URL・同Catalog Work・同非NULL keyで
+候補を制限。話数ラベル/タイトル/番号/前後ラベル/近接順序/ZIP記録を推測として表示する。
+丸数字をpartとして保持し、scene2⑤をscene25と誤解しない。話数ラベル全体と解析した話数番号が
+一致し、旧新の両方向で一意なら、最初に1対1推測として取り分ける。scene4①/②/③の同part同士を
+番号一致の弱い辺で3対3にまとめない。重複数は上位8辺への制限前に数え、同名が複数ある場合に
+任意の1組を選ばない。手動タイトル・表示位置が異なっても完全ラベル一致を優先する。
+`RepairLink.match_rule=label_number_unique` と根拠をJSONへ保存し、GUIは「ラベル一致で1対1推測」、
+summaryは「ラベル・話番号で1対1推測」を別集計する。取り分け後の残りだけを旧Sourceごと上位8辺の
+連結成分にする。API証拠は推測より、人間のメモはAPI表示より優先。APIなしの1対1も本文確定ではない。
+
+専用 `site_adapters/hanayume/repair_probe.py` は通常Discoveryの16件制限と独立。
+GUIが共有BrowserSessionへCDP接続し所有Pageだけを閉じる。plain-text robots.txtと
+exact `/api/episodes/<13hex>` GET以外をrouteで遮断、viewer/checkoutは開かない。
+逐次、再試行なし。既定は旧100件/GET200回/180秒/開始間隔2秒/offset0。
+最大旧500件/GET1000回/600秒、間隔0.5–30秒。GETは旧/独立新とも予算を消費し、
+新endpointは同attempt内cache。各fetch5秒abort/外側6秒、body2MB上限、総deadlineと停止操作。
+CDP接続は別途15秒以内。robots文書のnavigationも解析deadlineに含む。
+401/403/429/5xx/通信失敗は停止、その他未証明結果は不明として続行。予算が旧/新の途中で
+尽きた場合は次offsetでその旧IDを再解析。部分証拠は同snapshot内で累積できる。
+
+既存strict API parserを再利用し、旧と新のexact nonredirect HTTP200、episode/summary/
+access/series/indexの一致と現行Catalog候補への帰属を確認。同新IDへ複数旧IDが集まれば
+多対1、同indexが複数新IDに現れれば矛盾として不明。人間の指定がAPIより表示上優先し、
+API観測は詳細へ保持する。Stage 01の本文同一性証明は常に0で、completedを引き継がない。
+ZIPはItemの全Artifact記録であり、別Sourceの取得分も含む。ファイルstat/hashや画像参照は行わない。
+
+対応指定/保留/再取得は確認用メモだけ。左右の任意複数行、旧だけの保留、新だけの再取得、解除に対応。
+判断理由必須。他作品/key/site/不正URLを拒否するが、本文の意味上の誤対応は検出しない。
+JSONはexclusive新規保存で上書き不可。Stage 02から読込・対応の再編集ができる。
+作品再解析/終了で未保存メモは消える。対応無しは旧側だけの履歴保管メモとして指定できる。
+scope/segmentsの旧ID anchorは表示だけで置換しない。ZIP画像プレビューとStage 03採番/削除は未実装。
+Stage 02は別画面の明示apply。通常Discovery/Batch/Grant-onlyの実装・16件制限には影響しない。
+
+実CatalogのNGライフで旧161/現行候補154をread-only確認。2026-11-11のbounded live metadata
+確認は旧3件/GET4回で1件のstrict ID対応、2件不明。Catalog/Watchlistの前後SHA-256一致。
+本文比較、取得、ZIP操作、チケット消費は実施していない。詳細結果・テスト・既知制約は
+`runbooks/hanayume-catalog-repair/PROGRESS.md`、設計は同READMEを参照。
+
+同日のユーザー確認後、上記ラベル優先方式を採用。NGライフは1対1ラベル推測145組、
+複数候補は50→2グループ（scene2の5対1、scene3の4対1）になった。追加の実サイト通信なし、
+Catalog/Watchlistの前後SHA-256一致。Unit/Qt/合成Chromiumを含む修復機能39件成功、skip0。
+
+## Stage 02 移行プレビューと適用（2026-11-11）
+
+保存報告を現在の作品全graphと照合し、GUIで採用方針を変更できる。
+ユーザーが確認した「旧completed→新pendingは旧を利用、新旧completedは新、
+分割/統合も旧が揃えば利用、不明なら新側再取得」を自動方針として実装。
+技術的な本文同一性を主張せず、対応と取得利用を人間が採用するcheckboxを必要とする。
+1対1・旧Itemの兄弟Sourceなし・pristine donorは既存identity maintenanceを利用。
+旧Item/Source IDs、manual title/note本文、既存Run/Artifact/ZIP/quotaを維持し、現行外部状態と位置は新側を採用。
+donorに履歴/手動編集があれば自動方針は新側へ回す。明示旧利用や分割/統合は
+旧Artifact参照によるexternal coverageとし、現在Itemに偽のcompleted/Run/Artifactを作らない。
+同Itemのaliasは一つの取得単位として、採用した旧Source群の最新成功Artifactを検証する。
+古いZIPへの暗黙代用はしない。欠落/壊れた最新ZIPなら新側再取得へ回すか明示旧利用を拒否。
+
+履歴保管は担当OFF＋`history:hanayume-repair:<元key>`への所属移動。
+同transactionで非現行local bindingをscope configuration historyへ登録する。
+これはネイティブlisting証拠ではなく手動保管設定。現行Fullのenableと分離され、
+Scope Syncも既存removed-key規則でOFFを維持する。identity変更で旧IDが空く場合は
+旧Itemに非現行alias Source/Targetを作りidentityを予約し、quota/grantは複製しない。
+サイトが旧IDを再掲載したら既存の所有権guardで止め、明示再確認が必要となる。
+旧IDのscope/segments anchorはblock。新側だけは新規取得候補、未対応旧側は保留としてapplyを止める。
+「対応無し」は現行対象から外す意味で、旧Item/Run/Artifact/ZIPの物理削除はしない。
+
+設定/CLI: Stage 01の上部ボタン、または `python -m screenshot_crawler.gui
+--repair-migration output/hanayume-repair.json`。previewは新規JSONへ保存可能。
+GUIは適用前（旧/新）と適用後の現行Item/Source ID・statusを別表示し、残す/物理削除するDB行を明示する。
+選択行の説明に正確なItem/Source/Target ID、新URL、旧ID保管alias、採用ZIPを表示する。
+旧取得の1対1継承では旧Item/Sourceを現行に残し、新側の履歴/編集のない空DB行だけを物理削除。
+同transactionで保持Sourceのexternal_idとURLを新IDへ更新する。Discoveryは(site, external_id)で照合するため、
+新IDは旧completed Itemを参照し、空donorをpendingとして再作成しない。
+合成Full連続2回で新ID一意・旧DB ID/取得済み状態/全履歴維持を通常/order/segmentsの3構成で検証済み。
+新旧pendingで新側を採用/再取得する場合は、旧側にCrawlRun/Artifact/利用・grant/owned権利、
+手動title/note、別Source、個別Target設定がないとき旧Item/Source/Targetを削除し、新pendingだけを残す。
+保護対象のある旧pendingは理由をGUI表示して履歴保管する。plan/tokenに削除IDを含め、
+残す新Itemへ監査markerを記録。操作IDは方針version 2を含む。alias採番後に空の旧DB行を削除し、
+当該Work/siteのlisting証拠を無効化する。旧IDは予約せず、旧ID自体が再公開されれば新規pendingとなる。
+preview JSONにはoutcomes/after_summary（旧pending/新donor削除件数を区別）を追加し、
+方針変更/失敗では古い表示を消す。生成alias IDは適用時採番。表示機能はCatalogを変更しない。
+Catalog/Watchlist lock、全Work running Run拒否、状態/報告/ZIP token再検証、verified backup、
+BEGIN IMMEDIATE内再検証、単一transaction、FK/最終ZIP検証、監査markerによる冪等性を実装。
+Watchlist/ZIP/チケット状態は書き込まず、Batchやsite通信も行わない。
+external参照は旧Artifactのままなので現在ItemのZIP件数は0でもnote/planに参照を残す。
+兄弟Sourceを巻き込むstatus変更、古い/偽造/重複報告は拒否する。採番とファイル衝突対処は別Stage。
+
+実Catalog隔離copy確認: 13組reuse_identity、141グループuse_new（新取得済み8話と未取得133話）。
+現行154 Sourceはcompleted21/pending133。元の旧Sourceは13件を現行に継承、旧pending132件を削除、
+16件を履歴保管し、旧ID保管aliasを13件追加（履歴Source合計29）。新側の空donor13件も削除。
+scene15③の旧pending Source #32061はCrawlRun1件/Artifact0件のため保管する。
+全Run/Artifact/resource履歴のhash一致、
+再apply no-op、Scope preview ready、通常Batch候補1件で重複なし（他は既存paid/quota制約）。
+運用Catalog/Watchlist/元JSONのSHA不変。実サイト通信・本番apply・ZIP変更は未実施。
+現行証拠: `output/hanayume-repair-stage02-pending/{operational-preview,copy-verification}.json`。
+以前の `hanayume-repair-stage02/` は旧pendingも保管する旧方針での検証出力。
+
+## Stage 03A 履歴専用ZIPの分離
+
+Stage 02の別ボタンからpreview/applyする。移行前は移行planの投影予定で、applyを禁止する。
+移行後に実Catalogから再検証し、全Sourceが履歴key＋取得担当OFFのItemのZIPを別フォルダへ移す。
+通常のdiscovery_keyはWatchlist keyに対応するが、`history:...` はDB内部用bindingのみ。
+無範囲Fullはmissing/unavailableを含め同keyの全Sourceを担当ONにするため、履歴所属を分けてOFFを維持する。
+completed自体でもBatch対象外であり、履歴pendingと現役/履歴ZIPの区別のために担当/所属を明示する。
+旧取得のidentity継承は同Itemに現行Sourceがあるため、旧ID保管aliasがあってもZIPを現役の場所に維持。
+旧Artifact coverageとして現行external Itemが使うZIPと、他Item/Work/path共有も移動しない。
+既定先: `output/Books-history/hanayume/<work_key>/artifact-<id>/<元名>`。
+全Artifact locatorを新pathへ更新し、ZIP bytes/名前、Item/Source/Target/全Run/quota/Watchlistは保持する。
+旧status/manifest snapshotは不変。採番/不要ZIP削除と、残るsidecar衝突の対処は別Stage。
+backup/snapshot再検証/Catalog lock/BEGIN IMMEDIATEとpersistent recovery journalを必須とする。
+同一filesystemでhardlink可能な保存先に限定し、移動先は排他作成で上書きしない。
+例外時はDB/file復元を確認。不明/復元失敗はRECOVERY_REQUIREDで停止し、未解決journalがあればapplyしない。
+process強制終了はjournal/backup/manifestからの明示復旧が必要。本番ZIPは未移動。
+
+## ユーザー適用後の通常GUI表示（2026-11-11）
+
+ユーザーがStage 02を適用後、通常GUIで履歴が「未管理 / 所属不明」になったため表示を修正。
+監査marker＋保存binding＋Work/site＋担当OFF/unavailableを照合し、prefixだけでは履歴にしない。
+旧Itemだけの保管は「履歴保管（旧話）」、現行managed Itemと同Itemの旧IDは「移行済み旧ID（参照用）」。
+いずれも選択不能・取得対象外。進捗列は対象外、候補列は—、詳細はSource数と元Itemの取得状態を表示。
+親NGライフの進捗/同期状態は現行担当を基準にし、履歴の存在を要確認/所属不明として扱わない。
+本当に所属が不明なSourceは従来どおり未管理。登録もれ/無効bindingを隠さず、取得規則は変えない。
+実Catalogは現行154 Source（completed21/pending133）、旧話履歴16（completed15/pending1）、旧ID参照13。
+全36 ZIP Artifact中15件のlocatorがBooks-history配下で、ユーザーによる分離後のDB状態も確認した。
+これは保存先参照の確認であり、今回の通常GUI検証ではZIPの存在/hashは再検証しない。
+今回の修正は表示のみ。先行節の「本番未適用/未移動」は実装時点の記録であり、現時点ではユーザー適用済み。
+通常GUIの履歴分類は再読込時の対象候補だけをindexする。全Item/全Workのbindingを一律に
+展開せず、47,646 Sourceで約36〜46msだった処理を約5.2msに削減した。判定条件/分類結果は維持。
+スクロール時にこの分類やZIP hashは実行しない。作品ビューの描画改善はnote/00_core.mdを参照。

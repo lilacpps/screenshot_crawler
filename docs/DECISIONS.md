@@ -803,3 +803,36 @@ BookWalker専用の診断・Probe・圧縮比較・timing分析は再現手段�
 `poc/bookwalker/`へ移動し、関連の調査testは`tests/research/`へ分離する。
 `scripts/`は通常運用・保守用として整理する。
 
+## Hanayume修復の人間による取得採用と非現行履歴binding（2026-11-11）
+
+Stage 01の候補・API identity・本文同一性を区別したまま、Stage 02ではユーザーが確認した
+報告と採用方針を明示承認できる。旧completed→新pendingは検証済み旧ZIPを利用でき、
+新旧completedは新を優先する。分割/統合は旧取得範囲が揃えば参照によるexternal coverage、
+不明・不足時は新側の再取得を許容する。候補生成だけではcompletedを伝播しない。
+
+schemaを変更せず、旧Sourceは非現行履歴keyへ明示的に移して取得担当をOFFにする。
+同じtransactionで保管用bindingをscope configuration historyへ登録し、既存のremoved-key
+判定を再利用する。これはmaintenanceによるlocalな保管設定であり、過去のWatchlist掲載や
+site listingの証拠とは主張しない。Watchlist、通常Discovery、Batchのsite分岐を増やさない。
+次のFullで再有効化し得るflag-only退役や、履歴削除による見かけ上の整理は採用しない。
+ユーザーの追加方針として、新旧pendingのうち取得/利用履歴・権利・手動編集・別Source・個別Targetが
+ない旧DB行は保管せず削除する。消す履歴自体がないケースに限る。保護対象のあるpendingは履歴保管する。
+削除予定IDをpreview/tokenへ含め、verified backupとtransaction内の再検証後だけ削除する。
+監査markerは残す新Itemへ記録する。旧IDのaliasは作らず、旧IDがサイトへ再公開されたら通常Discoveryの
+新規pending扱いとなる。新IDは維持するため、現行listingの再Discoveryで新pendingが重複しない。
+identity移行で空く旧IDはquotaを持たない履歴aliasで予約し、再登場は所有権guardで停止する。
+異常な再登場を自動復帰させる処理は持たない。
+
+単純1対1だけ既存SourceIdentityMaintenanceの検証を一括transaction内で再利用する。
+pristineでないdonorを無理にmergeしない。複数話のZIP切断/結合、Run/Artifact再帰属は行わない。
+external coverageの出典はItem noteと移行planのArtifact ID/pathに残し、新Artifactを偽造しない。
+監査markerも同transactionで書き、再applyはno-op。Watchlistを変更しないためDBとファイルの
+跨transactionは不要。運用applyには具体的なプレビューとverified backupを先行させる。
+
+追加の履歴ZIP分離（Stage 03A）はCatalog移行から分ける。履歴Source専用のItemのZIPだけを
+Books-historyへ移動し、同pathの全Artifact locatorを更新する。現行Itemとの共有、external coverage、
+他Item/Workとのpath共有は維持する。通常のDiscovery/Batch/採番処理には分岐を増やさない。
+元のZIP名とbytes、Run/status/manifest snapshotは保持する。同一filesystemの排他的hardlink＋元path解除で
+既存移動先を上書きしない。非対応filesystemではcopy/deleteへ暗黙fallbackしない。
+DB/filesystemは一括atomicではないためverified backupとpersistent journalを先行し、通常例外を復元して検証する。
+強制終了・commit状態不明・復元失敗はRECOVERY_REQUIREDとし、未解決journalがある間はapplyしない。

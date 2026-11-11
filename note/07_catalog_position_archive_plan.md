@@ -21,6 +21,12 @@
 
 ## 1. Purpose
 
+Hanayume repair adds independent Stage 03A history-only ZIP relocation in
+`maintenance/hanayume_history.py`. It updates all matching Artifact locators
+after backup/hash/reference checks and leaves current acquisitions, ZIP names,
+Run/status snapshots and this renumber contract unchanged. It has its own
+recovery journal; numbering, status collisions and ZIP deletion remain separate.
+
 Current extension (2026-10-27): the Work editor and optional per-target
 archive_segments support manually interleaved replacements while keeping
 existing key/Source ownership. This extends ordering/configuration JSON without
