@@ -2093,6 +2093,18 @@ CDP endpointを既存の優先順位で解決し、BrowserSessionをconnect、Pa
 `--cdp-endpoint`は全targetで優先される。Crawler Chromeの自動起動は行わない。
 Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コマンドである。
 
+Discoveryのtarget間待機は`crawler.yaml`のsite別
+`discovery_inter_target_delay_ms`で設定する（未設定3000ms、0で無効）。
+CLIは`--crawler-config PATH`（既定`crawler.yaml`）、GUIは既存`runtime_path`を使い、
+実行開始時に1回読み込む。CLI/GUI共通の`_discover_target()`はlocal検証後、
+次のCDP接続前に直前targetのsite設定分だけ待つ。前targetのPage close/disconnect後に
+適用し、最初・単一target・末尾には待機を追加しない。site切り替えでも状態を引き継ぐ。
+disabled/local capability rejectは待機せず状態も更新しない。接続attempt以降の失敗・
+incomplete後にCLIが続行する場合も待機する。GUIは待機中も200ms以内の間隔で停止要求を確認する。
+full/incremental/boundedと同一Work内の別keyも同じ規則で、実行を跨ぐ状態は保存しない。
+Batchの`inter_candidate_delay_ms`とsite内の一覧ページ間待機は独立して維持する。
+人工CLI/workerで検証し、追加delayの実サイト時間計測は未実施である。
+
 `--site` と `--all` はtargetの失敗を収集して後続targetを続行し、最後にmode、
 （`--site` ではsiteも）、target数、
 成功数、失敗数と失敗理由を表示する。例外failureに加えて、DiscoveryResultの

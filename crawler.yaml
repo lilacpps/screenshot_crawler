@@ -1,5 +1,6 @@
 sites:
   magapoke:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -9,6 +10,7 @@ sites:
     work_ticket_cooldown_hours: 23
 
   mangaone:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -17,6 +19,7 @@ sites:
     stop_on_captcha: true
 
   comicdays:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -25,6 +28,7 @@ sites:
     stop_on_captcha: true
 
   bookwalker:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 0
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -33,6 +37,7 @@ sites:
     stop_on_captcha: true
 
   ebookjapan:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 0
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -41,6 +46,7 @@ sites:
     stop_on_captcha: true
 
   piccoma:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 200
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
@@ -49,6 +55,7 @@ sites:
     stop_on_captcha: true
 
   hanayume:
+    discovery_inter_target_delay_ms: 5000
     page_turn_delay_ms: 1500
     inter_candidate_delay_ms: 5000
     stop_on_http_403: true
@@ -57,6 +64,7 @@ sites:
     stop_on_captcha: true
 
   younganimal:
+    discovery_inter_target_delay_ms: 5000
     page_turn_delay_ms: 1500
     inter_candidate_delay_ms: 5000
     stop_on_http_403: true
@@ -65,9 +73,22 @@ sites:
     stop_on_captcha: true
 
   kadocomi:
+    discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
     stop_on_http_429: true
     stop_on_challenge: true
     stop_on_captcha: true
+
+  jumpplus:
+    discovery_inter_target_delay_ms: 3000
+
+  zeblack:
+    discovery_inter_target_delay_ms: 3000
+
+  comicfuz:
+    discovery_inter_target_delay_ms: 3000
+
+  yanmaga:
+    discovery_inter_target_delay_ms: 3000

@@ -58,6 +58,7 @@ from screenshot_crawler.discovery import (
     DiscoveryService,
 )
 from screenshot_crawler.discovery.models import DiscoveredRecord, DiscoveryResult
+from screenshot_crawler.discovery.pacing import DiscoveryPacer
 from screenshot_crawler.discovery.validation import (
     blocked_discovery_result,
     discovery_capability_error,
@@ -212,6 +213,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Catalog SQLite path (default: catalog.sqlite)",
     )
     discover.add_argument("--env-file", type=Path, default=Path(".env"))
+    discover.add_argument("--crawler-config", type=Path, default=Path("crawler.yaml"))
     discover.add_argument(
         "--cdp-endpoint",
         help=(
@@ -890,6 +892,7 @@ async def _discover_target(
     values: dict[str, str],
     cli_endpoint: str | None,
     keep_open: bool = False,
+    pacer: DiscoveryPacer | None = None,
 ) -> DiscoveryResult:
     """Run one target with a caller-owned, target-scoped browser session."""
 
@@ -919,6 +922,8 @@ async def _discover_target(
         cli_endpoint=cli_endpoint,
         values=values,
     )
+    if pacer is not None:
+        await pacer.before_target(target.site)
     session = await BrowserSession.connect(endpoint)
     try:
         page = await session.new_page()
@@ -990,6 +995,7 @@ async def _run_discover(args: argparse.Namespace) -> None:
         targets = [watchlist.get(args.key)]
 
     values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    pacer = DiscoveryPacer(load_runtime_settings(args.crawler_config))
     catalog = CatalogService(args.catalog)
     registry = _discovery_registry()
 
@@ -1002,6 +1008,7 @@ async def _run_discover(args: argparse.Namespace) -> None:
             values=values,
             cli_endpoint=args.cdp_endpoint,
             keep_open=args.keep_open,
+            pacer=pacer,
         )
         _print_discovery_result(result)
         return
@@ -1019,6 +1026,7 @@ async def _run_discover(args: argparse.Namespace) -> None:
                 registry=registry,
                 values=values,
                 cli_endpoint=args.cdp_endpoint,
+                pacer=pacer,
             )
         except Exception as exc:  # noqa: BLE001 - one target must not stop the batch
             error = str(exc) or type(exc).__name__

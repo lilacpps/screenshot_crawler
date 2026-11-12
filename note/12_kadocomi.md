@@ -1,3 +1,12 @@
+## Discovery target pacing (2026-11-13)
+
+CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
+the root YAML) after this target closes, only before another target starts.
+The first/single/final target adds no delay; site changes retain the previous
+site setting. Existing listing-page waits remain independent. See
+[shared runtime details](00_core.md#phase-1-runtime-settings--pacing).
+Synthetic CLI/worker ordering is verified; live timing is unverified.
+
 ## Stage07 complete-list investigation (2026-11-03)
 
 Preview/detail now supports continuous URL-bound ranges and open oldest/newest

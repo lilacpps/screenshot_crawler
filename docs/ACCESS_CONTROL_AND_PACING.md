@@ -55,6 +55,7 @@ sites:
   magapoke:
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
+    discovery_inter_target_delay_ms: 3000
     stop_on_http_403: true
     stop_on_http_429: true
     stop_on_challenge: true
@@ -64,6 +65,7 @@ sites:
   mangaone:
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
+    discovery_inter_target_delay_ms: 3000
     stop_on_http_403: true
     stop_on_http_429: true
     stop_on_challenge: true
@@ -72,6 +74,7 @@ sites:
   bookwalker:
     page_turn_delay_ms: 1000
     inter_candidate_delay_ms: 3000
+    discovery_inter_target_delay_ms: 3000
     stop_on_http_403: true
     stop_on_http_429: true
     stop_on_challenge: true
@@ -89,6 +92,7 @@ The following settings are generic and per-site:
 ```text
 page_turn_delay_ms
 inter_candidate_delay_ms
+discovery_inter_target_delay_ms
 stop_on_http_403
 stop_on_http_429
 stop_on_challenge
@@ -109,6 +113,7 @@ Safe initial pacing defaults:
 
 - `page_turn_delay_ms = 1000`
 - `inter_candidate_delay_ms = 3000`
+- `discovery_inter_target_delay_ms = 3000`
 
 Missing `crawler.yaml`, or a missing known site entry, must not silently turn the crawler into zero-delay operation.
 
@@ -174,6 +179,30 @@ Do not apply `page_turn_delay_ms` to:
 The delay does not replace readiness or change detection.
 
 ## 6. Inter-candidate pacing
+
+### Discovery target pacing
+
+`discovery_inter_target_delay_ms` is independent of Batch pacing. CLI Discover
+and the GUI execution worker load runtime settings once per execution and share
+one run-local `DiscoveryPacer` across every selected site. After the previous
+target's Page and CDP connection are cleaned up, it waits the previous target's
+site setting immediately before the next target's CDP connection attempt.
+The first target, a single-target execution and the end of execution have no
+delay. Disabled and locally rejected targets neither wait nor change pacing
+state. Connection attempts, including failed ones, establish the next delay;
+CLI continuation after a failed/incomplete target therefore still waits.
+The same contract applies to full, incremental and bounded Discovery, including
+different keys of one Work and site changes. GUI waits check cooperative stop
+at most every 200 ms. State is not persisted between commands/jobs.
+
+Missing file/site/field defaults to 3000 ms; explicit zero disables this delay.
+The distributed YAML specifies all 13 registered sites: 5000 ms for Hanayume
+and Younganimal, 3000 ms for the others. Existing adapter-internal listing
+pacing remains independent. `discover --crawler-config PATH` selects the file
+(default `crawler.yaml`); the GUI uses its existing `runtime_path`.
+This addition has synthetic CLI/worker coverage; live timing is unverified.
+
+### Batch candidate pacing
 
 `inter_candidate_delay_ms` is Batch-orchestration pacing.
 

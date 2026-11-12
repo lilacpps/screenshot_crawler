@@ -38,6 +38,12 @@ async def _no_cli_pacing_wait(_seconds: float) -> None:
     return
 
 
+@pytest.fixture(autouse=True)
+def _fake_discovery_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if "discover" in request.node.name:
+        monkeypatch.setattr("screenshot_crawler.discovery.pacing.asyncio.sleep", _no_cli_pacing_wait)
+
+
 def test_crawl_uses_cdp_options() -> None:
     args = _parser().parse_args(
         [
@@ -417,6 +423,8 @@ def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:
             "custom.yaml",
             "--catalog",
             "custom.sqlite",
+            "--crawler-config",
+            "custom-runtime.yaml",
             "--cdp-endpoint",
             "http://127.0.0.1:9333",
         ]
@@ -427,6 +435,7 @@ def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:
     assert args.mode == "incremental"
     assert args.watchlist == Path("custom.yaml")
     assert args.catalog == Path("custom.sqlite")
+    assert args.crawler_config == Path("custom-runtime.yaml")
     assert args.cdp_endpoint == "http://127.0.0.1:9333"
     assert args.env_file == Path(".env")
     assert not args.keep_open
@@ -3095,6 +3104,21 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
+    runtime = tmp_path / "runtime.yaml"
+    runtime.write_text(
+        "sites:\n  mangaone:\n    discovery_inter_target_delay_ms: 17\n"
+        "  bookwalker:\n    discovery_inter_target_delay_ms: 99\n", encoding="utf-8",
+    )
+    waits = []
+
+    async def record_wait(seconds):
+        # The prior Page and CDP connection must close before the next connects.
+        assert len(FakeDiscoverySession.instances) == 1
+        assert FakeDiscoverySession.instances[0].closed
+        assert FakeDiscoverySession.instances[0].closed_pages
+        waits.append(seconds)
+
+    monkeypatch.setattr("screenshot_crawler.discovery.pacing.asyncio.sleep", record_wait)
     monkeypatch.setattr(
         cli,
         "resolve_cdp_endpoint",
@@ -3102,7 +3126,8 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     )
 
     args = _parser().parse_args(
-        ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist)]
+        ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist),
+         "--crawler-config", str(runtime)]
     )
     await cli._run_discover(args)
 
@@ -3116,6 +3141,7 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     ]
     assert all(session.closed for session in FakeDiscoverySession.instances)
     assert all(session.closed_pages == [session.page] for session in FakeDiscoverySession.instances)
+    assert waits == [0.017]
 
 
 @pytest.mark.parametrize("mode", ["incremental", "full"])
@@ -3196,6 +3222,13 @@ async def test_discover_site_continues_after_failure_and_exits_as_failure(
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", FakeDiscoveryAdapterRegistry)
+    waits = []
+
+    async def record_wait(seconds):
+        assert FakeDiscoverySession.instances[-1].closed
+        waits.append(seconds)
+
+    monkeypatch.setattr("screenshot_crawler.discovery.pacing.asyncio.sleep", record_wait)
 
     args = _parser().parse_args(
         ["discover", "--site", "mangaone", "--mode", "incremental", "--watchlist", str(watchlist)]
@@ -3204,6 +3237,7 @@ async def test_discover_site_continues_after_failure_and_exits_as_failure(
         await cli._run_discover(args)
 
     assert [key for key, _mode, _page in FakeDiscoveryService.calls] == ["A", "C"]
+    assert waits == [3.0]
     output = capsys.readouterr().out
     assert "[2/2] C (mangaone)" in output
     assert "  site: mangaone" in output

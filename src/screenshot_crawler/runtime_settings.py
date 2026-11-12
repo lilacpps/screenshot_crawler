@@ -10,6 +10,7 @@ import yaml
 
 DEFAULT_PAGE_TURN_DELAY_MS = 1000
 DEFAULT_INTER_CANDIDATE_DELAY_MS = 3000
+DEFAULT_DISCOVERY_INTER_TARGET_DELAY_MS = 3000
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,7 @@ class SiteRuntimeSettings:
     stop_on_challenge: bool = True
     stop_on_captcha: bool = True
     work_ticket_cooldown_hours: int | None = None
+    discovery_inter_target_delay_ms: int = DEFAULT_DISCOVERY_INTER_TARGET_DELAY_MS
 
 
 @dataclass(frozen=True, slots=True)

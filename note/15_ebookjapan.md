@@ -1,5 +1,14 @@
 # ebookjapan purchased-only Discovery - current implementation
 
+## Discovery target pacing (2026-11-13)
+
+CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
+the root YAML) after this target closes, only before another target starts.
+The first/single/final target adds no delay; site changes retain the previous
+site setting. Existing listing-page waits remain independent. See
+[shared runtime details](00_core.md#phase-1-runtime-settings--pacing).
+Synthetic CLI/worker ordering is verified; live timing is unverified.
+
 ## Page-turn pacing and bounded performance measurement (2026-11-10)
 
 The distributed `crawler.yaml` explicitly sets `sites.ebookjapan.page_turn_delay_ms=0`.

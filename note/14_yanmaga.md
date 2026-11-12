@@ -1,5 +1,14 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Discovery target pacing (2026-11-13)
+
+CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
+the root YAML) after this target closes, only before another target starts.
+The first/single/final target adds no delay; site changes retain the previous
+site setting. Existing listing-page waits remain independent. See
+[shared runtime details](00_core.md#phase-1-runtime-settings--pacing).
+Synthetic CLI/worker ordering is verified; live timing is unverified.
+
 ## 現在の実装範囲
 
 Phases 02-05 passed independent review for the observed Chapter 11 layout. The normal CLI Chapter 11 E2E used native-pixel lossless WebP for all 20 pages with positive END, Manifest/ZIP, Artifact, and Completed. Independent reference capture and pixel comparison also passed exactly for all 20 pages. The N2 follow-up completed the red-free Chapter 1 Reader to END with WebP for all 36 pages. Complete original server page bytes were not observed; verified output is reconstructed pre-JPEG viewer pixels, not original bytes. Daily-limit scope and other reader layouts remain unverified.

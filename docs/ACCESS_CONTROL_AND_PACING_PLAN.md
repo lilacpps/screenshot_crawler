@@ -22,6 +22,14 @@ consumption persistence and later Work sequencing.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
+Discovery extension (2026-11-13): implemented independent
+`discovery_inter_target_delay_ms` (default 3000 ms, explicit zero accepted).
+Acceptance tests cover config defaults/overrides/invalid values, previous-site
+selection across site changes, cleanup before waiting, no first/single/final
+delay, disabled/capability skips, failed-attempt continuation, GUI custom runtime
+paths and cooperative cancellation during a chunked wait. Sleeps are faked;
+no new adapter/browser behavior or live timing claim is introduced.
+
 ### Changes
 
 - add `crawler.yaml` loader and typed per-site runtime settings,

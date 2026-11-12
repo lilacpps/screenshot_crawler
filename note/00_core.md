@@ -3063,6 +3063,7 @@ is already in flight.
 
 rootの`crawler.yaml`は`runtime_settings.py`が読み込み、`SiteRuntimeSettings`へresolveする。
 ファイルまたはsite entryがない場合は`page_turn_delay_ms=1000`、`inter_candidate_delay_ms=3000`を使う。
+Discovery専用`discovery_inter_target_delay_ms`も同じloaderで解決する（未設定3000ms）。
 不正なdelay（負数、bool、文字列、float）は明示的に失敗し、0はoperator overrideとして有効である。
 CrawlerRunnerはYAMLを読まず、CLI/Batchがresolved値を`RunConfig`またはBatch orchestrationへ渡す。
 
@@ -3076,6 +3077,23 @@ ebookjapanの有界計測と実サイト確認範囲は`note/15_ebookjapan.md`�
 delayはadapter timeout/grace/retry budgetの外側で、AD、loading polling、same-content wait、entry clickには適用しない。
 BatchはsiteへアクセスしたcandidateのPageをcloseした後、次のsite-accessing candidateの前に
 `inter_candidate_delay_ms`を1回だけ適用し、末尾candidateやCatalog local skipには適用しない。
+
+Discoveryでは`discovery/pacing.py`の`DiscoveryPacer`をCLI/GUIで実行ごとに1つ作る。
+設定は開始時に1回読み込み、共通`_discover_target()`がlocal検証後、次のCDP接続前に
+直前targetのsite設定分だけ待機する。Page close/disconnect後の追加待機で、最初・単一key・
+末尾には適用しない。disabled/capability rejectは待機も状態更新もしない。
+接続attempt以降は失敗でも次の待機対象となり、CLIの失敗/incomplete後の続行にも適用する。
+siteを切り替えても状態を引き継ぎ、同一Work内の別key・full/incremental/boundedも同じ規則。
+状態はjob/commandを跨いで保持しない。GUIは200ms以下に分割して既存checkpointを確認し、
+待機中の停止要求では次targetへ接続しない。CLIは`discover --crawler-config PATH`
+（既定`crawler.yaml`）、GUIは既存`runtime_path`を使用する。0は明示無効、不正値は接続前に失敗。
+同梱YAMLの全13siteに設定し、hanayume/younganimalは5000ms、他は3000ms。
+既存Batch/page-turn設定とAdapter内の一覧ページ間待機は維持する。
+fake sleepによるCLI/GUI workerの順序・回数・失敗継続・停止を検証し、実サイト時間計測は未実施。
+2026-11-13の関連Unitは218件と全site YAML設定確認1件が通過し、GUI入力・Jump+/Manga ONE
+Discoveryのlocal Integrationは29件通過（skipなし）。既存のroot YAML固定値testは変更前から
+operator設定（Magapoke等）と期待値が不一致で失敗し、関連回帰実行ではその1件だけ除外した。
+Research/Live/full suiteは未実行。Adapter/Coreの挙動は変えず、設定・共通実行境界を対象に検証した。
 
 Magapoke BatchはDiscoveryのlatest-firstを維持し、同一Work内を`published_at ASC (NULL last), source_id DESC`
 で処理する。Jump+もDiscoveryのlatest-firstを維持し、同じWork内orderingを通常direct candidateへ適用する。

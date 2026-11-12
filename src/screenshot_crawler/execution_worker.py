@@ -24,10 +24,12 @@ from screenshot_crawler.cli import (
     _discover_target,
     _discovery_registry,
 )
+from screenshot_crawler.discovery.pacing import DiscoveryPacer
 from screenshot_crawler.discovery.validation import discovery_capability_error
 from screenshot_crawler.management.execution import ExecutionPlanService, _effective_request_paths
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.jobs import sanitize_text
+from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.watchlist.service import WatchlistService
 
@@ -346,6 +348,10 @@ async def _run(
                     capability_blockers.append(f"{target.key}: {error}")
             if capability_blockers:
                 raise RuntimeError("Discovery preflight failed: " + "; ".join(capability_blockers))
+            pacer = DiscoveryPacer(
+                load_runtime_settings(str(request.get("runtime_path") or "crawler.yaml")),
+                checkpoint=checkpoint,
+            )
             for site, site_keys in sorted(keys_by_site.items()):
                 checkpoint()
                 emit("task_started", phase=f"discover:{mode}", payload={"site": site})
@@ -366,6 +372,7 @@ async def _run(
                             registry=registry,
                             values=values,
                             cli_endpoint=_request_cdp_endpoint(request),
+                            pacer=pacer,
                         )
                     except BaseException as exc:
                         reason = sanitize_text(str(exc)[:1000])

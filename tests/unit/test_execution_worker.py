@@ -444,6 +444,88 @@ def test_worker_skips_disabled_discover_before_browser_entry(
     asyncio.run(_run(request))
 
 
+@pytest.mark.parametrize("outcome", ["complete", "cancel", "invalid"])
+def test_worker_discovery_paces_across_sites_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    from screenshot_crawler import cli
+    from screenshot_crawler.execution_worker import WorkerCancelled
+    from screenshot_crawler.runtime_settings import RuntimeSettingsError
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    for key, site, enabled in [("a", "bookwalker", True), ("b", "bookwalker", False),
+                               ("c", "mangaone", True)]:
+        watchlist.add(key=key, work_key=key, label=key, site=site,
+                      url=f"https://example.invalid/{key}", enabled=enabled)
+    runtime = tmp_path / "runtime.yaml"
+    runtime.write_text(
+        "sites:\n  bookwalker:\n    discovery_inter_target_delay_ms: "
+        + ("-1" if outcome == "invalid" else "450")
+        + "\n  mangaone:\n    discovery_inter_target_delay_ms: 990\n", encoding="utf-8",
+    )
+    monkeypatch.setattr("screenshot_crawler.execution_worker.InventoryService.load",
+                        lambda *args, **kwargs: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker.ExecutionPlanService.preview",
+                        lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"))
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry",
+                        _fake_discovery_registry)
+    events = []
+    cancelled = False
+
+    class Session:
+        @classmethod
+        async def connect(cls, endpoint):
+            events.append("connect")
+            return cls()
+
+        async def new_page(self):
+            return object()
+
+        async def close_page(self, page):
+            events.append("close_page")
+
+        async def close(self):
+            events.append("close")
+
+    async def discover(self, page, target, mode):
+        events.append(target.key)
+        return DiscoveryResult(mode=mode, target_key=target.key, observed_count=0,
+                               new_count=0, known_count=0, complete=True,
+                               stopped_reason="exhausted", warnings=())
+
+    async def sleep(seconds):
+        nonlocal cancelled
+        events.append(seconds)
+        cancelled = outcome == "cancel"
+
+    monkeypatch.setattr(cli, "BrowserSession", Session)
+    monkeypatch.setattr(cli.DiscoveryService, "discover", discover)
+    monkeypatch.setattr("screenshot_crawler.discovery.pacing.asyncio.sleep", sleep)
+    request = {
+        "action": "discover", "selected_keys": ["a", "b", "c"],
+        "sites": ["bookwalker", "mangaone"],
+        "keys_by_site": {"bookwalker": ["a", "b"], "mangaone": ["c"]},
+        "catalog_path": str(catalog_path), "watchlist_path": str(watchlist_path),
+        "runtime_path": str(runtime), "env_file": str(tmp_path / "missing.env"),
+        "plan_fingerprint": "confirmed",
+    }
+    if outcome == "invalid":
+        with pytest.raises(RuntimeSettingsError):
+            asyncio.run(_run(request))
+        assert events == []
+    elif outcome == "cancel":
+        with pytest.raises(WorkerCancelled):
+            asyncio.run(_run(request, cancel_check=lambda: cancelled))
+        assert events == ["connect", "a", "close_page", "close", 0.2]
+    else:
+        asyncio.run(_run(request))
+        assert events == ["connect", "a", "close_page", "close", 0.2, 0.2, 0.05,
+                          "connect", "c", "close_page", "close"]
+
+
 def test_execution_preview_rejects_discover_when_all_selected_keys_disabled(
     tmp_path: Path,
 ) -> None:

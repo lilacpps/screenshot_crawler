@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.runtime_settings import (
+    DEFAULT_DISCOVERY_INTER_TARGET_DELAY_MS,
     DEFAULT_INTER_CANDIDATE_DELAY_MS,
     DEFAULT_PAGE_TURN_DELAY_MS,
     RuntimeSettingsError,
@@ -20,6 +21,7 @@ def test_runtime_settings_load_and_resolve_site_defaults(tmp_path: Path) -> None
         "  magapoke:\n"
         "    page_turn_delay_ms: 0\n"
         "    inter_candidate_delay_ms: 0\n"
+        "    discovery_inter_target_delay_ms: 4500\n"
         "    work_ticket_cooldown_hours: 23\n",
         encoding="utf-8",
     )
@@ -30,8 +32,12 @@ def test_runtime_settings_load_and_resolve_site_defaults(tmp_path: Path) -> None
         page_turn_delay_ms=0,
         inter_candidate_delay_ms=0,
         work_ticket_cooldown_hours=23,
+        discovery_inter_target_delay_ms=4500,
     )
     assert settings.for_site("mangaone").page_turn_delay_ms == DEFAULT_PAGE_TURN_DELAY_MS
+    assert settings.for_site("mangaone").discovery_inter_target_delay_ms == (
+        DEFAULT_DISCOVERY_INTER_TARGET_DELAY_MS
+    )
     assert settings.for_site("mangaone").inter_candidate_delay_ms == (
         DEFAULT_INTER_CANDIDATE_DELAY_MS
     )
@@ -41,10 +47,22 @@ def test_runtime_settings_missing_file_uses_safe_defaults(tmp_path: Path) -> Non
     settings = load_runtime_settings(tmp_path / "missing.yaml")
 
     assert settings.for_site("unknown") == SiteRuntimeSettings()
+    assert settings.for_site("unknown").discovery_inter_target_delay_ms == 3000
     assert settings.for_site("unknown").page_turn_delay_ms == DEFAULT_PAGE_TURN_DELAY_MS
     assert settings.for_site("unknown").inter_candidate_delay_ms == (
         DEFAULT_INTER_CANDIDATE_DELAY_MS
     )
+
+
+def test_distributed_discovery_delays_cover_all_registered_sites() -> None:
+    from screenshot_crawler.cli import _discovery_registry
+
+    settings = load_runtime_settings(Path(__file__).parents[2] / "crawler.yaml")
+    for site in _discovery_registry().sites():
+        assert site in settings.sites
+        assert settings.for_site(site).discovery_inter_target_delay_ms == (
+            5000 if site in {"hanayume", "younganimal"} else 3000
+        )
 
 
 def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites() -> None:
@@ -65,30 +83,34 @@ def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_oth
 
 
 @pytest.mark.parametrize("site", ["piccoma", "ebookjapan"])
-def test_runtime_settings_allow_explicit_zero_override(tmp_path: Path, site: str) -> None:
+@pytest.mark.parametrize("field", ["page_turn_delay_ms", "discovery_inter_target_delay_ms"])
+def test_runtime_settings_allow_explicit_zero_override(
+    tmp_path: Path, site: str, field: str
+) -> None:
     path = tmp_path / "crawler.yaml"
     path.write_text(
-        f"sites:\n  {site}:\n    page_turn_delay_ms: 0\n",
+        f"sites:\n  {site}:\n    {field}: 0\n",
         encoding="utf-8",
     )
 
-    assert load_runtime_settings(path).for_site(site).page_turn_delay_ms == 0
+    assert getattr(load_runtime_settings(path).for_site(site), field) == 0
 
 
 @pytest.mark.parametrize(
     "field_value",
     [-1, True, "1000", 1.5],
 )
+@pytest.mark.parametrize("field", ["page_turn_delay_ms", "discovery_inter_target_delay_ms"])
 def test_runtime_settings_reject_invalid_delay_values(
-    tmp_path: Path, field_value: object
+    tmp_path: Path, field_value: object, field: str
 ) -> None:
     path = tmp_path / "crawler.yaml"
     path.write_text(
-        f"sites:\n  mangaone:\n    page_turn_delay_ms: {field_value!r}\n",
+        f"sites:\n  mangaone:\n    {field}: {field_value!r}\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeSettingsError, match="page_turn_delay_ms"):
+    with pytest.raises(RuntimeSettingsError, match=field):
         load_runtime_settings(path)
 
 
