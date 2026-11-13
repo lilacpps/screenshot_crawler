@@ -14,8 +14,11 @@ from screenshot_crawler.catalog import CatalogService, WorkInput
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.maintenance.hanayume_repair import (
     IdentityObservation,
+    _episode_number,
+    _normalized,
     annotate,
     export_report,
+    generate_candidates,
     list_repair_works,
     load_analysis,
     unlink,
@@ -55,12 +58,14 @@ def test_complete_history_completed_new_and_zero_writes(hanayume_repair_inputs, 
     assert len(analysis.current[0].runs) == 2
     assert analysis.summary()["新旧ZIP記録あり（旧Source数）"] == 1
     assert analysis.summary()["本文同一性証明済み"] == 0
-    edited = annotate(analysis, (inputs.old.id,), (inputs.new.id,), "mapped", "人間の確認用メモ")
+    edited = annotate(analysis, (inputs.old.id,), (inputs.new.id,), "mapped")
     assert edited.links[0].evidence == "manual"
     assert not unlink(edited, (0,)).links
     out = tmp_path / "report.json"
     export_report(edited, out)
-    assert json.loads(out.read_text("utf-8"))["body_equality_proven"] is False
+    saved = json.loads(out.read_text("utf-8"))
+    assert saved["body_equality_proven"] is False
+    assert saved["analysis"]["links"][0]["reasons"] == ["本文同一性は未証明"]
     with pytest.raises(FileExistsError):
         export_report(analysis, out)
     for path in paths:
@@ -68,7 +73,8 @@ def test_complete_history_completed_new_and_zero_writes(hanayume_repair_inputs, 
 
 
 @pytest.mark.parametrize("shape", ["split", "merge", "multiple_old_sources"])
-def test_manual_shapes_do_not_complete_pending(hanayume_repair_inputs, shape):
+@pytest.mark.parametrize("reason", ["", "確認中"])
+def test_manual_shapes_do_not_complete_pending(hanayume_repair_inputs, shape, reason):
     x = hanayume_repair_inputs
     old_ids, new_ids = [x.old.id], [x.new.id]
     if shape == "split":
@@ -84,8 +90,9 @@ def test_manual_shapes_do_not_complete_pending(hanayume_repair_inputs, shape):
     analysis = load(x)
     assert any(len(l.old_ids) > 1 or len(l.new_ids) > 1 for l in analysis.links)
     for decision in ("mapped", "hold", "reacquire"):
-        result = annotate(analysis, tuple(old_ids), tuple(new_ids), decision, "確認中")
+        result = annotate(analysis, tuple(old_ids), tuple(new_ids), decision, reason)
         assert result.links[0].shape == ("1対2" if shape == "split" else "2対1")
+        assert result.links[0].reasons == ((reason,) if reason else ()) + ("本文同一性は未証明",)
         assert all(e.item.status == "pending" for e in result.current)
         assert result.summary()["本文同一性証明済み"] == 0
 
@@ -313,14 +320,17 @@ def test_partial_manual_edit_keeps_other_candidates_and_batch_unchanged(hanayume
     assert planner.plan(site="hanayume", now=now) == before
 
 
-def test_exact_part_labels_become_three_independent_guesses(hanayume_repair_inputs):
+@pytest.mark.parametrize("label", ["scene4", "第4翼", "4.架空編 ACT.1 Example 4",
+                                 "其ノ四", "其ノ十", "其ノ二十八", "#4", "#4.5", "＃４．５",
+                                 "♭004", "♭１００", "episode.04", "ＥＰＩＳＯＤＥ．０４"])
+def test_exact_part_labels_become_three_independent_guesses(hanayume_repair_inputs, label):
     x = hanayume_repair_inputs
-    x.catalog.update_item_metadata(x.old.item_id, order_label="scene4①")
-    x.catalog.update_item_metadata(x.new.item_id, order_label="scene4①")
+    x.catalog.update_item_metadata(x.old.item_id, order_label=f"{label}①")
+    x.catalog.update_item_metadata(x.new.item_id, order_label=f"{label}①")
     pairs = {(x.old.id, x.new.id)}
     for number, part in ((2, "②"), (3, "③")):
-        old, _, _ = x.add(number, f"scene4{part}", available=False)
-        new, _, _ = x.add(106 - number, f"scene4{part}", available=True)
+        old, _, _ = x.add(number, f"{label}{part}", available=False)
+        new, _, _ = x.add(106 - number, f"{label}{part}", available=True)
         pairs.add((old.id, new.id))
     paths = (x.catalog.path, x.watchlist, x.archive)
     before = [p.read_bytes() for p in paths]
@@ -333,6 +343,67 @@ def test_exact_part_labels_become_three_independent_guesses(hanayume_repair_inpu
     assert analysis.summary()["本文同一性証明済み"] == 0
     assert all(e.item.status == "pending" for e in analysis.current)
     assert [p.read_bytes() for p in paths] == before
+
+
+@pytest.mark.parametrize("labels,part_count", [
+    (tuple(f"第{i}翼" for i in range(1, 5)), 2),
+    (tuple(f"{i}.架空編 ACT.1 Example {i}" for i in range(1, 5)), 2),
+    (("其ノ一", "其ノ二", "其ノ三", "其ノ四"), 2),
+    (("#1.5", "#2", "#2.5", "#3"), 2),
+    (("♭001", "♭002", "♭003", "♭004"), 3),
+    (("episode.01", "episode.02", "episode.03", "episode.04"), 2),
+])
+def test_merged_opening_episodes_do_not_bridge_distinct_numbers(hanayume_repair_inputs, labels, part_count):
+    x = hanayume_repair_inputs
+    x.catalog.update_item_metadata(x.old.item_id, order_label="第99話")
+    x.catalog.update_item_metadata(x.new.item_id, order_label="第99話")
+    groups = set()
+    positions = {}
+    # The first three episodes merged; the fourth retained its parts.
+    # Positions are close despite differing episode labels.
+    for episode, base in enumerate(labels, start=1):
+        old_ids, new_ids = [], []
+        for part, marker in enumerate("①②③"[:part_count]):
+            number = (episode - 1) * part_count + part + 1
+            old, _, _ = x.add(number + 10, f"{base}{marker}", available=False)
+            positions[old.id] = number
+            old_ids.append(old.id)
+            if episode == 4:
+                new, _, _ = x.add(number + 110, f"{base}{marker}", available=True)
+                positions[new.id] = number - 3 * (part_count - 1)
+                groups.add(((old.id,), (new.id,)))
+        if episode < 4:
+            new, _, _ = x.add(episode + 200, base, available=True)
+            positions[new.id] = episode
+            new_ids.append(new.id)
+            groups.add((tuple(old_ids), tuple(new_ids)))
+    analysis = load(x)
+    analysis = generate_candidates(replace(analysis, entries=tuple(
+        replace(e, source=replace(e.source, display_position=positions.get(e.source.id, 99)))
+        for e in analysis.entries)))
+    links = [link for link in analysis.links if x.old.id not in link.old_ids]
+    assert {(link.old_ids, link.new_ids) for link in links} == groups
+    assert all(link.evidence == "heuristic" and link.decision == "review" for link in links)
+    assert analysis.summary()["本文同一性証明済み"] == 0
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("其ノ一①", "1"), ("其ノ九", "9"), ("其ノ十④", "10"),
+    ("其ノ十一", "11"), ("其ノ二十", "20"), ("其ノ二十八③", "28"), ("其ノ九十九", "99"),
+    ("其ノ", None), ("其ノ〇", None), ("其ノ一二", None), ("其ノ十十", None),
+    ("其ノ百①", None), ("其ノ一百", None), ("其ノ一番外", None),
+    ("#1", "1"), ("#1.5", "1.5"), ("#2①", "2"), ("#2.5②", "2.5"),
+    ("＃８．５①", "8.5"), ("#", None), ("#1.", None), ("#1.5.2", None),
+    ("#1.5番外", None),
+    ("♭001", "001"), ("♭002③", "002"), ("♭１００①", "100"),
+    ("♭-001", None), ("♭064 sideB", None), ("♭", None), ("♭002.5", None),
+    ("episode.01", "01"), ("Episode.02②", "02"), ("ＥＰＩＳＯＤＥ．１００③", "100"),
+    ("episode.", None), ("episode.01番外", None), ("episode.-01", None),
+    ("episode.01.5", None), ("episode01", None),
+    ("episode.EX", None),
+])
+def test_episode_numbers_preserve_prefixes_kanji_decimals_and_parts(label, expected):
+    assert _episode_number(_normalized(label)) == expected
 
 
 @pytest.mark.parametrize("side,count", [("old", 2), ("new", 2), ("new", 10)])

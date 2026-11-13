@@ -168,8 +168,13 @@ class CatalogRepairDialog(QDialog):
         vertical.addWidget(sides)
         lower = QWidget()
         lower_layout = QVBoxLayout(lower)
+        instructions = QLabel("手動対応：①左右の対応する行を選択（複数はCtrl/Shift） "
+                              "②「選択した左右を対応指定」。"
+                              "選択した行全体を1グループとして下のリストに反映します。")
+        instructions.setWordWrap(True)
+        lower_layout.addWidget(instructions)
         self.reason = QLineEdit()
-        self.reason.setPlaceholderText("手動判断の理由（必須）。左右の複数行をCtrl/Shiftで選択できます")
+        self.reason.setPlaceholderText("補足メモ（任意・空欄のまま指定できます）")
         lower_layout.addWidget(self.reason)
         actions = QHBoxLayout()
         self.edit_buttons = []
@@ -187,6 +192,9 @@ class CatalogRepairDialog(QDialog):
         self.save_button.clicked.connect(self.save_report)
         actions.addWidget(self.save_button)
         lower_layout.addLayout(actions)
+        self.edit_feedback = QLabel("左右を選んで指定してください。指定結果は下のリストで確認できます。")
+        self.edit_feedback.setWordWrap(True)
+        lower_layout.addWidget(self.edit_feedback)
         self.links = _table(("対応形状", "証拠 / 判断", "旧Source", "新Source", "判定根拠"))
         self.links.setColumnWidth(1, 230)
         self.links.setColumnWidth(2, 180)
@@ -361,9 +369,16 @@ class CatalogRepairDialog(QDialog):
                                      () if decision == "retire" else self.selected_ids(self.new_table),
                                      decision, self.reason.text())
         except ValueError as exc:
+            self.edit_feedback.setText(f"指定できませんでした: {exc}")
             self.status.setText(str(exc))
             return
         self.render()
+        row = len(self.analysis.links) - 1
+        self.links.clearSelection()
+        self.links.selectRow(row)
+        self.links.scrollToItem(self.links.item(row, 0))
+        self.edit_feedback.setText(
+            f"下のリストに反映しました（{self.analysis.links[row].shape}）。選択中の行が今回の指定です。")
         self.status.setText("確認用メモを変更しました。Catalog/Batchへの適用効果はありません。")
 
     def remove_links(self):

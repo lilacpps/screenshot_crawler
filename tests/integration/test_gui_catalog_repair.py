@@ -56,16 +56,18 @@ def test_compare_manual_annotation_clear_and_export(dialog, hanayume_repair_inpu
     assert d.old_table.item(0, 4).text() == "completed"
     assert d.new_table.item(0, 4).text() == "pending"
     assert "2 ZIP / 2 Run" in d.old_table.item(0, 5).text()
-    d.old_table.selectRow(0)
-    d.new_table.selectRow(0)
-    d.edit_link("mapped")
-    assert "理由" in d.status.text()
+    before_links = d.analysis.links
+    d.edit_buttons[0].click()
+    assert "指定できませんでした" in d.edit_feedback.text()
+    assert d.analysis.links == before_links
     for decision in ("mapped", "hold", "reacquire"):
         d.old_table.selectRow(0)
         d.new_table.selectRow(0)
-        d.reason.setText("目視確認用メモ")
-        d.edit_link(decision)
+        d.reason.setText("" if decision == "mapped" else "目視確認用メモ")
+        d.edit_buttons[("mapped", "hold", "reacquire").index(decision)].click()
         assert d.analysis.links[0].decision == decision
+        assert "反映しました" in d.edit_feedback.text()
+        assert [i.row() for i in d.links.selectionModel().selectedRows()] == [0]
     d.links.selectRow(0)
     assert d.selected_ids(d.old_table) == (x.old.id,)
     assert "手動note" in d.details.toPlainText()
@@ -128,13 +130,14 @@ def test_busy_close_and_failure_recovery(dialog, monkeypatch):
     assert "endpoint unavailable" in dialog.status.text()
 
 
-def test_full_part_labels_display_as_three_separate_guesses(dialog, hanayume_repair_inputs, qt_app):
+@pytest.mark.parametrize("label", ["第4話", "其ノ四", "#4.5", "♭004", "episode.04"])
+def test_full_part_labels_display_as_three_separate_guesses(dialog, hanayume_repair_inputs, qt_app, label):
     x, d = hanayume_repair_inputs, dialog
-    x.catalog.update_item_metadata(x.old.item_id, order_label="第4話①")
-    x.catalog.update_item_metadata(x.new.item_id, order_label="第4話①")
+    x.catalog.update_item_metadata(x.old.item_id, order_label=f"{label}①")
+    x.catalog.update_item_metadata(x.new.item_id, order_label=f"{label}①")
     for number, part in ((2, "②"), (3, "③")):
-        x.add(number, f"第4話{part}", available=False)
-        x.add(number + 100, f"第4話{part}", available=True)
+        x.add(number, f"{label}{part}", available=False)
+        x.add(number + 100, f"{label}{part}", available=True)
     d.load_work()
     wait(qt_app, lambda: d.task is None)
     assert d.links.rowCount() == 3
@@ -144,6 +147,27 @@ def test_full_part_labels_display_as_three_separate_guesses(dialog, hanayume_rep
         d.links.selectRow(row)
         assert len(d.selected_ids(d.old_table)) == len(d.selected_ids(d.new_table)) == 1
     assert "ラベル・話番号で1対1推測: 3" in d.summary_label.text()
+
+
+def test_manual_result_scrolls_to_selected_group(dialog, hanayume_repair_inputs, qt_app):
+    x, d = hanayume_repair_inputs, dialog
+    for episode in range(2, 32):
+        x.add(episode, f"第{episode}話", available=False)
+        x.add(episode + 100, f"第{episode}話", available=True)
+    d.load_work()
+    wait(qt_app, lambda: d.task is None)
+    d.links.scrollToTop()
+    d.old_table.selectRow(0)
+    d.new_table.selectRow(0)
+    assert not d.reason.text()
+    d.edit_buttons[0].click()
+    row = d.links.rowCount() - 1
+    assert d.analysis.links[row].decision == "mapped"
+    assert "手動指定 / 対応メモ" in d.links.item(row, 1).text()
+    assert [i.row() for i in d.links.selectionModel().selectedRows()] == [row]
+    assert d.links.viewport().rect().intersects(d.links.visualItemRect(d.links.item(row, 0)))
+    assert d.selected_ids(d.old_table) == (x.old.id,)
+    assert d.selected_ids(d.new_table) == (x.new.id,)
 
 
 @pytest.mark.parametrize("fault", [None, "new_index", "429"])

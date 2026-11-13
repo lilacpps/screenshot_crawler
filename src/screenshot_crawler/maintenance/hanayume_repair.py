@@ -261,7 +261,36 @@ def _normalized(value: str | None) -> str:
 
 
 def _episode_number(value: str) -> str | None:
-    match = re.search(r"(?:第)?(\d+)(?:話|回|章)|(?:scene|act|chapter)(\d+)", value)
+    # A leading listing ordinal identifies the episode; an embedded ACT.1
+    # can name a story arc shared by several numbered episodes.
+    ordinal = re.match(r"(\d+)\.(?=\D)", value)
+    if ordinal:
+        return ordinal[1]
+    # Keep fractional episodes distinct from their integer neighbors and
+    # normalized circled parts: #2.5② is episode 2.5, part 2.
+    numbered = re.fullmatch(r"#(\d+(?:\.\d+)?)(?:\(\d+\))?", value)
+    if numbered:
+        return numbered[1]
+    # The flat sign is an episode prefix. Negative/special-suffix labels
+    # such as ♭-001 and ♭064sideB remain outside this numeric form.
+    flat = re.fullmatch(r"♭(\d+)(?:\(\d+\))?", value)
+    if flat:
+        return flat[1]
+    episode = re.fullmatch(r"episode\.(\d+)(?:\(\d+\))?", value)
+    if episode:
+        return episode[1]
+    # Observed 其ノ一 / 其ノ二十八 labels, optionally followed by a circled
+    # part normalized to (N). Keep this bounded to canonical 1..99 forms.
+    kanji = re.fullmatch(r"其ノ([一二三四五六七八九]?十[一二三四五六七八九]?|[一二三四五六七八九])"
+                         r"(?:\(\d+\))?", value)
+    if kanji:
+        digits = "一二三四五六七八九"
+        tens, separator, units = kanji[1].partition("十")
+        if separator:
+            return str((digits.index(tens) + 1 if tens else 1) * 10
+                       + (digits.index(units) + 1 if units else 0))
+        return str(digits.index(tens) + 1)
+    match = re.search(r"(?:第)?(\d+)(?:話|回|章|翼)|(?:scene|act|chapter)\.?([0-9]+)", value)
     return next((v for v in match.groups() if v is not None), None) if match else None
 
 
@@ -396,7 +425,7 @@ def with_observations(analysis: RepairAnalysis, observations: tuple[IdentityObse
 
 
 def annotate(analysis: RepairAnalysis, old_ids: tuple[int, ...], new_ids: tuple[int, ...],
-             decision: str, reason: str) -> RepairAnalysis:
+             decision: str, reason: str = "") -> RepairAnalysis:
     if decision not in {"mapped", "hold", "reacquire", "retire"} or not (old_ids or new_ids):
         raise ValueError("Sourceと対応・保留・再取得のいずれかを指定してください")
     if decision == "mapped" and not (old_ids and new_ids):
@@ -407,8 +436,6 @@ def annotate(analysis: RepairAnalysis, old_ids: tuple[int, ...], new_ids: tuple[
         raise ValueError("対応無しの履歴保管には旧側だけを選択してください")
     if len(set(old_ids)) != len(old_ids) or len(set(new_ids)) != len(new_ids):
         raise ValueError("Sourceの重複指定はできません")
-    if not reason.strip():
-        raise ValueError("判断理由を入力してください")
     for ids, available in ((old_ids, False), (new_ids, True)):
         for sid in ids:
             entry = next((e for e in analysis.entries if e.source.id == sid), None)
@@ -429,7 +456,8 @@ def annotate(analysis: RepairAnalysis, old_ids: tuple[int, ...], new_ids: tuple[
             remaining_new = tuple(s for s in existing.new_ids if s not in used)
             if remaining_old and remaining_new:
                 links.append(replace(existing, old_ids=remaining_old, new_ids=remaining_new))
-    link = RepairLink(old_ids, new_ids, "manual", (reason.strip(), "本文同一性は未証明"), decision)
+    reasons = ((reason.strip(),) if reason.strip() else ()) + ("本文同一性は未証明",)
+    link = RepairLink(old_ids, new_ids, "manual", reasons, decision)
     return replace(analysis, links=tuple(links) + (link,))
 
 
