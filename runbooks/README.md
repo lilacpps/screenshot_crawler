@@ -90,3 +90,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   作品URLから購入済みの巻のみFull Discovery、owned-only direct Batch、
   原画像A/B/Cの実測・不成立理由を必須とするsource-native Capture研究、
   2作品のE2Eと後工程の明示renumber（planned）。
+
+- [Work単位の完全削除（退避付き）](work-deletion/README.md) —
+  複数サイトにまたがる1作品のWatchlist/Catalog完全削除とZIP/status退避、
+  read-only preview、強制中断復旧、GUI/CLI、同work_key再登録の段階実装（planned）。
