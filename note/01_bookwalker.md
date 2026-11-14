@@ -390,15 +390,21 @@ history. Existing owned/quota/access policy still governs subsequent Batch
 eligibility; preparation does not grant access.
 
 Implementation: `scripts/prepare_recrawl.py`; examples and scope limitations:
-`docs/BOOKWALKER_RECRAWL.md`. Verification uses 80 synthetic preparation-script
-Unit cases plus the existing Batch recrawl/sidecar boundary case: 81 passed,
-0 failed/skipped, with existing pytest-asyncio deprecation warnings. This includes
+`docs/BOOKWALKER_RECRAWL.md`. Verification on 2026-11-15 uses 100 synthetic preparation-script
+Unit cases plus the existing Batch recrawl/sidecar boundary case: 101 passed,
+0 failed/skipped, with existing pytest-asyncio deprecation warnings and a pytest
+cache write-permission warning. Tests use workspace-local
+`--basetemp .tmp/pytest-recrawl-head-20261115`. This includes
 the pre-existing site policies and apply workflow.
 Ruff (`scripts/prepare_recrawl.py src tests`) and diff checks passed.
 No real ZIP/Catalog scan or operational apply was performed for this policy
 change. The policy is script-local, so browser Integration/Research/full pytest
 were not rerun. Synthetic tests cover opening PNG recrawl/apply, the tail
 boundary, short archives, numbering, allowed/fallback counts and force.
+The opening-page regression matrix explicitly covers each saved-page number 1
+through 10 outside the last five, including synthetic Catalog scan/apply that
+backs up the archive and returns the Item to pending without `--force`. A reversed
+ZIP with PNGs at all ten opening positions counts all ten as fallback.
 No real Catalog apply, browser/live recrawl, Research/Probe or full repository
 suite is required for this script-policy integration; capture code is unchanged.
 The previously recorded 330-image source121 inventory had PNGs at saved pages

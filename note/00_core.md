@@ -3231,8 +3231,9 @@ MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback
 mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
 mapping was added on 2026-10-19 after the fractional-destination capture correction.
 BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback.
-First-ten-saved-page and last-five-saved-page PNGs are accepted when the archive also contains
-at least one JPEG companion; other body PNGs remain recrawl candidates. This is
+Only last-five-saved-page PNGs are accepted when the archive also contains
+at least one JPEG companion; opening PNGs outside that tail remain recrawl candidates.
+WebP is also a known BookWalker fallback and has no positional exception. This is
 an extension-based recrawl policy, not proof that every PNG has reduced
 fidelity: a verified native-size PNG retained after codec failure is also
 classified as a fallback format.
@@ -3276,20 +3277,19 @@ inspection; the prior sidecar is not restored over it. A foreign, malformed, or
 unprovable status remains a hard stop for operator review.
 
 BookWalker usage: `python scripts/prepare_recrawl.py --site bookwalker --catalog
-catalog.sqlite --show-all` performs a read-only scan. As of 2026-11-02, the
-PNGs at saved-page numbers 1 through 10 and the five highest saved-page numbers are
-allowed fallbacks when at least one JPEG member exists. Head/tail range acceptance
+catalog.sqlite --show-all` performs a read-only scan. As of 2026-11-04, only
+PNGs at the five highest saved-page numbers are
+allowed fallbacks when at least one JPEG member exists. Tail range acceptance
 requires all JPEG/PNG members to use unique canonical `page-NNNN` names
 (at least four digits, with normal zero padding); ZIP member order is ignored.
-The existing standalone cover exception independently requires a unique
-`page-0001` stem, even when other members use old names.
+There is no first-ten or standalone-cover exception.
 Allowed positions are counted once in `allowed_fallback_count`, including when
 other body PNGs remain. An archive with only these allowed PNGs and JPEGs is
 `PREFERRED_ONLY`, has `fallback_count=0`, and is excluded from apply unless
 explicit Item IDs plus `--force` request a recapture. Other body
 PNGs, PNG-only archives, nonstandard naming, duplicate page numbers and
-unexpected formats remain problems outside that standalone cover exception.
-The first ten mean saved-page numbers 1 through 10, not the first ten PNGs.
+unexpected formats remain problems. Opening PNGs in a short archive can still
+receive the tail exception when they are among the last five saved images.
 The last five positions mean the last five
 saved images, not the last five PNGs or the viewer's terminal counter.
 
@@ -3315,17 +3315,18 @@ are outside scope. `--apply` explicitly uses the existing backup/Artifact/
 pending workflow and preserves source grants and historical runs. Batch access
 policy still decides whether a pending item is readable. Details and examples:
 `docs/BOOKWALKER_RECRAWL.md` and `note/01_bookwalker.md`.
-Validation for the head-ten/tail-five policy: all 74 preparation-script Unit cases passed
-(0 failed/skipped; one existing pytest-asyncio deprecation warning), including
-all existing site policies and synthetic apply. Ruff (`scripts/prepare_recrawl.py
-src tests`) and diff checks passed. No browser Integration, Research/Probe,
-real Catalog apply, live recrawl or full repository suite was run because only
-the archive-policy script and its documentation changed.
-The 11 Youjitsu archives were inspected read-only: all PNGs occur in head/last-five
-positions, reducing format-policy candidates from eight to zero. ZIPs and Catalog
-were not changed. Boundaries at page 10/11, head/tail overlap, numeric ZIP-order
-independence, legacy-cover compatibility, nonstandard/duplicate names, PNG-only
-archives and explicit forced selection are covered by the script tests.
+Synthetic preparation-script tests cover each opening saved-page number 1 through
+10 as a recrawl/apply candidate outside the last five, plus the tail boundary,
+short-archive overlap, numeric ZIP-order independence, nonstandard/duplicate names,
+PNG-only archives and explicit forced selection. They also verify that ten opening
+PNGs are all counted as fallback even when ZIP order is reversed. No operational
+Catalog apply or live recrawl is part of this verification; capture behavior is unchanged.
+2026-11-15 verification: preparation-script Unit tests and the existing Batch
+recrawl/sidecar boundary case passed (101 passed, 0 skipped), using workspace-local
+`--basetemp .tmp/pytest-recrawl-head-20261115`. Ruff (`scripts/prepare_recrawl.py
+src tests`) and scoped diff checks passed. Existing pytest-asyncio deprecations
+and a pytest cache write-permission warning were reported. Browser Integration,
+Research/Probe and full pytest were not run for this test/documentation-only change.
 
 Hanayume usage: `python scripts/prepare_recrawl.py --site hanayume --work "暁のヨナ"
 --catalog catalog.sqlite --ignore-missing` is read-only; adding `--apply` moves the selected
@@ -3469,7 +3470,7 @@ preservation. No real site or CDP was accessed, and no operational Catalog,
 Watchlist, Books, quota, or ticket input was used; all fixtures were synthetic.
 ## BookWalker PNG recrawl and durable diagnostics (2026-10-30)
 
-BookWalker archive inspection accepts first-ten-saved-page and last-five-saved-page PNGs when
+BookWalker archive inspection accepts only last-five-saved-page PNGs when
 the same archive has at least one JPEG companion, under the canonical naming
 rules above. An archive with only these PNGs and JPEGs is `PREFERRED_ONLY` and
 excluded from recrawl/apply by default; explicit `--item-id` selection with
