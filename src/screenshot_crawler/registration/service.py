@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from screenshot_crawler.catalog.job_lock import CatalogJobLock
+from screenshot_crawler.maintenance.work_deletion_gate import assert_work_deletion_gate_clear
 from screenshot_crawler.management.catalog_reader import (
     CatalogInventoryReader,
     catalog_snapshot_identity,
@@ -145,7 +146,9 @@ class RegistrationService:
     def save(self, batch: BatchRegistrationDraft, preview: RegistrationPreview) -> RegistrationSaveResult:
         if draft_identity(batch) != preview.draft_identity:
             raise ValueError("プレビュー後に下書き/選択が変わりました")
+        assert_work_deletion_gate_clear(self.catalog)
         with CatalogJobLock(self.catalog):
+            assert_work_deletion_gate_clear(self.catalog)
             # No browser/network or Catalog write occurs inside either lock.
             fresh = self.preview(batch, data=CatalogInventoryReader().read(self.catalog))
             if fresh != preview:

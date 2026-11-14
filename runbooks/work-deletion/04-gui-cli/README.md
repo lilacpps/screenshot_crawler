@@ -1,6 +1,6 @@
 # Stage 04 — CLI / Windows GUI / E2E / ドキュメント
 
-**状態:** PLANNED / NOT STARTED。前提: Stage00–03のゲート完了、破壊的Applyの独立review承認。
+**状態:** IMPLEMENTED / INDEPENDENT REVIEW BLOCKING-0 APPROVED (2026-11-14)。Stage04のCLI/GUI surfaceは共通Serviceへ接続済み。実データ操作は行わず、破壊的操作の検証は隔離fixtureに限定した。Full suiteはWindows `pytest_asyncio`/IOCP teardown timeoutで完走せず、最終検証制限として記録する。
 
 ## 目的
 
@@ -26,6 +26,7 @@ python -m screenshot_crawler.cli work delete recover --operation-id <id> --apply
 - Qt main threadでSQLite backup/hash/renameをしない。既存QRunnable/Signalを参照し、操作中のreload/別ジョブ開始/終了を安全に制御。処理中にUIを閉じた場合の結果は実manifestで追跡し、成功推定しない。
 - 終了状態をDONE / BLOCKED（未変更）/ RECOVERY_REQUIRED（手動復旧要）として表示。DONE後はInventoryを更新し、Work行が消える。error時は最新版読み直しと復旧導線を表示。
 - Workのアーカイブ/非表示と削除は別操作。トラッシュの自動削除、GUI復元は設けない。
+- Previewは完全Catalog snapshotのfingerprintを維持したままID辞書join、library/status一回索引、同一preview内のstable file fact再利用を行う。候補走査とSHA chunk読取はQt非依存cancel tokenを確認し、Plan/token公開前のキャンセルはno-writeで終わる。GUI progressはqueued/throttledで段階・処理単位・経過秒を表示し、Apply中のキャンセル/closeは受け付けない。
 
 ## E2E fixtureシナリオ（外部サイト・実作品不要）
 
@@ -45,9 +46,9 @@ python -m screenshot_crawler.cli work delete recover --operation-id <id> --apply
 
 ## Exit / 最終レビュー
 
-- [ ] target/affected Catalog・Watchlist・maintenance・management・GUI testsが全て通る。
-- [ ] 多領域の変更なので`docs/TEST_STRATEGY.md`に従いfull suite実行を検討し、実施または未実施理由を記録。`ruff check src tests`。
-- [ ] 実サイト/live verificationは不要。不要な外部アクセスや権利消費がない。
-- [ ] 独立レビューのBLOCKING 0。削除→同key再登録→Full→Batch E2E通過。
-- [ ] docs/GUI_README.mdの操作・復旧手順、note/00_core.mdの現行実装スナップショット、PROGRESSが同期。
-- [ ] 変更したコード、テスト件数/skips/未実行カテゴリ、退避/復旧契約、未対応ケースを報告。
+- [x] Isolated affected CLI/maintenance/GUI suite: **313 passed, 442 warnings**; GUI subset: **46 passed, 1 warning**; Discovery→delete→same-key Full→package/Batch exact-path E2E: **1 passed, 10 warnings**. Root namespace and user config hashes were unchanged before/after.
+- [x] Full suite was attempted in an isolated CWD with a 120-second per-test timeout. Full2 was interrupted at approximately 5% after no output at `test_comicfuz_native_nonblank_1`; Full3 reached approximately 5% and emitted a Windows IOCP/`pytest_asyncio` teardown timeout stack without a suite summary. Both are recorded as incomplete, not PASS. The unchanged ComicFuz parameterized fixture separately passed `[False]` and `[True]` (**2 passed, 5 warnings, 11.37s**); this does not prove a causal baseline. `ruff check src tests` passes.
+- [x] 実サイト/live verificationは不要。不要な外部アクセスや権利消費がない。
+- [x] 独立 Stage 04 review BLOCKING 0. The isolated deletion→same-key registration→Full→Batch E2E itself passes; full-suite incompletion remains a documented limitation.
+- [x] docs/GUI_README.mdの操作・復旧手順、note/00_core.mdの現行実装スナップショット、PROGRESSを実装と同期。
+- [x] 変更したコード、テスト件数/skips/未実行カテゴリ、退避/復旧契約、未対応ケースを `PROGRESS.md` と `note/00_core.md` に記録。

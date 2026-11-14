@@ -1,6 +1,6 @@
 # Stage 02 — 退避・DB/YAML削除（CLI/GUI非公開）
 
-**状態:** PLANNED / NOT STARTED。前提: Stage01のread-only Planと所有証拠が独立レビュー承認済み。
+**状態:** IMPLEMENTED / INDEPENDENT REVIEW APPROVED。前提: Stage01のread-only Planと所有証拠が独立レビュー承認済み。通常のユーザー向けApplyはStage04まで非公開。
 
 ## 目的
 
@@ -39,3 +39,32 @@
 - [ ] Stage02の機能をGUI・CLIの破壊的コマンドで公開しない。独立レビューとPROGRESS記録を完了。
 
 **注意:** このStageのテストだけではSIGKILL/電源断の回復を保証しない。Stage03必須。
+- Stage 02 implementation record (2026-11-14): `WorkDeletionPreviewService.apply(plan_or_token)` is implemented and is now used by the Stage 04 CLI/GUI surfaces. It acquires the separate admission lock, then Catalog and Watchlist locks, re-previews and adopts the fresh locked plan, creates an exclusive fsync manifest and verified Catalog backup, moves primary artifact/status files with no-clobber same-volume rename, deletes the exact Work graph in one FK-checked CAS transaction, and atomically patches all Watchlist targets plus archived state. Pre-commit exceptions restore files and mark `ROLLED_BACK`; uncertain/post-commit failures preserve evidence and mark `RECOVERY_REQUIRED`. Isolated Stage 02 tests cover normal, Catalog-only, Watchlist-only, stale/forged plan, comments/CRLF, full dependent rows, backup/move/DB/YAML failure injection, and non-target protection.
+- BLOCKING7 follow-up (2026-11-14): canonical same-instance DTO cache is mandatory, paths/namespace are token-bound, Watchlist original/after bytes are durably snapshotted, each file has fsync INTENT/VERIFIED checkpoints, and `active.json` reserves the Catalog namespace before destructive work. Source/destination strong identity is recorded and checked through move/restore/final verification; rollback observes every intent and escalates ambiguity to `RECOVERY_REQUIRED`. DONE performs final target/non-target invariants. Final isolated suite: 32 passed; affected suite: 262 passed; ruff/diff-check pass. Stage 02 independent review is approved; public entry points are covered by Stage 04.
+-
+## Stage 02 implementation status (2026-11-14)
+
+The shared Apply path is implemented and exposed through the Stage 04 CLI/GUI
+surfaces after the Stage 03 recovery gate. The destructive sequence is admission lock, Catalog
+lock, Watchlist lock; a canonical fresh preview is the sole authority. The
+namespace `active.json` reservation is durably written before the operation
+manifest, so a crash in that interval is still gated. Watchlist disappearance
+after replacement is treated as unknown/recovery-required when the original
+Watchlist or target/archive state was present; it can never be reported DONE.
+
+Snapshots, manifest replacements, active-marker removal, and file renames use
+best-effort file and directory `fsync` barriers. Directory fsync is unavailable
+on some Windows/filesystem combinations, and this is not a proof against
+physical power loss. True process-kill and restart recovery remain Stage 03
+acceptance work. The latest isolated Stage 02 suite is 34 passed (2 warnings);
+the affected suite and independent review are still required before Stage 03.
+
+Relative Artifact locators and status `archive_path` values retain the
+existing process-CWD resolution semantics used by archive maintenance and
+Batch. A custom Catalog parent is never used as an implicit new base; raw
+traversal and reparse checks remain fail-closed before resolution.
+
+The trash operation directory is reserved with exclusive creation before any
+Watchlist snapshot or manifest write. A name race with an unrelated existing
+directory stops Apply without touching that directory or creating an active
+marker.

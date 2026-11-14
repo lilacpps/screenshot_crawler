@@ -20,6 +20,66 @@ screenshot-crawler-gui --catalog catalog.sqlite --watchlist watchlist.yaml --run
 ロックファイルの削除や管理DBの変更は不要です。ジョブID付きで「登録済み」と表示された場合は、
 再度登録せずジョブ一覧で状態を確認してください。失敗時に成功メッセージは表示しません。
 
+## Work完全削除（Stage 04）
+
+終了済みジョブの一部成功（partial）や過去のエラーログは、作品削除の停止理由になりません。
+worker PID・識別token・開始日時が全て未登録のqueued予約は、古いものを含めて削除の停止理由に
+しません。予約行はそのまま残ります。起動情報がある待機・準備・実行中ジョブは停止理由に
+件数と次の操作を表示します。中断扱いのjobは、
+実workerの終了を確認できれば履歴として扱い、動作中または終了確認不能なら停止します。
+管理DBや過去ログを削除して回避する必要はありません。
+
+status JSONは全件を読みません。`Books/<相対path>.zip`に対する
+`crawl-status/<同じ相対path>.json`だけを直接確認します。候補がなければ従来どおりZIPのみを
+退避でき、候補があれば本文のarchive_path・hash・所有とfile identityを検証して一緒に退避します。
+壊れた候補・権限不足・不正なpath等は停止します。別名・別配置の古いJSONは探索せず残します。
+管理ジョブログも退避対象外です。ジョブ一覧には最新100件の表示制限があるため、管理DB全体の
+未開始予約数と画面の表示数は一致保証しません。この変更は一覧や履歴を削除する処理ではありません。
+
+プレビューはCatalog照合、library/status候補の列挙、status JSON読取、ZIP/status確認の
+段階・件数・経過時間を表示します。経過時間は重いファイル読取中も更新します。
+プレビュー中の「Cancel」は読み取り処理を協調的に中止し、削除可能な結果を破棄します。
+Esc／閉じる操作は中止完了後に画面を閉じます。削除実行中のCancel／Esc／閉じる操作は
+拒否し、既存のmanifestによる復旧手順を維持します。起動済みのGUIには変更が自動反映
+されないため、更新後はGUIを起動し直してください。
+
+作品ビューのWork行を右クリックし、「作品を削除…」を選びます。別ダイアログで、
+正確な`work_key`/Work ID、全site/key、Item/Run/Artifact数、ZIP件数と容量、
+固定されたLibrary/status/trash root、blockerを確認します。プレビュー中はCatalog、
+Watchlist、ZIP/status、管理DBを書き換えません。確認チェックを付けるまで削除ボタンは
+無効です。処理はQt workerで実行され、画面を閉じてもmanifestを成功扱いにせず、完了後は
+Inventoryを再読込します。
+
+CLIでも同じServiceを使用します（CDP、ネットワーク、Quota消費はありません）。既定rootは
+既存packagingと同じ`output/Books`・`output/crawl-status`、退避先は両者の外側の
+`output/trash/work-deletion`です。custom rootは明示指定してください。
+
+```powershell
+python -m screenshot_crawler.cli work delete --work-key KEY --dry-run --json
+python -m screenshot_crawler.cli work delete --work-key KEY --apply --json
+python -m screenshot_crawler.cli work delete recover --operation-id ID --dry-run --json
+python -m screenshot_crawler.cli work delete bind --catalog catalog.sqlite --management output/management/management.sqlite
+```
+
+`BLOCKED`は未変更、`RECOVERY_REQUIRED`はmanifestを保持した復旧待ち、`DONE`だけが
+削除完了です。管理DBの初回登録は`bind`で全既知storeを明示してsealします。GUI/CLIは
+実Catalogへの試験削除を行わず、障害試験は隔離fixtureのみで実施します。
+
+プレビュー中はCatalog照合、管理ジョブ照合、library/status索引、ZIP/status確認の段階と、
+処理単位・経過秒を表示します。Cancel/Esc/閉じる操作はプレビューだけを協調キャンセルし、
+workerの終了を待ってから変更なしで画面を閉じます。Apply開始後はキャンセルや閉じる操作を
+受け付けず、manifestを根拠に完了または復旧待ちを確認します。
+
+復旧は同じCatalog identityを明示し、まずdry-runで診断してから、確認済みの
+`--operation-id`だけを `recover --apply` に渡します。custom Catalog/Watchlist/trashは
+`--catalog`・`--watchlist`・`--trash-root`、全既知管理DBは`--management`の複数指定で
+明示します。管理DBが未作成・未sealedの場合、previewは暗黙初期化せずBLOCKEDになるため、
+隔離環境でschemaを作成し `work delete bind --catalog ... --management ...` を実行してから
+再previewしてください。WAL/sidecar、同一volumeでない退避先、Windowsのno-clobber
+renameを満たさない環境、manifest不在・改変状態は自動復旧せず`RECOVERY_REQUIRED`として
+manifestを保全し、手動確認を要求します。Apply中にGUIを閉じる操作は拒否（busyのまま
+待機）し、強制終了時は成功と推定せず、再起動後にCLI dry-run recoveryでmanifestを診断します。
+
 ## 花とゆめ＋のCatalog修復（Stage 01・読み取り専用）
 
 修復適用後の通常一覧では、現行keyとは別に「履歴保管（旧話）」と「移行済み旧ID（参照用）」を表示します。

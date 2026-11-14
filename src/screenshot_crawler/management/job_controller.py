@@ -15,6 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
+from screenshot_crawler.maintenance.work_deletion_gate import (
+    assert_work_deletion_gate_clear,
+    register_management_store,
+    work_deletion_admission_lock,
+)
 from screenshot_crawler.management.execution import JobExecutionRequest, execution_request_payload
 from screenshot_crawler.management.jobs import (
     ACTIVE_JOB_STATES,
@@ -257,9 +262,17 @@ class JobController:
         gate_path = self.store.job_dir(job_id) / "start.gate"
         self._write_gate(gate_path, "wait")
         request = self._requests.get(job_id)
-        request_payload = (
-            execution_request_payload(request) if request is not None else json.loads(row["request_json"])
-        )
+        persisted_payload = json.loads(row["request_json"])
+        request_payload = execution_request_payload(request) if request is not None else persisted_payload
+        if isinstance(persisted_payload, dict) and persisted_payload.get("catalog_path"):
+            # The durable request is authoritative; a cached DTO may have
+            # omitted the path or outlived its original working directory.
+            request_payload["catalog_path"] = persisted_payload["catalog_path"]
+        raw_catalog_path = request_payload.get("catalog_path") or self.store.catalog_path or Path("catalog.sqlite").resolve(strict=False)
+        catalog_path = Path(str(raw_catalog_path)).resolve(strict=False)
+        with work_deletion_admission_lock(catalog_path):
+            assert_work_deletion_gate_clear(catalog_path)
+            register_management_store(catalog_path, self.store.path)
         explicit_endpoint = request.cdp_endpoint if request is not None else None
         request_payload["cdp_endpoint"] = None
         request_path.write_text(json.dumps(request_payload, ensure_ascii=False), encoding="utf-8")

@@ -1,5 +1,19 @@
 # Design Decisions
 
+## Work削除の管理ジョブ確認は「将来の書込み競合」に限定（2026-11-15）
+
+終了済みpartialを未知状態と誤判定し、過去の中断/監督エラーだけで永久に削除を止める挙動を
+修正する。通常終了状態はmanagement.jobsの定義を共用し、過去summary/logは読まず、Planを
+無効化しない。interruptedは無条件許可せず、identity/token/PID/OS start identityで終了を
+証明する。証明不能・live workerと起動情報があるqueued/planning/runningは排他契約で止める。
+worker_pid/worker_start_token/started_atが全て未登録のqueuedは、ageに関係なく未開始予約として
+除外する。workerのadmission/start gateとCatalog lockを維持し、claim raceでも削除中に書込めない
+ことを検証する。管理DB/logの削除、実processへのsignal、ジョブ履歴の書換えは不要。
+
+ユーザー指示により、status全走査も廃止する。packagingがZIPと同じ相対pathへstatusを保存する
+規則を使い、その候補だけを検証・退避する。別配置・別名の歴史的JSONは残し、その全alias検出は
+保証しない。対象ZIPの全Artifact所有とroot/hash/identity、commit/復旧は引き続き検証する。
+
 ## D-001 Pythonを採用
 
 ### 決定
@@ -836,3 +850,16 @@ Books-historyへ移動し、同pathの全Artifact locatorを更新する。現�
 既存移動先を上書きしない。非対応filesystemではcopy/deleteへ暗黙fallbackしない。
 DB/filesystemは一括atomicではないためverified backupとpersistent journalを先行し、通常例外を復元して検証する。
 強制終了・commit状態不明・復元失敗はRECOVERY_REQUIREDとし、未解決journalがある間はapplyしない。
+## Work単位完全削除の公開境界（2026-11-14）
+
+Stage04で、CLIとWindows GUIは同じ `WorkDeletionPreviewService` のPlan/tokenを
+authorityとして使う。CLIはJSON dry-run/applyと明示的なrecover/bindを提供し、GUIは
+Work行のコンテキストメニューから隔離QRunnableダイアログを開く。既存Discovery・
+Batch・Captureの意味は変更せず、preview/applyはCatalog identity、Watchlist revision、
+管理DB binding、全依存ID、Artifactの強いfile identity、manifestを再検証する。
+
+既定の削除rootは既存packagingと同じ `output/Books` / `output/crawl-status` と、両者の
+外側の `output/trash/work-deletion`。実データへのfallbackは禁止し、テストでは全pathを
+tmpへ固定する。previewは無書込、confirmationなしのApplyは禁止、未知状態や途中失敗は
+BLOCKED/RECOVERY_REQUIREDとして非成功終了にする。実サイト・実Catalog・実Watchlist・
+実ZIPの検証はこのStageの受入条件に含めない。

@@ -10,6 +10,7 @@ venv/
 
 # Runtime output
 output/
+**/.work-deletion/
 diagnostics/
 state/
 catalog.sqlite

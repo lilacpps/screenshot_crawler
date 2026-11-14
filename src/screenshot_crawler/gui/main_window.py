@@ -63,6 +63,7 @@ from .model import (
 )
 from .watchlist_editor import WatchlistEditorPage
 from .work_archive import WorkArchiveSaveWorker
+from .work_deletion import WorkDeletionDialog
 
 LOGGER = logging.getLogger(__name__)
 
@@ -224,6 +225,7 @@ class MainWindow(QMainWindow):
         self._pending_editor_full: str | None = None
         self._pending_work_full: tuple | None = None
         self._work_editor = None
+        self._work_deletion_dialog: WorkDeletionDialog | None = None
         self._registration_editor = None
         self._session_job_ids: list[str] = []
         self._monitor_followed_active_id: str | None = None
@@ -520,6 +522,7 @@ class MainWindow(QMainWindow):
 
     def _discovery_busy(self) -> bool:
         return (self._discovery_save_worker is not None or self._archive_save_worker is not None
+                or (self._work_deletion_dialog is not None and self._work_deletion_dialog.busy)
                 or self._discovery_refresh)
 
     def _archive_context_menu(self, index):
@@ -535,6 +538,11 @@ class MainWindow(QMainWindow):
         action.setEnabled(not reason)
         action.setToolTip(reason or "同じwork_keyの全登録に適用します。Discovery設定は変わりません。")
         action.triggered.connect(lambda: self._set_work_archived(node.work_key, not archived))
+        delete_action = menu.addAction("作品を削除…")
+        delete_action.setObjectName("delete_work_action")
+        delete_action.setEnabled(not reason and not self._discovery_busy())
+        delete_action.setToolTip(reason or "ZIP/statusを退避して、このWorkの登録を完全削除します")
+        delete_action.triggered.connect(lambda: self._open_work_deletion(node.work_key))
         return menu
 
     def _show_archive_context_menu(self, position) -> None:
@@ -551,7 +559,10 @@ class MainWindow(QMainWindow):
             return
         if (work_key in snapshot.archived_work_keys) == archived:
             return
-        worker = WorkArchiveSaveWorker(self.watchlist_path, work_key, archived, snapshot.watchlist_revision)
+        worker = WorkArchiveSaveWorker(
+            self.watchlist_path, work_key, archived, snapshot.watchlist_revision,
+            self.catalog_path,
+        )
         self._archive_save_worker = worker
         self._discovery_notice = ""
         self.error_label.clear()
@@ -561,6 +572,53 @@ class MainWindow(QMainWindow):
         title = next(key.title or key.label for key in snapshot.keys if key.work_key == work_key)
         self.statusBar().showMessage(f"{title}: アーカイブ設定を保存中…")
         self.thread_pool.start(worker)
+
+    def _open_work_deletion(self, work_key: str) -> None:
+        reason = self._discovery_block_reason()
+        if reason:
+            self.error_label.setText(reason)
+            return
+        if self._work_deletion_dialog is not None and self._work_deletion_dialog.isVisible():
+            self._work_deletion_dialog.raise_()
+            self._work_deletion_dialog.activateWindow()
+            return
+        dialog = WorkDeletionDialog(
+            work_key,
+            catalog_path=Path(self.catalog_path),
+            watchlist_path=Path(self.watchlist_path),
+            management_paths=(Path(self.management_path),),
+            library_root=Path("output/Books"),
+            status_root=Path("output/crawl-status"),
+            trash_root=Path("output/trash/work-deletion"),
+            parent=self,
+        )
+        self._work_deletion_dialog = dialog
+        dialog.completed.connect(self._work_deletion_completed, Qt.ConnectionType.QueuedConnection)
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._work_deletion_dialog_finished(current),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @Slot(object)
+    def _work_deletion_completed(self, result: object) -> None:
+        status = getattr(result, "status", "UNKNOWN")
+        if status == "DONE":
+            self.statusBar().showMessage("作品の削除が完了しました。再読込しています…")
+            self.reload()
+        else:
+            self.error_label.setText(f"作品削除結果: {status}")
+
+    def _work_deletion_dialog_finished(self, dialog: WorkDeletionDialog) -> None:
+        if not dialog.thread_pool.waitForDone(0):
+            QTimer.singleShot(10, dialog, lambda: self._work_deletion_dialog_finished(dialog))
+            return
+        if self._work_deletion_dialog is dialog:
+            self._work_deletion_dialog = None
+            self._refresh_discovery_controls()
+        dialog.deleteLater()
 
     @Slot(object)
     def _archive_saved(self, document) -> None:

@@ -1,6 +1,6 @@
 # Stage 03 — 強制中断・再開・安全な公開ゲート
 
-**状態:** PLANNED / NOT STARTED。前提: Stage02のApplyとbackup/manifestの状態契約。CLI/GUI公開は本Stage完了後。
+**状態:** IMPLEMENTED / INDEPENDENT REVIEW APPROVED (BLOCKING-0, 2026-11-14)。前提: Stage02のApplyとbackup/manifestの状態契約。通常の削除CLI/GUI公開はStage04の独立review完了まで保留。
 
 ## 目的
 
@@ -40,17 +40,56 @@ DB commit後の失敗 → RECOVERY_REQUIRED → verified roll-forward → DONE
 
 ## Fault injection / テスト
 
-- [ ] ファイル移動前intent直後、rename後状態記録直前、複数ファイル中間、バックアップ完了直後でprocess kill相当を再現。
-- [ ] DB commit前/中/直後（manifestは前phase）、Watchlist atomic replace前/直後、DONE記録前にkill相当を再現。
-- [ ] 2回recoverしても追加の削除・上書きが起きず、同一最終結果（idempotency）。
-- [ ] 同じpathに他WorkのZIPが作られた場合や元/退避両方にファイルがある場合は自動復旧禁止。
-- [ ] 管理対象ジョブがある/終了未確認、Lock競合、Catalog/Watchlist外部変更があると安全停止。
-- [ ] Pending operationが残るCatalogで通常Batch/Full/再登録/削除が止まる。復旧後には解除。
-- [ ] すべて隔離したSQLite・ZIPで実施し、本番実作品には触れない。
-- [ ] 適切なテスト結果・未回収問題をPROGRESSへ記録。独立レビューBLOCKING 0でStage04へ。
+- [x] ファイル移動前intent直後、rename後状態記録直前、複数ファイル中間、バックアップ完了直後でprocess kill相当を再現（fault matrix）。
+- [x] DB commit前/中/直後（manifestは前phase）、Watchlist atomic replace前/直後、DONE記録前にkill相当を再現。hot-journalの実DB中断も隔離fixtureで確認。
+- [x] 2回recoverしても追加の削除・上書きが起きず、同一最終結果（idempotency）。
+- [x] 同じpathに他WorkのZIPが作られた場合や元/退避両方にファイルがある場合は自動復旧禁止。
+- [x] 管理対象ジョブがある/終了未確認、Lock競合、Catalog/Watchlist外部変更があると安全停止。
+- [x] Pending operationが残るCatalogで通常Batch/Full/再登録/削除が止まる。復旧後には解除。
+- [x] すべて隔離したSQLite・ZIPで実施し、本番実作品には触れない。work-deletion targeted **60 passed, 2 warnings**、GUI Watchlist editorとの合同実行 **95 passed, 2 warnings**、affected **202 passed, 434 warnings**、ruff PASS。
+- [ ] 独立レビューBLOCKING 0。承認後にのみStage04へ進む。
 
 ## Exit
 
 - 未完了manifestの診断と復旧CLIが動作。
 - in-process例外だけでなくprocess restart境界のテストが成立。
 - **初めて**ユーザー向けApplyを有効にしてよい（GUI統合自体はStage04）。
+-
+## Stage 03 implementation status (2026-11-14)
+
+Independent review follow-up remains in progress. Recovery is implemented but
+Stage 03 independent review is approved (BLOCKING-0). Stage 04 CLI/GUI exposure
+is implemented in the companion runbook and remains subject to its independent
+review and final acceptance evidence.
+The read-only recovery path rejects SQLite WAL/header/sidecar and hot-journal
+ambiguity without writing; explicit apply may let SQLite perform native
+hot-journal rollback under the Catalog lock. Manifests require canonical
+Catalog/Watchlist/namespace bindings and verified backup facts. Catalog
+deletion also compares the complete non-target logical fingerprint inside the
+same transaction before commit, so an injected mutation of another Work
+rolls back rather than becoming a post-commit recovery case. Unknown Catalog
+tables/columns fail closed.
+
+The explicit service/CLI recovery path is implemented: `work delete recover`
+supports dry-run diagnosis and verified rollback/roll-forward, while
+`work delete bind` performs an operator-declared, read-only management-store
+bootstrap with CAS and sealed complete-set semantics. Recovery re-reads and
+validates the manifest under admission→Catalog→Watchlist locks, checks all
+bound management stores, verifies Catalog logical before/after rows, exact
+Watchlist bytes, and every file's size/SHA/strong identity. Mixed per-file
+states may be rolled back only when every individual side is verified;
+ambiguous/tampered state remains `RECOVERY_REQUIRED`.
+
+The runtime gate is connected to Discovery, registration, Batch execution, and
+JobStore enqueue when the request carries its effective Catalog path. The gate
+is checked again after the Catalog lock to close the TOCTOU window; normal
+queue registration during an active worker remains permitted. True subprocess
+`os._exit` recovery, manifestless active reservation diagnosis, idempotent
+recovery, and isolated binding/gate tests are covered. Physical power-loss
+durability remains unverified; normal destructive CLI/GUI Apply is still
+deferred to Stage 04.
+
+Preview also fails closed for a Catalog Artifact marked `missing` or `deleted`
+when its recorded ZIP locator, or the recorded status stem, still exists on
+disk. The implementation never infers a replacement filename; a genuine
+absence remains eligible for the existing manual/missing-artifact contract.

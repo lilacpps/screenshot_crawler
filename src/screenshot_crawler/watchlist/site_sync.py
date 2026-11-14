@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict, dataclass
 
 from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.maintenance.work_deletion_gate import assert_work_deletion_gate_clear
 from screenshot_crawler.watchlist.fingerprints import work_scope_fingerprint
 from screenshot_crawler.watchlist.reconcile import (
     ScopeReconciler,
@@ -132,7 +133,9 @@ class ScopeSiteSyncService:
         active_work_key: str | None = None
         stage = "preflight"
         try:
+            assert_work_deletion_gate_clear(self.catalog.path)
             with self.catalog.job_lock():
+                assert_work_deletion_gate_clear(self.catalog.path)
                 current = self.preview_site(preview.site)
                 stale_reason = self._preflight_error(preview, current)
                 if stale_reason is not None:

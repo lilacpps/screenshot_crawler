@@ -97,6 +97,60 @@ failed attempt is retained, not a monolithic pass. Operational stores were not
 test stores. Details/source hashes/review are recorded separately in PROGRESS.
 
 
+## Work deletion (Stage 04, 2026-11-14)
+
+Work deletion is implemented as a common, Qt-free `WorkDeletionPreviewService`
+surface with explicit CLI and Windows Qt entry points. `work delete --work-key`
+supports JSON dry-run and apply; `recover` and `bind` remain explicit
+subcommands. The plan reports authoritative Work title, all `(site,
+external_id)` keys, complete graph counts, ZIP/byte totals, roots, blockers,
+warnings, operation ID and manifest. Non-ready or uncertain operations are
+blocked/nonzero; no browser, quota, or live-site access is involved.
+
+The archive Work context menu opens a separate QRunnable-backed dialog. Preview
+is read-only and confirmation is required before Apply. Paths are resolved to
+absolute values when the owner/worker is constructed, so a later CWD change
+cannot redirect the operation. GUI reload/close/edit/job actions remain busy-
+guarded, and a successful DONE result reloads Inventory so the Work row
+disappears. Defaults match the existing isolated packaging roots
+(`output/Books`, `output/crawl-status`, `output/trash/work-deletion`); custom
+ roots are explicit. Stage04 verification uses only temporary Catalog,
+ Watchlist, management DB, ZIP/status and Qt fixtures; independent Stage04
+ review is BLOCKING-0 approved. No real deletion was performed.
+Catalog-adjacent `.work-deletion/` operation metadata is runtime-only and is
+ignored by `.gitignore`; incident evidence retained under `.tmp/` is not
+operational state.
+The GUI archive/restore worker follows the same absolute-path admission/gate
+before Watchlist CAS, so pending deletion blocks visibility changes while the
+normal post-release archive behavior remains unchanged. Initial Stage04
+verification was 313 passed with 442 warnings; current follow-up results are
+recorded in the Work deletion section and runbook PROGRESS. Full-suite runs reached a
+Windows browser/async teardown timeout and are recorded as incomplete. Causal
+relationship to this change remains undetermined.
+The unchanged ComicFuz synthetic parameterized capture check was separately
+rerun in an isolated CWD (`[False]` and `[True]`): 2 passed, 5 warnings in
+11.37s. This bounded diagnosis does not claim the full suite passed, and no
+Capture or site-adapter source was changed.
+
+The preview hot path keeps the complete Catalog snapshot/fingerprint but uses
+ID dictionaries for Work→Item→Source/Target→Run/Artifact ownership joins.
+The Library ZIP tree is indexed once per preview. Status JSON is read only at
+the matching library-relative path under status_root; no JSON tree scan or
+historical-alias search is performed. Other placements are retained untouched.
+Duplicate Artifact locators reuse one call-local stable file fact. A stable fact records size,
+SHA-256, device/inode, and mtime before/after hashing; any change, unsafe
+candidate status, malformed status, or read error remains fail-closed. The index
+loops and SHA chunk loop honor a Qt-free cooperative cancel token. Cancellation
+is checked before a Plan is cached, so no partial Plan/token/ready result is
+published.
+
+The Windows Qt dialog receives throttled queued progress signals with Japanese
+stage labels and file-count/elapsed-time units. Cancel/Esc/close cooperatively
+cancel preview and close only after the worker drains; Apply has no cancel path
+and rejects close while destructive work is running. MainWindow clears finished
+dialogs to avoid hidden worker/dialog accumulation. These performance and GUI
+cancel checks use synthetic isolated fixtures only.
+
 ## URL registration Work detail drafts (Stage 04)
 
 The URL dialog opens WorkEditorDialog in explicit draft-only mode. The child
@@ -3551,6 +3605,57 @@ Work/site一致、担当OFF・unavailableを要求し、prefixだけでは認定
 確認済み履歴だけで「要確認」filterへ入れず、担当外filterでは表示する。実行/Discovery切替は引き続き不可。
 2026-11-11、ユーザー適用後のNGライフをread-only確認。現行154、旧話履歴16、旧ID参照13を正しく分離。
 Artifact locatorの履歴先登録は15 ZIP。今回の表示修正ではCatalog/Watchlist/ZIPを変更していない。
+
+## Work単位の完全削除（現行実装、Stage 04、2026-11-14）
+
+Previewの性能改善: 全Catalog fingerprintと全Artifact/他Work参照の検査を維持し、
+Work/Item/Source/Target/RunのID辞書を一回構築して所属と冗長FKを照合する。
+重複ID/work_keyはfail-closed。library列挙は各previewで一回、status JSONはLibrary相対pathに
+対応する候補だけを一回読む。全JSON走査・規定外の歴史alias探索は廃止し、別配置JSONは残す。
+ZIP/statusのhashは安定した同一pathごとに共有する。cacheは呼出内限定で、各Artifactの
+size/SHA/owner検査を維持し、identity/size/mtimeの読取前後・再利用時変化をblockする。
+statusの解析bytesと後のhash観測も照合し、索引作成後の書換えを所有証明に使わない。
+Applyのfresh previewは新しいcacheで再読取する。Catalog schema、token payload、削除順、
+backup/rollback/recovery、通常Discovery/Batch/Captureは変更しない。
+
+`preview(..., progress=callback, cancel=WorkDeletionCancelToken())` はQt非依存。
+callbackはstage/completed/total/elapsedを受け取る。走査候補・JSON解析・SHA chunkで
+協調中止し、最終通知で中止された場合もPlan/cacheへ公開しない。GUIは通知を間引き、
+経過時間をtimerで補完する。Cancelはpreviewを中止、Esc/Xは中止後に閉じる。
+Applyにはcancelを伝播せず、実行中のcloseを拒否する。完了済みdialogはpool終了後に解放する。
+人工大規模Catalogでrow参照回数、rglob/hash回数、中止/no-write、status改変、GUIと
+既存Apply/recoveryを検証した。targeted 82件、affected 283件、最終lifecycle 2件がPASS。
+独立subset 9件とlifecycle 2件もPASS、独立レビューBLOCKING-0で承認済み。
+実Catalogの隔離copyのDB読取/fingerprint/所属/FKだけの
+診断は約1.99秒（18,952 Artifact）であり、ZIP/statusを含む総preview時間の保証ではない。
+最終件数と独立レビュー結果は `runbooks/work-deletion/PROGRESS.md` の性能改善記録を参照。
+
+Work単位の完全削除は `WorkDeletionPreviewService` と共通CLI/Windows GUI surfaceとして実装済みである。`work_key → work_id` をauthorityにCatalog v7の全依存（Items/Sources/Targets/CrawlRuns/全Artifacts/quota/scope/Discovery evidence）を検証し、Watchlist targets/archived、status、ZIP locator、全bound management store、active markerを同じcanonical Plan/tokenへ束ねる。CLIは `work delete --work-key KEY --dry-run|--apply --json` と明示的な `recover` / `bind` を提供し、GUIはWork行だけのコンテキストメニューからQRunnable preview/confirmation/applyを行う。title、全site key、Item/Run/Artifact、ZIP/byte数、root、blockerを表示し、未知状態や途中不明はBLOCKED/RECOVERY_REQUIREDで停止する。
+
+既定rootは既存packagingに合わせた `output/Books`、`output/crawl-status`、外側の `output/trash/work-deletion`。previewはCatalog/Watchlist/management/ZIP/statusを変更せず、Applyはadmission→Catalog→Watchlist lock、fresh preview、verified backup、per-file intent/strong identity、Catalog transaction内non-target fingerprint、Watchlist CAS、durable manifestを再検証する。commit前は検証済みrollback、commit後やunknown/tamperはroll-forward/RECOVERY_REQUIRED。物理電断耐性と非Windows no-replace renameは保証しない。実サイト・本番Catalog・本番Watchlist・実ZIPの検証は未実施で、全受入は隔離fixtureのみである。
+
+WatchlistはCatalog+Watchlist、Catalog-only、Watchlist-only、Not Foundを明示的に分け、target全keyと`archived_work_keys`を既存のlock/CAS/atomic replaceで同時除去する。ZIP/statusはCatalogが証明したfilesystem Artifactだけを対象にし、全Workの全Artifactでpath aliasを照合する。root外、`..`、case-insensitive衝突、symlink/reparse、hardlink、size/SHA不一致、別Work共有は停止条件。status JSONが欠落していても、Catalog present Artifactのlocator/size/SHAが完全一致する場合だけZIP-only退避を許可し、warningを残す。
+
+management DBはCatalogと独立しているため、同じCatalogの起動情報があるqueued、planning/runningと終了未確認workerを削除前にblockする。queuedでworker_pid/worker_start_token/started_atの3列が存在し全NULLなら未開始予約として除外し、予約や履歴は更新しない。古さ・cancel_requestedだけでは判定しない。通常終了状態（succeeded/partial/failed/cancelled、互換completed/aborted）の履歴も除外し、summary/log/supervision-error.jsonを読まずfingerprintにも含めない。interruptedはDB tokenとworker.identityのtoken/child・launcher PID、OS start identityで終了またはPID再利用を証明できれば履歴扱いにする。生存・identity欠落・読取不能・終了確認不能は停止し、実processの停止や履歴変更はしない。queuedのworker.identity欠落は正常で追加エラーにしない。GUI一覧は最新100件等の既存表示制限があり、全bound storeのDB件数と一致保証しない。本変更は一覧・一般queue APIの変更ではなく、削除側の不要な停止だけを解消する。
+
+未開始予約がpreview後にclaimされた場合はfresh Applyで止める。fresh Apply後のclaim raceも、
+実workerがadmission/start gateまたはCatalog lockを通れないことをsubprocess fixtureで確認した。Catalog lock後の
+gate再確認と全所有検査・commit/復旧は維持する。statusは候補の本文/strong identity/SHAと
+raw path/権限/reparse/hardlink/非regular fileを検査し、missing/deletedのLibrary外locatorも拒否。
+status root未作成は従来のstatusなし扱い、非directory/権限不足は明示block。別配置JSONの全alias
+検知は保証しない。metadata上のarchive_pathは従来どおりCWD基準で正規化する。
+
+idle/direct-status追補の検証はtargeted22件・affected333件・強化後のclaim race2件がPASS、skip0。
+管理DBのみのread-only診断では予約2件を残したまま停止理由0件、DB bytes/sidecar不変。
+独立最終レビューと詳細コマンドはPROGRESSの同追補を参照。実Workへのpreview/applyは未実施。
+独立subset13件PASS、コード/現行契約のレビューBLOCKING-0で承認済み。
+
+2026-11-15管理判定修正の検証: 対象16件・独立16件PASS、関連320件PASSとWindows長パスに
+よるbackup失敗2件。同じ2件は短い隔離pathで再試験PASS（source不変）。skip 0、ruff PASS、
+独立レビューBLOCKING-0承認。管理DBだけの実データread-only診断では待機2件のみ停止理由が
+残り、bytes/sidecar不変。実Catalog/Watchlist/ZIP削除や管理履歴変更は未実施。
+
+標準pathだけでcustom management storeの不在を証明できないため、canonical Catalog pathのSHA-256で分離したCatalog固有namespace内の`management-bindings.json`へJobStoreのcanonical pathをdurable登録し、registry欠落・未sealed・未知path・読取不能を`management_store_unbound`で停止する。初回導入や既存custom storeは全既知DBを明示bindしてからsealedにするbootstrap/migration操作を必要とし、sealed後に新pathが現れたら再確認する。queued投入raceを閉じるため、同namespaceの`active.json`と短時間admission lock（通常workerのCatalogJobLockとは別）を使い、JobStore enqueue/worker start/Discovery/registrationが未完了markerを検査する。通常worker実行中の後続queue登録は従来どおり許容し、Delete Applyだけがadmission lockを保持する。Apply内部のlock orderは`CatalogJobLock → Watchlist edit_lock`。DB COMMIT前の障害はjournalからrollback、COMMIT後はCatalog backupを無条件復元せずroll-forwardし、曖昧な状態はRECOVERY_REQUIREDとして新規取得・再登録・削除を停止する。
 
 作品ビューのスクロール性能を改善（2026-11-11）。従来はQtのindex()/rowCount()/parent()から呼ぶ
 visible_childrenが毎回全兄弟の表示判定を走査していた。各TreeNodeに表示子一覧をcacheし、

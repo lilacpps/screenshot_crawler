@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import sqlite3
 import time
@@ -34,6 +35,7 @@ from screenshot_crawler.discovery import (
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.gui.model import ViewMode
 from screenshot_crawler.gui.watchlist_editor import WatchlistEditorPage
+from screenshot_crawler.maintenance.work_deletion import _namespace
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.site_policies import MagapokeSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
@@ -48,7 +50,8 @@ def qt_app():
 
 
 @pytest.fixture(autouse=True)
-def dispose_editors(qt_app, monkeypatch):
+def dispose_editors(qt_app, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     from screenshot_crawler.core.browser import BrowserSession
 
     async def deny_live_cdp(*args, **kwargs):
@@ -174,6 +177,68 @@ def test_editor_full_signal_does_not_change_inventory_selection(qt_app, tmp_path
     editor.request_full()
     _wait(lambda: bool(received), editor)
     assert received == ["one"]
+    editor.close()
+
+
+def test_standalone_editor_uses_default_catalog_gate(qt_app, tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    _watchlist(path)
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path).initialize()
+    marker_dir = tmp_path / ".work-deletion" / _namespace(catalog_path)
+    marker_dir.mkdir(parents=True)
+    marker = marker_dir / "active.json"
+    marker.write_text(json.dumps({"phase": "active", "operation_id": "pending"}), encoding="utf-8")
+
+    editor = WatchlistEditorPage(path)
+    editor.label_edit.setText("Blocked while deleting")
+    editor.preview_edit()
+    before = path.read_bytes()
+    editor.save_edit()
+    _wait(lambda: editor._save_worker is None, editor)
+    assert path.read_bytes() == before
+    assert "gate" in editor.status.toPlainText().casefold() or "deletion" in editor.status.toPlainText().casefold()
+
+    marker.unlink()
+    editor.preview_edit()
+    editor.save_edit()
+    _wait(lambda: editor._save_worker is None, editor)
+    assert WatchlistService(path).get("one").label == "Blocked while deleting"
+    editor.close()
+
+
+def test_standalone_editor_captures_gate_paths_before_cwd_change(qt_app, tmp_path: Path, monkeypatch) -> None:
+    root_a = tmp_path / "cwd-a"
+    root_b = tmp_path / "cwd-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    monkeypatch.chdir(root_a)
+    watchlist = Path("watchlist.yaml")
+    _watchlist(watchlist)
+    catalog_path = Path("catalog.sqlite")
+    CatalogService(catalog_path).initialize()
+    marker_dir = catalog_path.parent / ".work-deletion" / _namespace(catalog_path)
+    marker_dir.mkdir(parents=True)
+    (marker_dir / "active.json").write_text(
+        json.dumps({"phase": "active", "operation_id": "pending"}), encoding="utf-8"
+    )
+    editor = WatchlistEditorPage(watchlist)
+    editor.label_edit.setText("CWD-stable")
+    editor.preview_edit()
+    workers = []
+    monkeypatch.setattr(editor.thread_pool, "start", workers.append)
+    before = editor.watchlist_path.read_bytes()
+    editor.save_edit()
+    assert len(workers) == 1
+
+    monkeypatch.chdir(root_b)
+    workers[0].run()
+    QApplication.processEvents()
+    assert editor.watchlist_path == (root_a / "watchlist.yaml").resolve()
+    assert editor.gate_catalog_path == (root_a / "catalog.sqlite").resolve()
+    assert editor.watchlist_path.read_bytes() == before
+    assert not (root_b / ".work-deletion").exists()
+    editor._dirty = False
     editor.close()
 
 

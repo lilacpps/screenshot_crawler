@@ -53,6 +53,7 @@ from screenshot_crawler.core.packaging import PackageResult, archive_stem, packa
 from screenshot_crawler.core.progress import atomic_write_json, normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner, RunResult
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.maintenance.work_deletion_gate import assert_work_deletion_gate_clear
 from screenshot_crawler.runtime_settings import (
     DEFAULT_PAGE_TURN_DELAY_MS,
     SiteRuntimeSettings,
@@ -73,7 +74,9 @@ def _catalog_job_locked(method):
 
     @wraps(method)
     async def wrapped(self, *args, **kwargs):
+        assert_work_deletion_gate_clear(self.catalog.path)
         with self.catalog.job_lock():
+            assert_work_deletion_gate_clear(self.catalog.path)
             return await method(self, *args, **kwargs)
 
     return wrapped

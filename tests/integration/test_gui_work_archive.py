@@ -1,6 +1,8 @@
 """Work archive interactions with synthetic Catalog and Watchlist inputs only."""
 
-from time import monotonic
+import sqlite3
+from pathlib import Path
+from time import monotonic, sleep
 from types import SimpleNamespace
 
 import pytest
@@ -10,8 +12,10 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.gui.main_window import MainWindow
 from screenshot_crawler.gui.model import ArchiveFilter
+from screenshot_crawler.maintenance.work_deletion import WorkDeletionPreviewService, _namespace
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 from tools.gui_sample import create_sample
@@ -24,8 +28,8 @@ def qt_app():
     return app
 
 
-def wait_for(app, predicate):
-    deadline = monotonic() + 10
+def wait_for(app, predicate, timeout=10):
+    deadline = monotonic() + timeout
     while not predicate() and monotonic() < deadline:
         app.processEvents()
         QTest.qWait(10)
@@ -36,7 +40,11 @@ def wait_for(app, predicate):
 def window(tmp_path, qt_app):
     db, watchlist = create_sample(tmp_path / "inputs", key_count=8, sources_per_key=8)
     runtime = tmp_path / "inputs" / "sample-runtime.yaml"
-    view = MainWindow(db, watchlist, runtime, auto_load=False, management_path=tmp_path / "jobs.sqlite")
+    management = tmp_path / "jobs.sqlite"
+    with sqlite3.connect(management) as connection:
+        connection.execute("CREATE TABLE jobs(job_id TEXT, state TEXT, selected_keys_json TEXT)")
+    WorkDeletionPreviewService().bind_management_stores(db, [management])
+    view = MainWindow(db, watchlist, runtime, auto_load=False, management_path=management)
     view.set_snapshot(InventoryService().load(db, watchlist, runtime_path=runtime))
     view.show()
     yield view
@@ -61,6 +69,8 @@ def test_archive_menu_cross_site_restore_restart_and_no_confirmation(window, qt_
     window.model.set_checked_keys({"sample-0000", "sample-0001", "sample-0004"})
     menu = window._archive_context_menu(work_index(window))
     assert menu.actions()[0].objectName() == "archive_work_action"
+    assert menu.actions()[1].objectName() == "delete_work_action"
+    assert menu.actions()[1].isEnabled()
     menu.actions()[0].trigger()
     menu.deleteLater()
     wait_for(qt_app, lambda: not window._discovery_busy() and not window._loading)
@@ -96,6 +106,96 @@ def test_archive_menu_cross_site_restore_restart_and_no_confirmation(window, qt_
     assert not work_index(window).isValid()
     window.archive_combo.setCurrentIndex(0)
     assert work_index(window).isValid()
+
+
+def test_work_delete_context_preview_cancel_isolated_and_apply_reloads(
+    window, qt_app, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog_path = Path(window.catalog_path)
+    watchlist_path = Path(window.watchlist_path)
+    # The GUI sample intentionally uses a non-existent illustrative ZIP.  Keep
+    # this destructive smoke fixture physical-artifact-free so the deletion
+    # planner can prove a complete graph without touching any real path.
+    with sqlite3.connect(catalog_path) as connection:
+        connection.execute("DELETE FROM artifacts")
+        connection.execute("DELETE FROM crawl_runs")
+    catalog_before = catalog_path.read_bytes()
+    watchlist_before = watchlist_path.read_bytes()
+    menu = window._archive_context_menu(work_index(window))
+    delete_action = menu.actions()[1]
+    assert delete_action.objectName() == "delete_work_action"
+    assert delete_action.isEnabled()
+    delete_action.trigger()
+    menu.deleteLater()
+    dialog = window._work_deletion_dialog
+    assert dialog is not None
+    wait_for(qt_app, lambda: dialog.worker is None)
+    assert dialog.plan is not None and dialog.plan.ready, dialog.plan.blockers
+    assert not dialog.confirm.isChecked()
+    assert not dialog.apply_button.isEnabled()
+    dialog.close()
+    assert catalog_path.read_bytes() == catalog_before
+    assert watchlist_path.read_bytes() == watchlist_before
+    assert not (tmp_path / "output" / "trash").exists()
+
+    window._open_work_deletion("sample-work-0000")
+    dialog = window._work_deletion_dialog
+    assert dialog is not None
+    wait_for(qt_app, lambda: dialog.worker is None)
+    assert dialog.plan is not None and dialog.plan.ready, dialog.plan.blockers
+    dialog.confirm.setChecked(True)
+    assert dialog.apply_button.isEnabled()
+    dialog.apply_button.click()
+    try:
+        wait_for(qt_app, lambda: dialog.worker is None and not window._loading, timeout=60)
+    except AssertionError as exc:
+        raise AssertionError(
+            f"dialog worker={dialog.worker!r} status={dialog.status.text()!r} "
+            f"window_loading={window._loading} error={window.error_label.text()!r}"
+        ) from exc
+    wait_for(qt_app, lambda: not window._discovery_busy() and not window._loading)
+    assert CatalogService(window.catalog_path).find_work("sample-work-0000") is None
+    assert not any(
+        node.kind == "work" and node.work_key == "sample-work-0000"
+        for node in window.model._nodes.values()
+    )
+
+
+def test_work_delete_busy_disables_other_work_actions_and_close_waits(
+    window, qt_app, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    original_preview = WorkDeletionPreviewService.preview
+
+    def delayed_preview(*args, **kwargs):
+        sleep(0.25)
+        return original_preview(*args, **kwargs)
+
+    monkeypatch.setattr(WorkDeletionPreviewService, "preview", delayed_preview)
+    window._open_work_deletion("sample-work-0000")
+    dialog = window._work_deletion_dialog
+    assert dialog is not None
+    assert window._discovery_busy()
+    blocked_menu = window._archive_context_menu(work_index(window))
+    assert not blocked_menu.actions()[1].isEnabled()
+    blocked_menu.deleteLater()
+    dialog.close()
+    wait_for(qt_app, lambda: dialog.worker is None)
+    assert not window._discovery_busy()
+
+
+def test_archive_restore_is_blocked_by_pending_work_deletion(window, qt_app):
+    catalog_path = Path(window.catalog_path)
+    watchlist_path = Path(window.watchlist_path)
+    namespace_dir = catalog_path.parent / ".work-deletion" / _namespace(catalog_path)
+    namespace_dir.mkdir(parents=True, exist_ok=True)
+    (namespace_dir / "active.json").write_text('{"phase":"APPLYING"}', encoding="utf-8")
+    before = watchlist_path.read_bytes()
+    window._set_work_archived("sample-work-0000", True)
+    wait_for(qt_app, lambda: window._archive_save_worker is None)
+    assert watchlist_path.read_bytes() == before
+    (namespace_dir / "active.json").unlink()
 
 
 @pytest.mark.parametrize("failure", ["cas", "write"])

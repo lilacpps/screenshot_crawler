@@ -79,6 +79,70 @@ def format_timestamp(value: datetime | str | None) -> str | None:
     return parsed.astimezone(JST).isoformat()
 
 
+def _catalog_row_fingerprint(connection: sqlite3.Connection, tables: tuple[str, ...]) -> str:
+    payload = {
+        table: [dict(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()]
+        for table in tables
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _catalog_non_target_fingerprint(
+    connection: sqlite3.Connection,
+    tables: tuple[str, ...],
+    work_id: int,
+) -> str:
+    rows = {
+        table: [dict(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()]
+        for table in tables
+    }
+    item_ids = {int(row["id"]) for row in rows["items"] if int(row["work_id"]) == work_id}
+    source_ids = {int(row["id"]) for row in rows["sources"] if int(row["item_id"]) in item_ids}
+    target_ids = {int(row["id"]) for row in rows["source_targets"] if int(row["source_id"]) in source_ids}
+    run_ids = {
+        int(row["id"])
+        for row in rows["crawl_runs"]
+        if int(row["item_id"]) in item_ids
+        or int(row["source_id"]) in source_ids
+        or int(row["target_id"]) in target_ids
+    }
+    artifact_ids = {
+        int(row["id"])
+        for row in rows["artifacts"]
+        if int(row["item_id"]) in item_ids
+        or (row["crawl_run_id"] is not None and int(row["crawl_run_id"]) in run_ids)
+    }
+    discovery_keys = {
+        str(row["discovery_key"])
+        for row in rows["discovery_inventory_evidence"]
+        if int(row["work_id"]) == work_id
+    }
+    ids_by_table = {
+        "items": item_ids, "sources": source_ids, "source_targets": target_ids,
+        "crawl_runs": run_ids, "artifacts": artifact_ids,
+        "quota_resource_states": {int(row["id"]) for row in rows["quota_resource_states"] if int(row["work_id"]) == work_id},
+    }
+    filtered: dict[str, list[dict[str, object]]] = {}
+    for table, table_rows in rows.items():
+        kept = []
+        for row in table_rows:
+            if table == "works" and int(row["id"]) == work_id:
+                continue
+            if table in ids_by_table and int(row["id"]) in ids_by_table[table]:
+                continue
+            if table in {"acquisition_scope_sync", "discovery_inventory_evidence"} and int(row["work_id"]) == work_id:
+                continue
+            if table == "discovery_inventory_positions" and str(row["discovery_key"]) in discovery_keys:
+                continue
+            kept.append(row)
+        filtered[table] = kept
+    return hashlib.sha256(
+        json.dumps(filtered, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
 class CatalogService:
     """Connection-per-operation Catalog service with foreign keys enabled."""
 
@@ -103,6 +167,56 @@ class CatalogService:
         with self._connection(initialize_schema=False) as connection:
             return schema.user_version(connection)
 
+    def delete_work_records(
+        self,
+        work_id: int,
+        *,
+        expected_fingerprint: str,
+        expected_non_target_fingerprint: str,
+    ) -> None:
+        """Delete one complete Work graph under one CAS transaction.
+
+        The caller must have performed the read-only preview.  The fingerprint
+        is checked again inside ``BEGIN IMMEDIATE`` so no stale plan can delete
+        a changed graph.  The non-target fingerprint is mandatory and is
+        checked again after the DELETE, before the transaction can commit. No
+        foreign-key disabling or whole-database restore is used.
+        """
+
+        tables = (
+            "works", "items", "sources", "source_targets", "crawl_runs", "artifacts",
+            "quota_resource_states", "acquisition_scope_sync",
+            "discovery_inventory_evidence", "discovery_inventory_positions",
+        )
+        with self._connection(initialize_schema=False) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = _catalog_row_fingerprint(connection, tables)
+            if current != expected_fingerprint:
+                raise CatalogError("Catalog changed since work deletion preview")
+            work = connection.execute("SELECT id FROM works WHERE id = ?", (work_id,)).fetchone()
+            if work is None:
+                raise CatalogNotFoundError(f"Catalog Work not found: {work_id}")
+            connection.execute(
+                "DELETE FROM discovery_inventory_positions WHERE discovery_key IN "
+                "(SELECT discovery_key FROM discovery_inventory_evidence WHERE work_id = ?)",
+                (work_id,),
+            )
+            connection.execute("DELETE FROM discovery_inventory_evidence WHERE work_id = ?", (work_id,))
+            connection.execute("DELETE FROM artifacts WHERE item_id IN (SELECT id FROM items WHERE work_id = ?)", (work_id,))
+            connection.execute("DELETE FROM crawl_runs WHERE item_id IN (SELECT id FROM items WHERE work_id = ?)", (work_id,))
+            connection.execute("DELETE FROM source_targets WHERE source_id IN (SELECT id FROM sources WHERE item_id IN (SELECT id FROM items WHERE work_id = ?))", (work_id,))
+            connection.execute("DELETE FROM sources WHERE item_id IN (SELECT id FROM items WHERE work_id = ?)", (work_id,))
+            connection.execute("DELETE FROM acquisition_scope_sync WHERE work_id = ?", (work_id,))
+            connection.execute("DELETE FROM quota_resource_states WHERE work_id = ?", (work_id,))
+            connection.execute("DELETE FROM items WHERE work_id = ?", (work_id,))
+            connection.execute("DELETE FROM works WHERE id = ?", (work_id,))
+            if connection.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone() is not None:
+                raise CatalogError("Catalog Work deletion did not remove the requested Work")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise CatalogError("Catalog foreign-key check failed after Work deletion")
+            actual_non_target = _catalog_non_target_fingerprint(connection, tables, work_id)
+            if actual_non_target != expected_non_target_fingerprint:
+                raise CatalogError("Catalog non-target rows changed during Work deletion")
     # Work API ---------------------------------------------------------
 
     def create_work(self, work: WorkInput | Mapping[str, Any] | None = None, **fields: Any) -> Work:
@@ -2211,6 +2325,23 @@ class CatalogService:
     def _read_only_connection(self):
         if not self.path.exists() or not self.path.is_file():
             raise CatalogNotFoundError(f"Catalog database not found: {self.path}")
+        try:
+            with self.path.open("rb") as stream:
+                header = stream.read(20)
+        except OSError as exc:
+            raise CatalogError(f"Could not inspect Catalog database '{self.path}': {exc}") from exc
+        # SQLite's header records the rollback/WAL read and write versions at
+        # bytes 18/19.  A WAL database can recreate -wal/-shm while a URI
+        # mode=ro connection is opened, so sidecar existence alone is not a
+        # sufficient no-write proof for preview/recovery reads.
+        if (
+            len(header) < 20
+            or header[18] == 2
+            or header[19] == 2
+            or Path(str(self.path) + "-wal").exists()
+            or Path(str(self.path) + "-shm").exists()
+        ):
+            raise CatalogError(f"Catalog database is in WAL mode: {self.path}")
         try:
             connection = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
             connection.row_factory = sqlite3.Row

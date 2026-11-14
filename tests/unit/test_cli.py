@@ -1,5 +1,7 @@
 import asyncio
 import builtins
+import json
+import sqlite3
 import sys
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta
@@ -29,6 +31,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryResult,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.maintenance.work_deletion import WorkDeletionPreviewService
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
@@ -67,6 +70,75 @@ def test_crawl_uses_cdp_options() -> None:
     assert not hasattr(args, "auth_state")
     assert not hasattr(args, "auth_required")
     assert not hasattr(args, "headed")
+
+
+def test_work_delete_parser_supports_direct_preview_and_recovery_compatibility() -> None:
+    preview = _parser().parse_args([
+        "work", "delete", "--work-key", "sample", "--dry-run", "--json",
+    ])
+    assert preview.work_action == "delete"
+    assert preview.delete_action is None
+    assert preview.work_key == "sample"
+    assert preview.dry_run and preview.json
+
+    recover = _parser().parse_args([
+        "work", "delete", "recover", "--operation-id", "op", "--dry-run", "--json",
+    ])
+    assert recover.delete_action == "recover"
+    assert recover.operation_id == "op"
+    assert recover.dry_run and recover.json
+
+
+def test_work_delete_cli_json_dry_run_isolated(tmp_path: Path, monkeypatch, capsys) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    watchlist_path = tmp_path / "watchlist.yaml"
+    management_path = tmp_path / "management.sqlite"
+    catalog = CatalogService(catalog_path)
+    catalog.create_work(WorkInput(work_key="cli-work", title="CLI fixture"))
+    watchlist_path.write_text("targets: []\narchived_work_keys: []\n", encoding="utf-8")
+    with sqlite3.connect(management_path) as connection:
+        connection.execute(
+            "CREATE TABLE jobs(job_id TEXT, state TEXT, selected_keys_json TEXT)"
+        )
+    WorkDeletionPreviewService().bind_management_stores(catalog_path, [management_path])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "screenshot-crawler", "work", "delete", "--work-key", "cli-work",
+        "--catalog", str(catalog_path), "--watchlist", str(watchlist_path),
+        "--management", str(management_path), "--dry-run", "--json",
+    ])
+    cli.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "DRY_RUN"
+    assert payload["work_key"] == "cli-work"
+    assert payload["counts"]["items"] == 0
+    assert not (tmp_path / "output" / "trash").exists()
+
+
+def test_work_delete_cli_json_apply_isolated(tmp_path: Path, monkeypatch, capsys) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    watchlist_path = tmp_path / "watchlist.yaml"
+    management_path = tmp_path / "management.sqlite"
+    catalog = CatalogService(catalog_path)
+    catalog.create_work(WorkInput(work_key="cli-apply", title="CLI apply fixture"))
+    watchlist_path.write_text("targets: []\narchived_work_keys: []\n", encoding="utf-8")
+    with sqlite3.connect(management_path) as connection:
+        connection.execute(
+            "CREATE TABLE jobs(job_id TEXT, state TEXT, selected_keys_json TEXT)"
+        )
+    WorkDeletionPreviewService().bind_management_stores(catalog_path, [management_path])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "screenshot-crawler", "work", "delete", "--work-key", "cli-apply",
+        "--catalog", str(catalog_path), "--watchlist", str(watchlist_path),
+        "--management", str(management_path), "--apply", "--json",
+    ])
+    cli.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "DONE"
+    assert payload["operation_id"]
+    assert payload["applied"] is True
+    assert CatalogService(catalog_path).find_work("cli-apply") is None
 
 
 def test_episode_list_parser_accepts_read_only_options() -> None:
@@ -3052,6 +3124,7 @@ def test_watch_add_requires_work_key_and_label_and_watch_list_displays_them(
         [
             "watch", "add", "--watchlist", str(watchlist), "--key", "scope",
             "--work-key", "work", "--site", "mangaone", "--url", "https://example.test",
+            "--catalog", str(tmp_path / "catalog.sqlite"),
             "--label", "作品",
         ]
     )

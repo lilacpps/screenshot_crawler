@@ -246,6 +246,41 @@ class WatchlistService:
 
     update_targets = apply_edit
 
+    def delete_work_targets_and_archive_state(
+        self,
+        work_key: str,
+        *,
+        expected_revision: str,
+    ) -> WatchlistSnapshot:
+        """Atomically remove every target and archived marker for one Work.
+
+        The complete document is CAS-checked while holding the normal
+        Watchlist edit lock.  Target comments, unknown keys and line endings
+        are preserved by the existing lossless patch writer.
+        """
+
+        with self.edit_lock():
+            original = self._content_for_revision(expected_revision)
+            current_targets = self._load_content(original)
+            current_archived = self._cached_document[2] if self._cached_document else ()
+            desired_targets = [target for target in current_targets if target.work_key != work_key]
+            desired_archived = tuple(key for key in current_archived if key != work_key)
+            if desired_targets == current_targets and desired_archived == current_archived:
+                return WatchlistSnapshot(tuple(current_targets), current_archived, self._content_digest(original))
+            patched = original
+            if desired_targets != current_targets:
+                patched = self._patch_existing_yaml(patched, current_targets, desired_targets)
+                if patched is None:
+                    raise WatchlistError("Cannot safely update Watchlist targets while preserving comments")
+            if desired_archived != current_archived:
+                patched = self._patch_archived_work_keys(patched, desired_archived)
+            self._validate_written_content(patched, desired_targets, archived_work_keys=desired_archived)
+            if self._read_content() != original:
+                raise WatchlistError("Watchlist changed while saving; reload and retry the edit")
+            written = self._preserve_eol(patched, original)
+            self._atomic_write(written)
+            return WatchlistSnapshot(tuple(desired_targets), desired_archived, self._content_digest(written))
+
     def add(
         self,
         *,

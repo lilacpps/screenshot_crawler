@@ -13,6 +13,11 @@ from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+
 def _watchlist(path: Path, *, key: str = "key-a", site: str = "mangaone") -> None:
     WatchlistService(path).apply_edit([
         WatchlistTarget(

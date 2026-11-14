@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -183,8 +183,9 @@ def read_complete_jsonl(path: str | Path) -> tuple[dict[str, Any], ...]:
 class JobStore:
     """Single-writer-friendly SQLite store for GUI job metadata."""
 
-    def __init__(self, path: str | Path = "output/management/management.sqlite") -> None:
+    def __init__(self, path: str | Path = "output/management/management.sqlite", *, catalog_path: str | Path | None = None) -> None:
         self.path = Path(path)
+        self.catalog_path = None if catalog_path is None else Path(catalog_path)
         self._lock = RLock()
         self._event_offsets: dict[str, int] = {}
 
@@ -315,6 +316,30 @@ class JobStore:
         return connection
 
     def create_job(
+        self,
+        request: JobExecutionRequest,
+        *,
+        management_root: str | Path | None = None,
+        original_job_id: str | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        from screenshot_crawler.maintenance.work_deletion_gate import (
+            assert_work_deletion_gate_clear,
+            register_management_store,
+            work_deletion_admission_lock,
+        )
+
+        catalog_path = Path(request.catalog_path or self.catalog_path or "catalog.sqlite").resolve(strict=False)
+        effective_request = (
+            request if request.catalog_path == str(catalog_path)
+            else replace(request, catalog_path=str(catalog_path))
+        )
+        with work_deletion_admission_lock(catalog_path):
+            assert_work_deletion_gate_clear(catalog_path)
+            self.initialize()
+            register_management_store(catalog_path, self.path)
+            return self._create_job_unlocked(effective_request, management_root=management_root, original_job_id=original_job_id)
+
+    def _create_job_unlocked(
         self,
         request: JobExecutionRequest,
         *,

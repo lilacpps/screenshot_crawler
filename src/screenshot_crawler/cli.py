@@ -64,6 +64,14 @@ from screenshot_crawler.discovery.validation import (
     discovery_capability_error,
 )
 from screenshot_crawler.maintenance.source_identity import SourceIdentityMaintenance
+from screenshot_crawler.maintenance.work_deletion import (
+    WorkDeletionApplyError,
+    WorkDeletionPreviewService,
+)
+from screenshot_crawler.maintenance.work_deletion_gate import (
+    assert_work_deletion_gate_clear,
+    work_deletion_admission_lock,
+)
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_adapters.hanayume.discovery import parse_hanayume_episode_url
@@ -304,11 +312,19 @@ def _parser() -> argparse.ArgumentParser:
     watch_add.add_argument("--url", required=True)
     watch_add.add_argument("--label", required=True)
     watch_add.add_argument("--archive-order", type=int)
+    watch_add.add_argument(
+        "--catalog", type=Path, default=Path("catalog.sqlite"),
+        help="Catalog used for the Work-deletion safety gate (default: catalog.sqlite)",
+    )
 
     for action in ("remove", "enable", "disable"):
         action_parser = watch_subparsers.add_parser(action)
         action_parser.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
         action_parser.add_argument("--key", required=True)
+        action_parser.add_argument(
+            "--catalog", type=Path, default=Path("catalog.sqlite"),
+            help="Catalog used for the Work-deletion safety gate (default: catalog.sqlite)",
+        )
 
     catalog = subparsers.add_parser("catalog", help="Manage and inspect Catalog data")
     catalog_subparsers = catalog.add_subparsers(dest="catalog_action", required=True)
@@ -491,6 +507,36 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the connected browser open until Enter is pressed",
     )
+    work = subparsers.add_parser("work", help="Work maintenance operations")
+    work_subparsers = work.add_subparsers(dest="work_action", required=True)
+    work_delete = work_subparsers.add_parser("delete", help="Preview/apply Work deletion or manage recovery")
+    work_delete.add_argument("--work-key", help="Exact Work key to preview or delete")
+    work_delete.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
+    work_delete.add_argument("--watchlist", type=Path, default=Path("watchlist.yaml"))
+    work_delete.add_argument("--library-root", type=Path, default=Path("output/Books"))
+    work_delete.add_argument("--status-root", type=Path, default=Path("output/crawl-status"))
+    work_delete.add_argument("--trash-root", type=Path, default=Path("output/trash/work-deletion"))
+    work_delete.add_argument("--management", dest="management_paths", action="append", type=Path, default=[])
+    work_delete_mode = work_delete.add_mutually_exclusive_group()
+    work_delete_mode.add_argument("--dry-run", action="store_true", help="Preview without modifying files")
+    work_delete_mode.add_argument("--apply", action="store_true", help="Apply the verified deletion plan")
+    work_delete.add_argument("--json", action="store_true")
+    delete_subparsers = work_delete.add_subparsers(dest="delete_action", required=False)
+    recover = delete_subparsers.add_parser("recover", help="Inspect or recover a pending deletion")
+    recover.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
+    recover.add_argument("--watchlist", type=Path, default=Path("watchlist.yaml"))
+    recover.add_argument("--trash-root", type=Path, default=None)
+    recover.add_argument("--management", dest="management_paths", action="append", type=Path, default=[])
+    recover.add_argument("--operation-id")
+    recover_mode = recover.add_mutually_exclusive_group()
+    recover_mode.add_argument("--dry-run", action="store_true", help="Diagnose without changing recovery state")
+    recover_mode.add_argument("--apply", action="store_true", help="Apply only a verified rollback/roll-forward")
+    recover.add_argument("--json", action="store_true")
+    bind = delete_subparsers.add_parser("bind", help="Explicitly seal management store bindings")
+    bind.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
+    bind.add_argument("--management", dest="management_paths", action="append", type=Path, required=True)
+    bind.add_argument("--expected-revision")
+    bind.add_argument("--json", action="store_true")
     return parser
 
 
@@ -1096,6 +1142,13 @@ async def _run_login(args: argparse.Namespace) -> None:
         await session.close()
 
 
+def _watchlist_gate_context(catalog: Path):
+    # Always serialize Watchlist mutation with the Catalog identity lock,
+    # including Catalog-less/watchlist-only work. The lock is an identity
+    # reservation and does not create a Catalog database.
+    return work_deletion_admission_lock(catalog)
+
+
 def _run_watch(args: argparse.Namespace) -> None:
     if args.watch_action == "scope-sync":
         if args.site is not None:
@@ -1207,23 +1260,31 @@ def _run_watch(args: argparse.Namespace) -> None:
                 f"{'' if target.archive_order is None else target.archive_order}"
             )
     elif args.watch_action == "add":
-        target = service.add(
-            key=args.key,
-            work_key=args.work_key,
-            site=args.site,
-            url=args.url,
-            label=args.label,
-            archive_order=args.archive_order,
-        )
+        with _watchlist_gate_context(args.catalog):
+            assert_work_deletion_gate_clear(args.catalog)
+            target = service.add(
+                key=args.key,
+                work_key=args.work_key,
+                site=args.site,
+                url=args.url,
+                label=args.label,
+                archive_order=args.archive_order,
+            )
         print(f"Added watchlist target '{target.key}'.")
     elif args.watch_action == "remove":
-        removed = service.remove(args.key)
+        with _watchlist_gate_context(args.catalog):
+            assert_work_deletion_gate_clear(args.catalog)
+            removed = service.remove(args.key)
         print(f"Removed watchlist target '{removed.key}'.")
     elif args.watch_action == "enable":
-        service.enable(args.key)
+        with _watchlist_gate_context(args.catalog):
+            assert_work_deletion_gate_clear(args.catalog)
+            service.enable(args.key)
         print(f"Enabled watchlist target '{args.key}'.")
     elif args.watch_action == "disable":
-        service.disable(args.key)
+        with _watchlist_gate_context(args.catalog):
+            assert_work_deletion_gate_clear(args.catalog)
+            service.disable(args.key)
         print(f"Disabled watchlist target '{args.key}'.")
 
 
@@ -1313,6 +1374,119 @@ def _run_catalog(args: argparse.Namespace) -> None:
             print(f"  donor_pristine: {'yes' if plan.donor_pristine else 'no'}")
             print(f"  body_revision_possible: {'yes' if plan.body_revision_possible else 'no'}")
             print(f"  plan_token: {plan.token}")
+
+
+def _run_work(args: argparse.Namespace) -> None:
+    service = WorkDeletionPreviewService()
+    if args.work_action != "delete":
+        raise WorkDeletionApplyError(f"unsupported work action: {args.work_action}")
+    if args.delete_action is None:
+        if not args.work_key:
+            raise WorkDeletionApplyError("work delete requires --work-key or a recovery/bind action")
+        catalog = Path(args.catalog).resolve(strict=False)
+        watchlist = Path(args.watchlist).resolve(strict=False)
+        library_root = Path(args.library_root).resolve(strict=False)
+        status_root = Path(args.status_root).resolve(strict=False)
+        trash_root = Path(args.trash_root).resolve(strict=False)
+        management = tuple(Path(path).resolve(strict=False) for path in args.management_paths)
+        plan = service.preview(
+            args.work_key,
+            catalog_path=catalog,
+            watchlist_path=watchlist,
+            management_paths=management,
+            library_root=library_root,
+            status_root=status_root,
+            trash_root=trash_root,
+        )
+        counts = {
+            "items": len(plan.item_ids),
+            "sources": len(plan.source_ids),
+            "source_targets": len(plan.source_target_ids),
+            "crawl_runs": len(plan.crawl_run_ids),
+            "artifacts": len(plan.artifact_ids),
+            "zip_count": plan.zip_count,
+            "byte_size": plan.byte_size,
+        }
+        payload = plan.as_dict()
+        payload.update({
+            "status": "DRY_RUN" if plan.ready else "BLOCKED",
+            "counts": counts,
+            "operation_id": None,
+            "manifest_path": None,
+            "applied": False,
+        })
+        if args.apply:
+            if not plan.ready:
+                payload["status"] = "BLOCKED"
+                if args.json:
+                    print(json.dumps(payload, ensure_ascii=False, indent=2))
+                raise WorkDeletionApplyError(
+                    f"work deletion is blocked: {', '.join(plan.blockers) or 'not found'}"
+                )
+            try:
+                applied = service.apply(plan)
+            except WorkDeletionApplyError as exc:
+                payload.update({
+                    "status": "RECOVERY_REQUIRED" if "recovery" in str(exc).casefold() else "BLOCKED",
+                    "details": [str(exc)],
+                    "applied": False,
+                })
+                if args.json:
+                    print(json.dumps(payload, ensure_ascii=False, indent=2))
+                raise
+            payload.update({
+                "status": applied.status,
+                "operation_id": applied.operation_id,
+                "manifest_path": applied.manifest_path,
+                "plan_token": applied.plan_token,
+                "applied": True,
+            })
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"{payload['status']}: work={plan.work_key} work_id={plan.work_id} "
+                f"items={counts['items']} runs={counts['crawl_runs']} zips={counts['zip_count']} "
+                f"bytes={counts['byte_size']}"
+            )
+            if plan.blockers:
+                print("  blockers: " + "; ".join(plan.blockers))
+            if plan.warnings:
+                print("  warnings: " + "; ".join(plan.warnings))
+        if not plan.ready:
+            raise SystemExit(2)
+        return
+    if args.delete_action == "bind":
+        result: object = service.bind_management_stores(
+            args.catalog, args.management_paths, expected_revision=args.expected_revision,
+        )
+    elif args.delete_action == "recover":
+        trash_root = args.trash_root or Path("output/trash/work-deletion")
+        result = service.recover(
+            args.catalog, args.watchlist, trash_root,
+            management_paths=args.management_paths,
+            operation_id=args.operation_id,
+            dry_run=not args.apply,
+        )
+        if args.apply and result.status == "RECOVERY_REQUIRED":
+            raise WorkDeletionApplyError(
+                f"recovery is not safe: {', '.join(result.details) or 'manual inspection required'}"
+            )
+    else:
+        raise WorkDeletionApplyError(f"unsupported deletion action: {args.delete_action}")
+    if isinstance(result, dict):
+        payload = result
+    else:
+        payload = {
+            "operation_id": result.operation_id,
+            "status": result.status,
+            "manifest_path": result.manifest_path,
+            "details": list(result.details),
+        }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(payload)
 
 
 def _print_batch_plan(
@@ -2726,6 +2900,8 @@ def main() -> None:
             _run_watch(args)
         elif args.command == "catalog":
             _run_catalog(args)
+        elif args.command == "work":
+            _run_work(args)
         elif args.command == "batch":
             if args.batch_action == "plan":
                 _run_batch_plan(args)
@@ -2738,6 +2914,9 @@ def main() -> None:
         print(f"Scope sync error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except CatalogError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except WorkDeletionApplyError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except BatchPlanningError as exc:

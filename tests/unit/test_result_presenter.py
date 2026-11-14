@@ -1,8 +1,15 @@
 import json
 
+import pytest
+
 from screenshot_crawler.management.execution import JobExecutionRequest
 from screenshot_crawler.management.jobs import JobEvent, JobStore
 from screenshot_crawler.management.result_presenter import JobResultPresenter
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
 
 
 def _request(action: str, *, metrics_root=None, keys=("key-a", "key-b")):

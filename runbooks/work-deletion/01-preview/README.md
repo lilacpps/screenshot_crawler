@@ -1,6 +1,11 @@
 # Stage 01 — Read-only 削除プレビュー
 
-**状態:** PLANNED / NOT STARTED。前提: Stage 00の承認済み所有/ジョブ/パス契約とfixture。実削除は実装しない。
+2026-11-15の現行契約は、全NULLの未開始queued予約を除外し、status JSONはpackaging規約の
+対応候補だけを直接読む。全status走査・規定外の歴史alias検知は廃止し、候補外は残す。
+詳細と現行検証結果はPROGRESSのidle/direct-status追補を参照する。以下のStage 01記録は
+当時のcheckpointであり、旧全走査・全queued停止を現行仕様として適用しない。
+
+**状態:** IMPLEMENTED / INDEPENDENT REVIEW APPROVED (2026-11-14)。前提: Stage 00の承認済み所有/ジョブ/パス契約とfixture。実削除はApplyサービスに委譲し、通常UI/CLIからは非公開。
 
 ## 目的
 
@@ -33,3 +38,6 @@
 - [ ] targeted tests、独立review、PROGRESS記録完了。Stage02へ進める。apply入口はまだ存在させない/無効。
 
 **禁止:** DB DELETE、Watchlist保存、ZIP rename、GUIからの本番操作。
+- Stage 01 reviewer follow-up (2026-11-14): BLOCKING7対応を反映済み、独立再レビュー待ち。sealed registry全bound store、active/pending/recovery gate（Watchlist-only含む）、status source/destination/bytes/hash、malformed・同stem・path alias fail-closed、canonical root identity/volume、未追跡同名ZIP、destination fingerprint/collision、historical duplicate、worker supervision/interrupted/unknown stateを検査する。Catalog/managementにWAL/SHM sidecarがある場合はSQLiteを開かずfail-closedとし、bytes/mtime/file-listを変更しない。
+- Verification update (2026-11-14): isolated Stage 01 suite is 11 passed (2 warnings); affected suite is 241 passed (2 warnings) with workspace basetemp; ruff and diff-check pass. The later BLOCKING fixes and independent review are recorded below; Stage 01 is approved and Stage 02/03/04 are no longer gated by this stage.
+- Reviewer BLOCKING3 follow-up (2026-11-14): exact same-Work duplicate locators now warn and retain all Artifact IDs while only the primary is move-eligible; mismatched/shared duplicates block. Status `archive_path` traversal/reparse is rejected before resolve. Historical checkpoint: isolated suite 14 passed; affected suite 244 passed; independent Stage 01 review approved. The management gate was refined on 2026-11-15: terminal history does not block because of old supervision logs; interrupted workers require exit proof. See the current PROGRESS record.

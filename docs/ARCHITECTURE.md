@@ -1,5 +1,42 @@
 # Architecture
 
+## Work deletion (current implementation, Stage 04, 2026-11-14)
+
+Management gate refinement (2026-11-15): management/jobs.pyのterminal stateをauthorityとし、
+interruptedを除く終了履歴と旧completed/abortedをSQLで除外する。過去summary/監督エラー等の
+logは読まず、fingerprintにも含めない。queuedでworker_pid/worker_start_token/started_atが
+全て存在してNULLなら、未開始予約として同様に除外する（取消やDB更新はしない）。
+起動情報があるqueuedとplanning/runningはCatalog binding確認後に書込み競合としてblock。
+worker冒頭のadmission/start gate、Catalog lock後のgate、Applyの排他とfresh previewを維持し、
+未開始予約のclaimがfresh previewと競合しても実writerが削除中に入らないことをテストする。
+interruptedだけはworker.identityとDBのtoken/child・launcher PIDを
+確認し、終了またはPID再利用の証明ができれば除外する。実worker生存・identity欠落・読取不能・
+生存PIDのOS start identity不明はblockし、signal送信や履歴の状態変更は行わない。
+別Catalogのjobは除外し、sealed binding/admission/Catalog lock/Apply fresh previewは維持する。
+
+Previewは全Catalog snapshotとfingerprintを維持したまま、ID辞書でWork/Item/Source/Target/Runを
+照合する。library列挙は呼出ごとに一回、status JSONはZIPのlibrary相対pathに対応する候補だけ
+読み、全件列挙しない。規定外の歴史的JSONや別名aliasは探索・変更しない。同じZIP/statusのhashを
+同一呼出内だけで共有する。各Artifactの宣言・所有検査は省略せず、読取前後および再利用時の
+file identity/size/mtimeと、status解析に使ったbytesのSHAを照合する。Applyは新しい呼出で
+再検証し、previewのhash cacheを引き継がない。Qt非依存のprogress callback/cancel tokenを
+GUIのqueued signalへ接続し、中止したpreviewはPlan/tokenを公開しない。
+
+Work単位の完全削除はRunbook `runbooks/work-deletion/` に従う共通Serviceとして実装済みである。`WorkDeletionPreviewService` はCatalog v7の全依存、Watchlist、Artifact/status/ZIP、全bound management store、active markerをread-onlyで検証し、CLIとWindows GUIは同じcanonical Plan/tokenをApplyへ渡す。CLIは `work delete --work-key KEY --dry-run|--apply --json` と明示的な `recover` / `bind` を提供し、GUIはWork行だけのコンテキストメニューから確認ダイアログを開く。通常のDiscovery、Batch、Capture、Watchlist編集、archive orderingの意味は変更しない。
+
+実装時はcanonical Catalog pathのSHA-256で分離したCatalog固有namespace内のdurable deletion marker、sealed management-store binding registry、短時間admission lockをqueue/start/Discovery/registrationの共通gateとして扱い、任意trash rootだけに未完了状態を置かない。標準management DBだけではcustom storeを証明できないため、registry欠落・未sealed・未知path・読取不能はfail-closedとする。初回導入は全既知storeを明示bindしてからsealedにするbootstrap/migration操作を必要とする。admission lockは通常workerのCatalogJobLockと分離し、既存の実行中queue登録を拒否しない。Delete Applyだけがadmission lockを保持し、その内側でCatalog lock取得後にWatchlist edit lockを同じ順序で保持する。冗長FK（CrawlRunのitem/source/target、Artifactのitem/run）のWork整合性を検証する。詳細な削除順、path alias/reparse/hardlinkのfail-closed条件、failure matrixは [work-deletion Stage 00](../runbooks/work-deletion/00-contract/README.md) に記録する。
+
+Preview performance refinement (2026-11-14): the read-only snapshot remains
+the authority and its fingerprint is unchanged, while ownership joins use
+call-local ID dictionaries instead of nested scans. The Library ZIP tree is
+indexed once; status JSON is read only at packaging-derived paths (2026-11-15).
+Duplicate locators reuse stable size/SHA/device/
+inode/mtime facts. Index candidates and SHA chunks honor a Qt-free cooperative
+cancel token. The GUI receives throttled queued progress with explicit stage,
+file-count, and elapsed-time labels; only preview is cancellable, while Apply
+close/cancel remains guarded. These optimizations do not change Discovery,
+Batch, Capture, or site-adapter semantics.
+
 ## Hanayume repair analysis (Stage 01)
 
 `gui/catalog_repair.py` is a separate optional Qt dialog, opened from Inventory
@@ -755,3 +792,15 @@ are identified explicitly and never retried automatically.
 Events use bounded latest/keyset reads and metrics use authorized incremental
 JSONL reads. Raw stdout/stderr remain separate, and the upper inventory layout
 and execution controls retain their existing order and meaning.
+- Work-deletion preview safety update (2026-11-14): the read-only planner treats a sealed management binding as a complete set, checks catalog-specific recovery markers before any Work classification, and binds plan tokens to root identity/volume, management logical state, status facts and the gate fingerprint. Existing destination operation directories, ambiguous/untracked artifacts, unsafe status paths, duplicate locators and uncertain worker states block. SQLite WAL/SHM sidecars are fail-closed before read-only open so preview cannot change SQLite read marks or source file metadata.
+- Duplicate locator refinement (2026-11-14): exact same-Work/path/size/SHA/owner historical duplicates remain represented by every Artifact ID, warn, and nominate one primary move; shared or mismatched ownership/content remains blocking. Supervision-error markers and raw status-path traversal are blocking before canonical resolution.
+- Work-deletion Apply (2026-11-14): the service path revalidates a fresh plan under admission→Catalog→Watchlist locks, writes a durable fsync manifest and verified standalone backup, performs no-clobber same-volume file moves with per-file hash checks, then executes exact Catalog graph deletion and lossless Watchlist target/archive CAS. Pre-commit exceptions restore files; commit uncertainty is observed as `RECOVERY_REQUIRED`. The CLI and GUI surfaces now use this same path.
+- Work-deletion Stage 02 safety refinement (2026-11-14): destructive Apply is bound to a canonical same-instance preview cache and path/namespace token, persists Watchlist originals plus per-file intent/verification, reserves `active.json`, and carries strong file identity through rename and rollback. Ambiguous filesystem/database/YAML state never chooses rollback; final target and non-target invariants are checked before releasing the reservation.
+- Work-deletion Stage 02 cutover refinement (2026-11-14): the namespace reservation is written before the manifest, and a previously present Watchlist that disappears after replacement is treated as `RECOVERY_REQUIRED`, never as DONE. File and parent-directory fsync barriers are best-effort; Windows/filesystem and physical-power-loss durability limits are explicit, with process-kill recovery deferred to Stage 03.
+- Work-deletion locator compatibility (2026-11-14): relative Catalog Artifact locators and status `archive_path` values resolve from the established process CWD, matching archive audit/renumber and Batch behavior. Deletion does not reinterpret them relative to a custom Catalog parent; traversal and reparse checks still run before canonical resolution.
+- Work-deletion operation namespace refinement (2026-11-14): the trash operation directory is exclusively created before any snapshot/manifest write. If an external actor wins that name race, Apply stops without touching the existing directory, manifest, marker, or source data.
+- Work-deletion recovery/gate (2026-11-14): recovery is an explicit dry-run/apply service and CLI path backed by durable operation history, admission→Catalog→Watchlist locking, exact Catalog/Watchlist before/after fingerprints, and per-file size/SHA/strong-identity observations. Discovery, registration, Batch, and effective-Catalog enqueue recheck the read-only deletion gate after acquiring the Catalog lock; active/pending, malformed, unknown, or manifestless reservations fail closed. Catalog rows marked missing/deleted are still blocked when their recorded ZIP or status locator exists physically, so stale state cannot hide a later Batch collision. Process-kill recovery is isolated-tested; physical power-loss durability is not claimed. Independent Stage 03 review is BLOCKING-0 approved.
+- Work-deletion move portability boundary (2026-11-14): destructive no-clobber rename is enabled only on Windows in this initial implementation, where the tested native rename semantics reject an existing destination. Other platforms fail closed before moving; no POSIX check-then-rename guarantee is claimed.
+- Work-deletion recovery safety (2026-11-14): recovery dry-run treats SQLite WAL/header/sidecars and hot journals as unknown without creating locks or SQLite files; explicit apply may use SQLite's native hot-journal rollback under the Catalog lock. Recovery manifests require canonical Catalog/Watchlist/namespace bindings and verified backup facts. Catalog deletion compares the full non-target logical fingerprint inside the same transaction before COMMIT, and unknown Catalog tables/columns fail closed. These boundaries are covered by the isolated Stage 03 review-approved suite.
+- Work-deletion GUI gate follow-up (2026-11-14): standalone Watchlist editor saves always use an effective Catalog admission/gate identity (`catalog_path` or isolated `catalog.sqlite` default); optional Catalog binding semantics for scope previews remain unchanged. Page, Watchlist, runtime, and worker paths are canonicalized at construction, so delayed workers cannot re-resolve them under a changed CWD. A pending deletion reservation blocks the save, and normal save resumes only after verified gate release. Manifest `active_marker` values are checked against the canonical Catalog namespace. GUI/work-deletion isolated coverage is 95 passing tests; Stage 03 independent review is BLOCKING-0 approved.
+- Work-deletion Stage 04 surface (2026-11-14): direct CLI preview/apply JSON and the archive Work context-menu dialog both invoke the common service. CLI output includes authoritative title/site keys, graph and ZIP/byte counts, operation/manifest identifiers, blockers and warnings; blocked and recovery-required results are nonzero. The Qt dialog previews on a QRunnable, requires explicit confirmation, and applies only the cached canonical Plan; all paths are absolute at owner construction. Defaults are the existing isolated packaging roots (`output/Books`, `output/crawl-status`, `output/trash/work-deletion`). Independent Stage 04 review is BLOCKING-0 approved; real data and live sites remain out of scope. The affected isolated suite is 313 passed with 442 warnings; the full-suite attempt is recorded as incomplete because of a Windows async teardown timeout.

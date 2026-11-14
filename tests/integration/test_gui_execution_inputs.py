@@ -22,6 +22,11 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from tools.gui_sample import create_sample
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.mark.parametrize("outcome", ["stopped", "failed", "orphaned", "broken_monitor"])
 def test_emergency_stop_terminates_active_job_and_pauses_dispatch(
     tmp_path, qt_app, monkeypatch, outcome

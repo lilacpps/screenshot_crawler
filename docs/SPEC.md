@@ -779,3 +779,28 @@ existing Screenshot Crawler
 - title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
 - 同じWorkで話ごとにsiteが異なることを許容し、cross-site Itemを自動mergeせずDiscovery時に重複候補warningだけを出す
 - 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める
+# Work deletion safety boundary (2026-11-14)
+
+管理ジョブの削除前確認は、同じCatalogの起動情報があるqueued、planning/runningと終了未確認workerが
+対象である。queuedでworker_pid/worker_start_token/started_atの3フィールドが存在して全てNULLなら、
+未開始予約として無視し、行の取消・削除は行わない。workerは既存admission/start gateとCatalog lockを
+通るまで書き込めない。succeeded/partial/failed/cancelled等の終了履歴は、そのsummaryや過去ログを
+停止理由・plan fingerprintに含めない。interruptedはworker identity/token/PIDとOSの生存・
+creation identityで終了を証明できた場合だけ履歴扱いにし、不明・生存中は停止する。
+queuedにはまだworker.identityがないのが正常で、欠落を追加エラーにしない。
+
+status JSONは、検証対象ZIPのlibrary-root相対pathをstatus-rootへ対応させ、拡張子を.jsonに
+した候補だけを読む。status rootの全走査や、別配置・別名の歴史的JSON探索は行わない。
+対応候補の本文/所有/hash/path/identity検査は維持し、候補外のJSONは残す。
+
+PreviewはCatalog全Artifact/他Work参照の検査を維持し、規定status候補とID/ファイル索引・呼出内hash共有で効率化し、段階・件数・
+経過時間と協調cancelを提供する。cancelされたpreviewは削除可能なPlan/tokenを公開しない。
+Apply/recoveryのcommit境界・排他・再検証と復旧契約は維持する。
+
+Work単位の完全削除は `runbooks/work-deletion/` の共通Service契約に従う。CLI/GUIは
+read-only previewでCatalog v7の全依存、Watchlist、Artifact/status/ZIP、全bound管理DBを
+確認し、同じcanonical Plan/tokenをApplyへ渡す。Applyは admission→Catalog→Watchlist の
+lock順、verified backup、per-file intent/strong identity、Catalog transaction内の非対象
+fingerprint、Watchlist CAS、durable manifestを要求する。不明・改変・途中失敗は
+BLOCKED/RECOVERY_REQUIREDとし、実サイト・実Catalog・実Watchlist・実ZIPへの恒常的な
+検証依存は作らない。Discovery/Batch/Captureの既存意味は変更しない。

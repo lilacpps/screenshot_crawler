@@ -53,6 +53,10 @@ from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow
 from screenshot_crawler.gui.model import ArchiveFilter, InventoryTreeModel, StatusFilter, ViewMode
 from screenshot_crawler.gui.watchlist_comparison import WorkEpisodeModel, WorkEpisodeRow
+from screenshot_crawler.maintenance.work_deletion_gate import (
+    assert_work_deletion_gate_clear,
+    work_deletion_admission_lock,
+)
 from screenshot_crawler.management.catalog_reader import (
     CatalogInventoryReader,
     catalog_snapshot_identity,
@@ -291,12 +295,17 @@ class _SaveWorker(QRunnable):
         revision: str,
         catalog_path: Path | None,
         catalog_guard: str | None,
+        gate_catalog_path: Path,
         generation: int,
         scope_preview: ScopeEditPreview | None = None,
     ) -> None:
         super().__init__()
-        self.path, self.proposed, self.revision = path, proposed, revision
-        self.catalog_path, self.catalog_guard, self.generation = catalog_path, catalog_guard, generation
+        self.path, self.proposed, self.revision = path.resolve(strict=False), proposed, revision
+        self.catalog_path, self.catalog_guard = (
+            catalog_path.resolve(strict=False) if catalog_path is not None else None,
+            catalog_guard,
+        )
+        self.gate_catalog_path, self.generation = gate_catalog_path.resolve(strict=False), generation
         self.scope_preview = scope_preview
         self.signals = _ScopeSignals()
 
@@ -314,22 +323,29 @@ class _SaveWorker(QRunnable):
     def run(self) -> None:
         try:
             service = WatchlistService(self.path)
-            if self.catalog_path is not None:
-                if self.catalog_guard is None or not self.catalog_path.is_file():
-                    raise RuntimeError("Catalog path pair is unavailable for a scope-affecting edit")
-                with CatalogJobLock(self.catalog_path):
-                    if self._guard(self.catalog_path) != self.catalog_guard:
-                        raise RuntimeError("Catalog path pair changed after preview")
-                    if self.scope_preview is None or not self.scope_preview.ready or not self.scope_preview.is_fresh():
-                        raise RuntimeError("Scope preview is missing or stale; rerun preview")
-                    if self.scope_preview.proposed_target not in self.proposed:
-                        raise RuntimeError("Scope preview draft no longer matches the save proposal")
-                    data = CatalogInventoryReader().read(self.catalog_path)
-                    if _catalog_snapshot_identity(data) != self.scope_preview.catalog_snapshot_id:
-                        raise RuntimeError("Catalog changed since scope preview; reload and retry")
+            admission = work_deletion_admission_lock(self.gate_catalog_path)
+            admission.__enter__()
+            try:
+                assert_work_deletion_gate_clear(self.gate_catalog_path)
+                if self.catalog_path is not None:
+                    if self.catalog_guard is None or not self.catalog_path.is_file():
+                        raise RuntimeError("Catalog path pair is unavailable for a scope-affecting edit")
+                    with CatalogJobLock(self.catalog_path):
+                        assert_work_deletion_gate_clear(self.gate_catalog_path or self.catalog_path)
+                        if self._guard(self.catalog_path) != self.catalog_guard:
+                            raise RuntimeError("Catalog path pair changed after preview")
+                        if self.scope_preview is None or not self.scope_preview.ready or not self.scope_preview.is_fresh():
+                            raise RuntimeError("Scope preview is missing or stale; rerun preview")
+                        if self.scope_preview.proposed_target not in self.proposed:
+                            raise RuntimeError("Scope preview draft no longer matches the save proposal")
+                        data = CatalogInventoryReader().read(self.catalog_path)
+                        if _catalog_snapshot_identity(data) != self.scope_preview.catalog_snapshot_id:
+                            raise RuntimeError("Catalog changed since scope preview; reload and retry")
+                        saved = service.apply_edit(self.proposed, expected_revision=self.revision)
+                else:
                     saved = service.apply_edit(self.proposed, expected_revision=self.revision)
-            else:
-                saved = service.apply_edit(self.proposed, expected_revision=self.revision)
+            finally:
+                admission.__exit__(None, None, None)
         except Exception as exc:  # noqa: BLE001 - atomic save boundary
             self.signals.failed.emit(str(exc) or type(exc).__name__)
         else:
@@ -524,9 +540,17 @@ class WatchlistEditorPage(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.Window, True)
-        self.watchlist_path = Path(watchlist_path)
-        self.catalog_path = Path(catalog_path) if catalog_path is not None else None
-        self.runtime_path = Path(runtime_path)
+        self.watchlist_path = Path(watchlist_path).resolve(strict=False)
+        self.catalog_path = Path(catalog_path).resolve(strict=False) if catalog_path is not None else None
+        # Watchlist-only edits still participate in the deletion admission
+        # gate.  Keep the optional Catalog binding semantics for scope edits,
+        # but resolve a deterministic default for the safety gate itself.
+        self.gate_catalog_path = (
+            Path(catalog_path).resolve(strict=False)
+            if catalog_path is not None
+            else Path("catalog.sqlite").resolve(strict=False)
+        )
+        self.runtime_path = Path(runtime_path).resolve(strict=False)
         self.snapshot = snapshot
         self.service = WatchlistService(self.watchlist_path)
         self.targets = tuple(self.service.list_targets())
@@ -1422,6 +1446,7 @@ class WatchlistEditorPage(QWidget):
                 self.revision,
                 self.catalog_path if selection_affecting else None,
                 self._catalog_guard if selection_affecting else None,
+                self.gate_catalog_path,
                 self._generation,
                 self._scope_edit_preview if selection_affecting else None,
             )

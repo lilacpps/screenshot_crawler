@@ -1,10 +1,12 @@
 # Work単位の完全削除（退避付き）Runbook
 
-> **PLANNED / NOT IMPLEMENTED — 2026-11-14**
+> **STAGES 00–04 IMPLEMENTED / INDEPENDENT STAGE04 REVIEW BLOCKING-0 APPROVED — 2026-11-14**
 >
 > 対象: lilacpps/screenshot_crawler の Catalog v7、Watchlist、ZIP/status、Windows GUI、CLI。
 > 目的は既存の作品を完全に登録し直せるようにすること。実際の作品・実データの削除はこのRunbookの作成では行わない。
-> 各Stageの実装状況とレビューは [PROGRESS.md](PROGRESS.md) を更新する。計画を実装済みと記載しない。
+> 各Stageの実装状況とレビューは [PROGRESS.md](PROGRESS.md) に記録する。実際の作品・実データの削除は行わず、隔離fixtureだけで検証する。
+
+Stage 04の独立レビューはBLOCKING-0で承認済み。隔離されたaffected suiteは313 passed、GUI subsetは46 passed、Full→削除→同一key再登録→BatchのE2Eは1 passedである。Full2/Full3はWindows `pytest_asyncio`/IOCP teardown timeoutにより完走せず、full-suite PASSとは扱わない。この制限、実行root、未実行カテゴリ、既知のWindows/WAL/電断限界は [PROGRESS.md](PROGRESS.md) の最終記録にまとめる。
 
 ## 0. Authority / 実装ルール
 
@@ -71,7 +73,7 @@ output/trash/work-deletion/<unique-id>/
 ~~~
 
 - この例は相対的な概念図。`trash` はLibraryやstatus配下に置かず、ユーザー指定の安全な退避ルートへ。ZIP/statusと退避先は同じvolume（rename可能）を初期必須条件とし、cross-volume copy/moveは初期版で拒否。
-- pathはCatalogの`filesystem Artifact.locator`と、該当ZIPのstemに対応する**内容照合済みstatus JSON**から確定する。Libraryディレクトリ全体や作品名一致によるglob削除は禁止。historical Artifactも列挙し、重複パスは明示的に検証して一度だけ移動。
+- ZIP pathはCatalogの`filesystem Artifact.locator`から確定する。statusは`status_root / ZIPのlibrary_root相対path.with_suffix('.json')`の一候補だけを内容照合し、全JSON走査は行わない。別配置・別名の古いJSONは残し、その全alias検出は保証しない。Libraryディレクトリ全体や作品名一致によるglob削除は禁止。historical Artifactも列挙し、重複ZIPパスは明示的に検証して一度だけ移動。
 - 他WorkのArtifactが同一パスを参照、symlink/reparse point・hardlinkによる曖昧な所有、ルート外/`..`/path traversal、衝突、Zip不在なのにpresent、既存ファイルのchecksum不一致、status JSONの不一致等はfail-closed。対象Artifactの種類/保存先が不明なら推測しない。
 - 欠損・既にdeleted/missingと記録済みのArtifactは退避対象にしない。ただし`present`の実ファイル不在を成功扱いしない。status JSONが存在しない場合はZIPに対して許容できるかStage 00で明示し、推測で作成しない。
 - 未追跡ファイル、失敗runの一時出力、他rootのファイルは検出可能な範囲で「手動確認対象」として報告。所有が証明できないファイルを勝手に移動しない。新規Batch衝突の恐れがある場合は完了保証に含めずブロックする。
@@ -85,7 +87,7 @@ output/trash/work-deletion/<unique-id>/
 
 ### 5.2 排他・再検証
 
-Apply前に既存のCatalog Job LockとWatchlist edit lockを**常に同じ順序**で取得し、すべての削除・復旧エントリがその順序を守る。GUI worker以外のCLI/workerも対象。関連Catalogの実行中・待機中・orphaned/supervision errorを検査し、安全性を証明できなければ止める（Stage00でmanagement DB位置と判定箇所を確定）。ロック保持中に状態・plan token・パスとhash・Watchlist CASを再検証。プレビュー中にジョブが開始していたらapplyしない。
+Apply前に既存のCatalog Job LockとWatchlist edit lockを**常に同じ順序**で取得し、すべての削除・復旧エントリがその順序を守る。GUI worker以外のCLI/workerも対象。関連Catalogの実行中・起動情報がある待機・終了未確認workerを検査し、安全性を証明できなければ止める。queuedでworker_pid/worker_start_token/started_atが存在して全NULLなら未開始予約として無視し、取消やDB更新はしない。通常終了履歴のsummaryや過去supervision errorだけでも止めない。ロック保持中に状態・plan token・パスとhash・Watchlist CASを再検証する。予約がclaimされていればfresh Applyで停止し、その後の競合もworkerのadmission/start gateとCatalog lockで防ぐ。
 
 ### 5.3 Durability/commit boundary
 

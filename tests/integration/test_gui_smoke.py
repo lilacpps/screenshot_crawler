@@ -20,6 +20,11 @@ def qt_app():
 
 
 @pytest.fixture(autouse=True)
+def isolate_default_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
 def dispose_qt_windows_on_gui_thread(qt_app):
     """Destroy widgets on their owning thread before the next worker starts."""
     import gc

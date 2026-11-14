@@ -25,6 +25,13 @@ from screenshot_crawler.management.jobs import (
 from screenshot_crawler.management.process_identity import process_is_alive, process_start_identity
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_catalog_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy omitted catalog paths inside each test's sandbox."""
+
+    monkeypatch.chdir(tmp_path)
+
+
 def _request() -> JobExecutionRequest:
     return JobExecutionRequest(
         action="batch",

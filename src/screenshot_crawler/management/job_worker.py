@@ -10,6 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from screenshot_crawler.execution_worker import WorkerCancelled, _run
+from screenshot_crawler.maintenance.work_deletion_gate import (
+    assert_work_deletion_gate_clear,
+    work_deletion_admission_lock,
+)
 from screenshot_crawler.management.jobs import JobEvent, JsonlEventSink
 from screenshot_crawler.management.process_identity import process_start_identity
 
@@ -32,6 +36,9 @@ async def run_job(
     job_dir: str | Path,
 ) -> int:
     job_dir = Path(job_dir)
+    catalog_path = Path(str(request.get("catalog_path") or Path("catalog.sqlite").resolve(strict=False))).resolve(strict=False)
+    with work_deletion_admission_lock(catalog_path):
+        assert_work_deletion_gate_clear(catalog_path)
     sink = JsonlEventSink(job_dir / "events.jsonl", job_id)
     identity = job_dir / "worker.identity"
     identity.write_text(

@@ -14,6 +14,10 @@ from screenshot_crawler.archive_order import (
 )
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.models import AcquisitionScopeSnapshot, Source
+from screenshot_crawler.maintenance.work_deletion_gate import (
+    assert_work_deletion_gate_clear,
+    work_deletion_admission_lock,
+)
 from screenshot_crawler.watchlist.fingerprints import (
     configuration_json,
     target_scope_definition,
@@ -142,32 +146,35 @@ class ScopeReconciler:
             raise ScopeReconciliationError(
                 "Scope sync is blocked: " + "; ".join(preview.blockers)
             )
-        with self.catalog.job_lock():
-            current = self.preview(preview.work_key)
-            if not current.ready:
-                raise ScopeReconciliationError(
-                    "Scope sync became blocked: " + "; ".join(current.blockers)
+        with work_deletion_admission_lock(self.catalog.path):
+            assert_work_deletion_gate_clear(self.catalog.path)
+            with self.catalog.job_lock():
+                assert_work_deletion_gate_clear(self.catalog.path)
+                current = self.preview(preview.work_key)
+                if not current.ready:
+                    raise ScopeReconciliationError(
+                        "Scope sync became blocked: " + "; ".join(current.blockers)
+                    )
+                if (
+                    current.fingerprint != preview.fingerprint
+                    or current.definition_fingerprint != preview.definition_fingerprint
+                    or current.configuration_json != preview.configuration_json
+                    or current.revision_token != preview.revision_token
+                    or current.source_flags != preview.source_flags
+                ):
+                    raise ScopeReconciliationError(
+                        "Watchlist or Catalog changed after preview; create a new preview"
+                    )
+                assert current.revision_token is not None
+                return self.catalog.apply_acquisition_scope_sync(
+                    work_key=current.work_key,
+                    fingerprint=current.fingerprint,
+                    definition_fingerprint=current.definition_fingerprint,
+                    configuration_json=current.configuration_json,
+                    expected_revision_token=current.revision_token,
+                    discovery_keys=current.discovery_keys,
+                    source_flags=dict(current.source_flags),
                 )
-            if (
-                current.fingerprint != preview.fingerprint
-                or current.definition_fingerprint != preview.definition_fingerprint
-                or current.configuration_json != preview.configuration_json
-                or current.revision_token != preview.revision_token
-                or current.source_flags != preview.source_flags
-            ):
-                raise ScopeReconciliationError(
-                    "Watchlist or Catalog changed after preview; create a new preview"
-                )
-            assert current.revision_token is not None
-            return self.catalog.apply_acquisition_scope_sync(
-                work_key=current.work_key,
-                fingerprint=current.fingerprint,
-                definition_fingerprint=current.definition_fingerprint,
-                configuration_json=current.configuration_json,
-                expected_revision_token=current.revision_token,
-                discovery_keys=current.discovery_keys,
-                source_flags=dict(current.source_flags),
-            )
 
     def require_synchronized(self, work_key: str) -> ScopeSyncPreview:
         """Require current Watchlist binding and every Catalog flag to agree."""

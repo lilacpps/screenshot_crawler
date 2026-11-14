@@ -35,6 +35,7 @@ from screenshot_crawler.maintenance.source_identity import (
     SourceIdentityError,
     SourceIdentityMaintenance,
 )
+from screenshot_crawler.maintenance.work_deletion_gate import assert_work_deletion_gate_clear
 from screenshot_crawler.watchlist.fingerprints import target_scope_fingerprint
 
 if TYPE_CHECKING:
@@ -93,7 +94,9 @@ class DiscoveryService:
             ):
                 raise DiscoveryIncompleteError(capability_error)
             return blocked_discovery_result(target, mode, capability_error)
+        assert_work_deletion_gate_clear(self.catalog.path)
         with self.catalog.job_lock():
+            assert_work_deletion_gate_clear(self.catalog.path)
             return await self._discover_locked(page, target, mode, adapter=adapter)
 
     async def _discover_locked(
