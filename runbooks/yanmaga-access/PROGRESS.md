@@ -2,9 +2,9 @@
 
 **Status:** PLANNED / NOT STARTED
 **Plan authored:** 2026-11-15
-**Implementation branch:** \`feat/yanmaga-access\`（作業開始時の最新mainから作成。未作成）
-**Base authority:** [README.md](README.md), \`runbooks/yanmaga-free/README.md\`, \`AGENTS.md\`
-**注意:** 本ファイルは実装済み・実サイト確認済みを意味しない。旧 \`runbooks/yanmaga-free/PROGRESS.md\` は通常無料機能の既存検証履歴として維持する。
+**Implementation branch:** `feat/yanmaga-access`（作業開始時の最新mainから作成。未作成）
+**Base authority:** [README.md](README.md), `runbooks/yanmaga-free/README.md`, `AGENTS.md`
+**注意:** 本ファイルは実装済み・実サイト確認済みを意味しない。旧 `runbooks/yanmaga-free/PROGRESS.md` は通常無料機能の既存検証履歴として維持する。
 
 | Stage | 状態 | 証拠・結果 |
 | --- | --- | --- |
@@ -30,7 +30,7 @@
 2. 初回無料開放時の画面遷移と閲覧期限の証拠、取得失敗時の再入場。
 3. 作品単位の待つと無料のチャージ・回復表示と、開放後の閲覧有効期間。
 4. 既存Yanmagaの匿名用Discovery証拠を維持しながら、ログイン時のアクセス分類を行う方法。
-5. 初回無料のdirect開放成功を既存DB \`access_granted_until\` に確実に反映する最小の呼び出し経路。
+5. 初回無料のdirect開放成功を既存DB `access_granted_until` に確実に反映する最小の呼び出し経路。
 6. 通常direct群と作品quota群の具体的な既存実行順。
 
 未検証の実サイト挙動を前提にproductionへセレクタや期限計算を入れないこと。
