@@ -1,6 +1,6 @@
 # Yanmaga access expansion progress
 
-**Status:** Stage 01 PASS (observed Discovery subset). Stage 02 C sort and canonical/og corrections are accepted with independent BLOCKING 0, and a later metadata-only live probe verified the production finite-countdown helper for the previously opened target. Stage 02 remains IN PROGRESS: first-free production capture, immediate Catalog persistence on the fresh flow, and recovery are not yet verified; the current BODY implementation awaits final independent review.
+**Status:** Stage 01 PASS (observed Discovery subset); Stage 02 PASS with independent final review BLOCKING 0. C1 verified one exact first-free release and synchronous grant persistence before an intentional capture-hook failure; C2 reused that grant without a new right. The v4 full/incremental metadata refresh passed Root's Catalog audit. C3 stopped before Source entry; C4-C6 failed before complete content, and C7 stopped before END after the nonsemantic inline rental card was misidentified as a gate. The site-local fix preserves semantic-dialog, body-ownership, pixel, page-count, and positive-END checks. C8 then completed the target using the same existing grant: 14 pages, positive END, ZIP, Artifact, and Item completion were independently audited. The archive contains 13 native WebP pages plus one safe PNG fallback for the last page. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental returned five known rows and `known_streak` with `complete=null` (not evaluated). Its Source/Viewer counts are unknown because the observer was not installed. The post-full plan had no candidates because the target Item was already completed. The additional first-free allowance is exhausted; the user's manual chapter-26 use is excluded from our attempt count and is not recorded as ticket/quota use. Stage 03 read-only investigation has started; Stage 03 implementation and Stage 04 have not started.
 **Plan authored:** 2026-11-15.
 **Implementation branch:** `feat/yanmaga-access`, created from latest `origin/main` (`4407e975`).
 **Stage 01 implementation commit:** `26cbae8`.
@@ -10,8 +10,8 @@
 | Stage | Status | Gate |
 | --- | --- | --- |
 | 01 Site probe / Discovery | PASS (observed subset); independent BLOCKING 0 | Wait-free, paid-only, and grant/expiry evidence remains unverified. |
-| 02 First-free capture | IN PROGRESS (C and canonical/og sub-gates accepted; metadata-only finite proof verified; BODY implementation and final review pending) | No fresh production capture/END/ZIP/Completed or recovery run has been verified. The one-episode first-free budget is exhausted; no more rights use is authorized for this target. |
-| 03 Work ticket | NOT STARTED / NOT VERIFIED | No wait-free signal or ticket/cooldown behavior has been confirmed live. Do not infer or enable quota. |
+| 02 First-free capture | PASS; independent final review BLOCKING 0 | C1 used one additional first-free attempt on position 31. C2 reused the same grant without a new right. V4 pre-capture full/incremental and plan passed independent Catalog audit. C3 stopped before Source entry under a QA budget guard. C4-C6 failed before complete capture. C7 saved 13 WebP pages and reached 14/14, then failed before END because the nonsemantic `#rental` card matched the broad modal gate. The site-local exemption preserves semantic-dialog, body-ownership, and positive-END checks. C8 completed the same existing-grant target with one Source GET and one Viewer GET, no other episode or non-GET request, and zero new first-free use. Run 8 succeeded with 14 pages and `stop_reason=end`; Item 27 completed and one Artifact was present. The 14-page ZIP and genuine Manifest match exactly and Root's artifact audit passed. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental returned `known_streak` with five known rows and `complete=null` (not evaluated), and its Source/Viewer request counts are unknown because its observer was not installed. The post-full plan had zero candidates because Item 27 was complete. The independent final review accepted Stage 02 with BLOCKING 0. No new right is authorized. |
+| 03 Work ticket | READ-ONLY INVESTIGATION STARTED; implementation NOT STARTED | No wait-free signal or ticket/cooldown behavior has been confirmed live. Do not infer or enable quota. |
 | 04 E2E / final review | NOT STARTED | Depends on earlier accepted stages and live access evidence. |
 
 ## Stage 01: site probe and Discovery
@@ -79,7 +79,7 @@ No cookies, auth state, personal account data, or full analytics request URLs we
 
 ### Stage 01 gate
 
-**PASS (observed Discovery subset); independent BLOCKING 0.** Lead accepted the review. Stage 02 is now in progress under its own Lead phase contract. Stage 03 remains not verified and cannot be treated as implemented without a live wait-free signal and a separate bounded quota/ticket contract. Unknown behavior remains fail-closed.
+**PASS (observed Discovery subset); independent BLOCKING 0.** Lead accepted the review. Stage 02 is recorded below under its own phase contract. Stage 03 read-only investigation has started; no wait-free signal or quota/ticket behavior has been confirmed, and implementation remains unstarted. Unknown behavior remains fail-closed.
 
 ## Stage 02: first-free capture
 
@@ -311,7 +311,8 @@ sort controls. Canonical input work URLs and public episode Source targets remai
 queryless. Legacy fixtures with no sort UI keep their
 existing oldest-first pagination contract. C implementation/tests are complete
 and accepted with independent BLOCKING 0. The canonical/og follow-up below is
-accepted with independent BLOCKING 0. No Stage 02 live capture has been run.
+accepted with independent BLOCKING 0. At that C-review checkpoint no Stage 02
+live capture had been run; the later C1 result is recorded below.
 
 The earlier Rental History UI read showed H=23. The latest read-only
 exact-target Rental History document showed one target anchor/card and one
@@ -520,6 +521,400 @@ probe allowed one recommendation GET and 21 known analytics POSTs; no raw URL,
 query value, HTML, or account data was recorded. Evidence:
 `output/yanmaga_access_experiment/stage02/production-helper-metadata-only-v1.json`.
 
+### Metadata-only candidate preparation and audit correction (2026-11-15)
+
+A later Lead-approved metadata-only check prepared a separate candidate without
+opening a Source or Viewer and without using rights. A fresh canonical full and
+incremental snapshot each contained 57 rows; `work-dual` had one authenticated,
+exact first-free row at full-list position 31, aliased here as
+`episode-ff-capture-01`. It is distinct from the already-used position-32
+`episode-ff-probe-01`. In a new isolated Catalog, this run recorded 1 Work,
+57 Items, 57 Sources, and 57 SourceTargets; the selected target IDs were Work 1 /
+Item 27 / Source 27 / Target 27. It reapplied the acquisition flag to exactly
+one Source and produced a one-candidate direct plan. Rights used: 0.
+No capture or Source navigation was performed. Exact episode identifiers and
+URLs remain only in ignored evidence.
+
+The unchanged report
+`output/yanmaga_access_experiment/stage02/metadata-only-v2/metadata-firstfree-work-dual-report.json`
+has SHA-256 `65497681fb71324a3c7c1557e1cf5143e4ccdf8dd702164f0d42e90e35aeb94d`;
+its companion Catalog audit has SHA-256
+`a5ef54089913fa829fe86fa698ae2d9e5e7507b406cf77dda3e870caae1fb7d3`. The
+The numeric zero values for `source_viewer_attempt_count` and
+`first_party_non_get_attempt_count` were computed from the measured full and
+incremental request-monitor guard counters, which recorded zero Source/Viewer
+and zero first-party non-GET activity. Only the `*_observed` flags remain
+false because the success branch omitted their updates. Those monitor runs
+recorded primary GET count 3 and recommendations-GET count 2
+each, with no fatal route, consistent with the classifier's all-resource-type
+Source/Viewer denial and first-party non-GET denial. The original report
+and audit were not edited, and no site rerun was made for this correction.
+The production source hashes used for C1 and still held fixed for C2 are
+adapter SHA-256
+`6B26B256809D5CE177E07D154B6625D48F467C88AF90AFDD7CE100B6AE90353F`, Discovery
+SHA-256 `E560CC4084B87716438BDBEA3D16480CA7CE6A206692FFE1159CA786375361AA`, and
+rental-history helper SHA-256
+`85717DE55E8DCF4873D03E742A465CB1F9966B32640C0DDB2B1402F09C8097E8`. The
+failure-injection harness `769` and external QA manifest monitor remain fixed.
+
+### Stage 02 C1 result and C2/final-capture contract
+
+The exact candidate was `work-dual` / `episode-ff-capture-01`, one-based
+full-list position 31. The isolated metadata report is authoritative for its
+canonical URL and identity; the exact episode ID remains only in ignored
+artifacts. The target identifiers in the dedicated Catalog were Work 1 / Item
+27 / Source 27 / Target 27; they are identifiers, not Catalog row totals. It is
+distinct from the previously used position-32
+`episode-ff-probe-01`.
+
+Tester ran C1 as the sole shared-browser operator; this documentation update
+made no source change and performed no CDP operation. C1 completed with all
+recorded checks passing. This additional first-free attempt used exactly one
+Source GET and one Viewer GET, attempted no other episode, made zero first-party
+non-GET requests, and invoked the capture hook once. The grant was saved before
+pixel-readiness work. After readiness/rewind, the hook raised the intentional QA
+`RuntimeError` before the first content page was saved.
+Root's independent Catalog audit confirmed the exact Work 1 / Item 27 / Source 27
+/ Target 27 identity, `access_mode=free`, and a future-aware stored grant, an
+Item still pending, one failed CrawlRun with
+`page_count=null` and the injected error marker, zero Artifacts, null
+`quota_started_at`, and zero Work resource state. No page file or Manifest page
+was created. The report was created at
+`2026-11-15T12:12:32.491816+00:00`; that is the report timestamp, not an exact
+site release or DB commit time. The stored Catalog bound
+`2026-11-16T19:12:23.851271+09:00` comes from the verified native countdown's
+conservative lower bound. It is not an observed absolute site expiry and does
+not assume a fixed 24-hour lifetime.
+
+Evidence is preserved without raw episode IDs in this note:
+`output/yanmaga_access_experiment/stage02/live-c1-failure-report.json` (SHA-256
+`7742a32ac4e6b5c2ea22999185332cc87a02b50745ff8ee7a2be66bcf30117f4`) and
+`output/yanmaga_access_experiment/stage02/root-c1-catalog-audit.json` (SHA-256
+`7ed0d238937cdf6e1b18139c7d0df16fd1ee1f7b4ddf4608017894d3864931f7`). The prior
+Research release on position 32 plus C1 on position 31 make two confirmed
+first-free uses in total. The additional first-free allowance is now exhausted;
+ticket, point, coin, and paid actions remain zero.
+
+Root independently confirmed the C1 persisted grant and authorized one C2
+retry without rerunning the external Catalog DiscoveryService. C2 completed
+with all checks passing on the same exact Source and future saved grant. The
+Adapter did perform its fresh internal listing preflight. It used one Source
+GET and one Viewer GET, then an intentional `capture_page` failure after
+readiness/rewind but before the first content page was saved, zero new first-free
+rights,
+zero other-episode attempts, zero first-party non-GET requests, and zero request
+observer errors. The Item remains pending; the two exact CrawlRuns are failed
+with the injected error and `page_count=null`; there are no Artifacts or Work
+resource records, and `quota_started_at` remains null. The saved future-aware
+Catalog grant is unchanged at
+`2026-11-16T19:12:23.851271+09:00`, the same conservative native-countdown lower
+bound recorded after C1. C2 report:
+`output/yanmaga_access_experiment/stage02/live-c2-no-rediscovery-report.json`
+(SHA-256 `1bc4cb6b3159c277d5b1449374788699006e8915113699d6757408abb4a5b0bd`).
+Independent Catalog audit:
+`output/yanmaga_access_experiment/stage02/root-c2-catalog-audit.json` (SHA-256
+`59c57136b19dcf0deb4958f09f32f8cb9b1a3c9e050458e5827ec3a578afed53`). Across
+C1 and C2, the dedicated Catalog totals were 1 Work, 57 Items, 57 Sources, 57
+SourceTargets, 2 CrawlRuns, 0 Artifacts, and 0 Work-resource rows. The selected
+target identity remained Work 1 / Item 27 / Source 27 / Target 27. These reports
+use only the `episode-ff-capture-01` alias.
+
+### Post-C2 metadata QA refresh (2026-11-15)
+
+A metadata-only v3 refresh then ran one full normal CLI Discovery for this
+candidate (incremental was not run). It made one work GET, one sort GET, one
+More request, three primary metadata GETs, two recommendation GETs, one MyPage
+GET, and one Rental History GET; Source/Viewer and first-party non-GET were 0,
+fatal routes were 0, and the existing future grant, pending Item, and
+zero Artifact/quota state were retained; the acquisition flag was restored to
+target-only scope. QA
+stopped because its derived `discovery_complete=false` was produced by an
+unconditional exception overwrite. The raw result was not saved, so the
+underlying result mode, error type/message presence, counts, snapshot, and
+record state are unknown; this is not evidence of a production Discovery
+failure. The QA assertion requiring a raw `free` mode was found inconsistent
+with the B-contract. The v4 QA preserves raw requested/result mode, completion,
+type, error-presence, counts, snapshot, and record state before assertions; it
+does not overwrite results in exception handling, require raw `free`, or require
+an incremental record.
+
+The distinct v4 QA harness (SHA prefix `98db3a1`; helper SHA prefix `1e8835`)
+passed its pure CLI-boundary self-test. Root approved and Tester completed one
+full and one incremental normal CLI metadata run, each once. The unchanged v4
+report is `output/yanmaga_access_experiment/stage02/metadata-only-v4-refresh-report.json`
+(SHA-256 `0b62fbb74622ef25e30f4f38d64ebc0c30d112365b894a56cc99dc29b85a100b`);
+Root's read-only audit `output/yanmaga_access_experiment/stage02/root-v4-refresh-catalog-audit.json` reports `allpass`.
+
+Both snapshots had 57 rows, current authenticated UI, unique canonical identity,
+and matching position-31 target sequence. Full Discovery reported native
+`complete=true`, `exhausted`, 57 observed rows, and no error. The target's raw
+SourceRecord was UNKNOWN; fresh Rental History plus the trusted future grant
+preserved Catalog `access_mode=free`. Incremental reported native
+`complete=null`, `known_streak`, five observed rows, and no error; it did not
+yield the target (zero records) while its snapshot still contained all 57 rows.
+After each run the acquisition flag was reapplied to only the target. Root
+confirmed the unchanged future grant, pending Item, target identities Work 1 /
+Item 27 / Source 27 / Target 27, 0 Artifacts, 0 quota/resource state, two
+existing CrawlRuns, and an exact one-candidate direct non-quota plan. Both runs
+used zero rights and recorded Source/Viewer, first-party non-GET, and fatal
+route counts of zero. No capture was attempted. The v3 report remains preserved
+separately; its raw result and underlying cause remain unknown.
+
+The offline CLI-help preflight ran `.venv` help for the root, `discover`,
+`batch`, and `batch run` commands; all four exited 0. Outputs are isolated
+under `output/yanmaga_access_experiment/stage02/cli-help-preflight/`. This
+checks available syntax only and is not a Stage 04 pass.
+
+### Stage 02 C3 and C4 normal-CLI attempts (2026-11-15)
+
+C3 was attempted once under its separately approved normal-CLI contract, then
+stopped before Source entry because the metadata-only one-work-request guard was
+reused for the final flow. Its report and the known two-work-navigation
+explanation remain above. No C3 retry occurred.
+
+Root separately authorized one C4 attempt after QA helper SHA
+`a916408933112f9cadc7f54ec2e3824354ca3ed4b8cdbc516d524f8b9eb20a97` and Rental
+History helper SHA
+`769d7ec68f6864302a0529ae79304ca0a9e67c49725c1d5138e0bf57f8933da3` passed
+Root's independent self-tests and actual-prepare check. C4 used the unchanged
+position-31 alias `episode-ff-capture-01` (Work 1 / Item 27 / Source 27 / Target
+27), same future grant, pending Item, and direct plan, with isolated
+`output/c4`, `library/b4`, CWD `c4cwd`, snapshot `c4`, and a separate report.
+The fixed adapter, Discovery, and Rental History sources were unchanged.
+
+C4's normal CLI ran once without capture injection, rediscovery, or retry. The
+report is `output/yanmaga_access_experiment/stage02/c4-final-capture-report.json`
+(SHA-256 `034c0ef4b8bacb7a8eda10f793e5ab90f463e1dd7d820defb052a03c72c5cafd`).
+It exited 2 after a Page handle JavaScript error: no dialog was present and the
+Node was closed. Root's read-only Catalog audit
+`output/yanmaga_access_experiment/stage02/root-c4-catalog-audit.json` reports
+`allpass`: Item pending, C1 grant unchanged and future-aware, Run 4 failed with
+an exception and `page_count=null`, and Artifact/quota state zero. Genuine
+Manifest, page progress, and ZIP were all zero. Error/metadata diagnostics were
+preserved; no C4 rerun occurred.
+
+The safe request-observer counted Source GET=1, Viewer GET=1, other requests=0,
+and non-GET=0. The run used the existing grant; new first-free, ticket, point,
+and paid actions and other-episode attempts were 0. Route counters separately
+recorded primary=4, work-document=2, older-sort=1, More=1, recommendations=3,
+MyPage=1, History=1, and analytics=45.
+The broad `source_viewer` classifier counted 29: exact Source route=1, exact
+Viewer route=0, and 28 parent `/viewer/` matches that were broad-denied. Do not
+interpret those 28 as Viewer entries or assets. Raw path and Resource Timing
+resourceType were not recorded, so request attribution is UNKNOWN. Root checked
+the Playwright route API behavior: the route handler sees only the first URL in
+a redirect chain. Therefore routeViewer=0 is not evidence that a Viewer hop was
+blocked or never reached; the independent request-observer Viewer GET=1 is
+consistent with a redirect hop. No driver-error cause or site failure is
+established. No production change is justified by this evidence.
+
+Tester inspected the already existing exact Viewer page read-only. During that
+inspection, new Page, goto, click, keypress, refresh, and rights use remained 0;
+the other two tabs were preserved. The initial safe-resource JSON was truncated
+in tool output and not saved; it is not evidence. A later sanitized capture is
+preserved at `output/yanmaga_access_experiment/stage02/c4-existing-resource-shapes-v2.json`
+(SHA-256 `f1b9d8672ef747479cb13902f44a95e6c34d508e25a384886e68ce2727dea80d`). It
+counts 89 resources, 31 first-party, including 28 on
+`viewer-assets.yanmaga.jp` under `/viewer/assets/` (JS, CSS, PNG, nested JS);
+none had a query. Timing exposed only `initiatorType`; actual Resource Timing
+type remains unknown. The Python and page JavaScript both identified the
+expected Viewer, with redirect count 1 and status 200, but
+`referrer_source=false`; the Source-to-Viewer chain is not proven. The earlier
+`c4-existing-viewer-resource-shapes.json` is retained as historical QA output
+but its `/viewer/` root filter and encoded-slug comparison were incomplete; the
+v2 result corrects the host/path and comics-shape comparison. Do not attribute
+C4's 28 broad parent matches to these assets or to the driver error: C4 raw
+paths/resource types were not recorded. This read-only inspection observed no
+new Source/Viewer/non-GET/error events.
+
+The initial QA preparation SHA-256 was
+`d6dfc77bafedd8dac772db599b903ddce55120ff2360fd89635c156f0448a705`. Independent
+pre-live review found two blockers: a caller passed a status string to
+`_crawl_run_is_successful(run)`, and `safeSamples` accepted an unbounded query
+key including a 1,045-character opaque key. Tester corrected only QA code in
+SHA `b70e47e36990f5069ab9513c35692de1cdf5e8df0bc66337e4d8cd3883128960`;
+independent C5 pre-live review reported BLOCKING 0, and Root's self-test and
+actual-prepare check passed with the same SHA. Query sampling is capped at
+4,096 characters and 64 fields; semantic-key matching is capped at 32
+characters, opaque values are recorded as `<other>`, and sampled key names are
+bounded to 10 characters with overflow tracking. Positive and privacy-negative
+checks passed. The normal-CLI run-object check is corrected. These were
+QA-harness findings, not production source changes.
+
+The read-only resource inventory above supports a narrow QA exception for exact
+HTTPS host `viewer-assets.yanmaga.jp`, `/viewer/assets/` path, GET, non-navigation
+static fetch types; credentials, query, fragment, and dot traversal remain
+rejected. The technical cap is 64, a safety limit rather than a site quota or an
+observed limit. This asset predicate must require a synchronous exact Viewer
+HTTP 200; UNKNOWN, 302, and 500 are rejected. Keep that response check separate
+from redirect-chain request classification to avoid blocking the Viewer hop.
+Metadata-mode limits remain unchanged. For the required source-to-viewer proof,
+verify the request/response chain in memory: one source request, its immediate
+exact Viewer request, source response 302, and Viewer response 200. Record only a
+boolean, two request nodes, and one HTTP redirect. A first-hop-only route Viewer
+count of 0 is acceptable only when that positive request/response chain is proven.
+Source/Viewer request-observer counts must each be 1, with other episodes,
+non-GET, and errors 0; recommendations remain capped at 3.
+
+An independent local Chromium fixture (one run, 3.48 seconds; local dynamic port
+and test-owned temporary profile only) exercised this event order: Source request,
+source route, source 302 response/finished, exact Viewer request, Viewer 200
+response, then static non-navigation asset request/route. It produced no
+Viewer-route callback but both requests/responses were observed. Source
+`redirected_to` the Viewer and the reverse/frame/main-frame checks were all true;
+at asset time the Source 302/Viewer 200 chain was present and JS executed. This
+is local synthetic evidence only, not a C4 or live-site redirect proof; external
+GET and shared CDP were 0 and the temporary profile was cleaned.
+
+The fixed C5 execution contract used adapter, Discovery, Rental History helper,
+and QA hashes
+`6B26B256809D5CE177E07D154B6625D48F467C88AF90AFDD7CE100B6AE90353F`,
+`E560CC4084B87716438BDBEA3D16480CA7CE6A206692FFE1159CA786375361AA`,
+`85717DE55E8DCF4873D03E742A465CB1F9966B32640C0DDB2B1402F09C8097E8`, and
+`b70e47e36990f5069ab9513c35692de1cdf5e8df0bc66337e4d8cd3883128960`. It
+targeted only `work-dual` / `episode-ff-capture-01` (position 31; Work 1 / Item
+27 / Source 27 / Target 27), the existing future grant, and the audited direct
+plan, in isolated `c5`/`b5`/`c5cwd`/snapshot/report paths.
+
+C5 ran once and failed before content capture because the body did not
+stabilize. Immutable report
+`output/yanmaga_access_experiment/stage02/c5-final-capture-report.json` has
+SHA-256 `79238a71c34164def7b83b244262cbcd781593b91b40aa24abd575b76c675f9b`.
+It records one Source request followed by the exact Viewer request (Source
+302, Viewer 200; two request nodes and one redirect), 27 allowed static assets
+(22 script, 1 stylesheet, 4 images), zero other episodes/non-GET/errors, and
+one fatal source-or-viewer violation. Root's Catalog audit found the Item still
+pending, the C1 grant unchanged and future-aware, one failed CrawlRun with
+`page_count=null`, and zero Artifacts. No additional right was used. The report
+is preserved; this failure does not prove a site-side failure.
+
+The safe C5 sample contains one same-main-frame `xhr` at masked path
+`/viewer/<opaque>` with query key names `cid`, `dmytime`, `k`,
+`random_identification`, and `type`; it contains no values. Offline inspection
+of the saved C5 HTML found the static literal `/viewer/bibGetCntntInfo` once
+(HTML SHA-256 `4a9bc205b2d1ef474b19dae5cda0488b77dd768725a026a6d9f5bbf3f56e8787`),
+but the exact request-to-literal mapping has not been observed. The isolated
+evidence is `stage02/c5-content-endpoint-offline-evidence.json`.
+
+A minimal C6-only QA delta adds one unmodified-request allowance for that exact
+`https://yanmaga.jp/viewer/bibGetCntntInfo` request: GET/XHR/non-navigation,
+same owned main frame, after the verified Source 302 to Viewer 200 chain, and
+one attempt only. It reads only a unique `cid` and requires equality with the
+exact Viewer URL's `cid`; other query values are ignored, not logged, and not
+changed. Query length and field count keep the existing bounded limits. The
+response observer records only the status scalar; final budget requires status
+200 and exactly one attempt. The request remains browser-generated and is
+continued unchanged. No other API, Source/Viewer entry, or resource allowance
+is added. C6 used separate `c6`/`b6`/`c6cwd`/snapshot/report paths and preserved
+all C5/C4/C3 artifacts. It made one Source and one Viewer GET, verified the
+302-to-200 chain and one content-info XHR, then failed because the body did not
+stabilize. The C6 report SHA-256 is
+`e285c019e5b3fe7a665de9882055b42d1850425373732e13c35d25ffba1e2039`; it records
+run 6 failed with page_count null, unchanged pending Item/grant, zero Artifact,
+two broad fatal counts and one unknown-subdomain count. No additional right was
+used. The C6 request guard proved too restrictive for the normal page flow, so
+C7 uses no network route interception or capture patch; it only counts requests
+through the existing sanitized observer while invoking ordinary CLI once.
+The ignored wrapper is
+`output/yanmaga_access_experiment/qa/c7_normal_cli_observed.py` (SHA-256
+`757cb1054399a8f7bf77e4a3804852f7e77b0d5b23f1165fd0f8ed124ef91e76`). Its
+offline preflight passed for the same existing-grant direct candidate, with
+chapter 26 / Source 28 disabled and no quota. C7 report
+`stage02/c7-normal-cli-observed-report.json` has SHA-256
+`3226ddc9e3708e0ca47b1fc20a461d62be55d4bb5d152fbcaee51ff058bce374`. It
+observed one Source GET, one Viewer GET, the 302-to-200 chain, one content-info
+XHR, and no non-GET; the normal CLI saved 13 native WebP pages and reached
+counter 14/14. The last rendered page and next-episode rental card were both
+present, but the run failed before positive END and created no Artifact. The
+existing grant and pending Item were unchanged; no new right was used.
+
+Root traced the stop to `_read_snapshot_js` treating all visible modal-named
+elements as gates. The observed nonsemantic inline card is nested under the
+unique `#rental` auxiliary and uses the exact static selectors
+`.episode-modal-expire`, `.episode-modal-rental-detail`,
+`.mod-modal-content-inner.episode-modal`, `.mod-modal-content.wrapper-mod-modal`,
+and `#js-modal-content.rental-modal`. The site-local gate now exempts only
+those exact shapes inside `#rental`; semantic dialog nodes remain gates, and
+existing page ownership, viewport, menu, image, END, and page-count checks are
+unchanged. The synthetic browser fixture models the adjacent card and final
+body page without site HTML or images. A semantic dialog inside that same card
+still fails closed.
+
+Validation after the fix: the targeted batch had 30 pass and five WinError 206
+failures because its basetemp path was too long; rerunning those five first-free
+gate cases with short `output/yfgr` passed 5/5. Adapter Unit passed 10/10 and
+the full Yanmaga adapter browser integration passed 106/106 (0 skipped).
+Independent Reviewer confirmed 8 pass / 0 skip and BLOCKING 0. Scoped Ruff and
+`git diff --check` passed. The first-free gate remained strict in both the
+existing signup/access cases and the new inline semantic-dialog case.
+
+The one normal-CLI retry uses the existing grant only. C8 is copied from the
+C7 observer wrapper into separate `c8`/`b8`/`c8cwd` and report/log paths; it
+checks the C7 report and fixed metadata/source hashes, then runs the ordinary
+CLI with passive sanitized request counts and no network interception or
+capture patch. C8's wrapper SHA-256 is
+`39201d2419525505659892da698b4c6b55a1f26644fac2b4af534614a8d8ed53`; offline
+prepare passed for the same direct existing-grant target, with Source 28
+disabled. C8 completed successfully: report
+`stage02/c8-normal-cli-observed-report.json` SHA-256
+`525c532a18bebd2f99ac95ab924adb56ec5eccc8353be2f87c00e108d6a31b63` records CLI
+exit 0, Run 8 succeeded, 14 pages, and `stop_reason=end`. Item 27 completed at
+`2026-11-16T05:37:42.303655+09:00`; one Artifact was present. Source GET=1,
+Viewer GET=1, other episodes=0, non-GET=0, observer errors=0. The C1 grant
+remained unchanged and future-aware; quota start and Work-resource count stayed
+zero, with no additional first-free use. The 14-page ZIP SHA-256 is
+`c9c33b1aa66583eef70220e823f14f9e93cc0e3d119ecfae361d8bb93e4eb35c` (10,990,866
+bytes). The genuine Manifest SHA-256 is
+`420ba7b88dd92b57bcfaaf9b47b983f689675664dcaccc0a493d350103d77ba2`; Root
+confirmed an exact 14-page Manifest/ZIP match and passed the artifact audit.
+The archive contains 13 native WebP pages and one safe PNG fallback for the
+last page (`segment_source_not_exactly_bound`). Terminal proof reported counter
+14, captured 14, complete sequence, visible final page, owned perimeter, rental
+card, title, hidden next button/menu, and same route. Independent extraction and
+visual review of pages 1, 8, and 14 confirmed chapter 27 and its ending title (`第27話 完`).
+The passive watcher ended without its auxiliary watch-result marker, so its
+standard audit command did not run; Root directly audited the genuine Manifest
+and ZIP. No marker was fabricated and no retry was made. Post-capture full
+Discovery exited 0 with 57 observed/known rows, `complete=true`, and
+`stopped_reason=exhausted`; the before/after Catalog comparison passed. The
+incremental CLI retry exited 0 without error, observed 5 known rows and 0 new,
+and stopped with `known_streak`; `complete=null` means completion was not
+evaluated. Its report says the Source/Viewer request observer was not used, so
+those request counts are unknown. The Catalog retained Source 27 as the only
+enabled source, Source 28 disabled, Item 27 completed, Artifact and grant
+unchanged, and quota state zero. The post-full plan had zero candidates because
+the Item was already completed. A bounded work-intro popup observation found
+`DIV.mod-modal-close.js-modal-close`, but its one click did not confirm the
+popup closed; the listing remained at 57 rows with no More control, so there was
+no further popup action. The ignored QA popup helper recognizes that observed
+DIV shape but has only passed compile checks; it has not been live tested. The C6 QA script has SHA-256
+`5EAE5EC75296DF37C43F1DE94CF6CD6FFC2E1C83BAD64D35705417E415D48746`; versus
+the accepted C5 QA backup its diff is 158 insertions / 17 deletions, limited to
+the endpoint branch, scalar counters, a happy/CID-mismatch self-test, C6 paths,
+and preserving the C5 failure record during preflight. `py_compile`, focused
+Ruff, `--selftest`, and no-execution prepare passed. Preparation reported the
+future-aware existing grant, pending Item, zero Artifacts, direct non-quota
+candidate, prior failed runs [3, 4, 5], and `capture_executed=false`. No CDP or
+live request was made.
+
+The fixed capture request budget remains one Source and one exact Viewer request,
+with the same-frame non-navigation static GET exception on exact HTTPS host
+`viewer-assets.yanmaga.jp`, `/viewer/assets/` prefix, only after exact Viewer
+HTTP 200, with technical cap 64. The chain must show Source 302 and Viewer 200.
+C8 verified capture, positive END, ZIP, and Completed for the selected
+existing-grant target. Post-capture full Discovery completed with 57 known
+rows, `complete=true`, and `stopped_reason=exhausted`; incremental stopped at
+`known_streak` with five known rows and `complete=null` (not evaluated). Its
+Source/Viewer request counts are unknown because its observer was not
+installed. The final independent Stage 02 review accepted PASS with BLOCKING
+0. No other episode, new first-free, ticket, point, or paid action was used.
+
+The selected automated candidate is chapter 27, Source 27 / Item 27 / position
+31. The user separately reported manually using first-free on chapter 26;
+Root's isolated catalog check identifies that as Source 28 / Item 28 / position
+30. Chapter 26 is excluded from this automation target and use count, and is
+not represented as ticket/quota usage.
+
 The current adapter implementation keeps the one-use first-free transition
 bound to an authenticated fresh `free` classification, exact row and public
 source href, and final visible marker check. After the Source GET, a DOM-only
@@ -547,8 +942,71 @@ existing-grant cases; 49 Yanmaga Discovery browser cases; 95 Yanmaga adapter,
 Discovery, policy, and Rental History cases; and a 9-case first-free gate,
 timeout, and no-ready targeted selection after the latest gate-token update.
 The earlier full adapter browser run passed 99 cases before that final
-role-less gate-token fixture expansion. The final full suite and final Ruff run
-are still pending. No Stage 02 live capture/END/ZIP/Completed run has occurred;
-Stage 02 remains in progress pending final tests and independent review. The
-first-free budget is exhausted, and no ticket, point, paid, or additional
-first-free action is authorized by this status record.
+role-less gate-token fixture expansion. A later full-suite attempt stopped after
+2,952 completed calls while one YoungAnimal test produced no progress; it is an
+interrupted run, not a pass. A bounded resume selected the remaining 6,179
+collection entries plus four earlier failures for recheck (6,183 selected):
+6,182 passed, 1 failed, 0 skipped in 12:42, with no per-test timeout. The four
+rechecked nodes were the GUI close regression, two Hanayume already-granted
+cases, and Yanmaga lossless-WebP pixel capture; all four passed on the resume.
+The sole resume failure was
+`test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites`:
+its Magapoke assertion expected 1,000 ms but read 1,500 ms from the user's
+unchanged working `crawler.yaml`. The committed blob for this test at HEAD is identical to base `4407e975`; its
+working-tree line endings normalize to that blob and `git diff` shows no test
+change. `src/screenshot_crawler/runtime_settings.py` and the committed
+`crawler.yaml` are byte-identical between base and HEAD. At the full-suite run,
+the working `crawler.yaml` had SHA-256
+`C71792897E17C8BB4ABAA0D1BF6F0966DE4833DDFCF2902DC88B20C39FF58631` and set
+Magapoke to 1,500 ms, which triggered the first assertion. In an isolated copy
+of the committed configuration, that assertion passes but the same test then
+fails its BookWalker assertion (expected 200 ms; committed config says 0 ms), a
+separate existing test/config mismatch. Neither configuration nor test was
+edited by this documentation-only update. A later read after the C1 run found
+the working `crawler.yaml` at SHA-256
+`A73BE4222B95611AD2ADCB6DAEAB57B916EC5AEDDB634AF05F7F6DD74FD565A6`, with
+Magapoke `inter_candidate_delay_ms=100000`; its Git diff still contains only
+the Magapoke delay overrides relative to the committed file. This later change
+was outside this writer's edits; its provenance is not established here and the
+file was not modified or restored. The full suite is therefore NOT CLEAN; this
+finding is not evidence of a Yanmaga regression. The preserved node-coverage
+audit records all 9,131
+collected nodes covered across the interrupted prefix and resumed suffix, with
+no missing or unexpected nodes; the latest per-node result is 9,130 passed and
+this one failure. This is coverage across separate attempts, not a clean single
+full-suite pass.
+
+The full-suite GUI-order failure was independently reproduced: a preceding test
+patched `QThreadPool.globalInstance().start` on the process-wide singleton and
+left an instance attribute that shadowed a later class-level stub. The two tests
+now patch `QThreadPool.start` at class level. Forward and reverse pair runs each
+passed 2 cases; Lead's affected run of the two changed GUI files plus
+`test_gui_repair_migration.py` passed 34, skipped 0, in 82.33 seconds (one
+existing pytest-asyncio deprecation warning). This is a test-only isolation fix;
+no GUI production code changed. The initial Yanmaga terminal-boundary failure
+also passed on one bounded rerun, but its original cause remains unknown. The
+first full-suite run is not reclassified as a pass.
+
+C1 and C2 verified release/grant persistence and preservation through
+intentional capture-hook failures after readiness/rewind but before the
+first saved content page; neither completed page capture, END, ZIP, or
+Completed state. Post-C2 full/incremental metadata Discovery and direct-plan
+validation are complete and independently audited. C3 stopped before Source
+entry on its QA request budget. C4 failed during normal CLI execution after
+one Source and one Viewer request, with no saved page or ZIP. C5 verified its
+Source 302 to Viewer 200 chain and allowed 27 static assets, but the body did
+not stabilize and no content page was saved; its Item stayed pending and
+existing grant unchanged. C6 failed before content stabilized and used no
+additional right. C7 saved 13 pages and reached 14/14 but did not establish
+END because the inline nonsemantic rental card was misclassified as a gate.
+The exact known-card exemption has independent BLOCKING 0 review. C8 then
+completed the same existing-grant target through the ordinary CLI, with passive
+request observation and no network interception. The run captured 14 pages,
+reached positive END, produced an exactly matching genuine Manifest and ZIP,
+and completed Item 27; Root's artifact audit passed. Post-capture full Discovery completed; the incremental CLI stopped with
+`known_streak` and `complete=null`, which does not establish incremental
+completeness. The post-full plan had zero candidates because Item 27 was already
+completed. The independent final review accepted Stage 02 with BLOCKING 0. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental stopped at `known_streak` with `complete=null` (not evaluated), and its Source/Viewer request counts are unknown because the observer was not installed. The post-full plan had zero candidates because Item 27 was complete. Stage 03 read-only investigation has started; Stage 03 implementation and Stage 04 have not started. The additional first-free budget is exhausted;
+C8 used no new right, ticket, point, paid action, retry, or alternate episode. The separate ignored QA watcher now skips identical snapshot
+rewrites and retries transient Windows replace-permission failures; its local
+selftest passed. This QA-only adjustment does not change production capture.

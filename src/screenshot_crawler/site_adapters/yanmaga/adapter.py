@@ -312,10 +312,19 @@ def _read_snapshot_js() -> str:
       const arrow = arrowNodes.length === 1 ? arrowNodes[0] : null;
       const arrowStyle = arrow ? getComputedStyle(arrow) : null;
       const arrowBox = arrow ? rect(arrow) : null;
+      const semanticGateSelector = '[role="dialog"],[aria-modal="true"],dialog';
+      const inlineRentalSelector = '.episode-modal-expire,.episode-modal-rental-detail,' +
+        '.mod-modal-content-inner.episode-modal,.mod-modal-content.wrapper-mod-modal,' +
+        '#js-modal-content.rental-modal';
+      const knownInlineRentalCard = node => {
+        if (!rental || !rental.contains(node) || !node.matches(inlineRentalSelector) ||
+            node.matches(semanticGateSelector)) return false;
+        return true;
+      };
       const accessGateVisible = [...document.querySelectorAll(
         '[role="dialog"],[aria-modal="true"],dialog,[class*="modal" i],[class*="alert" i]')]
         .filter(visible).some(node => /初回無料|チケット|ポイント|レンタル|購入|ログイン|会員登録|無料は1日で読める数/.test(
-          (node.innerText || '').replace(/\s+/g,' ').trim()));
+          (knownInlineRentalCard(node) ? '' : node.innerText || '').replace(/\s+/g,' ').trim()));
       return {
         counterCount:counterLeaves.length,
         counterText:counterLeaves.length === 1 ? (counterLeaves[0].innerText || '').trim() : '',

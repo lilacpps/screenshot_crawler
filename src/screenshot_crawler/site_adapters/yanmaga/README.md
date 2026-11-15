@@ -8,40 +8,121 @@ Completed services are reused. Shared Core exposes only the optional
 confirmed-grant observer; Catalog provides the grant-only persistence
 operation.
 
-## Stage 02 current state (2026-11-15; independent review pending)
+## Stage 02 current state (2026-11-16; C8 verified, Stage 02 PASS with independent BLOCKING 0)
 
-Stage 02 is implemented locally but is not yet accepted. C's sorted work identity
-change passed independent review with BLOCKING 0, and a later bounded
-metadata-only probe verified the current production Rental History helper for
-the previously opened `episode-ff-probe-01` target. The probe observed H=17 at
-2026-11-15T08:11:29.019643Z and derived the conservative
-`site_countdown_lower_bound` 2026-11-16T00:11:24.019643Z using GET start +
-(H - 1) hours - 5 seconds. This is a lower bound, not an absolute expiry. The
-probe used zero rights and made no Source or Viewer request; the cumulative
-first-free use remains one from the earlier research entry.
+The C sort and canonical/og corrections and the BODY pre-live review passed
+independent review with BLOCKING 0. A metadata-only probe verified the Rental
+History helper for the already opened `episode-ff-probe-01`: H=17 at
+2026-11-15T08:11:29.019643Z produced the conservative
+`site_countdown_lower_bound` 2026-11-16T00:11:24.019643Z from GET start plus
+(H - 1) hours minus 5 seconds. This is a lower bound, not an absolute expiry.
+That probe used zero rights. A separate metadata-only preparation confirmed a
+one-candidate direct plan for `episode-ff-capture-01`, position 31, with zero
+rights; it is a different episode from the prior position-32 Research release.
+The preparation Catalog contained 1 Work, 57 Items, 57 Sources, and 57
+SourceTargets. The selected target IDs were Work 1 / Item 27 / Source 27 /
+Target 27; these are identifiers, not row totals.
 
-Fresh authenticated Discovery may classify only an exact first-free row as
-`free`. `YanmagaAdapter` permits at most one normal public-episode GET for that
-fresh, exact first-free candidate, after rechecking the current work identity,
-visible login evidence, unique visible marker, row, and queryless source href.
-The observed public episode route can grant access automatically. Before any
-pixel-readiness wait, the adapter requires the same exact Viewer episode, a
-unique page counter and visible body wrapper, no known access gate, the exact
-completion notice, and a fresh finite same-target Rental History proof. It
-persists an immutable site-neutral grant synchronously through Batch before
-capture readiness. The completion notice is latched only for the same episode.
-Unknown access, missing or stale expiry, route drift, or any gate stops without
-another entry. The release state distinguishes `not_attempted`,
-`attempted_unknown`, `site_confirmed`, and `persisted`.
+C1 used one additional first-free entry for position 31. The exact Viewer and
+first-free completion notice were confirmed, and the finite grant was saved
+synchronously before pixel-readiness work. After readiness and rewind, an
+intentional `capture_page` failure occurred before the first content page was
+saved. The Item remained pending and no image Artifact was created. C2 then
+retried without rerunning the external Catalog DiscoveryService; the Adapter
+performed its fresh internal listing preflight and used the same future-aware
+saved grant. Its grant value remained unchanged, with no new first-free use.
+Both C1 and C2 used one Source GET and one Viewer GET, with no other episode or
+first-party non-GET request. Research plus C1 make two confirmed first-free
+uses total; C2 used zero additional rights, and the additional first-free
+allowance is exhausted. The C1/C2 Catalog audit found 1 Work, 57 Items, 57
+Sources, 57 SourceTargets, 2 CrawlRuns, 0 Artifacts, and 0 Work-resource rows;
+the target IDs remained Work 1 / Item 27 / Source 27 / Target 27.
+Ticket, point, coin, and paid actions remain zero. The stored bound represents a
+native countdown lower bound, not the site's actual expiry or a fixed 24-hour
+lifetime.
 
-Existing Catalog grants are rechecked against a fresh exact-target active
-countdown and the still-future stored expiry just before entry. An active H=1
-countdown can use the trusted Catalog expiry for direct retry; it does not emit
-or extend a grant. A first-free grant requires a finite future lower bound.
-Discovery's post-history snapshot must equal the validated pre-history listing
-before any records are emitted. Reader pixel and END validation remain strict.
-No production capture, END, ZIP, Completed, or retry recovery has been verified
-on the site; Stage 02 and live verification remain pending.
+Post-C2 metadata-only v4 full and incremental Discovery completed with
+zero rights and zero Source/Viewer/first-party non-GET/fatal requests. The
+report is `output/yanmaga_access_experiment/stage02/metadata-only-v4-refresh-report.json`
+(SHA-256 `0b62fbb74622ef25e30f4f38d64ebc0c30d112365b894a56cc99dc29b85a100b`).
+Both snapshots had 57 rows and matching target position/identity; full was
+complete/exhausted with 57 observed rows, while incremental had
+complete=null/known_streak with five observed rows and did not yield the
+target. Fresh history plus the trusted grant preserved its Catalog free
+mode and future expiry; flags were reapplied only to the target after each
+run. Root's independent audit confirmed the pending Item, unchanged grant,
+zero Artifact/quota state, and one direct non-quota plan. No capture was
+attempted. The v3 QA report remains unresolved because its raw Discovery result was not
+saved; this does not change the later successful v4 metadata refresh. The Stage
+02 final gate is PASS; the independent Reviewer reported BLOCKING 0 after Root
+completed documentation synchronization.
+
+The adapter still permits at most one normal public-episode GET for a fresh,
+exact authenticated first-free candidate, after rechecking the current work
+identity, visible login evidence, unique visible marker, row, and queryless
+source href. The observed public episode route can grant access automatically.
+Before any pixel-readiness wait, the adapter requires the same exact Viewer
+episode, a unique page counter and visible body wrapper, no known access gate,
+the exact completion notice, and a fresh finite same-target Rental History
+proof. It persists an immutable site-neutral grant synchronously through Batch
+before capture readiness. Unknown access, missing or stale expiry, route drift,
+or any gate stops without another entry. Existing grants require fresh active
+same-target countdown evidence and a still-future stored Catalog bound.
+
+C1/C2 verified grant persistence through intentional capture-hook failures
+after readiness/rewind but before the first saved content page. Post-C2
+full/incremental metadata Discovery and the one-candidate direct plan were
+independently audited. C3 stopped before Source entry on an incorrect QA
+request budget. C4 ran once and failed in the normal CLI after one Source
+and one Viewer request; no genuine Manifest page progress or ZIP was saved.
+The C4 failure does not establish a site failure. Its diagnostics are
+preserved. C5 ran once and failed before content capture because the body did
+not stabilize. The Item remained pending, the existing grant was preserved,
+and no Artifact was created. C6 used the existing grant and verified one Source
+302 to exact Viewer 200 chain and one content-info XHR, but the body still did
+not stabilize. Its run failed with page_count null; the Item stayed pending,
+the grant stayed unchanged, and no Artifact was created. No additional right
+was used. C7 then saved 13 native WebP pages and reached reader counter 14/14,
+but did not establish END or create an Artifact. Root traced the failure to the
+broad modal-class gate matching the nonsemantic inline rental card under the
+unique `#rental` auxiliary. The adapter now exempts only the observed static
+class/id shapes inside `#rental`; semantic dialogs and existing body ownership,
+viewport, menu, pixel, page-count, and positive-END checks remain in force. The
+synthetic browser fixture verifies the inline-card final page reaches END and
+that a semantic dialog within the same card still stops. The adapter Unit file
+passed 10 tests, the Yanmaga adapter browser file passed 106 tests, and the
+independent Reviewer reported 8 pass / 0 skip and BLOCKING 0. C8 completed the same target through the ordinary CLI using the existing
+future-aware grant. The run succeeded with 14 pages and positive END; Item 27
+completed and one Artifact was present. The genuine 14-page Manifest matches
+the ZIP exactly. Root's artifact audit passed, and an independent visual check
+confirmed the first, middle, and final pages belong to chapter 27, ending with
+`第27話 完`. The ZIP has 13 native WebP pages and one safe PNG fallback
+for the last page (`segment_source_not_exactly_bound`); no format fallback was
+changed. C8 used one Source GET and one Viewer GET, with zero other-episode,
+non-GET, or observer-error events and no additional first-free use. The saved
+grant stayed unchanged and future-aware; quota and work-resource state stayed
+empty.
+
+The passive watcher ended before writing its auxiliary watch-result marker, so
+its standard audit command could not run. Root independently audited the
+genuine Manifest and ZIP successfully. No marker was fabricated and no retry
+was made. Post-capture metadata checks then ran against the completed target. Full
+Discovery exited 0 with 57 observed/known rows, `complete=true`, and
+`stopped_reason=exhausted`; the before/after Catalog comparison passed. The
+incremental CLI also exited 0 without error and observed 5 known rows, 0 new,
+then stopped with `known_streak`. Its `complete` value is null, so incremental
+completion was not evaluated and is not claimed. The incremental report did not
+install the Source/Viewer request observer; those request counts are unknown.
+The Catalog retained Source 27 as the only enabled source, Source 28 disabled,
+Item 27 completed, the existing Artifact and grant unchanged, and quota state
+zero. The post-full plan contained zero candidates because Item 27 was already
+completed. The bounded work-intro popup observation found a visible
+`DIV.mod-modal-close.js-modal-close`, but its one click did not confirm popup
+disappearance; the listing remained at 57 rows with no More control, so no
+further popup action was attempted. The ignored QA popup helper, including this
+observed DIV shape, has only passed compile checks and has not been live tested.
+The Stage 02 final gate is PASS; independent Reviewer reported BLOCKING 0 after Root completed documentation synchronization.
+Yanmaga work-ticket selection remains disabled.
 
 ## Discovery
 
@@ -122,9 +203,10 @@ explicitly observed null is authoritative and clears it. Stage 01 had no live
 grant evidence. The daily-limit notice scope for red rows remains unknown.
 `access_checked_at` and `last_seen_at` use the current aware UTC time.
 
-During Stage 01, the capture adapter remained anonymous-only. Stage 02
-adds the bounded authenticated first-free entry path described above; the live
-production capture flow is still unverified. Missing/contradictory evidence, unknown markers, and unsupported
+During Stage 01, the capture adapter remained anonymous-only. Stage 02 adds
+the bounded authenticated first-free entry path described above. C8 verified
+the existing-grant production capture flow for the selected target; a complete
+fresh-first-free capture remains unverified. Missing/contradictory evidence, unknown markers, and unsupported
 row identity remain fail-closed. The list expansion contract remains strict:
 positive `data-limit`, native offset/sort/path, unique inserted rows, and stable
 ordering are required. The sample wife listing's missing-limit pagination

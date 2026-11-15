@@ -84,6 +84,8 @@ def _viewer_html(
     access_proof_delay_ms: int = 0,
     access_proof_never_ready: bool = False,
     access_gate_text: str | None = None,
+    inline_rental_card: bool = False,
+    inline_rental_dialog: bool = False,
     missing_half: bool = False,
     thin_segment: bool = False,
     oversized_last_segment: bool = False,
@@ -156,6 +158,8 @@ def _viewer_html(
             if index == 3 and adjacent_overlap
             else "1290px"
             if index == 3
+            else "1280px"
+            if index == 4 and inline_rental_card
             else "0px"
         )
         if native_capture:
@@ -242,7 +246,25 @@ def _viewer_html(
     rental_title = title
     if terminal_control == "signup_wrong_title":
         rental_title = title.replace(NEXT_ORDER_LABEL, "\u5225\u306e\u8a71")
-    rental_content = "" if unsafe_end else rental_title + controls[terminal_control]
+    rental_card = ""
+    if inline_rental_card:
+        dialog = (
+            '<div role="dialog" class="episode-modal-expire">'
+            "\u30ec\u30f3\u30bf\u30eb</div>"
+            if inline_rental_dialog
+            else ""
+        )
+        rental_card = (
+            '<div id="js-modal-content" class="rental-modal">'
+            '<div class="mod-modal-content wrapper-mod-modal">'
+            '<div class="mod-modal-content-inner episode-modal">'
+            '<div class="episode-modal-rental-detail">'
+            "\u30ec\u30f3\u30bf\u30eb\u4e2d</div>"
+            '<div class="episode-modal-expire">'
+            "\u6b8b\u308a23\u6642\u9593</div>"
+            f"{dialog}</div></div></div>"
+        )
+    rental_content = "" if unsafe_end else rental_title + controls[terminal_control] + rental_card
     rental = f'<div id="rental" style="display:none">{rental_content}</div>'
     rental_top = "1900px" if terminal_geometry == "offscreen" else "20px"
     obstruction_css = (
@@ -281,7 +303,7 @@ def _viewer_html(
       #arrow-content{{position:absolute;right:10px;bottom:10px;width:40px;height:40px}}
       #arrow-content.hide .arrow-next-page{{display:none}}
       .arrow-next-page{{width:40px;height:40px}}
-      #rental{{position:absolute;top:{rental_top};left:20px;width:500px;height:300px;background:#eee}}
+      #rental{{position:absolute;top:{rental_top};left:{'8px' if inline_rental_card else '20px'};width:{'1272px' if inline_rental_card else '500px'};height:{'1700px' if inline_rental_card else '300px'};background:#eee}}
       #menu{{position:fixed;inset:0;display:{menu_initial_display};z-index:30;background:rgba(0,0,0,.01)}}
       #menu_transparent{{position:absolute;inset:0;background:rgba(0,0,0,.01)}}
       #menu_header{{position:absolute;top:0;left:0;width:100%;height:100px;background:#ddd}}
@@ -460,6 +482,8 @@ async def _set_routes(
     unsafe_end: bool = False,
     delayed_end: bool = False,
     access_gate: bool = False,
+    inline_rental_card: bool = False,
+    inline_rental_dialog: bool = False,
     terminal_geometry: str = "valid",
     arrow_mode: str = "hidden",
     first_page_overlay: bool = False,
@@ -599,6 +623,8 @@ async def _set_routes(
                     unsafe_end=unsafe_end,
                     delayed_end=delayed_end,
                     access_gate=access_gate,
+                    inline_rental_card=inline_rental_card,
+                    inline_rental_dialog=inline_rental_dialog,
                     terminal_geometry=terminal_geometry,
                     arrow_mode=arrow_mode,
                     first_page_overlay=first_page_overlay,
@@ -752,6 +778,21 @@ async def test_yanmaga_runner_rewinds_captures_spread_and_stops_at_verified_end(
     assert [capture.metadata.get("parts") for capture in result.pages] == [None, 2, 2, None]
     assert browser_page.url == VIEWER_NAVIGATION_URL
     assert (tmp_path / "isolated-output" / "page-0004.png").is_file()
+
+
+async def test_yanmaga_inline_rental_card_does_not_block_final_body_or_end(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(browser_page, monkeypatch, inline_rental_card=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+
+    result = await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 4
+    assert await browser_page.locator("#rental .episode-modal-expire").is_visible()
+    assert (tmp_path / "isolated-output" / "page-0004.png").is_file()
+    assert not any(NEXT_EPISODE_ID in urlsplit(url).path for url in requested)
 
 
 @pytest.mark.parametrize("native_wrapper_transform", [None, "translateX(24px)"])
@@ -1523,6 +1564,7 @@ async def test_yanmaga_waits_for_delayed_positive_terminal_controls_without_arro
         ("oversized_last_segment", PageChangeTimeoutError),
         ("unknown_aux", PageChangeTimeoutError),
         ("access_gate", PageChangeTimeoutError),
+        ("inline_rental_dialog", PageChangeTimeoutError),
         ("unsafe_end", UnknownPageStateError),
         ("offscreen_rental", UnknownPageStateError),
         ("obstructed_rental", UnknownPageStateError),
@@ -1544,6 +1586,8 @@ async def test_yanmaga_runner_fails_closed_on_unproven_reader_state(
         "unsafe_end": scenario == "unsafe_end",
         "native_capture": scenario in {"wrong_route", "unsafe_end"},
         "access_gate": scenario == "access_gate",
+        "inline_rental_card": scenario == "inline_rental_dialog",
+        "inline_rental_dialog": scenario == "inline_rental_dialog",
         "terminal_geometry": (
             "offscreen" if scenario == "offscreen_rental" else
             "obstructed" if scenario == "obstructed_rental" else "valid"
