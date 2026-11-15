@@ -23,7 +23,7 @@
 実装順序：
 - まず既存のCatalog/Executorの拡張可能点を確認。最小のsite-neutral `direct grant confirmed` という**追加の観測結果**を安全にRunner/Batchへ受け渡す方法を検討する。AdapterのCatalog直書き、RunnerへのCatalog依存は禁止。
 - 本当に必要な場合だけ `CatalogService` に「site/sourceが一致・確定した期限を `access_granted_until` へ保存」する最小APIと、それを呼ぶBatch executor側の最小hookを足す。schema/既存モード/他サイトの意味を変更しない。
-- サイトが確定したGrant期限を返すなら保存。表示上の期限が不明でも、サイト仕様を実サイトで確認して保守的な下限が計算できる場合にのみ記録する。曖昧ならNULLのままにし、再実行時の**サイト閲覧可否**を正とする。推定の `now + 24h` を無条件に記録しない。
+- サイトが確定したGrant期限を返すなら保存。表示上の期限が不明でも、サイト仕様を実サイトで確認して保守的な下限が計算できる場合にのみ記録する。曖昧ならNULLのままにし、再実行時の**サイト閲覧可否**を正とする。推定の `now + 24h` を無条件に記録しない。ただし、`quota/paid`へ再分類後に`access_granted_until=NULL`のままでは**既存Plannerがdirect候補にしない**。この状態での「再取得可能」は、Discoveryが同一話の現在Grantを正に証明して適切なdirect候補にできる等の経路を実装・検証した場合に限る。そうした経路が無ければStage02は未完了として扱う。
 - **開放確定直後に記録**：END/ZIPが失敗しても `access_granted_until` は残り、Itemはpending。開放のみを「Crawl成功」「Completed」にしない。
 - 再Discoverで `access_mode` が `quota` や `paid` に変わっても、有効Grantが存在する間はPolicyが `direct` を返し、実際に同一話をViewerで再確認して再取得。既存Grantの期限が切れればdirectを不許可にする。Grant期限不明でも、候補の安全な入口から同じ話のViewer権限を再確認できる仕様を検証し、可能なら同一runの再実行を回復させる。
 - 再Discoverが行われることは**自動的に仮定しない**。再Discoverせず `free` candidateが残った場合も、実サイトで閲覧可能なら再取得し、閲覧不可/他resourceに変化したら追加消費なしで停止。
