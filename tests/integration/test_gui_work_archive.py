@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -227,7 +227,7 @@ def test_archive_blocks_other_saves_jobs_paths_close_and_active_worker(window, q
     assert window._archive_save_worker is None
     window._job_controller = None
     workers = []
-    monkeypatch.setattr(window.thread_pool, "start", workers.append)
+    monkeypatch.setattr(QThreadPool, "start", lambda self, worker: workers.append(worker))
     window._set_work_archived("sample-work-0000", True)
     assert len(workers) == 1
     window._toggle_discovery("sample-0001", False)

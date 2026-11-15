@@ -3435,6 +3435,24 @@ JobsPage are passive observers of the single JobController and
 JobStore. View refresh or initialization failures are isolated from queue,
 start, stop, force-stop, reconcile, and safety state handling.
 
+GUI test isolation: tests that intercept queued Qt work patch
+`QThreadPool.start` on the class, not on `QThreadPool.globalInstance()` itself.
+The global pool is a process-wide singleton; an instance-level monkeypatch can
+leave a bound method attribute after teardown and shadow a later class-level
+stub. The focused regression verifies both original and reverse test order.
+The pair passed in both orders after the test-only fix, and the affected run of
+those two GUI test files plus the later repair-migration file passed 34 tests,
+with zero skips and one existing pytest-asyncio deprecation warning. No GUI
+production code changed. A broader split full-suite run remains non-clean because
+of a runtime-settings test reading the user's changed `crawler.yaml`. The
+committed test blob at HEAD is identical to base `4407e975`; working-tree line
+endings normalize to the blob and `git diff` shows no test edit. The
+runtime-settings source and committed crawler configuration also match base and
+HEAD byte-for-byte. In an isolated committed-config view the Magapoke assertion
+passes, then the same test exposes a separate existing expectation mismatch
+(`bookwalker` is configured as 0 ms while the test expects 200 ms). Neither
+configuration nor test was changed during this work.
+
 LogTailReader is Qt-free and opens only the fixed stdout.log/stderr.log files
 under the selected JobStore job directory. Each stream has bounded incremental
 reads, UTF-8 decoder/file-identity reset, omission metadata, and independent
