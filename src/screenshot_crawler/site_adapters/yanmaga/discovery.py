@@ -64,6 +64,7 @@ class YanmagaListingRow:
     free_marker: bool
     red_marker_present: bool
     known_restricted: bool
+    first_free_marker: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,7 @@ class YanmagaListingSnapshot:
     anonymous: bool
     rows: tuple[YanmagaListingRow, ...]
     continuation: YanmagaContinuation | None
+    authenticated: bool = False
 
 
 def _decoded_segment(value: str) -> str | None:
@@ -151,8 +153,10 @@ def classify_yanmaga_free_marker(
     modal_marker: bool,
     anonymous: bool,
     restricted_marker: bool = False,
+    authenticated: bool = False,
+    first_free_marker: bool = False,
 ) -> str:
-    """Require the sampled red, non-wait row proof and anonymous page state."""
+    """Require the sampled red, non-wait row proof and verified page state."""
 
     if (
         marker_count == 1
@@ -162,8 +166,40 @@ def classify_yanmaga_free_marker(
         and marker_color == FREE_COLOR
         and not wait_marker
         and not modal_marker
-        and anonymous
+        and (anonymous or authenticated)
         and not restricted_marker
+        and not first_free_marker
+    ):
+        return "free"
+    return "unknown"
+
+
+def classify_yanmaga_first_free_marker(
+    *,
+    marker_count: int,
+    first_free_count: int,
+    marker_visible: bool,
+    marker_text: str | None,
+    marker_classes: tuple[str, ...],
+    wait_marker: bool,
+    modal_marker: bool,
+    authenticated: bool,
+    red_marker_present: bool = False,
+    conflicting_free_badge: bool = False,
+) -> str:
+    """Classify only the observed exact first-free badge on an authenticated row."""
+
+    if (
+        marker_count == 1
+        and first_free_count == 1
+        and marker_visible
+        and marker_text == "初回無料"
+        and set(marker_classes) == {"mod-episode-point--free", "by_first_time"}
+        and not wait_marker
+        and not modal_marker
+        and authenticated
+        and not red_marker_present
+        and not conflicting_free_badge
     ):
         return "free"
     return "unknown"
@@ -176,16 +212,41 @@ def has_yanmaga_anonymous_proof(
     login_states: tuple[str, ...],
     current_work_document: bool,
     telemetry_overflow: bool = False,
+    visible_mypage_links: int = 0,
 ) -> bool:
     """Require both the visible public sign-in affordance and explicit false telemetry."""
 
     return (
         visible_sign_in_links > 0
         and visible_sign_out_links == 0
+        and visible_mypage_links == 0
         and current_work_document
         and not telemetry_overflow
         and bool(login_states)
         and all(state == "false" for state in login_states)
+    )
+
+
+def has_yanmaga_authenticated_proof(
+    *,
+    visible_sign_in_links: int,
+    visible_mypage_links: int,
+    login_states: tuple[str, ...],
+    current_work_document: bool,
+    telemetry_overflow: bool = False,
+) -> bool:
+    """Use the observed account-only My Page link as positive UI evidence.
+
+    Analytics is supporting evidence only: it may be absent, but any observed
+    value must agree with the authenticated page state.
+    """
+
+    return (
+        visible_mypage_links > 0
+        and visible_sign_in_links == 0
+        and current_work_document
+        and not telemetry_overflow
+        and (not login_states or all(state == "true" for state in login_states))
     )
 
 
@@ -443,6 +504,16 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   return /(?:sign.?out|log.?out)/i.test(path) ||
                     /(?:sign.?out|log.?out)/i.test(element.className || '');
                 }).filter(visible);
+              const myPages = [...document.querySelectorAll('a[href]')]
+                .filter(anchor => {
+                  const href = new URL(anchor.href, location.href);
+                  return href.origin === location.origin
+                    && href.pathname === '/mypage'
+                    && href.username === ''
+                    && href.password === ''
+                    && href.search === ''
+                    && href.hash === '';
+                }).filter(visible);
               const containers = [...document.querySelectorAll('.detailv2-episodes')];
               const container = containers.length === 1 ? containers[0] : null;
               const allRows = [...document.querySelectorAll('.mod-episode-item')];
@@ -452,6 +523,10 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 const titleNodes = [...row.querySelectorAll('.mod-episode-title')];
                 const markers = [...row.querySelectorAll('.mod-episode-point--free')];
                 const marker = markers.length === 1 ? markers[0] : null;
+                const firstFreeMarkers = markers.filter(element =>
+                  element.classList.contains('by_first_time'));
+                const firstFreeMarker = firstFreeMarkers.length === 1
+                  ? firstFreeMarkers[0] : null;
                 const href = anchors.length === 1 ? new URL(anchors[0].href, location.href) : null;
                 return {
                   index,
@@ -464,6 +539,15 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   markerText: marker ? (marker.innerText || '').trim() : null,
                   markerClass: marker ? marker.className : null,
                   markerColor: marker ? getComputedStyle(marker).color : null,
+                  firstFreeCount: firstFreeMarkers.length,
+                  firstFreeVisible: visible(firstFreeMarker),
+                  firstFreeText: firstFreeMarker ? (firstFreeMarker.innerText || '').trim() : null,
+                  firstFreeClasses: firstFreeMarker ? [...firstFreeMarker.classList] : [],
+                  conflictingFreeBadge: [...row.querySelectorAll(
+                    '.mod-episode-point,[class*="mod-episode-point--"]')].some(element => {
+                      if (!visible(element) || element === marker || element === firstFreeMarker) return false;
+                      return (element.innerText || '').replace(/\s+/g, ' ').trim() === '\u7121\u6599';
+                    }),
                   waitMarker: [...row.querySelectorAll('.by_wait')].length > 0,
                   modalMarker: row.classList.contains('js-modal') || row.querySelector('.js-modal') !== null,
                   restrictedMarker: [...row.querySelectorAll('*')].some(element => {
@@ -505,6 +589,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 ogUrl: ogUrls.length === 1 ? ogUrls[0].content : null,
                 signIns: signIns.length,
                 signOuts: signOuts.length,
+                myPages: myPages.length,
                 title: document.title,
                 containerCount: containers.length,
                 rowCount: rows.length,
@@ -549,6 +634,14 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             login_states=tuple(telemetry.states),
             current_work_document=telemetry.current_work_document,
             telemetry_overflow=telemetry.overflow,
+            visible_mypage_links=identity.get("myPages", 0),
+        )
+        authenticated = has_yanmaga_authenticated_proof(
+            visible_sign_in_links=identity.get("signIns", 0),
+            visible_mypage_links=identity.get("myPages", 0),
+            login_states=tuple(telemetry.states),
+            current_work_document=telemetry.current_work_document,
+            telemetry_overflow=telemetry.overflow,
         )
         rows: list[YanmagaListingRow] = []
         seen_ids: set[str] = set()
@@ -576,6 +669,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             wait_marker = raw_row.get("waitMarker") is True
             modal_marker = raw_row.get("modalMarker") is True
             restricted_marker = raw_row.get("restrictedMarker") is True
+            conflicting_free_badge = raw_row.get("conflictingFreeBadge") is True
+            first_free_count = raw_row.get("firstFreeCount", 0)
             red_marker_present = (
                 marker_count == 1
                 and marker_visible
@@ -583,6 +678,26 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 and marker_class == "mod-episode-point--free"
                 and marker_color == FREE_COLOR
             )
+            first_free_marker = classify_yanmaga_first_free_marker(
+                marker_count=marker_count,
+                first_free_count=first_free_count,
+                marker_visible=raw_row.get("firstFreeVisible") is True,
+                marker_text=(
+                    raw_row.get("firstFreeText")
+                    if isinstance(raw_row.get("firstFreeText"), str)
+                    else None
+                ),
+                marker_classes=tuple(
+                    class_name
+                    for class_name in raw_row.get("firstFreeClasses", [])
+                    if isinstance(class_name, str)
+                ),
+                wait_marker=wait_marker,
+                modal_marker=modal_marker,
+                authenticated=authenticated,
+                red_marker_present=red_marker_present,
+                conflicting_free_badge=conflicting_free_badge,
+            ) == "free"
             free_marker = classify_yanmaga_free_marker(
                 marker_count=marker_count,
                 marker_visible=marker_visible,
@@ -593,6 +708,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 modal_marker=modal_marker,
                 anonymous=anonymous,
                 restricted_marker=restricted_marker,
+                authenticated=authenticated,
+                first_free_marker=first_free_count > 0,
             ) == "free"
             point_only_marker = raw_row.get("pointOnlyMarker") is True
             rows.append(
@@ -601,6 +718,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                     title=title,
                     url=href,
                     free_marker=free_marker,
+                    first_free_marker=first_free_marker,
                     red_marker_present=red_marker_present,
                     known_restricted=anonymous
                     and not red_marker_present
@@ -618,6 +736,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             anonymous=anonymous,
             rows=tuple(rows),
             continuation=continuation,
+            authenticated=authenticated,
         )
 
     @staticmethod
@@ -700,7 +819,11 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                     source=DiscoveredSource(
                         external_id=f"{work.slug}:{row.episode_id}",
                         url=row.url,
-                        access_mode="free" if row.free_marker else "unknown",
+                        access_mode=(
+                            "free"
+                            if row.free_marker or row.first_free_marker
+                            else "unknown"
+                        ),
                         free_until=None,
                         available=True,
                         access_checked_at=observed_at,

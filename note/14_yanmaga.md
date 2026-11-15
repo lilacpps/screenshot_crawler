@@ -132,30 +132,61 @@ card内controlはexact `次の話を読む`一つとsignupなし、またはvali
 Unknown layout、page gap/duplicate、spread片側欠落、未知auxiliary/access gate、source/style drift、
 終端不明はfail-closed。next arrowは診断のみ。
 
-## Access判定
+## Access behavior: current Discovery evidence
 
-追加のfail-closed条件: main-frame navigationごとにanalytics evidenceをresetし、requestのframe URLとPage URLの双方が
-対象work documentに一致したrequestだけを受け付ける。subframeや前documentの値は採用しない。対象documentで64件を超える
-一致field requestを受けたら、そのdocumentのanonymous proofを無効にする。可視の正確な「初回無料」labelまたは別要素の
-native `mod-episode-point*` badgeで正確な「無料」表示が赤い無料markerと同じrowにある場合はunknownとする。rowの
-detail/price要素に同じ「無料」文字列が繰り返されても別badgeとはみなさない。point表示の数値70だけならconflictにしない。
+The login observer is attached before work-page navigation. It accepts only
+main-frame telemetry while the current page and frame identify the requested
+work document, resets on main-frame navigation, caps matching events at 64, and
+detaches on every exit. It retains the exact `ep.is_logged_in` state only; it
+does not retain complete request URLs.
 
-`free` は同一rowに一つだけ見える `.mod-episode-point--free` があり、
-テキスト`無料`、class名完全一致、computed color `rgb(220, 0, 0)`、
-同じrowに`.by_wait`/`.js-modal`がない場合に限る。さらにpage全体で、
-`/customers/sign-up`の表示中sign-in/registration linkと、実測したanalytics
-request query field `ep.is_logged_in=false` が必要。`ep.is_logged_in`の値は
-request URL全体を保存せず、観測済みの2 analytics hostから対象fieldだけ読む。
-Observerはnavigation前にattachし、最大64 eventを保持、最大3秒だけ正の
-login stateを待ち、すべての終了経路でdetachする。sign-out、missing/undefined/
-conflicting telemetry、markerの欠損/競合は`unknown`。表示ラベルだけ、
-`data-is-free`、`data-modal`、point badgeの有無はfree判定にしない。
+Anonymous proof requires a visible sign-in link, no visible sign-out or exact
+same-origin `/mypage` link, current work-document identity, no telemetry
+overflow, and consistent explicit `ep.is_logged_in=false` values.
 
-通常無料以外を`paid`/`quota`に分類しない。全listed rowは
-`available=True`。無料期限は実測されていないため`free_until=None`を毎回送信し、
-以前の期限をクリアする。`access_checked_at`/`last_seen_at`は現在のaware UTC。
-ページの「無料は1日で読める数に限りがあります」という注意の赤字行への
-適用範囲は不明であり、no-capの一般化はしない。Discoveryではepisode linkを開かない。
+Authenticated proof requires a visible same-origin `/mypage` anchor whose exact
+path is `/mypage` and which has no credentials, query, or fragment; no visible
+sign-in link; current work-document identity; and no telemetry overflow.
+Analytics is supporting evidence only: it may be absent, but any observed state
+must be `true`. Visible, query/hash/userinfo, foreign-host, trailing-slash, and
+hidden link cases are covered by browser fixtures.
+
+A public-free row requires one visible `.mod-episode-point--free` element with
+exact text `無料`, exact class name, computed color `rgb(220, 0, 0)`, and
+no `.by_wait` or `.js-modal` marker, first-free label, or conflicting native
+free badge. It is accepted only on a verified anonymous or authenticated work
+document.
+
+A first-free row requires authenticated proof, exactly one total
+`.mod-episode-point--free` marker and one first-free marker, exact text
+`初回無料`, and the exact class-token set
+`{mod-episode-point--free, by_first_time}`. Wait/modal markers, a red-public
+marker, or another conflicting native free badge leaves the row unknown. A
+numeric normal point badge may coexist. Only these observed public-free and
+first-free states map to `access_mode=free`; other access states remain
+`unknown` and every row remains `available=True`.
+
+Yanmaga sends `free_until=None` on each refresh because no free-expiry value was
+observed; under the existing Catalog refresh contract this clears a stale
+free-expiry value. It does not observe an access grant, so
+`access_granted_until_observed=False`; Catalog preserves an existing grant in
+that case, while an explicitly observed null remains authoritative and clears
+it. Lead's isolated regression run confirmed both preservation contracts.
+
+The direct capture adapter remains anonymous-only. Discovery recognition of a
+logged-in first-free row does not enable Viewer entry. The daily-limit notice's
+scope is unknown. Wait-free, paid-only, active grant, safe grant expiry, and
+23-hour recovery remain unverified and unsupported. Discovery opens no episode
+or access CTA.
+
+Live evidence on 2026-11-15 JST: `work-dual` returned 57 rows after the
+Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated
+shared-profile page had five visible exact `/mypage` links, no sign-in/out
+labels, current work identity, and consistent true telemetry. The temporary
+empty-context comparison had no `/mypage` link, two sign-in links, and false
+telemetry. The wife-list continuation had no `data-limit`; the single authorized
+listing GET remains unsupported by the strict pagination contract. Refer to
+`runbooks/yanmaga-access/PROGRESS.md` and its isolated stage01 evidence files.
 
 ## 実サイト確認・テスト・既知の制約
 

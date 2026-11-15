@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import pytest
 
@@ -35,6 +35,10 @@ def _row(
 ) -> str:
     access = {
         "red": '<span class="mod-episode-point--free">無料</span>',
+        "first": (
+            '<span class="mod-episode-point--free by_first_time">初回無料</span>'
+            '<span class="mod-episode-point--normal">70</span>'
+        ),
         "wait": '<span class="mod-episode-point--free by_wait">無料</span>',
         "point": '<span class="mod-episode-point">70</span>',
         "none": "",
@@ -55,6 +59,7 @@ def _listing_html(
     anonymous: bool = True,
     signin: bool = True,
     signout: bool = False,
+    mypage: bool = False,
     emit_telemetry: bool = True,
     conflict_telemetry: bool = False,
     telemetry_count: int = 1,
@@ -101,6 +106,7 @@ def _listing_html(
         else ""
     )
     sign_out_link = '<a href="/customers/sign-out">ログアウト</a>' if signout else ""
+    mypage_link = '<a href="/mypage">マイページ</a>' if mypage else ""
     login_value = "false" if anonymous else "true"
     telemetry_calls = "".join(
         f'fetch("https://www.google-analytics.com/g/collect?ep.is_logged_in={login_value}&n={index}", '
@@ -125,7 +131,7 @@ def _listing_html(
       <style>.mod-episode-point--free {{ color: rgb(220, 0, 0); }}
         .by_wait {{ color: rgb(238, 117, 27); }}</style>
       {telemetry_script}
-      </head><body>{sign_in_link}{sign_out_link}
+      </head><body>{sign_in_link}{sign_out_link}{mypage_link}
       {frame_telemetry_html}
       <div class="detailv2-episodes"><p class="episode-free-browse-text">無料は1日で読める数に限りがあります。</p>
         <ul>{row_html}{continuation_html}{'<a rel="next" href="/comics/next">next</a>' if unsupported_paging else ''}</ul>
@@ -311,6 +317,105 @@ async def test_yanmaga_unverified_anonymous_state_never_marks_red_row_free(
         browser_page,
         tmp_path,
         _listing_html(rows, anonymous=False, signin=False),
+    )
+
+    source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}")
+    assert result.complete is True
+    assert source is not None
+    assert source.access_mode == "unknown"
+
+
+async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    rows = [
+        (_episode_id(1), "初回無料", "first"),
+        (_episode_id(2), "通常無料", "red"),
+        (_episode_id(3), "ポイントのみ", "point"),
+    ]
+    html = _listing_html(rows, anonymous=False, signin=False, mypage=True)
+    html = html.replace(
+        "</body>",
+        '<script>window.accessClicks=0</script>'
+        '<button id="unlock" onclick="window.accessClicks=(window.accessClicks||0)+1">'
+        "無料で読む</button>"
+        "</body>",
+    )
+    forbidden_requests: list[str] = []
+
+    def observe_non_consuming_probe(request) -> None:
+        parsed = urlsplit(request.url)
+        if parsed.hostname == "yanmaga.jp" and request.method != "GET":
+            forbidden_requests.append("non_get")
+        parts = parsed.path.rstrip("/").split("/")
+        if (
+            parsed.hostname == "yanmaga.jp"
+            and len(parts) == 4
+            and parts[1] == "comics"
+            and len(parts[3]) == 32
+        ):
+            forbidden_requests.append("episode_navigation")
+
+    browser_page.on("request", observe_non_consuming_probe)
+    catalog, result, _service, _state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        html,
+    )
+    browser_page.remove_listener("request", observe_non_consuming_probe)
+
+    assert result.complete is True
+    assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}").access_mode == "free"
+    assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(2)}").access_mode == "free"
+    assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(3)}").access_mode == "unknown"
+    assert await browser_page.evaluate("window.accessClicks") == 0
+    assert forbidden_requests == []
+
+
+async def test_yanmaga_conflicting_login_ui_keeps_free_rows_unknown(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    catalog, result, _service, _state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        _listing_html(
+            [(_episode_id(1), "第1話", "red")],
+            anonymous=True,
+            signin=True,
+            mypage=True,
+        ),
+    )
+
+    source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}")
+    assert result.complete is True
+    assert source is not None
+    assert source.access_mode == "unknown"
+
+
+async def test_yanmaga_noncanonical_mypage_links_are_not_authentication_evidence(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    html = _listing_html(
+        [(_episode_id(1), "第1話", "red")],
+        anonymous=False,
+        signin=False,
+    ).replace(
+        "</body>",
+        '<a href="/mypage?mode=menu">query</a>'
+        '<a href="/mypage#menu">fragment</a>'
+        '<a href="https://user@yanmaga.jp/mypage">userinfo</a>'
+        '<a href="https://other.example/mypage">foreign</a>'
+        '<a href="/mypage/">trailing-slash</a>'
+        '<a href="/mypage" style="display:none">hidden</a>'
+        "</body>",
+    )
+    catalog, result, _service, _state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        html,
     )
 
     source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}")

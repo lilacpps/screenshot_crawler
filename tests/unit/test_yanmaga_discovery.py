@@ -9,8 +9,10 @@ from screenshot_crawler.site_adapters.yanmaga import (
     YanmagaDiscoveryAdapter,
     YanmagaEpisodeParts,
     YanmagaWorkParts,
+    classify_yanmaga_first_free_marker,
     classify_yanmaga_free_marker,
     has_yanmaga_anonymous_proof,
+    has_yanmaga_authenticated_proof,
     parse_yanmaga_episode_url,
     parse_yanmaga_work_url,
 )
@@ -84,6 +86,47 @@ def test_yanmaga_anonymous_state_requires_explicit_nonconflicting_proof(
         telemetry_overflow=overflow,
     ) is expected
 
+    if sign_ins == 1 and states == ("false",):
+        assert not has_yanmaga_anonymous_proof(
+            visible_sign_in_links=sign_ins,
+            visible_sign_out_links=sign_outs,
+            login_states=states,
+            current_work_document=current_document,
+            telemetry_overflow=overflow,
+            visible_mypage_links=1,
+        )
+
+
+@pytest.mark.parametrize(
+    (
+        "sign_ins",
+        "mypage_links",
+        "states",
+        "current_document",
+        "overflow",
+        "expected",
+    ),
+    [
+        (0, 1, ("true",), True, False, True),
+        (0, 1, (), True, False, True),
+        (0, 1, ("false",), True, False, False),
+        (1, 1, ("true",), True, False, False),
+        (0, 0, ("true",), True, False, False),
+        (0, 1, ("true",), False, False, False),
+        (0, 1, ("true",), True, True, False),
+    ],
+)
+def test_yanmaga_authenticated_state_requires_positive_ui_and_consistent_evidence(
+    sign_ins, mypage_links, states, current_document, overflow, expected
+) -> None:
+    assert has_yanmaga_authenticated_proof(
+        visible_sign_in_links=sign_ins,
+        visible_mypage_links=mypage_links,
+        login_states=states,
+        current_work_document=current_document,
+        telemetry_overflow=overflow,
+    ) is expected
+
 
 def test_yanmaga_observer_rejects_stale_main_frame_telemetry_after_navigation() -> None:
     class FakePage:
@@ -130,6 +173,20 @@ def test_yanmaga_observer_rejects_stale_main_frame_telemetry_after_navigation() 
                 "wait_marker": False,
                 "modal_marker": False,
                 "anonymous": True,
+            },
+            "free",
+        ),
+        (
+            {
+                "marker_count": 1,
+                "marker_visible": True,
+                "marker_text": "無料",
+                "marker_class": "mod-episode-point--free",
+                "marker_color": "rgb(220, 0, 0)",
+                "wait_marker": False,
+                "modal_marker": False,
+                "anonymous": False,
+                "authenticated": True,
             },
             "free",
         ),
@@ -203,3 +260,65 @@ def test_yanmaga_observer_rejects_stale_main_frame_telemetry_after_navigation() 
 )
 def test_yanmaga_free_classification_requires_complete_red_row_proof(evidence, expected) -> None:
     assert classify_yanmaga_free_marker(**evidence) == expected
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [
+        (
+            {
+                "marker_count": 1,
+                "first_free_count": 1,
+                "marker_visible": True,
+                "marker_text": "初回無料",
+                "marker_classes": ("mod-episode-point--free", "by_first_time"),
+                "wait_marker": False,
+                "modal_marker": False,
+                "authenticated": True,
+            },
+            "free",
+        ),
+        (
+            {
+                "marker_count": 1,
+                "first_free_count": 1,
+                "marker_visible": True,
+                "marker_text": "初回無料",
+                "marker_classes": ("mod-episode-point--free", "by_first_time"),
+                "wait_marker": False,
+                "modal_marker": False,
+                "authenticated": False,
+            },
+            "unknown",
+        ),
+        (
+            {
+                "marker_count": 1,
+                "first_free_count": 1,
+                "marker_visible": True,
+                "marker_text": "初回無料",
+                "marker_classes": ("mod-episode-point--free", "by_first_time"),
+                "wait_marker": True,
+                "modal_marker": False,
+                "authenticated": True,
+            },
+            "unknown",
+        ),
+        (
+            {
+                "marker_count": 1,
+                "first_free_count": 1,
+                "marker_visible": True,
+                "marker_text": "初回無料",
+                "marker_classes": ("mod-episode-point--free", "by_first_time"),
+                "wait_marker": False,
+                "modal_marker": False,
+                "authenticated": True,
+                "conflicting_free_badge": True,
+            },
+            "unknown",
+        ),
+    ],
+)
+def test_yanmaga_first_free_requires_exact_authenticated_row_proof(evidence, expected) -> None:
+    assert classify_yanmaga_first_free_marker(**evidence) == expected

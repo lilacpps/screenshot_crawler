@@ -35,42 +35,64 @@ comes from the observed full DOM order (oldest is 1). It does not infer or
 repair positions from episode IDs, dates, or titles; bounded Discovery is
 unsupported and inferred positions are disabled.
 
-`free` requires all of these live row/page signals together:
+The current Stage 01 Discovery classification maps only observed public-free and
+first-free rows to `access_mode="free"`. Rows remain `available=True`; other or
+unverified states are `unknown`.
 
-- a single visible `.mod-episode-point--free` marker with exact text `無料`,
-  exact class name, and computed `rgb(220, 0, 0)`;
-- no `.by_wait` or `.js-modal` marker, no visible exact `初回無料` label, and no
-  separate exact `無料` badge in the native `mod-episode-point*` badge family;
-- at least one visible sign-in link to `/customers/sign-up` with a sign-in or
-  registration label, no visible sign-out control, and an explicitly observed
-  `ep.is_logged_in=false` value in an analytics request.
+A public-free row requires one visible `.mod-episode-point--free` element with
+exact text `無料`, the exact class name, and computed color
+`rgb(220, 0, 0)`. It must have no `.by_wait` or `.js-modal` marker, no exact
+`初回無料` label, and no separate exact `無料` badge in
+the native `mod-episode-point*` family. This proof is accepted only on a
+verified anonymous or authenticated work document.
 
-The anonymous-state observer is installed before page navigation. It reads
-only that exact query field from requests to the observed
-`analytics.google.com` and `www.google-analytics.com` hosts; it never records
-the complete request URL. It accepts only main-frame requests while both the
-frame and page still identify the requested work document; main-frame
-navigation resets its evidence. More than 64 matching events invalidates the
-current document's proof. Missing, `undefined`, malformed, conflicting, stale,
-subframe-only, or overflowing telemetry and any missing sign-in proof leave
-rows `unknown`. The observer is bounded and detached on every exit. A visible
-exact `初回無料` label or a separate native `mod-episode-point*` `無料` badge
-conflicts with the red marker. Repeated plain `無料` text in the row's detail or
-price elements is not treated as another badge; a numeric point badge alone
-does not conflict. Row attributes such as `data-is-free` and
-`data-modal` are not authoritative: the sampled red row had
-`data-is-free="false"` and `data-modal="registration"` but no `.js-modal`.
-Orange `.by_wait`, point-only, and ambiguous rows remain `unknown`. Discovery
-does not enter episode links or consume tickets, points, quota, or grants.
+A first-free row requires a verified authenticated work document, exactly one
+`.mod-episode-point--free` marker in the row, exactly one first-free marker,
+exact text `初回無料`, and the exact class-token set
+`{"mod-episode-point--free", "by_first_time"}`. Wait/modal markers, a public-red
+marker, or another conflicting native free badge leave it `unknown`. A numeric
+normal point badge may coexist, as observed in the sample. The classifier also
+requires the total free-marker count to be exactly one, so any extra or unknown
+free badge fails closed.
 
-Every observed row is persisted as `available=True`; access uncertainty is
-represented separately by `access_mode="unknown"`. No explicit free expiry
-was observed, so `free_until=None` is sent on every refresh to clear stale
-expiry values. `access_checked_at` and `last_seen_at` use the current aware UTC
-time. The listing notice says daily free reading is limited, but its scope for
-red rows is unknown; this adapter does not infer a no-cap rule. Any later
-visible access/limit gate must be handled by Viewer/Batch preflight before
-entry.
+Anonymous proof still requires a visible sign-in link, no sign-out or visible
+`/mypage` link, current work-document identity, and explicit consistent
+`ep.is_logged_in=false` evidence. Positive authenticated proof uses the
+observed visible same-origin `/mypage` link with exact path and no credentials,
+query, or fragment; no sign-in link; current work-document identity; and no
+telemetry overflow. Analytics is supporting evidence only: it may be absent,
+but any observed state must be `true`. The observer remains main-frame bound,
+resets on navigation, reads only the exact login field, and is detached on all
+exit paths.
+
+The live Stage 01 sample was `work-dual`.
+Two first-free rows were visible in the initial viewport. The post-change
+complete 57-row listing contained 27 first-free rows, 8 public-free rows, and
+22 unknown. No wait-free, paid-only, or active-grant/expiry state was
+observed. Those states remain `unknown`; the daily-limit notice scope is not
+inferred. A separate temporary empty-context comparison saw no `/mypage` link,
+two sign-in links, and false login telemetry. No episode or access CTA was
+opened. A read-only request observer found analytics POSTs to third-party
+hosts only and no first-party Yanmaga POST during the sampled listing read.
+
+All listed rows remain `available=True`. Yanmaga sends `free_until=None` on
+each refresh because no explicit free expiry was observed; the existing Catalog
+refresh contract clears stale free expiry. No grant is observed, so
+`access_granted_until_observed=False` preserves an existing Catalog grant; an
+explicitly observed null is authoritative and clears it. Stage 01 had no live
+grant evidence. The daily-limit notice scope for red rows remains unknown.
+`access_checked_at` and `last_seen_at` use the current aware UTC time.
+
+The capture `YanmagaAdapter` remains anonymous-only in this Stage 01 snapshot;
+Discovery recognition of authenticated first-free does not enable capture of
+those rows. Missing/contradictory evidence, unknown markers, and unsupported
+row identity remain fail-closed. The list expansion contract remains strict:
+positive `data-limit`, native offset/sort/path, unique inserted rows, and stable
+ordering are required. The sample wife listing's missing-limit pagination
+shape is deliberately unsupported in this stage. Discovery never opens
+an episode to classify access. Row attributes such as `data-is-free` and
+`data-modal` are not authoritative: the sampled first-free rows had
+`data-is-free="false"` and `data-modal="registration"` without `.js-modal`.
 
 ## Viewer and capture
 
