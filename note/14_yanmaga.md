@@ -1,5 +1,42 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Stage 02 current implementation (2026-11-15; review pending)
+
+The C sorted-document identity correction is accepted with independent
+BLOCKING 0. A bounded metadata-only probe then exercised the production
+Rental History helper for the already opened alias `episode-ff-probe-01`.
+It observed H=17 at 2026-11-15T08:11:29.019643Z and calculated
+`site_countdown_lower_bound=2026-11-16T00:11:24.019643Z` as GET start plus
+(H - 1) hours minus 5 seconds. This lower bound is not an absolute expiry.
+The probe used zero additional rights and made zero Source/Viewer requests;
+the one earlier first-free research entry remains the cumulative total.
+
+The capture adapter now allows one normal public-episode GET only after fresh
+authenticated Discovery classifies the exact row as first-free and a final
+same-DOM check confirms the work, row, marker, and queryless public URL. The
+observed episode GET may grant access automatically. Before any image or pixel
+readiness work, a separate DOM-only check requires the exact Viewer identity,
+one valid counter, the current visible body wrapper, no known access gate, and
+the exact first-free completion notice. The notice may be latched only while
+that same episode remains current. A fresh finite Rental History lower bound is
+then saved synchronously through the Batch grant observer before pixel waits.
+Image source, dimensions, decoding, rewind, END, and packaging failures keep the
+Item pending while retaining a saved grant. Unknown evidence, route drift,
+missing expiry, or callback failure does not trigger a second entry.
+
+Trusted existing grants require a still-future Catalog expiry and a fresh
+same-target active Rental History countdown immediately before entry. H=1 is
+active evidence and can use the trusted Catalog expiry without creating or
+extending a grant; H=0, stale/inactive evidence, or expired Catalog expiry is
+skipped. First-free grant creation still requires a finite future lower bound.
+After Discovery's async history read, it takes a new full listing snapshot and
+requires exact equality with the validated pre-read snapshot before yielding
+any record. The production pixel, END, and capture contracts are unchanged.
+Synthetic tests pass for the accepted target, timeout/cancel boundaries,
+post-history document drift, and recovery-state preservation. No production
+site capture/END/ZIP/Completed run has occurred; Stage 02 remains in progress
+pending full tests and independent review.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
@@ -9,70 +46,32 @@ site setting. Existing listing-page waits remain independent. See
 [shared runtime details](00_core.md#phase-1-runtime-settings--pacing).
 Synthetic CLI/worker ordering is verified; live timing is unverified.
 
-## Stage 02 Discovery sort correction (C sub-gate, independent review pending)
+## Stage 02 Discovery sort identity correction (accepted sub-gate)
 
-The authenticated work-dual page was newest-first by default in the 2026-11-15
-post-entry probe. Discovery now checks for exactly two visible same-work sort
-anchors with the observed labels, classes, link URLs, and selected state. It
-selects the exact oldest-first control once and accepts only the same work URL
-with the sole sort=older query. Canonical and og:url remain the unqueried work
-URL. Duplicate, hidden, foreign, unknown-query, label-conflicting, or
-selected-state-conflicting controls fail closed. Without sort controls, the
-existing oldest-first listing contract remains.
+The initial C implementation assumed canonical and og:url remained unqueried
+after selecting the oldest-first control. A bounded, read-only production
+Yanmaga Discovery uses `YanmagaDiscoveryAdapter` with the standard
+`DiscoveryService`; the adapter does not write Catalog directly. The optional
+`configure_source_snapshots(target, snapshots)` hook receives an immutable
+tuple filtered to the same site and exact Discovery key. Discovery rechecks
+the full listing after asynchronous Rental History proof and emits no rows on
+identity or content drift.
 
-The sorted page's native continuation had offset 5, limit 47, and older sort.
-One GET expanded 10 rows to 57; the final ID order matched the Stage 01
-oldest-first list and the sampled first-free episode remained at position 32.
-Source targets keep the public episode URL. The Discovery unit file passed 30
-cases. The browser file covered default-newest sorting, already-oldest with no
-sort click, continuation, positions, source identity, Completed/Artifact
-preservation, href drift to source/foreign targets, post-More active-state
-drift, and contradictory sort controls. The temporary aggregate-text rental
-parser and test were withdrawn after review noted they did not bind exact native
-label/value fields to the same target card. No rental parser is in production.
-Final verification passed 30 unit tests and 36 Yanmaga Discovery browser tests,
-with 0 skips; ruff check src tests also passed. Independent review of this C
-sub-gate is pending.
+Shared Batch adds a site-neutral immutable `ConfirmedAccessGrant` observer.
+The Executor binds it to the validated Catalog source and synchronously
+calls the grant-only Catalog API before capture continues. That API updates
+only the source grant expiry and timestamp. The schema is unchanged; other
+site adapters retain default no-op hooks, and Runner remains Catalog-free.
 
-One first-free entry was used for the Stage 02 probe and completed its
-first-party free-rental flow; no capture, Catalog grant write, END, or ZIP was
-performed. A later read-only Rental History check bound a visible card to the
-same exact episode. The visible card and one same-origin no-store GET both
-reported 22 remaining hours at GET start 2026-11-15 03:10:49.892907 UTC
-(12:10:49 JST). This yields only the conservative lower bound
-2026-11-16 00:10:49.892907 UTC (09:10:49 JST), GET-start plus 21 hours, not
-an absolute expiry. A tested
-The direct Rental History GET is retained as evidence only. Exact native
-label/value leaf-node structure and same-card binding still need proof before
-any Grant persistence or retry policy can use the countdown. No more access
-operations are authorized for this target.
+### Historical main integration baseline (2026-11-06; pre-Stage 02)
 
-## 現在の実装範囲
-
-Phases 02-05 passed independent review for the observed Chapter 11 layout. The normal CLI Chapter 11 E2E used native-pixel lossless WebP for all 20 pages with positive END, Manifest/ZIP, Artifact, and Completed. Independent reference capture and pixel comparison also passed exactly for all 20 pages. The N2 follow-up completed the red-free Chapter 1 Reader to END with WebP for all 36 pages. Complete original server page bytes were not observed; verified output is reconstructed pre-JPEG viewer pixels, not original bytes. Daily-limit scope and other reader layouts remain unverified.
-
-
-Discovery は `src/screenshot_crawler/site_adapters/yanmaga/discovery.py`
-の `YanmagaDiscoveryAdapter` が担当する。AdapterからCatalogへ直接書かず、
-標準`DiscoveryService`を利用する。Batchは既存Planner/Executor/Packagerを利用する。
-共通Core、Catalog schema、他siteは変更していない。
-
-## main統合時のBatch前提
-
-現在の共通Batchは、明示的なWatchlistと取得範囲の同期を必要とする。
-隔離検証では`batch plan`と`batch run`の両方へ、Discoveryで使用した
-`--watchlist PATH`と`--catalog PATH`を渡す。`--library-dir PATH`も両方で隔離先に揃える。
-正常なDiscoveryが取得範囲を同期する。
-YanmagaのPlanner/Batchテストも既存の`synchronized_legacy_planner`ヘルパーで
-テスト用Watchlistと取得範囲を準備し、共通の安全判定を通して実行する。
-この統合でAdapterの無料判定・capture・END条件は変更していない。
-
-2026-11-06のmain統合確認では、Yanmaga Unitと非BatchのViewer Integration 113件、
-Watchlist対応後のViewer Batch Integration 4件、Discovery Integration・CLI・Registry・
-共通Batch Planner/Executor・validation reuse 290件の計407件が通過した（分割実行、skip 0）。
-`ruff check src tests`とdiff whitespaceチェックも通過し、独立再レビューはBLOCKING 0。
-実サイトはユーザーから動作確認済みとの報告を受けたが、この統合作業では再操作していない。
-shared Core/schema/Researchの契約変更はないためfull suiteとResearchは再実行していない。
+At the original integration checkpoint, Batch required an explicit
+Watchlist and synchronized acquisition scope. The split Yanmaga Unit,
+Viewer, Discovery, CLI, registry, and common Planner/Executor selection
+passed 407 tests with 0 skips, and the historical full Ruff and independent
+review checks passed. Those counts describe that earlier baseline, not the
+current Stage 02 implementation. The Stage 02 affected tests and final full
+suite status are recorded in `runbooks/yanmaga-access/PROGRESS.md`.
 
 ## URL・Identity
 
@@ -106,15 +105,17 @@ listing snapshot does not prove unpublished or future backend rows.
 
 ## Viewer・Capture
 
-`YanmagaAdapter` はCatalogの `<decoded-work-slug>:<episode-id>` と元の
-`source_url` を照合し、Viewerへ入る直前に同じworkのcomplete anonymous
-Discoveryを再実行する。current listingで対象が一意な赤い通常無料rowなら
-通常navigationで同じepisodeへ進む。same-work complete listingで通常無料条件が
-明確に消えた場合はresource unavailable、それ以外の匿名性/identity/DOMの不明や
-競合はunknownで停止する。`auto` / `direct` のみを許可し、quota/resource方式を拒否。
-初回無料/待ち/pointだけのrowは対象にしない。Daily limit注意の赤字rowへの適用範囲は
-未確認であり、no-capの一般化はしない。Viewer上でlogin/quota/resource gateが
-見えた場合も停止する。
+`YanmagaAdapter` binds the configured `<decoded-work-slug>:<episode-id>` to
+the original Catalog `source_url` and freshly validates the exact requested
+source. The normal public-free path still requires the exact visible red-free
+marker. Stage 02 also permits one public-episode GET for a fresh authenticated
+exact first-free row; that route may grant access automatically. The adapter
+requires the exact Viewer, completion notice, and finite target-bound Rental
+History evidence before synchronously persisting the grant. A trusted stored
+grant can authorize direct retry only when its Catalog expiry is still future
+and a fresh same-target countdown is active. Unknown, conflicting, expired,
+or unsupported states fail closed. `direct` and `auto` are supported; ticket
+or quota selection is not enabled. Daily-limit scope remains unverified.
 
 実navigationではpublic episode URLが同じslug/episode IDを持つ
 `/viewer/comics/<slug>/<episode-id>` にredirectした。Viewer URLには一度、
@@ -209,16 +210,18 @@ first-free states map to `access_mode=free`; other access states remain
 
 Yanmaga sends `free_until=None` on each refresh because no free-expiry value was
 observed; under the existing Catalog refresh contract this clears a stale
-free-expiry value. It does not observe an access grant, so
-`access_granted_until_observed=False`; Catalog preserves an existing grant in
-that case, while an explicitly observed null remains authoritative and clears
-it. Lead's isolated regression run confirmed both preservation contracts.
+free-expiry value. A public listing does not assert a new grant expiry, so
+`access_granted_until_observed=False` and Catalog preserves an existing grant.
+The adapter uses fresh exact-target Rental History evidence only to retain a
+previous access mode while its trusted stored expiry remains future; it does
+not extend or replace that expiry during Discovery. The general Catalog contract
+still treats an explicitly observed null as authoritative. Lead's isolated
+regression run confirmed preservation and clear behavior.
 
-The direct capture adapter remains anonymous-only. Discovery recognition of a
-logged-in first-free row does not enable Viewer entry. The daily-limit notice's
-scope is unknown. Wait-free, paid-only, active grant, safe grant expiry, and
-23-hour recovery remain unverified and unsupported. Discovery opens no episode
-or access CTA.
+Stage 01's anonymous-only capture limitation was superseded by the Stage 02
+first-free and trusted-grant paths described above. Wait-free and paid-only
+classification, charged-state semantics, and 23-hour recovery remain unverified
+and unsupported. Discovery itself opens no episode or access CTA.
 
 Live evidence on 2026-11-15 JST: `work-dual` returned 57 rows after the
 Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated
@@ -282,26 +285,28 @@ boundary without allocating a cap-sized buffer. A bounded isolated ordinary CLI 
 page 1; it saved one native 1125×1600 WebP and intentionally exited at `--max-pages 1`, without
 reaching END or packaging. No page-ID association is inferred for the other retained candidates.
 
-### Phase 04 Batch (Reviewer accepted)
+### Phase 04 Batch, extended by Stage 02
 
-`YanmagaSitePolicy`は正しいsite、available、`access_mode="free"`、有効な
-`<decoded-work-slug>:<episode32hex>`、期限の安全な状態だけをeligibleにする。
-期限が未観測の`free_until=None`は、Discoveryがfree分類を独立に立証している場合だけ
-許可し、NULLからfreeを推定しない。awareな将来期限は許可し、期限切れ/equal、naive、
-malformedは除外する。PlannerがPolicy呼出し前にfree expiryをparseするので、Catalog内の
-malformed timestampはcandidate skipではなくplan全体をfail-closedにする。共通Core変更はない。
+`YanmagaSitePolicy` admits an available, correctly identified `free` source
+when its observed `free_until` is absent or still future. An available
+`quota` or `paid` source is eligible for the same `direct` strategy only
+when it has a valid exact episode identity and a timezone-aware
+`access_granted_until` later than the current time. Malformed, expired, or
+missing grants fail closed. No Yanmaga resource or grant-only pass is
+enabled; `quota_available` is not consumed.
 
-Batchは`direct`のみで、quota/resource/grant-only passなし。fresh same-work Discoveryで
-target rowが現在も赤字通常無料と確認された場合だけViewerへ進む。明確にfreeでなくなった
-targetはunavailableとしてskip、anonymous/identity/list状態の不明や矛盾はfailure/pending。
-positive ENDと標準packagingが完了するまでArtifact/Completedを作らない。
+The capture adapter preserves three direct-entry cases: the public red-free
+row, the fresh authenticated first-free row with one bounded source entry
+and finite grant proof, and a trusted stored grant revalidated by fresh
+same-target active Rental History evidence. Unknown access, wait-free,
+paid-only without a trusted grant, identity drift, or a visible gate does
+not authorize entry. Normal image, END, and packaging checks remain strict.
+Production Stage 02 capture and recovery remain unverified.
 
-Synthetic Batch IntegrationでCatalog Plannerからdirect candidateを作り、fresh free preflight、
-4ページcapture、ZIP CRC、present Artifact、成功CrawlRun、Completedを検証する。再無料確認で
-restrictedになったsourceはViewerへ入らずpending/Artifactなし。END不成立・synthetic ZIP失敗も
-pending/Artifactなし。実サイトBatch CLI E2EとManifest/ZIPの独立Tester監査はPhase 05で実施済みで、
-Chapter 11の限定ケースでpassした。最新のChapter 11 E2EはN2 native-pixel lossless WebP outputを通常CLIで検証した。
-All-20-page RGBA reference equality passed: 60 control segments were captured without overflow, send failures, or scan errors, then independently composited and compared with decoded ZIP WebP pixels. All 20 pages matched exactly. The earlier zero-snapshot result was a QA observer initialization issue now resolved; details are in PROGRESS.
+The earlier synthetic Batch Integration verified the normal public-free
+path through Catalog planning, capture, ZIP CRC, Artifact, CrawlRun, and
+Completed state. The separate Phase 05 live CLI evidence below is limited
+to the observed Chapter 11 case and is historical site evidence.
 
 ### Phase 05 isolated real-site CLI (historical PNG E2E and current WebP E2E PASS)
 

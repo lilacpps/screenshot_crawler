@@ -8,7 +8,7 @@ import re
 import uuid
 import warnings
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
@@ -58,7 +58,11 @@ from screenshot_crawler.runtime_settings import (
     DEFAULT_PAGE_TURN_DELAY_MS,
     SiteRuntimeSettings,
 )
-from screenshot_crawler.site_adapters.base import AccessResourceResolution, SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessResourceResolution,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import SitePolicy
@@ -258,6 +262,7 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
+        grant_observer_active = False
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
@@ -273,11 +278,48 @@ class BatchExecutor:
             if local_skip_reason is not None:
                 raise AccessResourceUnavailableError(local_skip_reason)
             adapter = self.adapters.create(candidate.site)
+            set_grant_observer = getattr(
+                adapter, "set_confirmed_access_grant_observer", None
+            )
+            configure_existing_grant = getattr(
+                adapter, "configure_existing_access_grant", None
+            )
+            if callable(set_grant_observer):
+                set_grant_observer(None)
+            if callable(configure_existing_grant):
+                configure_existing_grant(None)
             source = self.catalog.get_source(candidate.source_id)
             work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
             configure_identity = getattr(adapter, "configure_target_identity", None)
             if configure_identity is not None:
                 await configure_identity(source.external_id, work.work_key)
+            if callable(configure_existing_grant):
+                configure_existing_grant(_parse_access_grant(source.access_granted_until))
+
+            def persist_confirmed_grant(grant: ConfirmedAccessGrant) -> None:
+                if not grant_observer_active:
+                    raise BatchExecutionError(
+                        "confirmed grant observer is outside its candidate execution"
+                    )
+                if not isinstance(grant, ConfirmedAccessGrant):
+                    raise BatchExecutionError(
+                        "adapter reported an unvalidated confirmed grant value"
+                    )
+                if grant.site != source.site or grant.external_id != source.external_id:
+                    raise BatchExecutionError(
+                        "adapter reported a confirmed grant for a different candidate"
+                    )
+                self.catalog.record_confirmed_access_grant(
+                    candidate.source_id,
+                    site=source.site,
+                    external_id=source.external_id,
+                    observed_at=grant.observed_at,
+                    access_granted_until=grant.access_granted_until,
+                )
+
+            if callable(set_grant_observer):
+                set_grant_observer(persist_confirmed_grant)
+                grant_observer_active = True
             run = self.catalog.create_crawl_run(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -442,6 +484,21 @@ class BatchExecutor:
                 f"Batch candidate failed ({self._candidate_error_context(candidate)}): {exc}",
                 resource_consumed=resource_consumed,
             ) from exc
+        finally:
+            grant_observer_active = False
+            if adapter is not None:
+                set_grant_observer = getattr(
+                    adapter, "set_confirmed_access_grant_observer", None
+                )
+                configure_existing_grant = getattr(
+                    adapter, "configure_existing_access_grant", None
+                )
+                if callable(set_grant_observer):
+                    with suppress(Exception):
+                        set_grant_observer(None)
+                if callable(configure_existing_grant):
+                    with suppress(Exception):
+                        configure_existing_grant(None)
 
     def grant_only_skip_reason(
         self, candidate: BatchCandidate, *, now: datetime | None = None
@@ -1361,6 +1418,18 @@ def _normalize_now(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise BatchExecutionError("now must be a timezone-aware datetime")
     return value.astimezone(JST)
+
+
+def _parse_access_grant(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
 
 
 def _new_output_dir(

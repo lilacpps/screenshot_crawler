@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -135,7 +136,20 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
         self.stop_after = stop_after
         self.iter_records_calls = 0
         self.reconciliation_calls: list[tuple[str, DiscoverySourceSnapshot | None]] = []
+        self.configured_source_snapshots: list[
+            tuple[WatchlistTarget, tuple[DiscoverySourceSnapshot, ...]]
+        ] = []
+        self.configure_source_snapshots_error: Exception | None = None
         self.stop_calls: list[str] = []
+
+    def configure_source_snapshots(
+        self,
+        target: WatchlistTarget,
+        snapshots: tuple[DiscoverySourceSnapshot, ...],
+    ) -> None:
+        self.configured_source_snapshots.append((target, snapshots))
+        if self.configure_source_snapshots_error is not None:
+            raise self.configure_source_snapshots_error
 
     def iter_records(self, page: FakePage, target: WatchlistTarget, mode: str):
         del page, target, mode
@@ -278,6 +292,67 @@ def setup_service(
     registry = DiscoveryAdapterRegistry()
     registry.register(site, lambda: adapter)
     return DiscoveryService(catalog, registry), catalog, watch_target or target(site=site)
+
+
+async def test_discovery_snapshot_hook_receives_only_same_key_same_site_run_start_sources(
+    tmp_path: Path,
+) -> None:
+    until = datetime.now(UTC) + timedelta(days=2)
+    adapter = FakeDiscoveryAdapter(
+        [
+            record(
+                "same-scope",
+                access_mode="paid",
+                access_granted_until=until.isoformat(),
+                access_granted_until_observed=True,
+            )
+        ]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+
+    other_work = catalog.create_work(WorkInput(work_key="other-work", title="Other"))
+    other_item = catalog.create_item(ItemInput(kind="episode"), work_id=other_work.id)
+    catalog.create_source(
+        SourceInput(
+            site=watch_target.site,
+            external_id="other-scope",
+            discovery_key="different-key",
+            access_mode="paid",
+            access_granted_until=until.isoformat(),
+        ),
+        item_id=other_item.id,
+    )
+    adapter.records = [record("same-scope", access_mode="unknown")]
+
+    await service.discover(FakePage(), watch_target, "full")
+
+    configured_target, snapshots = adapter.configured_source_snapshots[-1]
+    assert configured_target == watch_target
+    assert [snapshot.external_id for snapshot in snapshots] == ["same-scope"]
+    assert datetime.fromisoformat(
+        str(snapshots[0].access_granted_until)
+    ).astimezone(UTC) == until.astimezone(UTC)
+    assert snapshots[0].access_mode == "paid"
+    assert catalog.get_source(catalog.find_source(watch_target.site, "same-scope").id).access_mode == "unknown"
+
+
+async def test_discovery_snapshot_hook_failure_returns_incomplete_before_any_source_write(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("one")])
+    adapter.configure_source_snapshots_error = DiscoveryIncompleteError(
+        "snapshot context failed"
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert result.error == "snapshot context failed"
+    assert catalog.list_sources() == []
+    assert catalog.list_items() == []
 
 
 async def test_first_discovery_creates_work_item_source_and_web_default(tmp_path: Path) -> None:

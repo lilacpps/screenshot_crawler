@@ -30,6 +30,7 @@ def _source(
     site: str = "yanmaga",
     external_id: str = EXTERNAL_ID,
     free_until: datetime | str | None = None,
+    access_granted_until: datetime | str | None = None,
 ) -> Source:
     return Source(
         id=1,
@@ -43,7 +44,7 @@ def _source(
         access_checked_at=None,
         last_seen_at=None,
         quota_started_at=None,
-        access_granted_until=None,
+        access_granted_until=access_granted_until,
         published_at=None,
         created_at="2026-10-20T12:00:00+09:00",
         updated_at="2026-10-20T12:00:00+09:00",
@@ -108,8 +109,8 @@ def test_yanmaga_policy_rejects_expired_or_unverifiable_expiry(
         (_source(available=False), "unavailable"),
         (_source(site="comicdays"), "wrong_site"),
         (_source("unknown"), "unknown"),
-        (_source("quota"), "quota_not_supported"),
-        (_source("paid"), "paid"),
+        (_source("quota"), "access_grant_not_observed"),
+        (_source("paid"), "access_grant_not_observed"),
         (_source("owned"), "owned_not_verified"),
         (_source("grant"), "grant_not_supported"),
         (_source("rental"), "rental_not_supported"),
@@ -145,6 +146,57 @@ def test_yanmaga_policy_rejects_naive_clock_and_has_no_resource_pass() -> None:
         policy.validate_access_resource("ticket")
     with pytest.raises(SitePolicyError, match="Grant-only access resource is not implemented"):
         policy.validate_grant_only_resource("ticket")
+
+
+@pytest.mark.parametrize("access_mode", ["quota", "paid"])
+def test_yanmaga_policy_allows_only_active_stored_grant_for_quota_or_paid(
+    access_mode: str,
+) -> None:
+    policy = YanmagaSitePolicy()
+    active = policy.evaluate(
+        _source(
+            access_mode,
+            access_granted_until=NOW + timedelta(hours=1),
+        ),
+        now=NOW,
+        quota_available=0,
+    )
+    assert (active.eligible, active.access_strategy, active.reason) == (
+        True,
+        "direct",
+        "active_confirmed_grant",
+    )
+    assert active.consumes_quota is False
+    assert active.quota_resource is None
+
+    for value, reason in (
+        (None, "access_grant_not_observed"),
+        (NOW, "expired_access_grant"),
+        (NOW - timedelta(seconds=1), "expired_access_grant"),
+        ("2026-10-20T13:00:00", "invalid_access_grant_until"),
+        ("not-a-timestamp", "invalid_access_grant_until"),
+    ):
+        denied = policy.evaluate(
+            _source(access_mode, access_granted_until=value),
+            now=NOW,
+            quota_available=None,
+        )
+        assert (denied.eligible, denied.access_strategy, denied.reason) == (
+            False,
+            None,
+            reason,
+        )
+
+
+def test_yanmaga_policy_never_imports_an_unknown_or_owned_mode_from_grant() -> None:
+    until = NOW + timedelta(hours=1)
+    for access_mode, reason in (("unknown", "unknown"), ("owned", "owned_not_verified")):
+        decision = YanmagaSitePolicy().evaluate(
+            _source(access_mode, access_granted_until=until),
+            now=NOW,
+            quota_available=None,
+        )
+        assert (decision.eligible, decision.reason) == (False, reason)
 
 
 def test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions(
@@ -202,8 +254,7 @@ def test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions(
     assert all(not candidate.consumes_quota for candidate in plan.candidates)
     assert {entry.reason for entry in plan.skipped} >= {
         "unknown",
-        "quota_not_supported",
-        "paid",
+        "access_grant_not_observed",
         "owned_not_verified",
         "unavailable",
     }

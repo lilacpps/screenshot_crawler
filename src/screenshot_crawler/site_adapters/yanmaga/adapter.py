@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from itertools import pairwise
 from math import isfinite
@@ -17,20 +18,25 @@ from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
+    AccessStopError,
     PageChangeTimeoutError,
     UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.site_adapters.base import ConfirmedAccessGrant, SiteAdapter
 from screenshot_crawler.site_adapters.yanmaga.access import yanmaga_access_profile
 from screenshot_crawler.site_adapters.yanmaga.discovery import (
+    _SORT_OLDEST_LABEL,
     SITE_HOST,
     YanmagaDiscoveryAdapter,
     YanmagaEpisodeParts,
     YanmagaListingRow,
     YanmagaWorkParts,
+    _parse_yanmaga_sorted_work_url,
+    _validate_work_identity_urls,
     parse_yanmaga_episode_url,
     parse_yanmaga_work_url,
 )
@@ -43,6 +49,10 @@ from screenshot_crawler.site_adapters.yanmaga.native_capture import (
     release_yanmaga_native_page,
     verify_yanmaga_native_group,
 )
+from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    RentalCountdown,
+    fetch_rental_history_countdowns,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
 VIEWPORT_WIDTH = 2560
@@ -50,6 +60,7 @@ VIEWPORT_HEIGHT = 1800
 PAGE_CHANGE_TIMEOUT_MS = 15_000
 INITIALIZE_TIMEOUT_MS = 90_000
 RENDER_POLL_MS = 100
+FIRST_FREE_ACCESS_PROOF_TIMEOUT_MS = 2_000
 STABLE_READS_REQUIRED = 3
 MAX_BODY_PAGES = 2_000
 MAX_REWIND_TURNS = MAX_BODY_PAGES
@@ -368,6 +379,23 @@ class YanmagaAdapter(SiteAdapter):
         self._listing_rows = None
         self._native_observer_installed = False
         self._last_capture_group: dict[str, object] = {}
+        self._existing_access_grant_until: datetime | None = None
+        self._first_free_entry_attempted = False
+        self._first_free_release_state = "not_attempted"
+        self._first_free_grant: ConfirmedAccessGrant | None = None
+        self._first_free_completion_notice_seen = False
+
+    def configure_existing_access_grant(
+        self, access_granted_until: datetime | None
+    ) -> None:
+        if (
+            isinstance(access_granted_until, datetime)
+            and access_granted_until.tzinfo is not None
+            and access_granted_until.utcoffset() is not None
+        ):
+            self._existing_access_grant_until = access_granted_until
+        else:
+            self._existing_access_grant_until = None
 
     async def prepare_page(self, page: Page) -> None:
         try:
@@ -413,6 +441,13 @@ class YanmagaAdapter(SiteAdapter):
         self._expected = YanmagaEpisodeParts(slug, episode_id)
         self._expected_external_id = external_id
         self._work_key = work_key
+        self._first_free_entry_attempted = False
+        self._first_free_release_state = "not_attempted"
+        self._first_free_grant = None
+        self._first_free_completion_notice_seen = False
+        self._existing_access_grant_until = None
+        self._listing_rows = None
+        self._viewer_url = None
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         requested = parse_yanmaga_episode_url(source_url)
@@ -463,9 +498,9 @@ class YanmagaAdapter(SiteAdapter):
         discovery = YanmagaDiscoveryAdapter()
         records = [record async for record in discovery.iter_records(page, target, "full")]
         listing = discovery.last_snapshot
-        if listing is None or not listing.anonymous:
+        if listing is None or not (listing.anonymous or listing.authenticated):
             raise UnknownPageStateError(
-                "Yanmaga current public listing lacks explicit anonymous-state proof"
+                "Yanmaga current listing lacks explicit login-state proof"
             )
         self._listing_rows = listing.rows
         matches = [
@@ -484,23 +519,100 @@ class YanmagaAdapter(SiteAdapter):
         if len(row_matches) != 1:
             raise UnknownPageStateError("Yanmaga target row is absent from the validated listing snapshot")
         row = row_matches[0]
-        if match.source.access_mode != "free":
-            if row.known_restricted and not row.red_marker_present:
-                raise AccessResourceUnavailableError(
-                    "yanmaga_target_no_longer_unconditionally_free"
-                )
-            raise UnknownPageStateError(
-                "Yanmaga target lacks unambiguous current anonymous free evidence"
+        if match.source.url != self._source_url:
+            raise UnknownPageStateError("Yanmaga listing route differs from the requested source URL")
+        classified_free = match.source.access_mode == "free"
+        authenticated_first_free = (
+            row.first_free_marker and listing.authenticated and classified_free
+        )
+        trusted_until = self._active_existing_grant_until()
+        fresh_existing_grant: RentalCountdown | None = None
+        if trusted_until is not None and not row.free_marker:
+            if not listing.authenticated or listing.mypage_href is None:
+                raise AccessResourceUnavailableError("yanmaga_existing_grant_auth_unknown")
+            proofs = await fetch_rental_history_countdowns(
+                page,
+                observed_mypage_href=listing.mypage_href,
+                targets=(expected,),
             )
-        if not row.free_marker or match.source.url != self._source_url:
-            raise UnknownPageStateError("Yanmaga free listing route differs from the requested source URL")
+            fresh_existing_grant = next(
+                (
+                    countdown
+                    for external_id, countdown in proofs
+                    if external_id == self._expected_external_id and countdown.active
+                ),
+                None,
+            )
+            if fresh_existing_grant is None:
+                raise AccessResourceUnavailableError("yanmaga_existing_grant_not_active")
+
+        fresh_first_free = (
+            authenticated_first_free and self._existing_access_grant_until is None
+        )
+        if row.free_marker and classified_free:
+            pass
+        elif fresh_first_free:
+            if listing.mypage_href is None:
+                raise UnknownPageStateError("Yanmaga first-free target has no observed account link")
+            if getattr(self, "_confirmed_access_grant_observer", None) is None:
+                raise AccessResourceUnavailableError(
+                    "yanmaga_first_free_requires_batch_grant_observer"
+                )
+        elif fresh_existing_grant is not None:
+            pass
+        elif row.known_restricted and not row.red_marker_present:
+            raise AccessResourceUnavailableError(
+                "yanmaga_target_not_currently_free_or_granted"
+            )
+        else:
+            raise UnknownPageStateError(
+                "Yanmaga target lacks an exact current public-free, first-free, or trusted-grant proof"
+            )
         self._work_title = match.item.canonical_title or expected.slug
         self._episode_title = match.item.order_label
         if not self._episode_title:
             raise UnknownPageStateError("Yanmaga target episode label is unavailable")
 
-        await page.goto(self._source_url, wait_until="domcontentloaded", timeout=30_000)
+        if row.first_free_marker and not fresh_first_free and fresh_existing_grant is None:
+            raise AccessResourceUnavailableError("yanmaga_first_free_provenance_is_unknown")
+        await self._validate_pre_entry_target(
+            page,
+            expected,
+            row,
+            listing,
+            trusted_grant=fresh_existing_grant is not None,
+            classified_access_mode=match.source.access_mode,
+        )
+        if fresh_first_free and self._first_free_entry_attempted:
+            raise AccessResourceUnavailableError("yanmaga_first_free_entry_already_attempted")
+        self._first_free_entry_attempted = bool(fresh_first_free)
+        if fresh_first_free:
+            self._first_free_release_state = "attempted_unknown"
+        if fresh_existing_grant is not None:
+            self._require_live_existing_grant(fresh_existing_grant)
+        try:
+            await page.goto(self._source_url, wait_until="domcontentloaded", timeout=30_000)
+        except (PlaywrightError, TimeoutError) as entry_error:
+            if fresh_first_free:
+                try:
+                    await self._confirm_and_persist_first_free_grant(
+                        page, expected, listing.mypage_href or ""
+                    )
+                except AccessStopError:
+                    raise
+                except Exception as confirmation_error:  # noqa: BLE001
+                    entry_error.add_note(
+                        "Yanmaga first-free post-navigation confirmation remained unknown: "
+                        f"{type(confirmation_error).__name__}"
+                    )
+            raise
         self._validate_viewer_route(page)
+        if fresh_first_free and not await self._confirm_and_persist_first_free_grant(
+                page, expected, listing.mypage_href or ""
+        ):
+            raise AccessResourceUnavailableError(
+                "yanmaga_first_free_access_or_finite_grant_unconfirmed"
+            )
         snapshot = await self._wait_for_stable_snapshot(
             page,
             timeout_ms=PAGE_CHANGE_TIMEOUT_MS,
@@ -515,6 +627,411 @@ class YanmagaAdapter(SiteAdapter):
             raise UnknownPageStateError("Yanmaga viewer did not restore its first body page")
         first = await self._prepare_first_page_capture(page, first)
         self._viewer_url = page.url
+
+    def _active_existing_grant_until(self) -> datetime | None:
+        value = self._existing_access_grant_until
+        if (
+            value is None
+            or value.tzinfo is None
+            or value.utcoffset() is None
+            or value.astimezone(UTC) <= datetime.now(UTC)
+        ):
+            return None
+        return value
+
+    @property
+    def first_free_release_state(self) -> str:
+        """Return a non-sensitive state for this run's one permitted entry."""
+
+        return self._first_free_release_state
+
+    def _require_live_existing_grant(self, countdown: RentalCountdown) -> None:
+        trusted_until = self._active_existing_grant_until()
+        now = datetime.now(UTC)
+        if (
+            trusted_until is None
+            or not countdown.active
+            or countdown.observed_at.tzinfo is None
+            or countdown.observed_at.utcoffset() is None
+            or countdown.observed_at.astimezone(UTC) > now
+        ):
+            raise AccessResourceUnavailableError(
+                "yanmaga_existing_grant_not_active_before_entry"
+            )
+
+    async def _confirm_and_persist_first_free_grant(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+        observed_mypage_href: str,
+    ) -> bool:
+        if self._first_free_grant is not None:
+            return self._first_free_release_state == "persisted"
+        if not self._first_free_entry_attempted:
+            raise AccessResourceUnavailableError(
+                "yanmaga_first_free_confirmation_without_entry_attempt"
+            )
+        if not await self._has_first_free_access_proof(page, expected):
+            return False
+
+        proofs = await fetch_rental_history_countdowns(
+            page,
+            observed_mypage_href=observed_mypage_href,
+            targets=(expected,),
+        )
+        if not await self._has_first_free_access_proof(page, expected):
+            return False
+        external_id = self._expected_external_id
+        countdown = next(
+            (
+                value
+                for proof_external_id, value in proofs
+                if proof_external_id == external_id and value.active
+            ),
+            None,
+        )
+        now = datetime.now(UTC)
+        if (
+            countdown is None
+            or countdown.access_granted_until is None
+            or countdown.access_granted_until.tzinfo is None
+            or countdown.access_granted_until.utcoffset() is None
+            or countdown.access_granted_until.astimezone(UTC) <= now
+            or countdown.expiry_evidence != "site_countdown_lower_bound"
+            or countdown.observed_at.tzinfo is None
+            or countdown.observed_at.utcoffset() is None
+            or countdown.observed_at.astimezone(UTC) > now
+        ):
+            return False
+
+        grant = ConfirmedAccessGrant(
+            site="yanmaga",
+            external_id=external_id or "",
+            observed_at=countdown.observed_at,
+            access_granted_until=countdown.access_granted_until,
+            expiry_evidence=countdown.expiry_evidence,  # type: ignore[arg-type]
+        )
+        self._first_free_grant = grant
+        self._first_free_release_state = "site_confirmed"
+        self.report_confirmed_access_grant(grant)
+        self._first_free_release_state = "persisted"
+        return True
+
+    async def _validate_pre_entry_target(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+        row: YanmagaListingRow,
+        listing,
+        *,
+        trusted_grant: bool,
+        classified_access_mode: str,
+    ) -> None:
+        expected_public_path = (
+            f"/comics/{quote(expected.slug, safe='')}/{expected.episode_id}"
+        )
+        expected_work_path = f"/comics/{quote(expected.slug, safe='')}"
+        state = await page.evaluate(
+            r"""(args) => {
+              const visible = element => {
+                if (!element || element.getClientRects().length === 0) return false;
+                for (let node = element; node; node = node.parentElement) {
+                  const style = getComputedStyle(node);
+                  if (node.hidden || style.display === 'none' || style.visibility === 'hidden' ||
+                      style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+                }
+                const box = element.getBoundingClientRect();
+                return box.width > 0 && box.height > 0;
+              };
+              const current = new URL(location.href);
+              const canonical = [...document.querySelectorAll('link[rel="canonical"]')];
+              const og = [...document.querySelectorAll('meta[property="og:url"]')];
+              const sortControls = [...document.querySelectorAll('a.ga-sort.nav-link')].map((element, index) => ({
+                index,
+                tag: element.tagName,
+                visible: visible(element),
+                text: (element.innerText || '').replace(/\s+/g, ' ').trim(),
+                classes: [...element.classList],
+                href: element.href,
+                ariaCurrent: element.getAttribute('aria-current'),
+                ariaPressed: element.getAttribute('aria-pressed'),
+                ariaSelected: element.getAttribute('aria-selected')
+              }));
+              const rows = [...document.querySelectorAll('.detailv2-episodes .mod-episode-item')];
+              const matched = rows.filter(row => [...row.querySelectorAll('a[href]')].some(anchor => {
+                try { return new URL(anchor.href).pathname === args.episodePath; }
+                catch { return false; }
+              }));
+              const row = matched.length === 1 ? matched[0] : null;
+              const anchors = row ? [...row.querySelectorAll('a[href]')].filter(anchor => {
+                try { return new URL(anchor.href).pathname === args.episodePath; }
+                catch { return false; }
+              }) : [];
+              const exactAnchors = anchors.filter(anchor => {
+                try {
+                  const href = new URL(anchor.href);
+                  const expected = new URL(args.sourceUrl);
+                  return href.href === expected.href && href.protocol === 'https:' &&
+                    href.origin === 'https://yanmaga.jp' && !href.username && !href.password &&
+                    !href.search && !href.hash;
+                } catch { return false; }
+              });
+              const markers = row ? [...row.querySelectorAll('.mod-episode-point--free')] : [];
+              const first = markers.filter(marker => marker.classList.contains('by_first_time'));
+              const inactive = element => {
+                const ariaDisabled = element.getAttribute('aria-disabled');
+                return element.hasAttribute('disabled') || element.hasAttribute('inert') ||
+                  (ariaDisabled !== null && ariaDisabled !== 'false');
+              };
+              const firstExact = first.length === 1 && visible(first[0]) &&
+                first[0].innerText.trim() === args.firstLabel &&
+                first[0].className === 'mod-episode-point--free by_first_time';
+              const redExact = markers.length === 1 && visible(markers[0]) &&
+                markers[0].innerText.trim() === args.freeLabel &&
+                markers[0].className === 'mod-episode-point--free' &&
+                getComputedStyle(markers[0]).color === args.freeColor;
+              const otherFreeBadge = row && [...row.querySelectorAll(
+                '.mod-episode-point,[class*="mod-episode-point--"]')].some(marker =>
+                  !markers.includes(marker) &&
+                  marker.innerText.replace(/\s+/g,' ').trim() === args.freeLabel);
+              const myPages = [...document.querySelectorAll('a[href]')].filter(anchor => {
+                try {
+                  const url = new URL(anchor.href);
+                  return visible(anchor) && url.origin === location.origin &&
+                    url.pathname === '/mypage' && !url.search && !url.hash &&
+                    !url.username && !url.password;
+                } catch { return false; }
+              });
+              const signIns = [...document.querySelectorAll('a[href]')].filter(anchor => {
+                try {
+                  const url = new URL(anchor.href);
+                  return visible(anchor) && url.origin === location.origin &&
+                    url.pathname === '/customers/sign-up' &&
+                    /\u30ed\u30b0\u30a4\u30f3|\u4f1a\u54e1\u767b\u9332|\u65b0\u898f\u767b\u9332/.test(anchor.innerText || '');
+                } catch { return false; }
+              });
+              const signOuts = [...document.querySelectorAll('a[href],button')].filter(element => {
+                const path = element instanceof HTMLAnchorElement ? new URL(element.href).pathname : '';
+                return visible(element) && /(?:sign.?out|log.?out)/i.test(path + ' ' + element.className);
+              });
+              const pageOkay = current.protocol === 'https:' && current.hostname === 'yanmaga.jp' &&
+                !current.username && !current.password && current.pathname === args.workPath &&
+                !current.hash && (current.search === '' || current.search === '?sort=older');
+              const loginOkay = args.authenticated
+                ? myPages.length > 0 && signIns.length === 0 && signOuts.length === 0
+                : myPages.length === 0 && signIns.length > 0 && signOuts.length === 0;
+              const modeOkay = args.firstFree
+                ? markers.length === 1 && firstExact && !redExact
+                : args.trustedGrant
+                  ? markers.length === 0 && row.querySelector('.by_wait,.js-modal') === null
+                  : redExact && first.length === 0;
+              return {
+                documentUrl: current.href,
+                canonicalCount: canonical.length,
+                canonicalUrl: canonical.length === 1 ? canonical[0].href : null,
+                ogCount: og.length,
+                ogUrl: og.length === 1 ? og[0].content : null,
+                sortControls,
+                pageOkay,
+                loginOkay,
+                rowCount: matched.length,
+                anchorCount: anchors.length,
+                exactAnchorCount: exactAnchors.length,
+                targetVisible: row !== null && visible(row) && anchors.length === 1 &&
+                  exactAnchors.length === 1 && visible(anchors[0]),
+                targetInactive: row === null || inactive(row) || anchors.some(inactive),
+                modeOkay,
+                noWaitModal: row !== null && row.querySelector('.by_wait,.js-modal') === null,
+                noOtherFreeBadge: !otherFreeBadge,
+                noRowButtons: row !== null && row.querySelectorAll(
+                  'button,[role="button"],input[type="button"],input[type="submit"]').length === 0,
+                noInlineHandler: row !== null && ![row, ...row.querySelectorAll('*')].some(element =>
+                  [...element.attributes].some(attribute => /^on/i.test(attribute.name)))
+              };
+            }""",
+            {
+                "episodePath": expected_public_path,
+                "workPath": expected_work_path,
+                "workUrl": self._work_url,
+                "sourceUrl": self._source_url,
+                "authenticated": listing.authenticated,
+                "firstFree": row.first_free_marker and classified_access_mode == "free",
+                "trustedGrant": trusted_grant,
+                "firstLabel": "\u521d\u56de\u7121\u6599",
+                "freeLabel": "\u7121\u6599",
+                "freeColor": "rgb(220, 0, 0)",
+            },
+        )
+        identity_ok = False
+        if isinstance(state, dict):
+            try:
+                document_url = state.get("documentUrl")
+                canonical_url = state.get("canonicalUrl")
+                og_url = state.get("ogUrl")
+                sort_controls = state.get("sortControls")
+                work = YanmagaWorkParts(expected.slug)
+                if (
+                    state.get("canonicalCount") != 1
+                    or state.get("ogCount") != 1
+                    or not isinstance(sort_controls, list)
+                    or not isinstance(document_url, str)
+                    or page.url != document_url
+                ):
+                    raise DiscoveryIncompleteError("Yanmaga work identity changed before entry")
+                sorted_document = _parse_yanmaga_sorted_work_url(document_url, work)
+                if sort_controls:
+                    YanmagaDiscoveryAdapter._validate_sort_controls(
+                        sort_controls,
+                        work,
+                        expected_active_label=_SORT_OLDEST_LABEL,
+                    )
+                elif sorted_document:
+                    raise DiscoveryIncompleteError(
+                        "Yanmaga sorted work document lacks oldest-first UI proof"
+                    )
+                elif parse_yanmaga_work_url(document_url) != work:
+                    raise DiscoveryIncompleteError("Yanmaga base work identity changed")
+                _validate_work_identity_urls(
+                    document_url,
+                    canonical_url,
+                    og_url,
+                    work,
+                    allow_sorted_identity=sorted_document,
+                )
+                identity_ok = True
+            except DiscoveryIncompleteError:
+                identity_ok = False
+        if (
+            not isinstance(state, dict)
+            or state.get("pageOkay") is not True
+            or not identity_ok
+            or state.get("loginOkay") is not True
+            or state.get("rowCount") != 1
+            or state.get("anchorCount") != 1
+            or state.get("exactAnchorCount") != 1
+            or state.get("targetVisible") is not True
+            or state.get("targetInactive") is not False
+            or state.get("modeOkay") is not True
+            or state.get("noWaitModal") is not True
+            or state.get("noOtherFreeBadge") is not True
+            or state.get("noRowButtons") is not True
+            or state.get("noInlineHandler") is not True
+            or row.url != self._source_url
+            or (row.first_free_marker and not listing.authenticated)
+        ):
+            raise UnknownPageStateError(
+                "Yanmaga target row, login state, or access marker changed before entry"
+            )
+
+    async def _has_first_free_access_proof(
+        self, page: Page, expected: YanmagaEpisodeParts
+    ) -> bool:
+        deadline = monotonic() + min(
+            FIRST_FREE_ACCESS_PROOF_TIMEOUT_MS, PAGE_CHANGE_TIMEOUT_MS
+        ) / 1_000
+        while True:
+            try:
+                value = await page.evaluate(
+                    r"""(args) => {
+                      const visible = element => {
+                        if (!element || element.getClientRects().length === 0) return false;
+                        for (let node = element; node; node = node.parentElement) {
+                          const style = getComputedStyle(node);
+                          if (node.hidden || style.display === 'none' || style.visibility === 'hidden' ||
+                              style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+                        }
+                        const box = element.getBoundingClientRect();
+                        return box.width > 0 && box.height > 0;
+                      };
+                      const counters = [...document.querySelectorAll('body *')].filter(node =>
+                        node.children.length === 0 && /^\s*[1-9][0-9]*\s*\/\s*[1-9][0-9]*\s*$/.test(node.innerText || ''));
+                      const counterText = counters.length === 1
+                        ? (counters[0].innerText || '').trim() : '';
+                      const counterMatch = /^\s*([1-9][0-9]*)\s*\/\s*([1-9][0-9]*)\s*$/.exec(counterText);
+                      const current = counterMatch ? Number(counterMatch[1]) : null;
+                      const roots = [...document.querySelectorAll('.pages#content')];
+                      const root = roots.length === 1 ? roots[0] : null;
+                      const children = root ? [...root.children] : [];
+                      const bodyNodes = children.filter(node => /^content-p[1-9][0-9]*$/.test(node.id));
+                      const bodyPageIds = bodyNodes.map(node => Number(node.id.slice('content-p'.length)));
+                      const visibleBodyPageIds = bodyNodes.filter(visible).map(node =>
+                        Number(node.id.slice('content-p'.length)));
+                      const auxiliaryIdsKnown = children.filter(node => !/^content-p[1-9][0-9]*$/.test(node.id))
+                        .every(node => ['ads', 'recommend', 'rental'].includes(node.id) ||
+                          /^banners-p(?:notice_banner|after_viewer)_[1-9][0-9]*$/.test(node.id));
+                      const gateNodes = [...document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"],dialog,[class*="modal" i],[class*="alert" i]')]
+                        .filter(visible);
+                      const accessGateVisible = gateNodes.some(node => {
+                        const text = (node.innerText || '').replace(/\s+/g, ' ').trim();
+                        if (text === args.completionNotice) return false;
+                        return /\u521d\u56de\u7121\u6599|\u30c1\u30b1\u30c3\u30c8|\u30dd\u30a4\u30f3\u30c8|\u30ec\u30f3\u30bf\u30eb|\u8cfc\u5165|\u30ed\u30b0\u30a4\u30f3|\u4f1a\u54e1\u767b\u9332|\u7121\u6599\u306f1\u65e5\u3067\u8aad\u3081\u308b\u6570/.test(text);
+                      });
+                      const noticeCount = [...document.querySelectorAll('body *')].filter(element =>
+                        element.children.length === 0 && visible(element) &&
+                        (element.innerText || '').trim() === args.completionNotice).length;
+                      return {
+                        currentUrl: location.href,
+                        counterCount: counters.length,
+                        counterText,
+                        pageContainerCount: roots.length,
+                        bodyPageIds,
+                        visibleBodyPageIds,
+                        auxiliaryIdsKnown,
+                        accessGateVisible,
+                        completionNoticeCount: noticeCount,
+                        currentPage: current
+                      };
+                    }""",
+                    {
+                        "completionNotice": "\u7121\u6599\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
+                    },
+                )
+            except PlaywrightError:
+                return False
+            if isinstance(value, dict):
+                current_url = value.get("currentUrl")
+                current_page_url = page.url
+                same_expected_viewer = (
+                    isinstance(current_url, str)
+                    and current_page_url == current_url
+                    and parse_yanmaga_viewer_url(current_url) == expected
+                )
+                notice_count = value.get("completionNoticeCount")
+                if not same_expected_viewer:
+                    self._first_free_completion_notice_seen = False
+                elif notice_count == 1:
+                    self._first_free_completion_notice_seen = True
+                counter = parse_yanmaga_page_counter(value.get("counterText"))
+                body_ids = value.get("bodyPageIds")
+                visible_ids = value.get("visibleBodyPageIds")
+                if (
+                    same_expected_viewer
+                    and value.get("counterCount") == 1
+                    and value.get("pageContainerCount") == 1
+                    and counter is not None
+                    and counter[1] <= MAX_BODY_PAGES
+                    and value.get("currentPage") == counter[0]
+                    and isinstance(body_ids, list)
+                    and bool(body_ids)
+                    and all(
+                        type(index) is int and 1 <= index <= MAX_BODY_PAGES
+                        for index in body_ids
+                    )
+                    and len(set(body_ids)) == len(body_ids)
+                    and isinstance(visible_ids, list)
+                    and all(type(index) is int for index in visible_ids)
+                    and counter[0] in visible_ids
+                    and value.get("auxiliaryIdsKnown") is True
+                    and value.get("accessGateVisible") is False
+                    and notice_count in {0, 1}
+                    and self._first_free_completion_notice_seen
+                ):
+                    return True
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return False
+            await page.wait_for_timeout(min(RENDER_POLL_MS, max(1, int(remaining * 1_000))))
 
     def _require_expected(self) -> YanmagaEpisodeParts:
         if self._expected is None:
@@ -1488,6 +2005,7 @@ class YanmagaAdapter(SiteAdapter):
                 if native_group
                 else "rendered_dom_body_wrapper"
             ),
+            "first_free_release_state": self._first_free_release_state,
             "capture_method": group.get("group_method", "capture_not_recorded"),
             "source_native_bytes_used": False,
             "source_native_pixels_used": native_group,

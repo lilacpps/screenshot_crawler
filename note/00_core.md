@@ -3669,3 +3669,26 @@ projection切替は新nodeを作る。archive非表示のFalse判定もcacheす�
 同process・計測器なしのoffscreen A/Bでは30 scrollが3.056秒→0.630秒（約4.85倍）。実desktop FPSの保証ではない。
 Qt/Inventory/両editor/GUI archive・toggle・smoke・executionのaffected188件PASS、skip0。モデル回帰テストで
 大量index参照の走査数上限と全cache失効契機を検証した。詳細は修復Runbook PROGRESSの性能節。
+
+## Site-neutral confirmed-grant interfaces (Yanmaga Stage 02, 2026-11-15)
+
+`ConfirmedAccessGrant` is an immutable site-neutral value carrying the exact
+site/external identity, aware observation time, aware finite future expiry,
+and evidence kind. `SiteAdapter` may report it only through the optional
+synchronous confirmed-grant observer. `BatchExecutor` binds that observer to
+the validated candidate's Catalog source, verifies the event type and identity,
+and calls the Catalog's grant-only API before capture proceeds. The observer
+closure is deactivated and removed on every run exit. The Catalog API updates
+only that source's `access_granted_until` and timestamp; it does not update
+`quota_started_at`, resource state, Items, or Artifacts. The Runner does not
+depend on Catalog. This interface does not imply any site-specific resource
+selection or grant duration.
+
+At Discovery run start, `DiscoveryService` can pass the adapter an immutable
+tuple of existing `DiscoverySourceSnapshot` values for the exact target through
+an optional no-op-by-default `configure_source_snapshots` hook. The snapshot
+includes the stored `access_granted_until` without changing the service's
+site-wide previous-source map across discovery keys. Adapter hooks remain responsible for site-bound
+validation. When an adapter performs an asynchronous proof after a validated
+listing, it must recheck the full listing identity before yielding records so
+that no partial or stale snapshot is reconciled.

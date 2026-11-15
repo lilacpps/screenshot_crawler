@@ -4,7 +4,44 @@
 rendered-page Viewer/Capture path (Phase 03), and direct-only normal Batch
 (Phase 04). CLI registrations cover Discovery, manual Crawl/Runner, Batch
 adapter, and Batch policy. Existing Planner, Executor, packager, Artifact, and
-Completed services are reused without a shared Core or Catalog change.
+Completed services are reused. Shared Core exposes only the optional
+confirmed-grant observer; Catalog provides the grant-only persistence
+operation.
+
+## Stage 02 current state (2026-11-15; independent review pending)
+
+Stage 02 is implemented locally but is not yet accepted. C's sorted work identity
+change passed independent review with BLOCKING 0, and a later bounded
+metadata-only probe verified the current production Rental History helper for
+the previously opened `episode-ff-probe-01` target. The probe observed H=17 at
+2026-11-15T08:11:29.019643Z and derived the conservative
+`site_countdown_lower_bound` 2026-11-16T00:11:24.019643Z using GET start +
+(H - 1) hours - 5 seconds. This is a lower bound, not an absolute expiry. The
+probe used zero rights and made no Source or Viewer request; the cumulative
+first-free use remains one from the earlier research entry.
+
+Fresh authenticated Discovery may classify only an exact first-free row as
+`free`. `YanmagaAdapter` permits at most one normal public-episode GET for that
+fresh, exact first-free candidate, after rechecking the current work identity,
+visible login evidence, unique visible marker, row, and queryless source href.
+The observed public episode route can grant access automatically. Before any
+pixel-readiness wait, the adapter requires the same exact Viewer episode, a
+unique page counter and visible body wrapper, no known access gate, the exact
+completion notice, and a fresh finite same-target Rental History proof. It
+persists an immutable site-neutral grant synchronously through Batch before
+capture readiness. The completion notice is latched only for the same episode.
+Unknown access, missing or stale expiry, route drift, or any gate stops without
+another entry. The release state distinguishes `not_attempted`,
+`attempted_unknown`, `site_confirmed`, and `persisted`.
+
+Existing Catalog grants are rechecked against a fresh exact-target active
+countdown and the still-future stored expiry just before entry. An active H=1
+countdown can use the trusted Catalog expiry for direct retry; it does not emit
+or extend a grant. A first-free grant requires a finite future lower bound.
+Discovery's post-history snapshot must equal the validated pre-history listing
+before any records are emitted. Reader pixel and END validation remain strict.
+No production capture, END, ZIP, Completed, or retry recovery has been verified
+on the site; Stage 02 and live verification remain pending.
 
 ## Discovery
 
@@ -36,9 +73,10 @@ comes from the observed full DOM order (oldest is 1). It does not infer or
 repair positions from episode IDs, dates, or titles; bounded Discovery is
 unsupported and inferred positions are disabled.
 
-The current Stage 01 Discovery classification maps only observed public-free and
-first-free rows to `access_mode="free"`. Rows remain `available=True`; other or
-unverified states are `unknown`.
+The Stage 01 observed listing classification remains current: only verified
+public-free and first-free rows map to `access_mode="free"`. Rows remain
+`available=True`; other or unverified states are `unknown`. Stage 02 adds the
+separate trusted-grant path described below.
 
 A public-free row requires one visible `.mod-episode-point--free` element with
 exact text `無料`, the exact class name, and computed color
@@ -84,9 +122,9 @@ explicitly observed null is authoritative and clears it. Stage 01 had no live
 grant evidence. The daily-limit notice scope for red rows remains unknown.
 `access_checked_at` and `last_seen_at` use the current aware UTC time.
 
-The capture `YanmagaAdapter` remains anonymous-only in this Stage 01 snapshot;
-Discovery recognition of authenticated first-free does not enable capture of
-those rows. Missing/contradictory evidence, unknown markers, and unsupported
+During Stage 01, the capture adapter remained anonymous-only. Stage 02
+adds the bounded authenticated first-free entry path described above; the live
+production capture flow is still unverified. Missing/contradictory evidence, unknown markers, and unsupported
 row identity remain fail-closed. The list expansion contract remains strict:
 positive `data-limit`, native offset/sort/path, unique inserted rows, and stable
 ordering are required. The sample wife listing's missing-limit pagination
@@ -95,59 +133,65 @@ an episode to classify access. Row attributes such as `data-is-free` and
 `data-modal` are not authoritative: the sampled first-free rows had
 `data-is-free="false"` and `data-modal="registration"` without `.js-modal`.
 
-## Stage 02 Discovery sort correction (sub-gate pending independent review)
+## Stage 02 Discovery sort identity correction (accepted sub-gate)
 
-The 2026-11-15 post-entry work-dual probe found the default authenticated page
-newest-first. The implementation now recognizes only the observed two visible
-same-work sort links with their exact labels, classes, and selected state. It
-accepts an already-active oldest-first state without a sort click; when the
-newest-first control is active, it selects the exact oldest-first label 最初から
-once. The click locator remains bound to the observed exact href and accessible
-label through the click. It accepts only the same work URL with the sole query
-sort=older and revalidates the base canonical and og:url. Every stable and final
-listing snapshot must retain the unique known controls with oldest-first active.
-Duplicate, hidden, foreign, unknown-query, label-conflicting, selected-state
-conflicting, or href-drifting controls fail closed. If no sort controls are
-present, their continued absence and the existing oldest-first listing
-contract are required.
+The initial C sort implementation expected canonical and og:url to stay on the
+unqueried work URL after an oldest-first UI navigation. A bounded read-only
+production Discovery diagnostic found that the actual sorted work document,
+canonical, and og:url all used the same exact-work `?sort=older` shape. Discovery
+therefore stopped with the allowlisted reason `redirected_to_different_work_or_route`.
+The diagnostic confirmed one base GET and one oldest-sort GET (both HTTP 200),
+then no More click attempt, no continuation XHR, no metadata helper call, and no
+Source or Viewer route. It used zero additional rights; no first-party non-GET
+was observed, and 30 foreign non-GET attempts were aborted.
 
-On the sorted document, one More click used offset 5, limit 47, and older sort.
-The synthetic browser fixture normalized the default newest-first 10-row page
-and native continuation into all 57 oldest-first positions, then emitted
-latest-first records. The sampled first-free episode retained position 32 and
-its public episode URL as the Catalog source target. Completed item, run, and
-Artifact state remained unchanged on repeat Discovery. The fixture also
-asserted GET-only requests and no episode/Viewer navigation. Separate fixtures
-cover already-oldest with zero sort clicks, a changing href that targets an
-episode or foreign work, active state lost or flipped after More, and
-contradictory sort UI. Independent review of this sub-gate is pending.
+Discovery now accepts either a matching unqueried canonical/og:url pair, or a
+matching exact `?sort=older` pair only when the same inspected document has the
+exact same-work older URL and the unique observed oldest-first control is active.
+Mixed pairs, extra or duplicate query fields, fragments, userinfo, foreign or duplicate
+identity tags, and sorted identity without that UI proof fail closed. Public
+input work URLs, episode URLs, and Source targets remain queryless. Legacy pages
+without sort controls retain their existing base-URL contract.
 
-The later read-only Rental History observation showed a first-party
-exact-target card with 22 remaining hours, matched by one same-origin no-store
-GET of the observed history href. At 2026-11-15 03:10:49.892907 UTC
-(12:10:49 JST), the countdown supports only a conservative lower bound of
-2026-11-16 00:10:49.892907 UTC (09:10:49 JST), GET-start plus 21 hours. This
-is not an absolute expiry and is not connected to Discovery, Catalog, or
-capture.
-Only this target's visible card and safe response headers were retained.
-Production countdown parsing still needs exact native label/value-node and
-same-card structural proof before use. The first-free release budget remains
-exhausted; no capture, ticket, point, paid, or additional access action was
-performed. Immediate grant persistence, retry recovery, capture/END/ZIP, and
-finite absolute expiry remain unverified.
+A separate earlier read-only Rental History check observed the exact target
+card with H=22 and matched it through one same-origin no-store HTML GET (HTTP
+200, 33,971 bytes, Age absent, private max-age=0 must-revalidate). The request
+started at 2026-11-15 03:10:49.892907 UTC. The then-current diagnostic
+recorded 2026-11-16 00:10:49.892907 UTC (GET start plus 21 hours) as its
+countdown-derived result; it was not an absolute site expiry. The current
+runtime rule is more conservative: `site_countdown_lower_bound` is GET start
+plus (H - 1) hours minus 5 seconds, yielding 2026-11-16 00:10:44.892907 UTC
+(09:10:44.892907 JST) for H=22. This is also a lower bound, not an absolute
+expiry. This countdown observation predates later Lead-authorized
+metadata-only listing probes. The latest bounded probe used zero
+additional rights and zero Source/Viewer requests, called the production
+helper once, and confirmed H=17 with a finite conservative lower bound. This
+verifies the helper on the exact already-open target only; it does not verify
+production capture or retry recovery.
+
+The production failure document exposed one exact More control with offset 5,
+limit 47, older sort, and same-work episodes path. That control was not clicked
+in this diagnostic. Synthetic browser fixtures cover the exact sorted identity
+pair, the compatible base pair, mixed and unknown query forms, duplicate query
+tags, fragments, duplicate canonical/og tags, and sorted identity without a
+matching current document or UI proof. Discovery unit tests passed 31 cases;
+the Yanmaga Discovery browser file passed 49 cases with 0 skips. The canonical/og follow-up was accepted with independent BLOCKING 0. Stage 02
+capture and immediate grant persistence remain incomplete.
 
 ## Viewer and capture
 
-`YanmagaAdapter` binds the configured `<decoded-work-slug>:<episode-id>` to the
-original Catalog `source_url`, freshly repeats full public Discovery, and
-enters the exact requested URL only when the current anonymous listing still
-has one unambiguous red unconditional-free row. A complete same-work listing
-that now proves a restricted state is reported as a lost free resource;
-missing/contradictory anonymous evidence, identity drift, and malformed listing
-state fail closed. `direct` and `auto` are supported; quota/resource strategies
-are rejected. The current listing and reader are checked for a visible access
-gate before accepting capture. This does not establish that the site has no
-daily cap beyond the observed sample.
+`YanmagaAdapter` binds the configured `<decoded-work-slug>:<episode-id>` to
+the original Catalog `source_url` and freshly validates the exact requested
+source. The normal public-free path still requires the exact visible red-free
+marker. Stage 02 also permits one public-episode GET for a fresh authenticated
+exact first-free row; that route may grant access automatically, and the
+adapter requires the exact Viewer, completion notice, and finite target-bound
+Rental History evidence before synchronously saving the grant. A trusted
+stored grant can authorize direct retry only when its Catalog expiry is still
+future and a fresh same-target countdown is active. All other unknown,
+conflicting, expired, or unsupported access states fail closed. `direct` and
+`auto` are supported; site ticket/quota selection is not enabled. This does
+not establish that the site has no daily cap beyond the observed sample.
 
 The public episode route normally redirects to
 `/viewer/comics/<same-slug>/<same-episode-id>`. Live navigation also showed the
@@ -244,24 +288,27 @@ before saving the page; no CSS is changed to conceal reader controls.
 
 ## Batch
 
-`YanmagaSitePolicy` admits only `site="yanmaga"`, `available=True`,
-`access_mode="free"`, and a valid work-slug/32-hex-episode identity. It always
-chooses `direct`, never consumes quota, and exposes no access-resource or
-grant-only pass. `free_until=None` is allowed because current Discovery
+`YanmagaSitePolicy` admits a valid available `free` source directly. A
+`quota` or `paid` source is also direct only when Catalog has a valid aware
+future confirmed grant; it never starts a quota/resource pass and exposes no
+grant-only pass. Invalid, expired, or absent grants are skipped. `free_until=None` is allowed because current Discovery
 explicitly refreshes public-free rows with no observed deadline; NULL alone
 does not create a free classification. A valid aware future timestamp is
 allowed, while expired/equal, malformed, or timezone-naive expiry values are
 ineligible. The shared Planner parses free timestamps before calling Policy,
 so a malformed persisted timestamp can fail the whole plan with
-`BatchPlanningError`; this remains fail-closed and no Core behavior changed.
+`BatchPlanningError`; the shared Planner keeps its existing fail-closed behavior.
 
-The normal Batch Executor creates a fresh Yanmaga adapter, which repeats the
-same-work complete public Discovery and checks the exact target row before
-opening its episode URL. A clearly observed loss of the red-free state is a
-resource-unavailable skip; missing/conflicting identity or anonymous evidence
-fails the candidate. Only a successful positive END and normal packaging flow
-can create a ZIP/Artifact and mark the Catalog Item completed. Ticket, points,
-quota, grant-only, purchase, and alternate resource passes are unsupported.
+The normal Batch Executor creates a fresh Yanmaga adapter and validates the
+exact target before opening its public episode URL. The public-free path requires
+the current red-free marker. The first-free path requires fresh authenticated
+Discovery, one bounded source entry, the exact Viewer completion notice, and a
+finite Rental History proof saved before capture readiness. A trusted Catalog
+grant permits direct retry only while its stored expiry is future and a fresh
+same-target countdown is active. All other unknown, conflicting, expired, or
+unsupported states fail closed. Only positive END and normal packaging can mark
+the Catalog Item completed. Ticket, point, purchase, quota, and grant-only passes
+remain unsupported.
 
 ## Verification and limits
 

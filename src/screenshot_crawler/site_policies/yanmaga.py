@@ -37,10 +37,25 @@ class YanmagaSitePolicy(SitePolicy):
             return PolicyDecision(False, None, "wrong_site")
         if not source.available:
             return PolicyDecision(False, None, "unavailable")
+        if source.access_granted_until is not None:
+            try:
+                self._parse_grant_until(source.access_granted_until)
+            except (TypeError, ValueError):
+                return PolicyDecision(False, None, "invalid_access_grant_until")
         if source.access_mode != "free":
+            if source.access_mode in {"quota", "paid"}:
+                try:
+                    grant_until = self._parse_grant_until(source.access_granted_until)
+                except (TypeError, ValueError):
+                    return PolicyDecision(False, None, "invalid_access_grant_until")
+                if grant_until is not None and grant_until > current:
+                    if not self._valid_external_id(source.external_id):
+                        return PolicyDecision(False, None, "invalid_episode_identity")
+                    return PolicyDecision(True, "direct", "active_confirmed_grant")
+                if grant_until is not None:
+                    return PolicyDecision(False, None, "expired_access_grant")
+                return PolicyDecision(False, None, "access_grant_not_observed")
             reason = {
-                "quota": "quota_not_supported",
-                "paid": "paid",
                 "owned": "owned_not_verified",
                 "grant": "grant_not_supported",
                 "rental": "rental_not_supported",
@@ -81,6 +96,17 @@ class YanmagaSitePolicy(SitePolicy):
             raise TypeError("free_until must be a datetime, ISO timestamp, or null")
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("free_until must be timezone-aware")
+        return parsed.astimezone(JST)
+
+    @staticmethod
+    def _parse_grant_until(value: datetime | str | None) -> datetime | None:
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+        if not isinstance(parsed, datetime):
+            raise TypeError("access_granted_until must be a datetime, ISO timestamp, or null")
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("access_granted_until must be timezone-aware")
         return parsed.astimezone(JST)
 
 

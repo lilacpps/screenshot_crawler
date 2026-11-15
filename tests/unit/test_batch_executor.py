@@ -18,6 +18,7 @@ from screenshot_crawler.batch import (
     BatchExecutor,
     BatchInterruptedError,
     BatchPlanner,
+    CandidateExecutionError,
 )
 from screenshot_crawler.batch.archive_guard import ArchiveHistoryWarning
 from screenshot_crawler.batch.executor import (
@@ -45,7 +46,12 @@ from screenshot_crawler.core.packaging import (
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
-from screenshot_crawler.site_adapters.base import AccessConsumption, AccessResourceResolution
+from screenshot_crawler.site_adapters.base import (
+    AccessConsumption,
+    AccessResourceResolution,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
@@ -109,15 +115,19 @@ class FakeRunner:
         catalog: CatalogService,
         fail: bool = False,
         during_run: Callable[[RunConfig], None] | None = None,
+        adapter_action: Callable[[SiteAdapter], None] | None = None,
     ) -> None:
         self.config = config
         self.catalog = catalog
         self.fail = fail
         self.during_run = during_run
+        self.adapter_action = adapter_action
 
-    async def run(self, _page: object, _adapter: FakeAdapter) -> RunResult:
+    async def run(self, _page: object, _adapter: SiteAdapter) -> RunResult:
         if self.during_run is not None:
             self.during_run(self.config)
+        if self.adapter_action is not None:
+            self.adapter_action(_adapter)
         if self.fail:
             raise RuntimeError("crawler failed")
         return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
@@ -157,12 +167,14 @@ def make_executor(
     before_run: Callable[[RunConfig], None] | None = None,
     during_run: Callable[[RunConfig], None] | None = None,
     runtime_settings: SiteRuntimeSettings | None = None,
+    adapter_factory: Callable[[], SiteAdapter] | None = None,
+    adapter_action: Callable[[SiteAdapter], None] | None = None,
 ) -> BatchExecutor:
     policies = SitePolicyRegistry()
     policies.register("mangaone", MangaOneSitePolicy)
     policies.register("piccoma", PiccomaSitePolicy)
     adapters = AdapterRegistry()
-    adapters.register("mangaone", FakeAdapter)
+    adapters.register("mangaone", adapter_factory or FakeAdapter)
     adapters.register("piccoma", FakeAdapter)
 
     def runner_factory(config: RunConfig) -> FakeRunner:
@@ -175,6 +187,7 @@ def make_executor(
             catalog=service,
             fail=fail_crawl,
             during_run=during_run,
+            adapter_action=adapter_action,
         )
 
     def package_function(
@@ -409,6 +422,155 @@ async def test_direct_candidate_runs_and_completes_without_quota_state(
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at is None
     assert source.access_granted_until is None
+
+
+async def test_executor_persists_confirmed_grant_before_runner_continues_and_clears_context(
+    tmp_path: Path,
+) -> None:
+    class GrantAdapter(SiteAdapter):
+        def __init__(self) -> None:
+            self.grants: list[datetime | None] = []
+
+        def configure_existing_access_grant(self, access_granted_until) -> None:
+            self.grants.append(access_granted_until)
+
+        async def initialize(self, _page):
+            return None
+
+        async def detect_state(self, _page):
+            return PageState.END
+
+        async def get_capture_target(self, _page):
+            return None
+
+        async def get_content_identity(self, _page):
+            return None
+
+        async def get_content_context(self, _page):
+            return None
+
+        async def go_next(self, _page):
+            return None
+
+        async def wait_for_change(self, _page, _previous_identity):
+            return None
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    existing_until = NOW + timedelta(hours=3)
+    candidate = add_candidate(
+        service,
+        access_mode="free",
+        access_granted_until=existing_until.isoformat(),
+    )
+    adapter = GrantAdapter()
+    captured_observers: list[Callable[[ConfirmedAccessGrant], None]] = []
+    grant = ConfirmedAccessGrant(
+        site=candidate.site,
+        external_id=candidate.external_id,
+        observed_at=NOW,
+        access_granted_until=NOW + timedelta(hours=4),
+        expiry_evidence="site_countdown_lower_bound",
+    )
+
+    def report_before_runner_failure(configured_adapter: SiteAdapter) -> None:
+        observer = configured_adapter._confirmed_access_grant_observer  # type: ignore[attr-defined]
+        assert callable(observer)
+        captured_observers.append(observer)
+        configured_adapter.report_confirmed_access_grant(grant)
+        assert service.get_source(candidate.source_id).access_granted_until == (
+            NOW + timedelta(hours=4)
+        ).isoformat()
+
+    executor = make_executor(
+        service,
+        fail_crawl=True,
+        adapter_factory=lambda: adapter,
+        adapter_action=report_before_runner_failure,
+    )
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    assert adapter.grants == [None, existing_until, None]
+    assert adapter._confirmed_access_grant_observer is None
+    with pytest.raises(RuntimeError, match="observer is not configured"):
+        adapter.report_confirmed_access_grant(grant)
+    assert len(captured_observers) == 1
+    with pytest.raises(BatchExecutionError, match="outside its candidate execution"):
+        captured_observers[0](grant)
+    assert service.get_item(candidate.item_id).status == "pending"
+
+
+async def test_executor_grant_persistence_failure_prevents_capture_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class GrantAdapter(SiteAdapter):
+        async def initialize(self, _page):
+            return None
+
+        async def detect_state(self, _page):
+            return PageState.END
+
+        async def get_capture_target(self, _page):
+            return None
+
+        async def get_content_identity(self, _page):
+            return None
+
+        async def get_content_context(self, _page):
+            return None
+
+        async def go_next(self, _page):
+            return None
+
+        async def wait_for_change(self, _page, _previous_identity):
+            return None
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    adapter = GrantAdapter()
+    capture_started = False
+    grant = ConfirmedAccessGrant(
+        site=candidate.site,
+        external_id=candidate.external_id,
+        observed_at=NOW,
+        access_granted_until=NOW + timedelta(hours=2),
+        expiry_evidence="site_countdown_lower_bound",
+    )
+
+    def fail_catalog_write(*_args, **_kwargs):
+        raise RuntimeError("catalog grant write failed")
+
+    monkeypatch.setattr(service, "record_confirmed_access_grant", fail_catalog_write)
+
+    def attempt_grant(configured_adapter: SiteAdapter) -> None:
+        nonlocal capture_started
+        configured_adapter.report_confirmed_access_grant(grant)
+        capture_started = True
+
+    executor = make_executor(
+        service,
+        adapter_factory=lambda: adapter,
+        adapter_action=attempt_grant,
+    )
+    with pytest.raises(CandidateExecutionError, match="catalog grant write failed"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    assert capture_started is False
+    assert service.get_source(candidate.source_id).access_granted_until is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert adapter._confirmed_access_grant_observer is None
 
 
 async def test_stale_archive_prefix_is_rejected_before_run_creation(
@@ -1469,6 +1631,22 @@ async def test_populated_candidate_external_id_must_match_catalog_source(
     with pytest.raises(BatchExecutionError, match="external_id"):
         await executor.execute_candidate(
             object(), replace(candidate, external_id="different-episode"), now=NOW
+        )
+
+    assert service.list_crawl_runs() == []
+    assert service.list_artifacts() == []
+
+
+async def test_empty_candidate_external_id_keeps_existing_scope_guard_strict(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    with pytest.raises(BatchExecutionError, match="external_id"):
+        await executor.execute_candidate(
+            object(), replace(candidate, external_id=""), now=NOW
         )
 
     assert service.list_crawl_runs() == []

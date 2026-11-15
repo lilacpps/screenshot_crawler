@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from screenshot_crawler.cli import _discovery_registry
+from screenshot_crawler.discovery import DiscoverySourceSnapshot
 from screenshot_crawler.site_adapters.yanmaga import (
     YanmagaDiscoveryAdapter,
     YanmagaEpisodeParts,
@@ -17,6 +19,7 @@ from screenshot_crawler.site_adapters.yanmaga import (
     parse_yanmaga_work_url,
 )
 from screenshot_crawler.site_adapters.yanmaga import discovery as yanmaga_discovery
+from screenshot_crawler.watchlist import WatchlistTarget
 
 BASE = "https://yanmaga.jp"
 WORK_URL = f"{BASE}/comics/%E3%83%86%E3%82%B9%E3%83%88%E4%BD%9C"
@@ -77,6 +80,94 @@ def test_yanmaga_sorted_work_url_is_internal_only_and_exact() -> None:
         f"{WORK_URL}?sort=older#episodes",
     ):
         assert not yanmaga_discovery._parse_yanmaga_sorted_work_url(url, expected)
+
+
+def test_yanmaga_recovery_preserves_only_same_scope_source_with_fresh_proofs() -> None:
+    target = WatchlistTarget(
+        key="yanmaga-test",
+        work_key="yanmaga:test-work",
+        site="yanmaga",
+        url=WORK_URL,
+        label="test work",
+    )
+    external_id = f"{SLUG}:{EPISODE_ID}"
+    until = datetime.now(UTC) + timedelta(hours=2)
+    trusted = DiscoverySourceSnapshot(
+        external_id=external_id,
+        discovery_key=target.key,
+        access_mode="paid",
+        available=True,
+        access_granted_until=until,
+    )
+    adapter = YanmagaDiscoveryAdapter()
+    adapter.configure_source_snapshots(
+        target,
+        (
+            trusted,
+            DiscoverySourceSnapshot(
+                external_id=f"{SLUG}:{'1' * 32}",
+                discovery_key="other-key",
+                access_mode="paid",
+                available=True,
+                access_granted_until=until,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=f"other-work:{'2' * 32}",
+                discovery_key=target.key,
+                access_mode="quota",
+                available=True,
+                access_granted_until=until,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=f"{SLUG}:{'3' * 32}",
+                discovery_key=target.key,
+                access_mode="unknown",
+                available=True,
+                access_granted_until=until,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=f"{SLUG}:{'4' * 32}",
+                discovery_key=target.key,
+                access_mode="owned",
+                available=True,
+                access_granted_until=until,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=f"{SLUG}:{'5' * 32}",
+                discovery_key=target.key,
+                access_mode="free",
+                available=True,
+                access_granted_until=datetime.now(UTC) - timedelta(seconds=1),
+            ),
+            DiscoverySourceSnapshot(
+                external_id=f"{SLUG}:{'6' * 32}",
+                discovery_key=target.key,
+                access_mode="free",
+                available=True,
+                access_granted_until=datetime(2099, 1, 1),  # noqa: DTZ001 - naive expiry must be rejected
+            ),
+        ),
+    )
+
+    assert tuple(adapter._grant_candidates) == (external_id,)
+    assert adapter.reconcile_access_mode("unknown", trusted, target) == "unknown"
+    adapter._fresh_active_grants.add(external_id)
+    assert adapter.reconcile_access_mode("unknown", trusted, target) == "paid"
+    assert adapter.reconcile_access_mode("free", trusted, target) == "free"
+
+    expired_during_run = DiscoverySourceSnapshot(
+        external_id=external_id,
+        discovery_key=target.key,
+        access_mode="paid",
+        available=True,
+        access_granted_until=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert adapter.reconcile_access_mode("unknown", expired_during_run, target) == "unknown"
+
+    adapter.configure_source_snapshots(target, ())
+    assert adapter._grant_candidates == {}
+    assert adapter._fresh_active_grants == set()
+    assert adapter.reconcile_access_mode("unknown", trusted, target) == "unknown"
 
 
 @pytest.mark.parametrize(

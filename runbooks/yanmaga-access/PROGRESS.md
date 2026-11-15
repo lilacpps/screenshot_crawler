@@ -1,6 +1,6 @@
 # Yanmaga access expansion progress
 
-**Status:** Stage 01 PASS (observed Discovery subset); Stage 02 C sort sub-gate accepted with independent BLOCKING 0. Stage 02 as a whole remains incomplete; first-free capture and grant persistence are not implemented.
+**Status:** Stage 01 PASS (observed Discovery subset). Stage 02 C sort and canonical/og corrections are accepted with independent BLOCKING 0, and a later metadata-only live probe verified the production finite-countdown helper for the previously opened target. Stage 02 remains IN PROGRESS: first-free production capture, immediate Catalog persistence on the fresh flow, and recovery are not yet verified; the current BODY implementation awaits final independent review.
 **Plan authored:** 2026-11-15.
 **Implementation branch:** `feat/yanmaga-access`, created from latest `origin/main` (`4407e975`).
 **Stage 01 implementation commit:** `26cbae8`.
@@ -10,7 +10,7 @@
 | Stage | Status | Gate |
 | --- | --- | --- |
 | 01 Site probe / Discovery | PASS (observed subset); independent BLOCKING 0 | Wait-free, paid-only, and grant/expiry evidence remains unverified. |
-| 02 First-free capture | IN PROGRESS (one entry observed; C sort correction accepted, independent BLOCKING 0; capture/persistence pending) | The C sort sub-gate is accepted. Stage 02 capture, immediate grant persistence, and recovery remain incomplete. No more rights use is authorized for this target. |
+| 02 First-free capture | IN PROGRESS (C and canonical/og sub-gates accepted; metadata-only finite proof verified; BODY implementation and final review pending) | No fresh production capture/END/ZIP/Completed or recovery run has been verified. The one-episode first-free budget is exhausted; no more rights use is authorized for this target. |
 | 03 Work ticket | NOT STARTED / NOT VERIFIED | No wait-free signal or ticket/cooldown behavior has been confirmed live. Do not infer or enable quota. |
 | 04 E2E / final review | NOT STARTED | Depends on earlier accepted stages and live access evidence. |
 
@@ -283,10 +283,10 @@ from the site completion notice; no separate CTA was clicked. Subsequent
 read-only probes below were separately bounded and Lead-approved. Stage 02
 now has a site-local Discovery sort correction and focused tests; its C
 sub-gate was accepted by the independent Reviewer with BLOCKING 0. The
-detached countdown helper is diagnostic only and is not wired to runtime
-access state. Immediate grant persistence, retry with and without rediscovery,
-complete capture/END/ZIP, and capture-path Completed behavior remain
-unverified.
+the production countdown helper has since been exercised by the separately
+approved metadata-only probe recorded below. First-free runtime persistence,
+retry with and without rediscovery, complete capture/END/ZIP, and capture-path
+Completed behavior remain unverified on the live production path.
 
 ### Stage 02 C sort correction and D countdown observation
 
@@ -299,16 +299,19 @@ matched the pre-entry oldest-first sequence, with the selected episode at
 position 32. Rights use, episode navigation, Viewer navigation, CTA clicks,
 and non-GET requests were all zero in these sort probes.
 
-Discovery now requires that observed sort UI shape when present, revalidates
-base canonical and og:url, accepts an already-active oldest link without a
-click, and selects the oldest link once only when the observed UI is newest.
+The initial C implementation required base canonical and og:url. The later
+production diagnostic found both identity URLs on the exact same-work sort=older
+shape after the observed oldest-first navigation. The current implementation
+accepts either a matching base pair or that matching sorted pair only when the
+same document observation also proves the exact older URL and active oldest UI.
 It performs existing strict expansion and ordering on the oldest-first
 document. It rejects duplicate,
 hidden, foreign, unknown-query, label-conflicting, and active-state-conflicting
-sort controls. Canonical input URLs, canonical/og identity, and public episode
-Source targets remain unqueried. Legacy fixtures with no sort UI keep their
+sort controls. Canonical input work URLs and public episode Source targets remain
+queryless. Legacy fixtures with no sort UI keep their
 existing oldest-first pagination contract. C implementation/tests are complete
-and accepted with independent BLOCKING 0; no Stage 02 capture implementation has begun.
+and accepted with independent BLOCKING 0. The canonical/og follow-up below is
+accepted with independent BLOCKING 0. No Stage 02 live capture has been run.
 
 The earlier Rental History UI read showed H=23. The latest read-only
 exact-target Rental History document showed one target anchor/card and one
@@ -317,17 +320,26 @@ same-origin no-store GET to the exact observed history href returned 200
 text/html, 33,971 bytes, and the detached target-A summary matched H=22. The
 safe headers included Date 2026-11-15 03:10:51 GMT, no Age, and
 Cache-Control max-age=0, private, must-revalidate. At aware UTC fetch start
-2026-11-15 03:10:49.892907 UTC (12:10:49.892907 JST), H=22 yields only the conservative
-site_countdown_lower_bound of 2026-11-16 00:10:49.892907 UTC (GET start plus
-21 hours). This is not an absolute expiry. The probe recorded one fetch, two
-document GETs, zero rights use, zero episode/Viewer routes, zero CTA clicks,
-zero non-GETs, and no AccessGuard stop. No further site operation will be
-performed for this target.
+2026-11-15 03:10:49.892907 UTC (12:10:49.892907 JST), the then-current
+diagnostic recorded 2026-11-16 00:10:49.892907 UTC (GET start plus 21 hours)
+as its countdown-derived result. This was not an absolute site expiry. The
+current runtime rule subtracts an additional 5 seconds: its
+site_countdown_lower_bound for H=22 is 2026-11-16 00:10:44.892907 UTC
+(09:10:44.892907 JST), computed as GET start plus (H - 1) hours minus 5
+seconds. This is also a lower bound, not an absolute expiry. The probe recorded
+one fetch, two document GETs, zero rights use, zero episode/Viewer routes, zero
+CTA clicks, zero non-GETs, and no AccessGuard stop. At that checkpoint, before
+later Lead-authorized metadata-only probes, no further site operation had been
+authorized. Those later probes are recorded below and also used zero rights and
+made zero Source/Viewer requests.
 
-No rental-countdown parser remains in production code. The temporary
-aggregate-text helper and test were withdrawn after Review noted that native
-exact label/value leaf nodes and same-card structural binding were not proven.
-That DOM relationship was not recorded during the final probe.
+The earlier aggregate-text countdown helper and test were withdrawn after
+Review noted that they did not prove native exact label/value leaf nodes and
+same-card binding. A later native-structure helper is now present in the Stage
+02 working tree, but the latest complete-listing probe stopped before calling
+it. Its compatibility through the production Discovery path and its use before
+capture have not passed the Stage 02 gate. The earlier DOM relation was not
+recorded in the original probe.
 
 The first full browser invocation could not create pytest temporary directories
 under the Windows global temp root (30 setup errors, 2 tests passed). An
@@ -353,6 +365,190 @@ successful read-only GET used a temporary target-A diagnostic parser. That
 aggregate-text helper/test was removed after Review because it lacked exact
 native label/value leaf-node and same-card structure proof.
 
+
+### Stage 02 C canonical/og identity follow-up
+
+A bounded read-only production Discovery diagnostic reached the authenticated
+oldest-sort document and failed before expansion with allowlisted reason
+`redirected_to_different_work_or_route`; the cause type was absent. The work
+GET and exact sort GET each returned HTTP 200. At failure, the same-page scalar
+snapshot showed canonical and og:url both had the exact same-work `?sort=older`
+shape, the document was on that exact sort path, and the older control was
+active. It also showed one same-work More control (`offset=5`, `limit=47`,
+`sort=older`), 10 visible rows, one visible MyPage link, no visible sign-in
+link, and one valid `ep.is_logged_in=true` telemetry event. The More control was
+not clicked (instrumented click attempts 0); More XHRs and metadata helper calls
+were 0. Source/Viewer attempts and first-party non-GET requests were 0. Thirty
+foreign non-GET requests were aborted. Additional rights used: 0. Guard had not
+stopped at the diagnostic checkpoint. All outputs omit request URLs and raw
+query values.
+
+This is the observed reason the initial C code rejected the page: it required
+base canonical/og URLs even though the sorted page served the exact older-sort
+identity pair. The site-local correction retains queryless public input and
+Source URL parsing, allows either an exact base identity pair or an exact older
+pair tied to the same sorted document plus unique active older UI, and rejects
+mixed/unknown/duplicate identity forms. Unit tests passed 31; the Yanmaga
+Discovery browser file passed 48 with 0 skips. Existing pytest-asyncio
+deprecation warnings only. The independent C review reported BLOCKING 0 and the
+Lead accepted that sub-gate. Stage 02 capture and Catalog grant persistence
+remain unverified.
+
+Evidence: ignored `output/yanmaga_access_experiment/stage02/discovery-failure-diagnostic.json`
+plus the corrected earlier `production-helper-complete-listing-probe.json`.
+At that checkpoint, no follow-up live requests were yet authorized before the C review gate.
+
+### Stage 02 More request query observation
+
+After the C review gate, a separately Lead-approved metadata-only probe used the
+already opened `episode-ff-probe-01` target. This probe used 0 rights; the
+previously confirmed first-free use remains a separate cumulative count of 1.
+It made one base work GET, one oldest-sort GET, and one native More click. It
+observed one exact same-work `/episodes` GET/XHR attempt. The query had the
+bounded key set `cb`, `limit`, `offset`, and `sort`; there were no duplicate
+keys or parse errors, and the three paging values matched the visible native
+More control. The opaque `cb` value was not saved. No `_` key was present.
+
+The diagnostic field `more_xhr_get_count=0` is the count accepted under the
+then-current strict three-key pagination contract; it does not mean there were
+no `/episodes` path attempts. The new observer recorded path attempts 1,
+allowed 0, aborted 1. The probe route filter rejected the extra `cb` key before
+continuation was accepted. Because the request was intercepted locally, this
+does not establish what the site handler would have done with it. The listing
+did not change (`continuation_did_not_change_listing`); MyPage/history helper
+calls were 0, Source/Viewer attempts were 0, and the AccessGuard did not stop.
+The probe output contains no URL or raw query values.
+
+The next probe-only guard revision recognizes either the legacy three paging
+keys or this exact four-key shape when `cb` is a single nonempty value of at
+most 1024 decoded characters without control characters and all three paging
+values match the native control. It forwards the observed `cb` value unchanged
+and does not generate or record it. Unknown keys, duplicates, `_`, other
+resources, and Source or Viewer routes remain denied. This does not claim that
+`cb` is a cache-buster. The revision has only passed local checks so far: 70
+existing route cases, 10 `cb` classifier cases, 21 observer cases, Python
+compile, and ASCII-only validation. The independent Reviewer reported BLOCKING
+0 for this probe-only guard revision; the site adapter/helper SHAs remained
+unchanged.
+
+The Lead then approved one metadata-only probe for the same already opened
+target. It completed the 57-row listing, with the target present once at
+position 32 and authenticated UI true. The visible More control produced one
+GET/XHR request with the exact observed key set; the native offset, limit, and
+sort values all matched. The `cb` value was single, nonempty, 13 characters,
+decimal-shaped, and free of control characters. Its value was not recorded and
+its meaning remains unknown. The More response was HTTP 200 JavaScript. This
+establishes successful bounded listing expansion under the approved query
+shape, not anything about `cb` semantics.
+
+The metadata helper ran once. MyPage metadata GET returned HTTP 200 HTML with
+`Cache-Control: max-age=0, private, must-revalidate` and no Age header, but no
+history metadata GET was recorded and the helper returned zero proofs. One
+`unexpected_first_party_fetch` was aborted; its path and query keys were not
+recorded, so its role is unknown and cannot be identified as the history
+request. The result is `metadata_unknown`: no H, expiry evidence, or finite
+grant bound was observed in this run. The guard did not stop and there were no
+page errors.
+The work, sort, More, and MyPage responses all returned HTTP 200 and had no
+Age header. Each had
+`Cache-Control: max-age=0, private, must-revalidate`.
+There were two observed recommendation GETs and 44 known analytics POSTs
+allowed by the bounded route guard. Source/Viewer attempts and first-party
+non-GET requests were 0. This probe used 0 rights; the prior confirmed
+first-free use remains a separate cumulative count of 1. No capture, new
+entry, or retry was performed. Stage 02 remains unverified.
+
+Evidence: `output/yanmaga_access_experiment/stage02/production-helper-compat-native-traffic-v3.json`.
+
+An offline code review then found that the probe guard, not the production
+helper, hardcoded the MyPage history tab value as `rental`. The native link's
+tab value had not been retained in prior evidence, and the v3 summary has one
+`unexpected_first_party_fetch` abort whose path/query were not recorded. It is
+not established that this abort was the history request. A new diagnostic-only
+harness version removes the enum assumption: it allows a single nonempty,
+bounded, control-free `tab` value only on same-origin `/mypage` GET/fetch, while
+still rejecting duplicates, other keys, wrong resource type, auth and other
+work. It logs only safe query shape and request outcomes, never the value.
+
+The probe-only harness now has a `--metadata-only` mode. It uses one fresh base
+work GET, reads current URL/canonical/og/auth/MyPage evidence in one DOM
+observation, then calls the frozen helper at most once for the prior exact
+target proof. It does not require that target to appear in the initial ten
+rows. The route budget is base GET 1, MyPage GET 1, history GET 1, at most three
+main metadata GETs total, sort and More 0, recommendations 1, and known
+analytics POSTs 100. Source/Viewer, auth, other-work, and first-party non-GET
+requests remain denied. Only safe MyPage query shape and request outcome are
+recorded. Local checks pass: 70 route cases, 10 `cb` classifier cases, 21 More
+observer cases, 13 MyPage history classifier/observer cases, and 14
+metadata-only budget cases. A base-response gate also requires HTTP 200 before
+the helper can run; its 12 local cases include a status-500 caller path with
+zero helper calls. Python compile and ASCII-only validation pass. Harness
+SHA256 is `701aa60791b86e9ca12dc574a525b7470e7165429f3994963512863f035bf6ab`;
+production/helper SHAs remain unchanged. This latest harness version has not
+been independently reviewed or run live.
+
+This was the planned check at the earlier harness-review checkpoint. A later
+Lead-approved execution and its result are recorded in the latest Stage 02
+status section below.
+
 ## Stages 03-04
 
 Not started. Record the Lead-approved scope, live evidence, tests, independent review, and gate outcome here before advancing each stage. Do not infer missing site behavior to satisfy a stage.
+
+### Latest Stage 02 implementation and verification status (2026-11-15)
+
+The C canonical/og identity correction is accepted with independent BLOCKING 0.
+The pre-entry check now uses the same C-approved identity validator: it accepts
+a sorted document with the observed oldest-first UI and either matching sorted
+or base canonical/og pair, as well as a base document with the positive
+oldest-first UI and matching base identity pair. Mixed, unknown, duplicate,
+foreign, or unsupported forms remain rejected.
+
+The fixed production helper and Discovery sources were verified by SHA before
+the Lead-approved metadata-only probe. The probe used the already released
+`episode-ff-probe-01`, made one base work GET, one MyPage GET, and one observed
+Rental History GET (three metadata document GETs total), plus one known same-work
+recommendation GET. It made zero Source/Viewer requests, zero first-party
+non-GET requests, and used zero rights; the cumulative first-free use remains
+one. It reported `metadata_verified_finite`, native H=17, and
+`observed_at_utc=2026-11-15T08:11:29.019643Z`. The derived
+`site_countdown_lower_bound` is `2026-11-16T00:11:24.019643Z`, using GET start
+plus (H - 1) hours minus 5 seconds. This is a conservative lower bound, not an
+absolute site expiry. MyPage and History responses were HTTP 200 HTML; both had
+`Cache-Control: max-age=0, private, must-revalidate` and no Age header. The
+probe allowed one recommendation GET and 21 known analytics POSTs; no raw URL,
+query value, HTML, or account data was recorded. Evidence:
+`output/yanmaga_access_experiment/stage02/production-helper-metadata-only-v1.json`.
+
+The current adapter implementation keeps the one-use first-free transition
+bound to an authenticated fresh `free` classification, exact row and public
+source href, and final visible marker check. After the Source GET, a DOM-only
+bounded poll requires the exact Viewer episode, one valid counter, the current
+visible body wrapper, no known access gate, and the exact first-free completion
+notice. The notice latch is cleared when the observed expected Viewer URL no longer matches. Only then does
+the production helper obtain the finite target-specific lower bound and the
+Batch observer synchronously persist it before any image/pixel readiness,
+rewind, or capture work. A failed render, END check, or packaging leaves the
+Item pending and preserves any saved grant; it does not consume a second
+entry. AccessGuard stop and cancellation do not trigger metadata retry. The
+release state distinguishes `not_attempted`, `attempted_unknown`,
+`site_confirmed`, and `persisted`.
+
+Existing-grant reuse now requires both a still-future trusted Catalog expiry
+and a fresh exact-target active countdown immediately before entry. H=1 is
+active but has no new finite lower bound, so the stored Catalog expiry can
+authorize direct reuse without creating or extending a grant. H=0, unknown or
+future-dated observation time, and expired stored grant fail closed. Discovery
+also repeats the full same-work snapshot after its async history lookup and
+emits no records if work/auth/sort/row identity or ordering changed.
+
+Focused checks after these changes passed: 32 adapter pre-entry/first-free/
+existing-grant cases; 49 Yanmaga Discovery browser cases; 95 Yanmaga adapter,
+Discovery, policy, and Rental History cases; and a 9-case first-free gate,
+timeout, and no-ready targeted selection after the latest gate-token update.
+The earlier full adapter browser run passed 99 cases before that final
+role-less gate-token fixture expansion. The final full suite and final Ruff run
+are still pending. No Stage 02 live capture/END/ZIP/Completed run has occurred;
+Stage 02 remains in progress pending final tests and independent review. The
+first-free budget is exhausted, and no ticket, point, paid, or additional
+first-free action is authorized by this status record.

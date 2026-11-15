@@ -1264,6 +1264,59 @@ class CatalogService:
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
         return self._source_from_row(row)
 
+    def record_confirmed_access_grant(
+        self,
+        source_id: int,
+        *,
+        site: str,
+        external_id: str,
+        observed_at: datetime | str,
+        access_granted_until: datetime | str,
+    ) -> Source:
+        """Persist one finite direct grant without changing quota or Item state."""
+
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(external_id, "external_id")
+        observed = format_timestamp(observed_at)
+        granted_until = format_timestamp(access_granted_until)
+        if observed is None or granted_until is None:
+            raise CatalogValidationError("confirmed grant timestamps are required")
+        observed_dt = datetime.fromisoformat(observed)
+        granted_until_dt = datetime.fromisoformat(granted_until)
+        if granted_until_dt <= observed_dt:
+            raise CatalogValidationError(
+                "confirmed grant expiry must follow its observation"
+            )
+
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            source = self._require_row(connection, "sources", source_id, "source")
+            if source["site"] != site or source["external_id"] != external_id:
+                raise CatalogValidationError(
+                    "confirmed grant identity does not match the selected source"
+                )
+            existing_value = source["access_granted_until"]
+            if existing_value is not None:
+                try:
+                    existing = datetime.fromisoformat(existing_value)
+                except ValueError as exc:
+                    raise CatalogValidationError(
+                        "existing access grant timestamp is invalid"
+                    ) from exc
+                if existing.tzinfo is None or existing.utcoffset() is None:
+                    raise CatalogValidationError(
+                        "existing access grant timestamp must be timezone-aware"
+                    )
+                if existing >= granted_until_dt:
+                    return self._source_from_row(source)
+            connection.execute(
+                "UPDATE sources SET access_granted_until = ?, updated_at = ? "
+                "WHERE id = ? AND site = ? AND external_id = ?",
+                (granted_until, timestamp, source_id, site, external_id),
+            )
+            updated = self._require_row(connection, "sources", source_id, "source")
+        return self._source_from_row(updated)
+
     def get_quota_resource_state(
         self, work_id: int, *, site: str, resource: str
     ) -> QuotaResourceState | None:

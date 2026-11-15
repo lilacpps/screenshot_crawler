@@ -3,6 +3,7 @@ import io
 import json
 import os
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,11 @@ from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import ProgressStore, atomic_write_json
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessConsumption,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _encode_native_lossless_webp,
 )
@@ -138,6 +143,43 @@ class FakeAdapter(SiteAdapter):
         previous_identity: ContentIdentity | None,
     ) -> None:
         return None
+
+
+def test_confirmed_access_grant_is_immutable_finite_and_sync_observed() -> None:
+    observed = datetime(2026, 11, 15, 3, 10, tzinfo=UTC)
+    grant = ConfirmedAccessGrant(
+        site="yanmaga",
+        external_id="work:0123456789abcdef0123456789abcdef",
+        observed_at=observed,
+        access_granted_until=observed + timedelta(hours=21),
+        expiry_evidence="site_countdown_lower_bound",
+    )
+    received: list[ConfirmedAccessGrant] = []
+    adapter = FakeAdapter([], [])
+    adapter.set_confirmed_access_grant_observer(received.append)
+    adapter.report_confirmed_access_grant(grant)
+    assert received == [grant]
+
+    with pytest.raises((AttributeError, TypeError)):
+        grant.site = "other"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ConfirmedAccessGrant(
+            site="yanmaga",
+            external_id="work:0123456789abcdef0123456789abcdef",
+            observed_at=datetime(2026, 11, 15, 3, 10),  # noqa: DTZ001 - naive rejected
+            access_granted_until=observed + timedelta(hours=21),
+            expiry_evidence="site_countdown_lower_bound",
+        )
+    with pytest.raises(ValueError, match="follow its observation"):
+        ConfirmedAccessGrant(
+            site="yanmaga",
+            external_id="work:0123456789abcdef0123456789abcdef",
+            observed_at=observed,
+            access_granted_until=observed,
+            expiry_evidence="site_absolute_expiry",
+        )
+    with pytest.raises(RuntimeError, match="observer is not configured"):
+        FakeAdapter([], []).report_confirmed_access_grant(grant)
 
 
 class EntryOnlyAdapter(FakeAdapter):

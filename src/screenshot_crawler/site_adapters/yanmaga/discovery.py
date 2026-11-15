@@ -17,8 +17,12 @@ from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveredSource,
     DiscoveryMode,
+    DiscoverySourceSnapshot,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    fetch_rental_history_countdowns,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
 SITE_HOST = "yanmaga.jp"
@@ -84,6 +88,35 @@ class YanmagaListingSnapshot:
     rows: tuple[YanmagaListingRow, ...]
     continuation: YanmagaContinuation | None
     authenticated: bool = False
+    mypage_href: str | None = None
+
+
+def _has_future_catalog_grant(
+    snapshot: DiscoverySourceSnapshot, now: datetime
+) -> bool:
+    value = snapshot.access_granted_until
+    try:
+        grant_until = datetime.fromisoformat(value) if isinstance(value, str) else value
+    except ValueError:
+        return False
+    return (
+        isinstance(grant_until, datetime)
+        and grant_until.tzinfo is not None
+        and grant_until.utcoffset() is not None
+        and grant_until.astimezone(UTC) > now.astimezone(UTC)
+    )
+
+
+def _parse_composite_id(value: str) -> tuple[str, str] | None:
+    match = re.fullmatch(r"(?P<slug>.+):(?P<episode>[0-9a-f]{32})", value)
+    if match is None:
+        return None
+    slug = match.group("slug")
+    if parse_yanmaga_work_url(
+        f"https://{SITE_HOST}/comics/{quote(slug, safe='')}"
+    ) != YanmagaWorkParts(slug):
+        return None
+    return slug, match.group("episode")
 
 
 def _decoded_segment(value: str) -> str | None:
@@ -167,6 +200,41 @@ def _validate_work_document_url(
     ):
         return
     raise DiscoveryIncompleteError("Yanmaga current document is not the expected work page")
+
+
+def _validate_work_identity_urls(
+    document_url: object,
+    canonical_url: object,
+    og_url: object,
+    expected: YanmagaWorkParts,
+    *,
+    allow_sorted_identity: bool,
+) -> None:
+    """Validate one document's canonical pair without relaxing public inputs."""
+
+    document_is_base = isinstance(document_url, str) and parse_yanmaga_work_url(document_url) == expected
+    document_is_sorted = isinstance(document_url, str) and _parse_yanmaga_sorted_work_url(
+        document_url, expected
+    )
+    if not document_is_base and not (allow_sorted_identity and document_is_sorted):
+        raise DiscoveryIncompleteError("Yanmaga current document is not the expected work page")
+
+    canonical_is_base = isinstance(canonical_url, str) and parse_yanmaga_work_url(canonical_url) == expected
+    og_is_base = isinstance(og_url, str) and parse_yanmaga_work_url(og_url) == expected
+    canonical_is_sorted = isinstance(canonical_url, str) and _parse_yanmaga_sorted_work_url(
+        canonical_url, expected
+    )
+    og_is_sorted = isinstance(og_url, str) and _parse_yanmaga_sorted_work_url(og_url, expected)
+    if canonical_is_base and og_is_base:
+        return
+    if (
+        allow_sorted_identity
+        and document_is_sorted
+        and canonical_is_sorted
+        and og_is_sorted
+    ):
+        return
+    raise DiscoveryIncompleteError("Yanmaga redirected to a different work or route")
 
 
 def _sort_link_value(value: object, expected: YanmagaWorkParts) -> str | None:
@@ -466,6 +534,56 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
 
     def __init__(self) -> None:
         self.last_snapshot: YanmagaListingSnapshot | None = None
+        self._grant_candidates: dict[str, DiscoverySourceSnapshot] = {}
+        self._fresh_active_grants: set[str] = set()
+        self._grant_work_slug: str | None = None
+
+    def configure_source_snapshots(
+        self,
+        target: WatchlistTarget,
+        snapshots: tuple[DiscoverySourceSnapshot, ...],
+    ) -> None:
+        self._grant_candidates = {}
+        self._fresh_active_grants = set()
+        work = parse_yanmaga_work_url(target.url)
+        self._grant_work_slug = work.slug if work is not None else None
+        if target.site != "yanmaga" or work is None:
+            return
+        now = datetime.now(UTC)
+        for snapshot in snapshots:
+            parsed_id = _parse_composite_id(snapshot.external_id)
+            if (
+                snapshot.discovery_key != target.key
+                or parsed_id is None
+                or parsed_id[0] != work.slug
+                or snapshot.access_mode not in {"free", "quota", "paid"}
+                or not _has_future_catalog_grant(snapshot, now)
+            ):
+                continue
+            self._grant_candidates[snapshot.external_id] = snapshot
+
+    def reconcile_access_mode(
+        self,
+        observed_access_mode: str,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> str:
+        if observed_access_mode != "unknown" or previous is None:
+            return observed_access_mode
+        previous_parts = _parse_composite_id(previous.external_id)
+        if (
+            target.site != "yanmaga"
+            or self._grant_work_slug is None
+            or previous_parts is None
+            or previous_parts[0] != self._grant_work_slug
+            or previous.discovery_key != target.key
+            or previous.access_mode not in {"free", "quota", "paid"}
+            or not _has_future_catalog_grant(previous, datetime.now(UTC))
+            or previous.external_id not in self._grant_candidates
+            or previous.external_id not in self._fresh_active_grants
+        ):
+            return observed_access_mode
+        return previous.access_mode
 
     async def iter_records(
         self,
@@ -475,6 +593,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
     ) -> AsyncIterator[DiscoveredRecord]:
         del mode  # DiscoveryService owns its shared latest-first known-streak rule.
         self.last_snapshot = None
+        self._fresh_active_grants = set()
         work = parse_yanmaga_work_url(target.url)
         if work is None:
             raise DiscoveryIncompleteError("Watchlist target must be a canonical Yanmaga work URL")
@@ -522,8 +641,31 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError(
                     "Yanmaga identity, access evidence or listing changed before emission"
                 )
+            if self._grant_candidates and final_snapshot.authenticated and final_snapshot.mypage_href:
+                eligible_targets: list[YanmagaEpisodeParts] = []
+                for external_id in self._grant_candidates:
+                    parsed_id = _parse_composite_id(external_id)
+                    if parsed_id is not None and parsed_id[0] == work.slug:
+                        eligible_targets.append(YanmagaEpisodeParts(*parsed_id))
+                if eligible_targets:
+                    fresh = await fetch_rental_history_countdowns(
+                        page,
+                        observed_mypage_href=final_snapshot.mypage_href,
+                        targets=tuple(eligible_targets),
+                    )
+                    self._fresh_active_grants = {
+                        external_id
+                        for external_id, countdown in fresh
+                        if countdown.active
+                    }
+                    post_history_snapshot = await self._snapshot(page, work, telemetry)
+                    if post_history_snapshot != final_snapshot:
+                        raise DiscoveryIncompleteError(
+                            "Yanmaga identity, access evidence or listing changed during grant verification"
+                        )
+                    final_snapshot = post_history_snapshot
             self.last_snapshot = final_snapshot
-            records = self._records_from_snapshot(snapshot, target, work)
+            records = self._records_from_snapshot(final_snapshot, target, work)
             # DiscoveryService mutates Catalog as each item is yielded. All
             # paging, row identity, access evidence and stability checks have
             # completed before this point so a partial full run cannot reconcile.
@@ -544,13 +686,17 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         telemetry: _LoginTelemetryObserver,
     ) -> bool:
         state = await self._sort_control_state(page)
-        self._validate_work_url(state.get("url"), work)
-        self._validate_work_url(state.get("canonical"), work)
-        self._validate_work_url(state.get("ogUrl"), work)
         controls = state.get("controls")
         if not isinstance(controls, list):
             raise DiscoveryIncompleteError("Yanmaga sort controls are malformed")
         if not controls:
+            _validate_work_identity_urls(
+                state.get("url"),
+                state.get("canonical"),
+                state.get("ogUrl"),
+                work,
+                allow_sorted_identity=False,
+            )
             telemetry.require_absent_sort_controls()
             return False
         active_labels = [
@@ -570,6 +716,16 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             controls,
             work,
             expected_active_label=active_label,
+        )
+        _validate_work_identity_urls(
+            state.get("url"),
+            state.get("canonical"),
+            state.get("ogUrl"),
+            work,
+            allow_sorted_identity=(
+                active_label == _SORT_OLDEST_LABEL
+                and _parse_yanmaga_sorted_work_url(state.get("url", ""), work)
+            ),
         )
         if active_label == _SORT_OLDEST_LABEL:
             telemetry.allow_sorted_work_document()
@@ -627,9 +783,6 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError("Yanmaga oldest-first sort changed before selection")
 
         fresh_state = await self._sort_control_state(page)
-        self._validate_work_url(fresh_state.get("url"), work)
-        self._validate_work_url(fresh_state.get("canonical"), work)
-        self._validate_work_url(fresh_state.get("ogUrl"), work)
         fresh_controls = fresh_state.get("controls")
         if not isinstance(fresh_controls, list):
             raise DiscoveryIncompleteError("Yanmaga sort controls changed before selection")
@@ -645,6 +798,13 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             or fresh_oldest.get("hrefAttribute") != raw_href
         ):
             raise DiscoveryIncompleteError("Yanmaga oldest-first href changed before selection")
+        _validate_work_identity_urls(
+            fresh_state.get("url"),
+            fresh_state.get("canonical"),
+            fresh_state.get("ogUrl"),
+            work,
+            allow_sorted_identity=False,
+        )
         if await locator.count() != 1:
             raise DiscoveryIncompleteError("Yanmaga oldest-first locator changed before selection")
         telemetry.allow_sorted_work_document()
@@ -661,13 +821,6 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         if not _parse_yanmaga_sorted_work_url(page.url, work):
             raise DiscoveryIncompleteError("Yanmaga sort did not open the observed oldest-first URL")
         sorted_state = await self._sort_control_state(page)
-        _validate_work_document_url(
-            sorted_state.get("url"),
-            work,
-            allow_sorted_document=True,
-        )
-        self._validate_work_url(sorted_state.get("canonical"), work)
-        self._validate_work_url(sorted_state.get("ogUrl"), work)
         sorted_controls = sorted_state.get("controls")
         if not isinstance(sorted_controls, list):
             raise DiscoveryIncompleteError("Yanmaga sorted controls are malformed")
@@ -675,6 +828,13 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             sorted_controls,
             work,
             expected_active_label=_SORT_OLDEST_LABEL,
+        )
+        _validate_work_identity_urls(
+            sorted_state.get("url"),
+            sorted_state.get("canonical"),
+            sorted_state.get("ogUrl"),
+            work,
+            allow_sorted_identity=True,
         )
         return True
 
@@ -929,6 +1089,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 signIns: signIns.length,
                 signOuts: signOuts.length,
                 myPages: myPages.length,
+                myPageHrefs: myPages.map(anchor => anchor.href),
                 title: document.title,
                 containerCount: containers.length,
                 rowCount: rows.length,
@@ -951,8 +1112,6 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             work,
             allow_sorted_document=telemetry.sorted_work_document_allowed,
         )
-        self._validate_work_url(identity.get("canonical"), work)
-        self._validate_work_url(identity.get("ogUrl"), work)
         sort_controls = identity.get("sortControls")
         if not isinstance(sort_controls, list):
             raise DiscoveryIncompleteError("Yanmaga sort state is unavailable")
@@ -966,6 +1125,17 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError("Yanmaga sort controls appeared after initial inspection")
         elif telemetry.sort_ui_mode is None:
             raise DiscoveryIncompleteError("Yanmaga sort controls were not initialized")
+        _validate_work_identity_urls(
+            identity.get("url"),
+            identity.get("canonical"),
+            identity.get("ogUrl"),
+            work,
+            allow_sorted_identity=(
+                telemetry.sort_ui_mode == "oldest"
+                and isinstance(identity.get("url"), str)
+                and _parse_yanmaga_sorted_work_url(identity["url"], work)
+            ),
+        )
 
         rows_value = identity.get("rows")
         if (
@@ -1000,6 +1170,27 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             current_work_document=telemetry.current_work_document,
             telemetry_overflow=telemetry.overflow,
         )
+        mypage_hrefs = identity.get("myPageHrefs")
+        mypage_href: str | None = None
+        if authenticated and isinstance(mypage_hrefs, list):
+            exact_hrefs = {value for value in mypage_hrefs if isinstance(value, str)}
+            if len(exact_hrefs) == 1:
+                candidate_href = next(iter(exact_hrefs))
+                try:
+                    parsed_href = urlsplit(candidate_href)
+                    if (
+                        parsed_href.scheme == "https"
+                        and (parsed_href.hostname or "").lower() == SITE_HOST
+                        and parsed_href.port in (None, 443)
+                        and parsed_href.path == "/mypage"
+                        and not parsed_href.username
+                        and not parsed_href.password
+                        and not parsed_href.query
+                        and not parsed_href.fragment
+                    ):
+                        mypage_href = candidate_href
+                except ValueError:
+                    mypage_href = None
         rows: list[YanmagaListingRow] = []
         seen_ids: set[str] = set()
         for index, raw_row in enumerate(rows_value):
@@ -1094,6 +1285,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             rows=tuple(rows),
             continuation=continuation,
             authenticated=authenticated,
+            mypage_href=mypage_href,
         )
 
     @staticmethod

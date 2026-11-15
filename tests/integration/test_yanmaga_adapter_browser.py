@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote, unquote, urlsplit
 
 import pytest
 from PIL import Image
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from screenshot_crawler.batch import BatchExecutor, CandidateExecutionError
+from screenshot_crawler.batch import (
+    BatchExecutionError,
+    BatchExecutor,
+    BatchInterruptedError,
+    CandidateExecutionError,
+)
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -19,6 +26,7 @@ from screenshot_crawler.catalog import (
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
+    AccessStopError,
     PageChangeTimeoutError,
     UnknownPageStateError,
 )
@@ -41,6 +49,7 @@ from screenshot_crawler.site_adapters.yanmaga.native_capture import (
     dispose_yanmaga_native_observer,
     install_yanmaga_native_observer,
 )
+from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
 from screenshot_crawler.site_policies import SitePolicyRegistry, YanmagaSitePolicy
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
@@ -56,6 +65,8 @@ VIEWER_URL = f"https://yanmaga.jp/viewer/comics/{quote(SLUG, safe='')}/{EPISODE_
 VIEWER_NAVIGATION_URL = f"{VIEWER_URL}?cid=AbCd0123456789EfGhIj"
 WORK_KEY = f"yanmaga:{SLUG}"
 NOW = datetime(2026, 10, 20, 12, tzinfo=JST)
+GRANT_OBSERVED_AT = datetime(2026, 11, 15, 0, tzinfo=UTC)
+GRANT_UNTIL = GRANT_OBSERVED_AT + timedelta(hours=21)
 
 
 def _segment_data(color: str, index: int) -> str:
@@ -69,6 +80,10 @@ def _segment_data(color: str, index: int) -> str:
 
 def _viewer_html(
     *,
+    first_free_completion_notice: bool = False,
+    access_proof_delay_ms: int = 0,
+    access_proof_never_ready: bool = False,
+    access_gate_text: str | None = None,
     missing_half: bool = False,
     thin_segment: bool = False,
     oversized_last_segment: bool = False,
@@ -168,6 +183,8 @@ def _viewer_html(
     )
     if unknown_aux:
         auxiliary += '<div id="unknown-promo"></div>'
+    if access_gate_text is not None:
+        auxiliary += f'<div class="access-gate-modal">{access_gate_text}</div>'
     if access_gate:
         auxiliary += (
             '<div role="dialog" class="quota-modal" '
@@ -244,6 +261,12 @@ def _viewer_html(
     menu_initial_display = "block" if first_page_overlay else "none"
     menu_after_roundtrip = "none" if menu_hideable else "block"
     edge_overlay = '<div id="edge-obstruction"></div>' if edge_obstruction else ""
+    first_free_notice = (
+        "<div>" + "".join(map(chr, (0x7121, 0x6599, 0x30ec, 0x30f3, 0x30bf, 0x30eb,
+                                     0x304c, 0x5b8c, 0x4e86, 0x3057, 0x307e, 0x3057, 0x305f))) + "</div>"
+        if first_free_completion_notice
+        else ""
+    )
     return f'''<!doctype html><html><head><meta charset="utf-8"><title>Test | YanmagaWeb</title>
     <style>
       html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
@@ -266,7 +289,7 @@ def _viewer_html(
       #edge-obstruction{{position:fixed;left:0;top:0;width:8px;height:8px;z-index:40;background:#f00}}
       #ads,#recommend{{position:absolute;width:1px;height:1px;overflow:hidden}}
       {obstruction_css}
-    </style></head><body>
+    </style></head><body>{first_free_notice}
     <span id="counter">{initial_page}/4</span>
     {arrow}
     <div class="pages" id="content">{''.join(wrappers)}{rental}{auxiliary}</div>
@@ -283,6 +306,8 @@ def _viewer_html(
       const menuHideable={json.dumps(menu_hideable)};
       let leftFromFirst=false;
       const delayedEnd={json.dumps(delayed_end)};
+      const accessProofDelayMs={access_proof_delay_ms};
+      const accessProofNeverReady={json.dumps(access_proof_never_ready)};
       const arrowVisibleAtEnd={arrow_visible_at_end};
       const nativeCapture={json.dumps(native_capture)};
       const nativeTransparent={json.dumps(native_transparent)};
@@ -340,8 +365,73 @@ def _viewer_html(
         }};
         generated.forEach(createBlobUrl);
       }}
-      show({initial_page});
+      if(accessProofDelayMs>0 || accessProofNeverReady){{
+        counter.textContent='';
+        pages.forEach(node=>node.style.display='none');
+        if(!accessProofNeverReady) setTimeout(()=>show({initial_page}),accessProofDelayMs);
+      }} else show({initial_page});
     </script></body></html>'''
+
+
+def _work_listing_html(
+    access_mode: str,
+    *,
+    target_href: str | None = None,
+    marker_hidden: bool = False,
+    anchor_attributes: str = "",
+    row_attributes: str = "",
+    canonical_href: str | None = None,
+    og_url: str | None = None,
+    sort_ui_state: str = "none",
+) -> str:
+    first_free = access_mode == "first_free"
+    authenticated = first_free or access_mode == "trusted_grant"
+    marker_style = ' style="display:none"' if marker_hidden else ""
+    if first_free:
+        label = "".join(map(chr, (0x521d, 0x56de, 0x7121, 0x6599)))
+        badge = (
+            f'<span class="mod-episode-point--free by_first_time"{marker_style}>{label}</span>'
+            '<span class="mod-episode-point--normal">70</span>'
+        )
+    elif access_mode == "free":
+        label = "".join(map(chr, (0x7121, 0x6599)))
+        badge = f'<span class="mod-episode-point--free"{marker_style}>{label}</span>'
+    else:
+        badge = ""
+    allowed_sort_states = {"none", "older", "newer", "both"}
+    if sort_ui_state not in allowed_sort_states:
+        raise ValueError(f"unsupported sort UI state: {sort_ui_state}")
+    newest_active = ' class="ga-sort nav-link active"' if sort_ui_state in {"newer", "both"} else ' class="ga-sort nav-link"'
+    oldest_active = ' class="ga-sort nav-link active"' if sort_ui_state in {"older", "both"} else ' class="ga-sort nav-link"'
+    sort_markup = (
+        '<nav class="episode-sort">'
+        f'<a{newest_active} href="{WORK_URL}?sort=newer">\u65b0\u7740\u9806</a>'
+        f'<a{oldest_active} href="{WORK_URL}?sort=older">\u6700\u521d\u304b\u3089</a>'
+        '</nav>'
+        if sort_ui_state != "none"
+        else ""
+    )
+    account = (
+        '<a href="/mypage">My page</a>'
+        if authenticated
+        else "<a href=\"/customers/sign-up\">"
+        + "".join(map(chr, (0x30ed, 0x30b0, 0x30a4, 0x30f3)))
+        + "</a>"
+    )
+    target_href = target_href or SOURCE_URL
+    canonical_href = canonical_href or WORK_URL
+    og_url = og_url or WORK_URL
+    return f'''<!doctype html><html><head>
+      <meta charset="utf-8">
+      <link rel="canonical" href="{canonical_href}">
+      <meta property="og:url" content="{og_url}">
+      <style>.mod-episode-point--free {{ color: rgb(220, 0, 0); }}</style>
+      </head><body>{account}
+      {sort_markup}
+      <div class="detailv2-episodes"><ul>
+      <li class="mod-episode-item" {row_attributes}><a class="mod-episode-link" href="{target_href}" {anchor_attributes}>
+      <p class="mod-episode-title">Episode 1</p>{badge}</a></li>
+      </ul></div></body></html>'''
 
 
 async def _set_routes(
@@ -349,6 +439,20 @@ async def _set_routes(
     monkeypatch,
     *,
     access_mode: str = "free",
+    source_access_mode_override: str | None = None,
+    target_href: str | None = None,
+    marker_hidden: bool = False,
+    anchor_attributes: str = "",
+    row_attributes: str = "",
+    sorted_listing: bool = False,
+    canonical_shape: str = "base",
+    og_shape: str = "base",
+    sort_ui_state: str = "none",
+    source_goto_failure: str | None = None,
+    first_free_completion_notice: bool = False,
+    access_proof_delay_ms: int = 0,
+    access_proof_never_ready: bool = False,
+    access_gate_text: str | None = None,
     missing_half: bool = False,
     thin_segment: bool = False,
     oversized_last_segment: bool = False,
@@ -377,9 +481,15 @@ async def _set_routes(
     async def fake_records(_self, _page, target, mode):
         assert target.url == WORK_URL
         assert mode == "full"
+        first_free = access_mode == "first_free"
+        trusted_grant = access_mode == "trusted_grant"
         _self.last_snapshot = YanmagaListingSnapshot(
             title="テスト作品",
-            anonymous=True,
+            anonymous=not (first_free or trusted_grant),
+            authenticated=first_free or trusted_grant,
+            mypage_href=(
+                "https://yanmaga.jp/mypage" if first_free or trusted_grant else None
+            ),
             rows=(
                 YanmagaListingRow(
                     episode_id=EPISODE_ID,
@@ -388,6 +498,7 @@ async def _set_routes(
                     free_marker=access_mode == "free",
                     red_marker_present=access_mode == "free",
                     known_restricted=access_mode == "known_restricted",
+                    first_free_marker=first_free,
                 ),
                 YanmagaListingRow(
                     episode_id=NEXT_EPISODE_ID,
@@ -400,12 +511,23 @@ async def _set_routes(
             ),
             continuation=None,
         )
+        if sorted_listing:
+            await _page.goto(f"{WORK_URL}?sort=older", wait_until="domcontentloaded")
+        source_access_mode = (
+            source_access_mode_override
+            if source_access_mode_override is not None
+            else "unknown"
+            if access_mode in {"known_restricted", "trusted_grant"}
+            else "free"
+            if first_free
+            else access_mode
+        )
         yield DiscoveredRecord(
             item=DiscoveredItem(canonical_title="テスト作品", order_label="第1話"),
             source=DiscoveredSource(
                 external_id=f"{SLUG}:{EPISODE_ID}",
                 url=SOURCE_URL,
-                access_mode="unknown" if access_mode == "known_restricted" else access_mode,
+                access_mode=source_access_mode,
                 available=True,
             ),
         )
@@ -428,9 +550,37 @@ async def _set_routes(
     async def route_handler(route):
         url = route.request.url
         requested.append(url)
-        path = unquote(urlsplit(url).path)
+        parsed_url = urlsplit(url)
+        path = unquote(parsed_url.path)
         if path == unquote(urlsplit(WORK_URL).path):
-            await route.fulfill(status=200, content_type="text/html", body="<title>Work</title>")
+            is_sorted = parsed_url.query == "sort=older"
+            if parsed_url.query not in {"", "sort=older"}:
+                await route.fulfill(status=404, body="not found")
+                return
+            def metadata_url(shape: str) -> str:
+                if shape == "current":
+                    return f"{WORK_URL}?sort=older" if is_sorted else WORK_URL
+                if shape == "older":
+                    return f"{WORK_URL}?sort=older"
+                if shape == "base":
+                    return WORK_URL
+                if shape == "foreign":
+                    return "https://example.invalid/work"
+                raise ValueError(f"unsupported metadata URL shape: {shape}")
+            await route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=_work_listing_html(
+                    access_mode,
+                    target_href=target_href,
+                    marker_hidden=marker_hidden,
+                    anchor_attributes=anchor_attributes,
+                    row_attributes=row_attributes,
+                    canonical_href=metadata_url(canonical_shape),
+                    og_url=metadata_url(og_shape),
+                    sort_ui_state=sort_ui_state,
+                ),
+            )
         elif path in {
             unquote(urlsplit(VIEWER_URL).path),
             unquote(urlsplit(wrong_viewer_url).path),
@@ -440,6 +590,9 @@ async def _set_routes(
                 content_type="text/html",
                 body=_viewer_html(
                     missing_half=missing_half,
+                    access_proof_delay_ms=access_proof_delay_ms,
+                    access_proof_never_ready=access_proof_never_ready,
+                    access_gate_text=access_gate_text,
                     thin_segment=thin_segment,
                     oversized_last_segment=oversized_last_segment,
                     unknown_aux=unknown_aux,
@@ -450,6 +603,7 @@ async def _set_routes(
                     arrow_mode=arrow_mode,
                     first_page_overlay=first_page_overlay,
                     menu_hideable=menu_hideable,
+                    first_free_completion_notice=first_free_completion_notice,
                     edge_obstruction=edge_obstruction,
                     adjacent_overlap=adjacent_overlap,
                     terminal_control=terminal_control,
@@ -472,7 +626,12 @@ async def _set_routes(
         if url == SOURCE_URL:
             requested.append(url)
             destination = wrong_viewer_url if wrong_route else VIEWER_NAVIGATION_URL
-            return await original_goto(destination, *args, **kwargs)
+            result = await original_goto(destination, *args, **kwargs)
+            if source_goto_failure == "timeout_after_navigation":
+                raise PlaywrightTimeoutError("synthetic source navigation timeout")
+            if source_goto_failure == "cancel_after_navigation":
+                raise asyncio.CancelledError
+            return result
         return await original_goto(url, *args, **kwargs)
 
     monkeypatch.setattr(page, "goto", goto_final_viewer_for_public_episode)
@@ -526,6 +685,46 @@ def _seed_batch_candidate(tmp_path):
     plan = planner.plan(site="yanmaga", now=NOW)
     assert len(plan.candidates) == 1
     return catalog, policies, adapters, plan.candidates[0], item, source, target, planner.watchlist
+
+
+def _install_rental_history_proof(monkeypatch):
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_fetch(_page, *, observed_mypage_href, targets):
+        calls.append((observed_mypage_href, tuple(targets)))
+        assert observed_mypage_href == "https://yanmaga.jp/mypage"
+        assert len(targets) == 1
+        assert targets[0].episode_id == EPISODE_ID
+        return (
+            (
+                f"{SLUG}:{EPISODE_ID}",
+                RentalCountdown(
+                    observed_at=GRANT_OBSERVED_AT,
+                    remaining_hours=22,
+                    access_granted_until=GRANT_UNTIL,
+                    expiry_evidence="site_countdown_lower_bound",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(adapter_module, "fetch_rental_history_countdowns", fake_fetch)
+    return calls
+
+
+async def _adapter_at_work(page, monkeypatch, *, access_mode="free", **route_options):
+    requested = await _set_routes(
+        page,
+        monkeypatch,
+        access_mode=access_mode,
+        **route_options,
+    )
+    adapter = YanmagaAdapter()
+    await adapter.configure_run(page, "direct")
+    await adapter.configure_target_identity(f"{SLUG}:{EPISODE_ID}", WORK_KEY)
+    adapter.resolve_initial_navigation_url(SOURCE_URL)
+    adapter.set_confirmed_access_grant_observer(lambda _grant: None)
+    await page.goto(WORK_URL, wait_until="domcontentloaded")
+    return requested, adapter
 
 
 async def test_yanmaga_runner_rewinds_captures_spread_and_stops_at_verified_end(
@@ -1369,6 +1568,545 @@ async def test_yanmaga_runner_fails_closed_on_unproven_reader_state(
     if scenario in {"unknown_access", "known_restricted"}:
         assert not any(urlsplit(url).path.endswith(EPISODE_ID) for url in requested)
         assert browser_page.url == WORK_URL
+
+
+@pytest.mark.parametrize(
+    ("access_mode", "route_options"),
+    [
+        pytest.param("free", {"marker_hidden": True}, id="hidden-public-free-marker"),
+        pytest.param(
+            "first_free",
+            {"marker_hidden": True},
+            id="hidden-first-free-marker",
+        ),
+        pytest.param(
+            "free",
+            {"target_href": f"{SOURCE_URL}?unexpected=1"},
+            id="source-href-query",
+        ),
+        pytest.param(
+            "free",
+            {"target_href": f"{SOURCE_URL}#fragment"},
+            id="source-href-fragment",
+        ),
+        pytest.param(
+            "free",
+            {"target_href": SOURCE_URL.replace("https://yanmaga.jp", "https://example.invalid")},
+            id="source-href-foreign-origin",
+        ),
+        pytest.param(
+            "free",
+            {"target_href": SOURCE_URL.replace("https://yanmaga.jp", "https://user@yanmaga.jp")},
+            id="source-href-userinfo",
+        ),
+        pytest.param(
+            "free",
+            {"anchor_attributes": 'aria-disabled="true"'},
+            id="aria-disabled-source-link",
+        ),
+        pytest.param(
+            "free",
+            {"anchor_attributes": "disabled"},
+            id="disabled-source-link",
+        ),
+        pytest.param(
+            "free",
+            {"row_attributes": 'onclick="return false"'},
+            id="row-inline-handler",
+        ),
+        pytest.param(
+            "free",
+            {"row_attributes": 'aria-disabled="true"'},
+            id="aria-disabled-source-row",
+        ),
+        pytest.param(
+            "free",
+            {"row_attributes": "disabled"},
+            id="disabled-source-row",
+        ),
+        pytest.param(
+            "free",
+            {"row_attributes": "hidden"},
+            id="hidden-source-row",
+        ),
+        pytest.param(
+            "first_free",
+            {"source_access_mode_override": "unknown"},
+            id="first-free-without-classified-source-mode",
+        ),
+    ],
+)
+async def test_yanmaga_pre_entry_rejects_invisible_or_drifted_free_target(
+    browser_page, monkeypatch, access_mode, route_options
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode=access_mode,
+        **route_options,
+    )
+
+    try:
+        await adapter.initialize(browser_page)
+    except (AccessResourceUnavailableError, UnknownPageStateError):
+        pass
+    else:
+        pytest.fail("invalid or inactive discovery target was accepted")
+
+    assert not any(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested)
+    assert browser_page.url == WORK_URL
+
+
+@pytest.mark.parametrize(
+    ("sorted_listing", "canonical_shape", "og_shape", "sort_ui_state"),
+    [
+        pytest.param(True, "older", "older", "older", id="sorted-document-and-metadata"),
+        pytest.param(True, "base", "base", "older", id="sorted-document-with-base-metadata"),
+        pytest.param(False, "base", "base", "older", id="base-document-with-oldest-ui"),
+    ],
+)
+async def test_yanmaga_pre_entry_accepts_c_contract_oldest_identity_shapes(
+    browser_page, monkeypatch, sorted_listing, canonical_shape, og_shape, sort_ui_state
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        sorted_listing=sorted_listing,
+        canonical_shape=canonical_shape,
+        og_shape=og_shape,
+        sort_ui_state=sort_ui_state,
+    )
+
+    await adapter.initialize(browser_page)
+
+    assert browser_page.url == VIEWER_NAVIGATION_URL
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+@pytest.mark.parametrize(
+    ("canonical_shape", "og_shape", "sort_ui_state"),
+    [
+        pytest.param("older", "base", "older", id="mixed-canonical-og-shape"),
+        pytest.param("older", "older", "newer", id="sorted-page-with-newer-active"),
+        pytest.param("older", "older", "none", id="sorted-page-without-sort-ui"),
+        pytest.param("older", "older", "both", id="ambiguous-active-sort-ui"),
+    ],
+)
+async def test_yanmaga_pre_entry_rejects_sorted_document_identity_drift(
+    browser_page, monkeypatch, canonical_shape, og_shape, sort_ui_state
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        sorted_listing=True,
+        canonical_shape=canonical_shape,
+        og_shape=og_shape,
+        sort_ui_state=sort_ui_state,
+    )
+
+    try:
+        await adapter.initialize(browser_page)
+    except (AccessResourceUnavailableError, UnknownPageStateError):
+        pass
+    else:
+        pytest.fail("sorted work document identity mismatch was accepted")
+
+    assert not any(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested)
+    assert urlsplit(browser_page.url).path == urlsplit(WORK_URL).path
+
+
+async def test_yanmaga_first_free_saves_exact_finite_grant_before_capture_and_completes(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        access_proof_delay_ms=150,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        library_dir=tmp_path / "library",
+        max_pages=8,
+        now=NOW,
+    )
+
+    saved_source = catalog.get_source(source.id)
+    assert result.stop_reason == "end" and result.page_count == 4
+    assert catalog.get_item(item.id).status == "completed"
+    assert datetime.fromisoformat(saved_source.access_granted_until).astimezone(UTC) == GRANT_UNTIL
+    assert saved_source.quota_started_at is None
+    assert len(proof_calls) == 1
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["pixel_readiness", "rewind", "end", "zip"],
+)
+async def test_yanmaga_first_free_grant_survives_render_end_and_package_failures(
+    browser_page, tmp_path, monkeypatch, failure
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        thin_segment=failure == "pixel_readiness",
+        missing_half=failure == "rewind",
+        unsafe_end=failure == "end",
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 350)
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor_kwargs = {"runtime_settings": SiteRuntimeSettings(page_turn_delay_ms=0)}
+    if failure == "zip":
+        def fail_package(*_args, **_kwargs):
+            raise OSError("synthetic ZIP packaging failure")
+
+        executor_kwargs["package_function"] = fail_package
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist, **executor_kwargs)
+
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=8,
+            now=NOW,
+        )
+
+    saved_source = catalog.get_source(source.id)
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    assert saved_source.access_granted_until is not None
+    assert datetime.fromisoformat(saved_source.access_granted_until).astimezone(UTC) == GRANT_UNTIL
+    assert saved_source.quota_started_at is None
+    assert len(proof_calls) == 1
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert not list((tmp_path / "library").rglob("*.zip"))
+
+
+async def test_yanmaga_first_free_navigation_timeout_confirms_once_on_same_viewer(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        source_goto_failure="timeout_after_navigation",
+    )
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            now=NOW,
+        )
+
+    assert isinstance(raised.value.__cause__, PlaywrightTimeoutError)
+    saved_source = catalog.get_source(source.id)
+    assert browser_page.url == VIEWER_NAVIGATION_URL
+    assert catalog.get_item(item.id).status == "pending"
+    assert saved_source.access_granted_until is not None
+    assert datetime.fromisoformat(saved_source.access_granted_until).astimezone(UTC) == GRANT_UNTIL
+    assert len(proof_calls) == 1
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert catalog.list_artifacts(item_id=item.id) == []
+
+
+async def test_yanmaga_first_free_cancellation_does_not_start_metadata_retry(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        source_goto_failure="cancel_after_navigation",
+    )
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(BatchInterruptedError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            now=NOW,
+        )
+
+    assert isinstance(raised.value.__cause__, asyncio.CancelledError)
+    saved_source = catalog.get_source(source.id)
+    assert browser_page.url == VIEWER_NAVIGATION_URL
+    assert catalog.get_item(item.id).status == "pending"
+    assert saved_source.access_granted_until is None
+    assert saved_source.quota_started_at is None
+    assert proof_calls == []
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert catalog.list_artifacts(item_id=item.id) == []
+
+
+async def test_yanmaga_first_free_unknown_access_proof_does_not_retry_entry_or_fetch_metadata(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        access_proof_never_ready=True,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 250)
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(AccessResourceUnavailableError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            now=NOW,
+        )
+
+    saved_source = catalog.get_source(source.id)
+    assert catalog.get_item(item.id).status == "pending"
+    assert saved_source.access_granted_until is None
+    assert proof_calls == []
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert catalog.list_artifacts(item_id=item.id) == []
+
+
+@pytest.mark.parametrize(
+    "gate_text",
+    [
+        pytest.param("\u30c1\u30b1\u30c3\u30c8", id="ticket-gate"),
+        pytest.param("\u521d\u56de\u7121\u6599", id="first-free-gate"),
+        pytest.param("\u4f1a\u54e1\u767b\u9332", id="registration-gate"),
+        pytest.param("\u30ec\u30f3\u30bf\u30eb", id="rental-gate"),
+        pytest.param("\u7121\u6599\u306f1\u65e5\u3067\u8aad\u3081\u308b\u6570", id="daily-limit-gate"),
+    ],
+)
+async def test_yanmaga_first_free_roleless_access_gate_blocks_notice_and_history(
+    browser_page, tmp_path, monkeypatch, gate_text
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        access_gate_text=gate_text,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 250)
+    history_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(AccessResourceUnavailableError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            now=NOW,
+        )
+
+    saved_source = catalog.get_source(source.id)
+    assert catalog.get_item(item.id).status == "pending"
+    assert saved_source.access_granted_until is None
+    assert history_calls == []
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert catalog.list_artifacts(item_id=item.id) == []
+
+
+async def test_yanmaga_first_free_guard_stop_during_timeout_confirmation_is_fatal(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        source_goto_failure="timeout_after_navigation",
+    )
+    proof_calls = _install_rental_history_proof(monkeypatch)
+
+    async def stop_confirmation(_self, *_args, **_kwargs):
+        raise AccessStopError(reason="http_429", site="yanmaga", url=VIEWER_NAVIGATION_URL)
+
+    monkeypatch.setattr(YanmagaAdapter, "_confirm_and_persist_first_free_grant", stop_confirmation)
+    catalog, policies, adapters, candidate, _item, _source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(BatchExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            now=NOW,
+        )
+
+    assert raised.value.access_stop.reason == "http_429"
+    assert proof_calls == []
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+@pytest.mark.parametrize(
+    ("grant_is_future", "remaining_hours", "expected_entry"),
+    [
+        pytest.param(True, 1, True, id="active-one-hour-with-trusted-future-grant"),
+        pytest.param(True, 0, False, id="inactive-countdown-does-not-enter"),
+        pytest.param(False, 1, False, id="expired-catalog-grant-does-not-enter"),
+    ],
+)
+async def test_yanmaga_existing_grant_recheck_uses_catalog_expiry_and_active_countdown(
+    browser_page, monkeypatch, grant_is_future, remaining_hours, expected_entry
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="trusted_grant",
+    )
+    observed_at = datetime.now(UTC)
+    expiry = (
+        datetime.now(UTC) + timedelta(hours=4)
+        if grant_is_future
+        else datetime.now(UTC) - timedelta(minutes=1)
+    )
+    adapter.configure_existing_access_grant(expiry)
+    calls = []
+
+    async def fake_fetch(_page, *, observed_mypage_href, targets):
+        calls.append((observed_mypage_href, targets))
+        return (
+            (
+                f"{SLUG}:{EPISODE_ID}",
+                RentalCountdown(
+                    observed_at=observed_at,
+                    remaining_hours=remaining_hours,
+                    access_granted_until=None,
+                    expiry_evidence=None,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(adapter_module, "fetch_rental_history_countdowns", fake_fetch)
+    if expected_entry:
+        await adapter.initialize(browser_page)
+    else:
+        with pytest.raises((AccessResourceUnavailableError, UnknownPageStateError)):
+            await adapter.initialize(browser_page)
+
+    source_requests = [url for url in requested if urlsplit(url).path == urlsplit(SOURCE_URL).path]
+    assert len(source_requests) == int(expected_entry)
+    assert len(calls) == int(grant_is_future)
+
+
+async def test_yanmaga_retry_uses_saved_grant_without_reemitting_or_extending_it(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    first_requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        first_free_completion_notice=True,
+        unsafe_end=True,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 350)
+    proof_calls = _install_rental_history_proof(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = _seed_batch_candidate(
+        tmp_path
+    )
+    recorded_grants: list[dict[str, object]] = []
+    original_record_grant = catalog.record_confirmed_access_grant
+
+    def record_grant(*args, **kwargs):
+        recorded_grants.append(dict(kwargs))
+        return original_record_grant(*args, **kwargs)
+
+    monkeypatch.setattr(catalog, "record_confirmed_access_grant", record_grant)
+    failing_executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(CandidateExecutionError):
+        await failing_executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "first-output",
+            library_dir=tmp_path / "library",
+            max_pages=8,
+            now=NOW,
+        )
+
+    first_saved_source = catalog.get_source(source.id)
+    assert catalog.get_item(item.id).status == "pending"
+    assert datetime.fromisoformat(first_saved_source.access_granted_until).astimezone(UTC) == GRANT_UNTIL
+    assert len(recorded_grants) == 1
+    assert len(proof_calls) == 1
+
+    retry_requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="trusted_grant",
+    )
+    retry_executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+    result = await retry_executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "retry-output",
+        library_dir=tmp_path / "library",
+        max_pages=8,
+        now=NOW + timedelta(minutes=5),
+    )
+
+    retried_source = catalog.get_source(source.id)
+    assert result.stop_reason == "end"
+    assert catalog.get_item(item.id).status == "completed"
+    assert datetime.fromisoformat(retried_source.access_granted_until).astimezone(UTC) == GRANT_UNTIL
+    assert retried_source.quota_started_at is None
+    assert len(recorded_grants) == 1
+    assert len(proof_calls) >= 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in first_requested) == 1
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in retry_requested) == 1
 
 
 async def test_yanmaga_batch_runs_direct_to_zip_and_completes_catalog_item(

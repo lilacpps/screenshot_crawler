@@ -763,6 +763,21 @@ checks without giving Core Catalog access or site-specific identity rules.
 Work-scoped local resource cooldown checks run before opening a consuming
 candidate page; local skips do not count as site attempts or pacing events.
 
+### Confirmed access grant persistence
+
+`ConfirmedAccessGrant` is an immutable site-neutral event containing the exact
+site/external identity, an aware observation time, a finite aware expiry later
+than that observation, and its evidence kind. `SiteAdapter` exposes optional
+`set_confirmed_access_grant_observer(callback | None)` and
+`configure_existing_access_grant(expiry | None)` hooks. The Batch Executor
+binds the observer to the already validated Catalog source, validates the
+immutable event, and synchronously calls the Catalog grant-only API before
+capture continues. The Catalog update changes only that source grant expiry
+and its update timestamp; quota state, resource state, Items, and Artifacts
+remain untouched. The Executor disables and clears the observer on every run
+exit. Runner remains independent of Catalog. Existing-grant context is reset
+for each run, including a `None` expiry.
+
 ## Hanayume Source identity maintenance
 
 Hanayume Full Discovery may observe a site native identity proof that an old

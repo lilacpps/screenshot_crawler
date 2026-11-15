@@ -1300,6 +1300,21 @@ Discovery Adapterは、Watchlist targetのsite固有listing pageを読み、Disc
 - Screenshot Crawler実行
 - local artifact state更新
 
+### 7.1.1 Existing source snapshot context and async proof
+
+`DiscoveryService` may pass a Discovery adapter an immutable tuple of
+existing `DiscoverySourceSnapshot` values for the exact target through the
+optional `configure_source_snapshots(target, snapshots)` hook. The default
+implementation is a no-op. The service reads existing sources for the target
+site and passes only snapshots whose `discovery_key` equals `target.key`; the
+tuple includes stored `access_granted_until`. Its same-site previous-source map
+across discovery keys remains unchanged for reconciliation. Adapters
+must validate any retained snapshot against the current exact source identity
+and fresh site evidence. If an adapter awaits an additional proof after
+validating a listing, it must take and validate a final full listing
+snapshot before yielding records. Any identity, access, ordering, or content
+drift makes the discovery incomplete and emits no records.
+
 ### 7.2 Mode capability preflight
 
 Discovery adapters expose `supports_incremental_discovery`, which defaults to

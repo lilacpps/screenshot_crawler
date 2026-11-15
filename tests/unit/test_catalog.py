@@ -843,6 +843,73 @@ def test_quota_resource_state_and_source_grant_commit_atomically(tmp_path: Path)
     assert stale_source.access_granted_until == "2026-09-27T09:00:00+09:00"
 
 
+def test_confirmed_direct_grant_updates_only_exact_source_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="yanmaga-work", title="Work"))
+    item = service.create_item(ItemInput(status="pending"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(
+            site="yanmaga",
+            external_id="work:00000000000000000000000000000001",
+            access_mode="paid",
+            quota_started_at="2026-09-17T10:00:00+09:00",
+            available=True,
+        ),
+        item_id=item.id,
+    )
+    observed = "2026-09-17T12:00:00+09:00"
+    expiry = "2026-09-18T09:00:00+09:00"
+
+    saved = service.record_confirmed_access_grant(
+        source.id,
+        site="yanmaga",
+        external_id=source.external_id,
+        observed_at=observed,
+        access_granted_until=expiry,
+    )
+    assert saved.access_granted_until == expiry
+    assert saved.quota_started_at == source.quota_started_at
+    assert saved.access_mode == source.access_mode
+    assert service.get_item(item.id).status == "pending"
+    assert service.list_artifacts(item_id=item.id) == []
+
+    unchanged = service.record_confirmed_access_grant(
+        source.id,
+        site="yanmaga",
+        external_id=source.external_id,
+        observed_at="2026-09-17T13:00:00+09:00",
+        access_granted_until="2026-09-17T14:00:00+09:00",
+    )
+    assert unchanged.access_granted_until == expiry
+
+    with pytest.raises(CatalogValidationError, match="identity"):
+        service.record_confirmed_access_grant(
+            source.id,
+            site="yanmaga",
+            external_id="other:00000000000000000000000000000001",
+            observed_at=observed,
+            access_granted_until=expiry,
+        )
+    with pytest.raises(CatalogValidationError, match="follow its observation"):
+        service.record_confirmed_access_grant(
+            source.id,
+            site="yanmaga",
+            external_id=source.external_id,
+            observed_at=expiry,
+            access_granted_until=expiry,
+        )
+    with pytest.raises((ValueError, CatalogValidationError)):
+        service.record_confirmed_access_grant(
+            source.id,
+            site="yanmaga",
+            external_id=source.external_id,
+            observed_at="2026-09-17T12:00:00",
+            access_granted_until=expiry,
+        )
+
+
 def test_clear_quota_access_is_compare_and_set_and_preserves_source_identity(
     tmp_path: Path,
 ) -> None:

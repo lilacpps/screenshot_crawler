@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -9,8 +10,11 @@ import pytest
 
 from screenshot_crawler.catalog import ArtifactInput, CatalogService
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
+from screenshot_crawler.discovery.models import DiscoverySourceSnapshot
+from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.yanmaga import YanmagaDiscoveryAdapter
 from screenshot_crawler.site_adapters.yanmaga import discovery as yanmaga_discovery
+from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -67,6 +71,12 @@ def _listing_html(
     frame_telemetry: bool = False,
     current_slug: str = SLUG,
     canonical_slug: str = SLUG,
+    canonical_query: str = "",
+    og_query: str | None = None,
+    canonical_href_override: str | None = None,
+    og_href_override: str | None = None,
+    duplicate_canonical: bool = False,
+    duplicate_og_url: bool = False,
     continuation: tuple[int, int, str] | None = None,
     insert_row: str | None = None,
     continuation_sort: str = "older",
@@ -194,10 +204,17 @@ def _listing_html(
         if frame_telemetry
         else ""
     )
+    selected_og_query = canonical_query if og_query is None else og_query
+    canonical_href = canonical_href_override or f"{BASE}/comics/{encoded_canonical}{canonical_query}"
+    og_href = og_href_override or f"{BASE}/comics/{encoded_canonical}{selected_og_query}"
+    canonical_tag = f'<link rel="canonical" href="{canonical_href}">'
+    og_tag = f'<meta property="og:url" content="{og_href}">'
+    canonical_tags = canonical_tag * (2 if duplicate_canonical else 1)
+    og_tags = og_tag * (2 if duplicate_og_url else 1)
     return f'''<!doctype html><html><head><meta charset="utf-8">
       <title>Synthetic Yanmaga Work</title>
-      <link rel="canonical" href="{BASE}/comics/{encoded_canonical}">
-      <meta property="og:url" content="{BASE}/comics/{encoded_canonical}">
+      {canonical_tags}
+      {og_tags}
       <style>.mod-episode-point--free {{ color: rgb(220, 0, 0); }}
         .by_wait {{ color: rgb(238, 117, 27); }}</style>
       {telemetry_script}
@@ -476,8 +493,74 @@ async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}").access_mode == "free"
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(2)}").access_mode == "free"
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(3)}").access_mode == "unknown"
-    assert await browser_page.evaluate("window.accessClicks") == 0
+    assert await browser_page.evaluate("window.accessClicks || 0") == 0
     assert forbidden_requests == []
+
+
+async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
+    browser_page, monkeypatch
+) -> None:
+    external_id = f"{SLUG}:{_episode_id(1)}"
+    target = _target()
+    html = _listing_html(
+        [(_episode_id(1), "unknown access", "none")],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+    )
+
+    async def fulfill(route) -> None:
+        await route.fulfill(body=html, content_type="text/html; charset=utf-8")
+
+    async def fulfill_telemetry(route) -> None:
+        await route.fulfill(status=204)
+
+    await browser_page.route(f"{BASE}/**", fulfill)
+    await browser_page.route("https://www.google-analytics.com/**", fulfill_telemetry)
+    adapter = YanmagaDiscoveryAdapter()
+    adapter.configure_source_snapshots(
+        target,
+        (
+            DiscoverySourceSnapshot(
+                external_id=external_id,
+                discovery_key=target.key,
+                access_mode="paid",
+                available=True,
+                access_granted_until=datetime.now(UTC) + timedelta(hours=2),
+            ),
+        ),
+    )
+    observed_target = yanmaga_discovery.YanmagaEpisodeParts(SLUG, _episode_id(1))
+
+    async def mutate_during_history_fetch(_page, *, observed_mypage_href, targets):
+        assert observed_mypage_href == f"{BASE}/mypage"
+        assert targets == (observed_target,)
+        await browser_page.evaluate(
+            "document.querySelector('.mod-episode-title').textContent='changed during probe'"
+        )
+        now = datetime.now(UTC)
+        return (
+            (
+                external_id,
+                RentalCountdown(
+                    observed_at=now,
+                    remaining_hours=2,
+                    access_granted_until=now + timedelta(hours=1),
+                    expiry_evidence="site_countdown_lower_bound",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        yanmaga_discovery, "fetch_rental_history_countdowns", mutate_during_history_fetch
+    )
+    emitted = []
+    with pytest.raises(DiscoveryIncompleteError):
+        async for record in adapter.iter_records(browser_page, target, "full"):
+            emitted.append(record)
+
+    assert emitted == []
+    assert adapter.last_snapshot is None
 
 
 @pytest.mark.parametrize("already_oldest", [False, True])
@@ -510,6 +593,7 @@ async def test_yanmaga_observed_oldest_sort_preserves_positions_source_and_compl
         signin=False,
         mypage=True,
         sort_state="older",
+        canonical_query="" if already_oldest else "?sort=older",
         continuation=(47, 5, path),
         continuation_sort="older",
         continuation_fetch_insert_row=inserted_rows,
@@ -586,6 +670,112 @@ async def test_yanmaga_observed_oldest_sort_preserves_positions_source_and_compl
     assert len(more_requests) == 1
     assert not any(
         re.fullmatch(r"/comics/[^/]+/[0-9a-f]{32}", request["path"])
+        or request["path"].startswith("/viewer/")
+        for request in state["requests"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_complete", "sort_count"),
+    [
+        ("sorted_pair", True, 1),
+        ("base_pair", True, 1),
+        ("mixed_pair", False, 1),
+        ("unknown_query", False, 1),
+        ("duplicate_query", False, 1),
+        ("fragment", False, 1),
+        ("userinfo", False, 1),
+        ("foreign_sorted_identity", False, 1),
+        ("duplicate_canonical", False, 1),
+        ("duplicate_og", False, 1),
+        ("base_document_sorted_pair", False, 0),
+        ("no_ui_sorted_pair", False, 0),
+    ],
+)
+async def test_yanmaga_sorted_canonical_identity_requires_exact_oldest_document_and_ui(
+    browser_page,
+    tmp_path: Path,
+    case: str,
+    expected_complete: bool,
+    sort_count: int,
+) -> None:
+    row = (_episode_id(1), "episode 1", "red")
+    initial_state = "newer"
+    initial_query = ""
+    sorted_state: str | None = "older"
+    sorted_canonical_query = "?sort=older"
+    sorted_og_query: str | None = None
+    canonical_href_override: str | None = None
+    duplicate_canonical = False
+    duplicate_og = False
+
+    if case == "base_pair":
+        sorted_canonical_query = ""
+    elif case == "mixed_pair":
+        sorted_og_query = ""
+    elif case == "unknown_query":
+        sorted_canonical_query = "?sort=older&extra=1"
+    elif case == "duplicate_query":
+        sorted_canonical_query = "?sort=older&sort=older"
+    elif case == "fragment":
+        sorted_canonical_query = "?sort=older#episodes"
+    elif case == "userinfo":
+        canonical_href_override = (
+            f"https://user@yanmaga.jp/comics/{quote(SLUG, safe='')}?sort=older"
+        )
+    elif case == "foreign_sorted_identity":
+        canonical_href_override = "https://yanmaga.jp/comics/other-work?sort=older"
+    elif case == "duplicate_canonical":
+        duplicate_canonical = True
+    elif case == "duplicate_og":
+        duplicate_og = True
+    elif case == "base_document_sorted_pair":
+        initial_state = "older"
+        initial_query = "?sort=older"
+    elif case == "no_ui_sorted_pair":
+        initial_state = None
+        initial_query = "?sort=older"
+        sorted_state = None
+
+    initial_html = _listing_html(
+        [row],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state=initial_state,
+        canonical_query=initial_query,
+    )
+    sorted_html = _listing_html(
+        [row],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state=sorted_state,
+        canonical_query=sorted_canonical_query,
+        og_query=sorted_og_query,
+        canonical_href_override=canonical_href_override,
+        duplicate_canonical=duplicate_canonical,
+        duplicate_og_url=duplicate_og,
+    )
+    catalog, result, _service, state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        initial_html,
+        sorted_html=sorted_html,
+    )
+
+    assert result.complete is expected_complete
+    assert len(catalog.list_sources(site="yanmaga")) == (1 if expected_complete else 0)
+    sort_requests = [
+        request
+        for request in state["requests"]
+        if request["path"] == f"/comics/{quote(SLUG, safe='')}"
+        and request["query"] == "sort=older"
+    ]
+    assert len(sort_requests) == sort_count
+    assert not any(
+        re.fullmatch(r"/comics/[^/]+/[^/]+", request["path"])
+        and not request["path"].endswith("/episodes")
         or request["path"].startswith("/viewer/")
         for request in state["requests"]
     )
