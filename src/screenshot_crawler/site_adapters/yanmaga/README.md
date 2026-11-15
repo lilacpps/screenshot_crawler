@@ -29,8 +29,9 @@ Expansion/row bounds and unsupported controls stop the run as incomplete.
 Incomplete results are buffered before yield, so `DiscoveryService` cannot
 partially reconcile a full Catalog run or mark prior sources unavailable.
 
-The observed listing is oldest-first. The adapter emits its complete snapshot
-latest-first for shared incremental Discovery, while `global_display_position`
+The adapter normalizes the supported listing to oldest-first before emitting
+its complete snapshot latest-first for shared incremental Discovery, while
+`global_display_position`
 comes from the observed full DOM order (oldest is 1). It does not infer or
 repair positions from episode IDs, dates, or titles; bounded Discovery is
 unsupported and inferred positions are disabled.
@@ -93,6 +94,47 @@ shape is deliberately unsupported in this stage. Discovery never opens
 an episode to classify access. Row attributes such as `data-is-free` and
 `data-modal` are not authoritative: the sampled first-free rows had
 `data-is-free="false"` and `data-modal="registration"` without `.js-modal`.
+
+## Stage 02 Discovery sort correction (sub-gate pending independent review)
+
+The 2026-11-15 post-entry work-dual probe found the default authenticated page
+newest-first. The implementation now recognizes only the observed two visible
+same-work sort links with their exact labels, classes, and selected state. It
+accepts an already-active oldest-first state without a sort click; when the
+newest-first control is active, it selects the exact oldest-first label 最初から
+once. The click locator remains bound to the observed exact href and accessible
+label through the click. It accepts only the same work URL with the sole query
+sort=older and revalidates the base canonical and og:url. Every stable and final
+listing snapshot must retain the unique known controls with oldest-first active.
+Duplicate, hidden, foreign, unknown-query, label-conflicting, selected-state
+conflicting, or href-drifting controls fail closed. If no sort controls are
+present, their continued absence and the existing oldest-first listing
+contract are required.
+
+On the sorted document, one More click used offset 5, limit 47, and older sort.
+The synthetic browser fixture normalized the default newest-first 10-row page
+and native continuation into all 57 oldest-first positions, then emitted
+latest-first records. The sampled first-free episode retained position 32 and
+its public episode URL as the Catalog source target. Completed item, run, and
+Artifact state remained unchanged on repeat Discovery. The fixture also
+asserted GET-only requests and no episode/Viewer navigation. Separate fixtures
+cover already-oldest with zero sort clicks, a changing href that targets an
+episode or foreign work, active state lost or flipped after More, and
+contradictory sort UI. Independent review of this sub-gate is pending.
+
+The later read-only Rental History observation showed a first-party
+exact-target card with 22 remaining hours, matched by one same-origin no-store
+GET of the observed history href. At 2026-11-15 03:10:49.892907 UTC
+(12:10:49 JST), the countdown supports only a conservative lower bound of
+2026-11-16 00:10:49.892907 UTC (09:10:49 JST), GET-start plus 21 hours. This
+is not an absolute expiry and is not connected to Discovery, Catalog, or
+capture.
+Only this target's visible card and safe response headers were retained.
+Production countdown parsing still needs exact native label/value-node and
+same-card structural proof before use. The first-free release budget remains
+exhausted; no capture, ticket, point, paid, or additional access action was
+performed. Immediate grant persistence, retry recovery, capture/END/ZIP, and
+finite absolute expiry remain unverified.
 
 ## Viewer and capture
 

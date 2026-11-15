@@ -9,6 +9,44 @@ site setting. Existing listing-page waits remain independent. See
 [shared runtime details](00_core.md#phase-1-runtime-settings--pacing).
 Synthetic CLI/worker ordering is verified; live timing is unverified.
 
+## Stage 02 Discovery sort correction (C sub-gate, independent review pending)
+
+The authenticated work-dual page was newest-first by default in the 2026-11-15
+post-entry probe. Discovery now checks for exactly two visible same-work sort
+anchors with the observed labels, classes, link URLs, and selected state. It
+selects the exact oldest-first control once and accepts only the same work URL
+with the sole sort=older query. Canonical and og:url remain the unqueried work
+URL. Duplicate, hidden, foreign, unknown-query, label-conflicting, or
+selected-state-conflicting controls fail closed. Without sort controls, the
+existing oldest-first listing contract remains.
+
+The sorted page's native continuation had offset 5, limit 47, and older sort.
+One GET expanded 10 rows to 57; the final ID order matched the Stage 01
+oldest-first list and the sampled first-free episode remained at position 32.
+Source targets keep the public episode URL. The Discovery unit file passed 30
+cases. The browser file covered default-newest sorting, already-oldest with no
+sort click, continuation, positions, source identity, Completed/Artifact
+preservation, href drift to source/foreign targets, post-More active-state
+drift, and contradictory sort controls. The temporary aggregate-text rental
+parser and test were withdrawn after review noted they did not bind exact native
+label/value fields to the same target card. No rental parser is in production.
+Final verification passed 30 unit tests and 36 Yanmaga Discovery browser tests,
+with 0 skips; ruff check src tests also passed. Independent review of this C
+sub-gate is pending.
+
+One first-free entry was used for the Stage 02 probe and completed its
+first-party free-rental flow; no capture, Catalog grant write, END, or ZIP was
+performed. A later read-only Rental History check bound a visible card to the
+same exact episode. The visible card and one same-origin no-store GET both
+reported 22 remaining hours at GET start 2026-11-15 03:10:49.892907 UTC
+(12:10:49 JST). This yields only the conservative lower bound
+2026-11-16 00:10:49.892907 UTC (09:10:49 JST), GET-start plus 21 hours, not
+an absolute expiry. A tested
+The direct Rental History GET is retained as evidence only. Exact native
+label/value leaf-node structure and same-card binding still need proof before
+any Grant persistence or retry policy can use the countdown. No more access
+operations are authorized for this target.
+
 ## 現在の実装範囲
 
 Phases 02-05 passed independent review for the observed Chapter 11 layout. The normal CLI Chapter 11 E2E used native-pixel lossless WebP for all 20 pages with positive END, Manifest/ZIP, Artifact, and Completed. Independent reference capture and pixel comparison also passed exactly for all 20 pages. The N2 follow-up completed the red-free Chapter 1 Reader to END with WebP for all 36 pages. Complete original server page bytes were not observed; verified output is reconstructed pre-JPEG viewer pixels, not original bytes. Daily-limit scope and other reader layouts remain unverified.
@@ -58,10 +96,13 @@ shared Core/schema/Researchの契約変更はないためfull suiteとResearch�
 最大100回/5,000行までで、未知のcontrol・重複・partial・driftは
 `DiscoveryIncompleteError`。全レコードをbufferしてからyieldする。
 
-実測のDOM順はoldest-firstであり、complete snapshotの位置を古い順1基準で
-記録し、yieldはlatest-first。数値ID・日付・話タイトルから順序や欠落を
-推測しない。現在配信されているpublic listingのcomplete snapshotの証明であり、
-未公開/将来分を含むバックエンド全件の証明ではない。
+Work pages are not assumed to be oldest-first by default DOM order. When the
+observed sort controls are present, Discovery validates and selects the exact
+oldest-first same-work URL. The resulting complete DOM order supplies
+global_display_position; records are yielded latest-first. Without sort
+controls, the existing oldest-first fixture contract remains. Order and
+missing rows are never inferred from IDs, dates, or titles. A complete public
+listing snapshot does not prove unpublished or future backend rows.
 
 ## Viewer・Capture
 

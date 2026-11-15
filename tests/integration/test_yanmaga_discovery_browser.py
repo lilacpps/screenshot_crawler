@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -70,8 +71,12 @@ def _listing_html(
     insert_row: str | None = None,
     continuation_sort: str = "older",
     continuation_fetch: bool = False,
+    continuation_fetch_insert_row: str | None = None,
+    continuation_sort_drift: str | None = None,
     unsupported_paging: bool = False,
     raw_row_html: str | None = None,
+    sort_state: str | None = None,
+    sort_variant: str | None = None,
 ) -> str:
     encoded_current = quote(current_slug, safe="")
     encoded_canonical = quote(canonical_slug, safe="")
@@ -100,6 +105,71 @@ def _listing_html(
                 fetch('{path}?limit={limit}&offset={offset}&sort={continuation_sort}');
               }});
             </script>'''
+        elif continuation_fetch_insert_row is not None:
+            if continuation_sort_drift not in {
+                None,
+                "deactivate_oldest",
+                "activate_newest",
+            }:
+                raise ValueError("unsupported continuation sort drift")
+            row_json = json.dumps(continuation_fetch_insert_row, ensure_ascii=False)
+            drift_script = ""
+            if continuation_sort_drift is not None:
+                drift_script = f"""
+                  const controls = [...document.querySelectorAll('a.ga-sort.nav-link')];
+                  const oldestLabel = String.fromCharCode(0x6700, 0x521d, 0x304b, 0x3089);
+                  const newestLabel = String.fromCharCode(0x65b0, 0x7740, 0x9806);
+                  const oldest = controls.find(a => a.innerText.trim() === oldestLabel);
+                  const newest = controls.find(a => a.innerText.trim() === newestLabel);
+                  if ('{continuation_sort_drift}' === 'deactivate_oldest') {{
+                    oldest?.classList.remove('active');
+                  }} else {{
+                    oldest?.classList.remove('active');
+                    newest?.classList.add('active');
+                  }}
+                """
+            expand_script = f'''<script>
+              document.querySelector('.mod-episode-more-button').addEventListener('click', async () => {{
+                const response = await fetch('{path}?offset={offset}&limit={limit}&sort={continuation_sort}');
+                if (!response.ok) return;
+                const rows = [...document.querySelectorAll('.mod-episode-item')];
+                rows[{offset}].insertAdjacentHTML('beforebegin', {row_json});
+                document.querySelector('.mod-episode-more-button').remove();
+                {drift_script}
+              }});
+            </script>'''
+    sort_html = ""
+    if sort_state is not None:
+        if sort_state not in {"newer", "older"}:
+            raise ValueError("sort_state must be newer, older, or None")
+        newest_class = " active" if sort_state == "newer" else ""
+        oldest_class = " active" if sort_state == "older" else ""
+        newest_href = f"{BASE}/comics/{encoded_current}?sort=newer"
+        oldest_href = f"{BASE}/comics/{encoded_current}?sort=older"
+        newest_label = "".join(map(chr, (0x65B0, 0x7740, 0x9806)))
+        oldest_label = "".join(map(chr, (0x6700, 0x521D, 0x304B, 0x3089)))
+        oldest_style = ""
+        extra_oldest = ""
+        if sort_variant == "hidden_oldest":
+            oldest_style = ' style="display:none"'
+        elif sort_variant == "foreign_oldest":
+            oldest_href = f"{BASE}/comics/foreign-work?sort=older"
+        elif sort_variant == "unknown_query":
+            oldest_href += "&extra=1"
+        elif sort_variant == "label_conflict":
+            oldest_label = newest_label
+        elif sort_variant == "active_conflict":
+            oldest_class = " active"
+        elif sort_variant == "duplicate_oldest":
+            extra_oldest = (
+                f'<a class="ga-sort nav-link" href="{oldest_href}">{oldest_label}</a>'
+            )
+        sort_html = (
+            '<nav class="episode-sort">'
+            f'<a class="ga-sort nav-link{newest_class}" href="{newest_href}">{newest_label}</a>'
+            f'<a class="ga-sort nav-link{oldest_class}" href="{oldest_href}"{oldest_style}>{oldest_label}</a>'
+            f"{extra_oldest}</nav>"
+        )
     sign_in_link = (
         '<a class="header-utilities-customer--sign_in" href="/customers/sign-up">ログイン</a>'
         if signin
@@ -133,6 +203,7 @@ def _listing_html(
       {telemetry_script}
       </head><body>{sign_in_link}{sign_out_link}{mypage_link}
       {frame_telemetry_html}
+      {sort_html}
       <div class="detailv2-episodes"><p class="episode-free-browse-text">無料は1日で読める数に限りがあります。</p>
         <ul>{row_html}{continuation_html}{'<a rel="next" href="/comics/next">next</a>' if unsupported_paging else ''}</ul>
       </div>{expand_script}</body></html>'''.replace(
@@ -164,27 +235,63 @@ async def _discover_with_listener_check(browser_page, service, target, mode):
     return result, listeners_clean
 
 
-async def _run_discovery(browser_page, tmp_path: Path, html: str, *, mode="full", scope=None):
-    state = {"html": html}
+async def _run_discovery(
+    browser_page,
+    tmp_path: Path,
+    html: str,
+    *,
+    mode="full",
+    scope=None,
+    sorted_html: str | None = None,
+):
+    state = {"html": html, "requests": []}
+    if sorted_html is not None:
+        state["sorted_html"] = sorted_html
 
     async def fulfill(route) -> None:
-        if state.get("fail_continuation") and "/episodes?" in route.request.url:
+        request_url = urlsplit(route.request.url)
+        if state.get("fail_continuation") and request_url.path.endswith("/episodes") and request_url.query:
             await route.abort(error_code="failed")
             return
-        await route.fulfill(body=state["html"], content_type="text/html; charset=utf-8")
+        if request_url.path.endswith("/episodes") and request_url.query:
+            await route.fulfill(
+                body=state.get("continuation_response", '{"ok":true}'),
+                content_type="application/json; charset=utf-8",
+            )
+            return
+        if request_url.query == "sort=older" and state.get("sorted_html"):
+            body = state["sorted_html"]
+        else:
+            body = state["html"]
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
 
     async def fulfill_telemetry(route) -> None:
         await route.fulfill(status=204)
 
     await browser_page.route(f"{BASE}/**", fulfill)
     await browser_page.route("https://www.google-analytics.com/**", fulfill_telemetry)
+    def record_request(request) -> None:
+        parsed = urlsplit(request.url)
+        if parsed.hostname == "yanmaga.jp":
+            state["requests"].append(
+                {
+                    "method": request.method,
+                    "path": parsed.path,
+                    "query": parsed.query,
+                }
+            )
+
+    browser_page.on("request", record_request)
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()
     registry.register("yanmaga", YanmagaDiscoveryAdapter)
     service = DiscoveryService(catalog, registry)
-    result, state["listeners_clean"] = await _discover_with_listener_check(
-        browser_page, service, _target(scope), mode
-    )
+    try:
+        result, state["listeners_clean"] = await _discover_with_listener_check(
+            browser_page, service, _target(scope), mode
+        )
+    finally:
+        browser_page.remove_listener("request", record_request)
     return catalog, result, service, state
 
 
@@ -371,6 +478,332 @@ async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(3)}").access_mode == "unknown"
     assert await browser_page.evaluate("window.accessClicks") == 0
     assert forbidden_requests == []
+
+
+@pytest.mark.parametrize("already_oldest", [False, True])
+async def test_yanmaga_observed_oldest_sort_preserves_positions_source_and_completed(
+    browser_page,
+    tmp_path: Path,
+    already_oldest: bool,
+) -> None:
+    path = f"/comics/{quote(SLUG, safe='')}/episodes"
+    newest_numbers = [57, 56, 55, 54, 53, 5, 4, 3, 2, 1]
+    oldest_page_numbers = [1, 2, 3, 4, 5, 53, 54, 55, 56, 57]
+
+    def row(number: int) -> tuple[str, str, str]:
+        marker = "first" if number == 32 else "red" if number == 1 else "none"
+        return (_episode_id(number), f"episode {number}", marker)
+
+    default_html = _listing_html(
+        [row(number) for number in newest_numbers],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state="newer",
+    )
+    inserted_rows = "".join(
+        _row(*row(number)) for number in range(6, 53)
+    )
+    oldest_html = _listing_html(
+        [row(number) for number in oldest_page_numbers],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state="older",
+        continuation=(47, 5, path),
+        continuation_sort="older",
+        continuation_fetch_insert_row=inserted_rows,
+    )
+    initial_html = oldest_html if already_oldest else default_html
+    catalog, first, service, state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        initial_html,
+        sorted_html=None if already_oldest else oldest_html,
+    )
+
+    assert first.complete is True
+    sources = catalog.list_sources(site="yanmaga")
+    assert len(sources) == 57
+    by_episode = {
+        source.external_id.rsplit(":", 1)[1]: source for source in sources
+    }
+    assert [by_episode[_episode_id(number)].display_position for number in range(1, 58)] == list(
+        range(1, 58)
+    )
+    assert [source.external_id for source in sources] == [
+        f"{SLUG}:{_episode_id(number)}" for number in range(57, 0, -1)
+    ]
+    first_free = by_episode[_episode_id(32)]
+    assert first_free.access_mode == "free"
+    target = catalog.find_source_target(first_free.id, "web")
+    assert target is not None
+    assert target.locator == f"{WORK_URL}/{_episode_id(32)}"
+    assert "?sort=" not in target.locator
+
+    item = catalog.get_item(first_free.item_id)
+    run = catalog.create_crawl_run(
+        item_id=item.id,
+        source_id=first_free.id,
+        target_id=target.id,
+        access_strategy="direct",
+    )
+    _sequence, artifact, completed_item = catalog.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="b" * 64,
+            byte_size=128,
+            storage_backend="local",
+            locator="sort-test-only.zip",
+            state="present",
+        ),
+        page_count=1,
+    )
+    completed_at = completed_item.completed_at
+    repeated = await service.discover(browser_page, _target(), "full")
+
+    assert repeated.complete is True
+    assert catalog.get_item(item.id).status == "completed"
+    assert catalog.get_item(item.id).completed_at == completed_at
+    assert catalog.get_crawl_run(run.id).status == "succeeded"
+    assert [saved.id for saved in catalog.list_artifacts(item_id=item.id)] == [artifact.id]
+    assert state["listeners_clean"] is True
+    assert all(request["method"] == "GET" for request in state["requests"])
+    sort_requests = [
+        request
+        for request in state["requests"]
+        if request["path"] == f"/comics/{quote(SLUG, safe='')}"
+        and request["query"] == "sort=older"
+    ]
+    more_requests = [
+        request
+        for request in state["requests"]
+        if request["path"] == path and request["query"] == "offset=5&limit=47&sort=older"
+    ]
+    assert len(sort_requests) == (0 if already_oldest else 1)
+    assert len(more_requests) == 1
+    assert not any(
+        re.fullmatch(r"/comics/[^/]+/[0-9a-f]{32}", request["path"])
+        or request["path"].startswith("/viewer/")
+        for request in state["requests"]
+    )
+
+
+@pytest.mark.parametrize("drift", ["deactivate_oldest", "activate_newest"])
+async def test_yanmaga_active_oldest_state_is_rechecked_after_more_before_catalog_emit(
+    browser_page,
+    tmp_path: Path,
+    drift: str,
+) -> None:
+    path = f"/comics/{quote(SLUG, safe='')}/episodes"
+    episode_id = _episode_id(32)
+    catalog, first, service, state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        _listing_html([(episode_id, "completed episode", "red")]),
+    )
+    assert first.complete is True
+    source = catalog.find_source("yanmaga", f"{SLUG}:{episode_id}")
+    assert source is not None
+    item = catalog.get_item(source.item_id)
+    target = catalog.find_source_target(source.id, "web")
+    assert target is not None
+    run = catalog.create_crawl_run(
+        item_id=item.id,
+        source_id=source.id,
+        target_id=target.id,
+        access_strategy="direct",
+    )
+    _sequence, artifact, completed_item = catalog.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="c" * 64,
+            byte_size=128,
+            storage_backend="local",
+            locator="sort-drift-test-only.zip",
+            state="present",
+        ),
+        page_count=1,
+    )
+    completed_at = completed_item.completed_at
+    initial_positions = {
+        saved.external_id: saved.display_position
+        for saved in catalog.list_sources(site="yanmaga")
+    }
+    initial_status = catalog.get_item(item.id).status
+
+    oldest_page_numbers = [1, 2, 3, 4, 5, 53, 54, 55, 56, 57]
+
+    def row(number: int) -> tuple[str, str, str]:
+        marker = "first" if number == 32 else "red" if number == 1 else "none"
+        return (_episode_id(number), f"episode {number}", marker)
+
+    inserted_rows = "".join(_row(*row(number)) for number in range(6, 53))
+    state["html"] = _listing_html(
+        [row(number) for number in oldest_page_numbers],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state="older",
+        continuation=(47, 5, path),
+        continuation_sort="older",
+        continuation_fetch_insert_row=inserted_rows,
+        continuation_sort_drift=drift,
+    )
+    drift_requests: list[dict[str, str]] = []
+
+    def observe_drift_request(request) -> None:
+        parsed = urlsplit(request.url)
+        if parsed.hostname == "yanmaga.jp":
+            drift_requests.append(
+                {
+                    "method": request.method,
+                    "path": parsed.path,
+                    "query": parsed.query,
+                }
+            )
+
+    browser_page.on("request", observe_drift_request)
+    try:
+        failed = await service.discover(browser_page, _target(), "full")
+    finally:
+        browser_page.remove_listener("request", observe_drift_request)
+
+    assert failed.complete is False
+    assert failed.observed_count == 0
+    assert all(request["method"] == "GET" for request in drift_requests)
+    assert any(
+        request["path"] == path and request["query"] == "offset=5&limit=47&sort=older"
+        for request in drift_requests
+    )
+    assert not any(
+        request["path"] == f"/comics/{quote(SLUG, safe='')}"
+        and request["query"] == "sort=older"
+        for request in drift_requests
+    )
+    assert not any(
+        re.fullmatch(r"/comics/[^/]+/[0-9a-f]{32}", request["path"])
+        or request["path"].startswith("/viewer/")
+        for request in drift_requests
+    )
+    current_source = catalog.find_source("yanmaga", source.external_id)
+    assert current_source is not None
+    assert current_source.display_position == initial_positions[source.external_id]
+    assert catalog.get_item(item.id).status == initial_status == "completed"
+    assert catalog.get_item(item.id).completed_at == completed_at
+    assert catalog.get_crawl_run(run.id).status == "succeeded"
+    assert [saved.id for saved in catalog.list_artifacts(item_id=item.id)] == [artifact.id]
+
+
+@pytest.mark.parametrize("destination", ["source", "foreign"])
+async def test_yanmaga_sort_href_drift_never_clicks_mutated_target(
+    browser_page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+) -> None:
+    html = _listing_html(
+        [(_episode_id(1), "episode 1", "first")],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state="newer",
+    )
+    target_href = (
+        f"{WORK_URL}/{_episode_id(1)}"
+        if destination == "source"
+        else f"{BASE}/comics/foreign-work?sort=older"
+    )
+    original = YanmagaDiscoveryAdapter._sort_control_state
+    calls = 0
+    oldest_label = "".join(map(chr, (0x6700, 0x521D, 0x304B, 0x3089)))
+
+    async def drift_after_final_observation(self, page):
+        nonlocal calls
+        state = await original(self, page)
+        calls += 1
+        if calls == 2:
+            await page.evaluate(
+                """args => {
+                  const anchor = [...document.querySelectorAll('a.ga-sort.nav-link')]
+                    .find(element => element.innerText.trim() === args.label);
+                  anchor.setAttribute('href', args.href);
+                }""",
+                {"label": oldest_label, "href": target_href},
+            )
+        return state
+
+    monkeypatch.setattr(
+        YanmagaDiscoveryAdapter,
+        "_sort_control_state",
+        drift_after_final_observation,
+    )
+    catalog, result, _service, state = await _run_discovery(
+        browser_page,
+        tmp_path,
+        html,
+    )
+
+    assert calls == 2
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="yanmaga") == []
+    assert catalog.list_items() == []
+    assert all(request["method"] == "GET" for request in state["requests"])
+    assert not any(
+        request["path"] == f"/comics/{quote(SLUG, safe='')}"
+        and request["query"] == "sort=older"
+        for request in state["requests"]
+    )
+    assert not any(
+        request["path"].endswith(f"/{_episode_id(1)}")
+        or request["path"] == "/comics/foreign-work"
+        for request in state["requests"]
+    )
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "hidden_oldest",
+        "foreign_oldest",
+        "unknown_query",
+        "label_conflict",
+        "active_conflict",
+        "duplicate_oldest",
+    ],
+)
+async def test_yanmaga_unknown_oldest_sort_ui_fails_closed_before_navigation(
+    browser_page,
+    tmp_path: Path,
+    variant: str,
+) -> None:
+    html = _listing_html(
+        [(_episode_id(1), "episode 1", "red")],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+        sort_state="newer",
+        sort_variant=variant,
+    )
+    catalog, result, _service, state = await _run_discovery(browser_page, tmp_path, html)
+
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="yanmaga") == []
+    assert catalog.list_items() == []
+    assert all(request["method"] == "GET" for request in state["requests"])
+    assert not any(request["query"] == "sort=older" for request in state["requests"])
+    assert not any(request["path"].endswith("/episodes") for request in state["requests"])
+    assert not any(
+        re.fullmatch(r"/comics/[^/]+/[0-9a-f]{32}", request["path"])
+        or request["path"].startswith("/viewer/")
+        for request in state["requests"]
+    )
 
 
 async def test_yanmaga_conflicting_login_ui_keeps_free_rows_unknown(

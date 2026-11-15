@@ -6,7 +6,7 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import quote, unquote_plus, unquote_to_bytes, urlsplit
+from urllib.parse import parse_qsl, quote, unquote_plus, unquote_to_bytes, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
@@ -25,6 +25,7 @@ SITE_HOST = "yanmaga.jp"
 LIST_SELECTOR = ".detailv2-episodes"
 ROW_SELECTOR = ".mod-episode-item"
 MORE_SELECTOR = ".mod-episode-more-button"
+SORT_SELECTOR = "a.ga-sort.nav-link"
 FREE_SELECTOR = ".mod-episode-point--free"
 FREE_COLOR = "rgb(220, 0, 0)"
 WAIT_TIMEOUT_MS = 15_000
@@ -43,6 +44,8 @@ _WORK_PATH = re.compile(r"^/comics/(?P<slug>[^/]+)$")
 _EPISODE_PATH = re.compile(r"^/comics/(?P<slug>[^/]+)/(?P<episode_id>[0-9a-f]{32})$")
 _LIST_PATH = re.compile(r"^/comics/(?P<slug>[^/]+)/episodes$")
 _POSITIVE_INTEGER = re.compile(r"^(?:0|[1-9][0-9]*)$")
+_SORT_NEWEST_LABEL = "\u65b0\u7740\u9806"
+_SORT_OLDEST_LABEL = "\u6700\u521d\u304b\u3089"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +130,75 @@ def parse_yanmaga_work_url(url: str) -> YanmagaWorkParts | None:
     match = _parse_yanmaga_url(url, _WORK_PATH)
     slug = _decoded_segment(match.group("slug")) if match is not None else None
     return YanmagaWorkParts(slug) if slug is not None else None
+
+
+def _parse_yanmaga_sorted_work_url(url: str, expected: YanmagaWorkParts) -> bool:
+    """Accept only the observed in-page oldest-first work URL shape."""
+
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and (parsed.hostname or "").lower() == SITE_HOST
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == f"/comics/{quote(expected.slug, safe='')}"
+        and parsed.query == "sort=older"
+        and not parsed.fragment
+    )
+
+
+def _validate_work_document_url(
+    value: object,
+    expected: YanmagaWorkParts,
+    *,
+    allow_sorted_document: bool,
+) -> None:
+    if isinstance(value, str) and parse_yanmaga_work_url(value) == expected:
+        return
+    if (
+        allow_sorted_document
+        and isinstance(value, str)
+        and _parse_yanmaga_sorted_work_url(value, expected)
+    ):
+        return
+    raise DiscoveryIncompleteError("Yanmaga current document is not the expected work page")
+
+
+def _sort_link_value(value: object, expected: YanmagaWorkParts) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() != "https"
+        or (parsed.hostname or "").lower() != SITE_HOST
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != f"/comics/{quote(expected.slug, safe='')}"
+        or parsed.fragment
+        or parsed.query not in {"sort=newer", "sort=older"}
+        or len(query) != 1
+        or query[0][0] != "sort"
+        or not query[0][1]
+    ):
+        return None
+    return query[0][1]
+
+
+def _css_attribute_string(value: object) -> str | None:
+    if not isinstance(value, str) or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        return None
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def parse_yanmaga_episode_url(url: str) -> YanmagaEpisodeParts | None:
@@ -258,6 +330,7 @@ class _LoginTelemetryObserver:
 
     def __init__(self, expected_work: YanmagaWorkParts) -> None:
         self._expected_work = expected_work
+        self._sort_ui_mode: str | None = None
         self._page: Page | None = None
         self.states: list[str] = []
         self.current_work_document = False
@@ -272,7 +345,29 @@ class _LoginTelemetryObserver:
         page.on("framenavigated", self._navigation_listener)
 
     def _is_expected_work_url(self, url: str) -> bool:
-        return parse_yanmaga_work_url(url) == self._expected_work
+        return (
+            parse_yanmaga_work_url(url) == self._expected_work
+            or (
+                self.sorted_work_document_allowed
+                and _parse_yanmaga_sorted_work_url(url, self._expected_work)
+            )
+        )
+
+    def allow_sorted_work_document(self) -> None:
+        """Allow only the one observed in-page sort navigation shape."""
+
+        self._sort_ui_mode = "oldest"
+
+    def require_absent_sort_controls(self) -> None:
+        self._sort_ui_mode = "absent"
+
+    @property
+    def sorted_work_document_allowed(self) -> bool:
+        return self._sort_ui_mode == "oldest"
+
+    @property
+    def sort_ui_mode(self) -> str | None:
+        return self._sort_ui_mode
 
     def _on_frame_navigated(self, frame: object) -> None:
         page = self._page
@@ -394,6 +489,12 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 state="visible", timeout=WAIT_TIMEOUT_MS
             )
             await telemetry.wait_for_state(page)
+            sort_selected = await self._select_oldest_sort(page, work, telemetry)
+            if sort_selected:
+                await page.locator(f"{LIST_SELECTOR} {ROW_SELECTOR}").first.wait_for(
+                    state="visible", timeout=WAIT_TIMEOUT_MS
+                )
+                await telemetry.wait_for_state(page)
             snapshot = await self._wait_for_stable_snapshot(page, work, telemetry)
             expansions = 0
             while snapshot.continuation is not None:
@@ -435,6 +536,233 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
 
         for record in records:
             yield record
+
+    async def _select_oldest_sort(
+        self,
+        page: Page,
+        work: YanmagaWorkParts,
+        telemetry: _LoginTelemetryObserver,
+    ) -> bool:
+        state = await self._sort_control_state(page)
+        self._validate_work_url(state.get("url"), work)
+        self._validate_work_url(state.get("canonical"), work)
+        self._validate_work_url(state.get("ogUrl"), work)
+        controls = state.get("controls")
+        if not isinstance(controls, list):
+            raise DiscoveryIncompleteError("Yanmaga sort controls are malformed")
+        if not controls:
+            telemetry.require_absent_sort_controls()
+            return False
+        active_labels = [
+            control.get("text")
+            for control in controls
+            if isinstance(control, Mapping)
+            and isinstance(control.get("classes"), list)
+            and "active" in control["classes"]
+        ]
+        if len(active_labels) != 1 or active_labels[0] not in {
+            _SORT_NEWEST_LABEL,
+            _SORT_OLDEST_LABEL,
+        }:
+            raise DiscoveryIncompleteError("Yanmaga sort selected state is ambiguous")
+        active_label = active_labels[0]
+        oldest_index = self._validate_sort_controls(
+            controls,
+            work,
+            expected_active_label=active_label,
+        )
+        if active_label == _SORT_OLDEST_LABEL:
+            telemetry.allow_sorted_work_document()
+            return True
+
+        observed_oldest = controls[oldest_index]
+        if not isinstance(observed_oldest, Mapping):
+            raise DiscoveryIncompleteError("Yanmaga oldest-first sort control is malformed")
+        raw_href = observed_oldest.get("hrefAttribute")
+        href_selector = _css_attribute_string(raw_href)
+        observed_href = observed_oldest.get("href")
+        if href_selector is None or not isinstance(observed_href, str):
+            raise DiscoveryIncompleteError("Yanmaga oldest-first href is unavailable")
+        href_locator = page.locator(f"{SORT_SELECTOR}[href={href_selector}]")
+        locator = href_locator.and_(
+            page.get_by_role("link", name=_SORT_OLDEST_LABEL, exact=True)
+        )
+        if await locator.count() != 1:
+            raise DiscoveryIncompleteError(
+                "Yanmaga oldest-first control changed before selection"
+            )
+        final_control = await locator.evaluate(
+            r"""element => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return {
+                tag: element.tagName,
+                visible: element.getClientRects().length > 0
+                  && !element.hidden && style.display !== 'none'
+                  && style.visibility !== 'hidden' && style.visibility !== 'collapse'
+                  && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0,
+                text: (element.innerText || '').replace(/\s+/g, ' ').trim(),
+                classes: [...element.classList],
+                href: element.href,
+                hrefAttribute: element.getAttribute('href'),
+                ariaCurrent: element.getAttribute('aria-current'),
+                ariaPressed: element.getAttribute('aria-pressed'),
+                ariaSelected: element.getAttribute('aria-selected')
+              };
+            }"""
+        )
+        if (
+            not isinstance(final_control, Mapping)
+            or final_control.get("tag") != "A"
+            or final_control.get("visible") is not True
+            or final_control.get("text") != _SORT_OLDEST_LABEL
+            or set(final_control.get("classes", [])) != {"ga-sort", "nav-link"}
+            or _sort_link_value(final_control.get("href"), work) != "older"
+            or final_control.get("href") != observed_href
+            or final_control.get("hrefAttribute") != raw_href
+            or final_control.get("ariaCurrent") is not None
+            or final_control.get("ariaPressed") is not None
+            or final_control.get("ariaSelected") is not None
+        ):
+            raise DiscoveryIncompleteError("Yanmaga oldest-first sort changed before selection")
+
+        fresh_state = await self._sort_control_state(page)
+        self._validate_work_url(fresh_state.get("url"), work)
+        self._validate_work_url(fresh_state.get("canonical"), work)
+        self._validate_work_url(fresh_state.get("ogUrl"), work)
+        fresh_controls = fresh_state.get("controls")
+        if not isinstance(fresh_controls, list):
+            raise DiscoveryIncompleteError("Yanmaga sort controls changed before selection")
+        fresh_oldest_index = self._validate_sort_controls(
+            fresh_controls,
+            work,
+            expected_active_label=_SORT_NEWEST_LABEL,
+        )
+        fresh_oldest = fresh_controls[fresh_oldest_index]
+        if (
+            not isinstance(fresh_oldest, Mapping)
+            or fresh_oldest.get("href") != observed_href
+            or fresh_oldest.get("hrefAttribute") != raw_href
+        ):
+            raise DiscoveryIncompleteError("Yanmaga oldest-first href changed before selection")
+        if await locator.count() != 1:
+            raise DiscoveryIncompleteError("Yanmaga oldest-first locator changed before selection")
+        telemetry.allow_sorted_work_document()
+        try:
+            async with page.expect_navigation(
+                wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS
+            ):
+                await locator.click(timeout=WAIT_TIMEOUT_MS)
+        except (PlaywrightError, TimeoutError) as exc:
+            raise DiscoveryIncompleteError(
+                "Yanmaga oldest-first sort navigation did not complete"
+            ) from exc
+
+        if not _parse_yanmaga_sorted_work_url(page.url, work):
+            raise DiscoveryIncompleteError("Yanmaga sort did not open the observed oldest-first URL")
+        sorted_state = await self._sort_control_state(page)
+        _validate_work_document_url(
+            sorted_state.get("url"),
+            work,
+            allow_sorted_document=True,
+        )
+        self._validate_work_url(sorted_state.get("canonical"), work)
+        self._validate_work_url(sorted_state.get("ogUrl"), work)
+        sorted_controls = sorted_state.get("controls")
+        if not isinstance(sorted_controls, list):
+            raise DiscoveryIncompleteError("Yanmaga sorted controls are malformed")
+        self._validate_sort_controls(
+            sorted_controls,
+            work,
+            expected_active_label=_SORT_OLDEST_LABEL,
+        )
+        return True
+
+    async def _sort_control_state(self, page: Page) -> Mapping[str, object]:
+        state = await page.evaluate(
+            r"""() => {
+              const visible = element => {
+                if (!element || element.getClientRects().length === 0) return false;
+                for (let node = element; node; node = node.parentElement) {
+                  const style = getComputedStyle(node);
+                  if (node.hidden || style.display === 'none' || style.visibility === 'hidden'
+                      || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+                }
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              };
+              const canonical = [...document.querySelectorAll('link[rel="canonical"]')];
+              const ogUrls = [...document.querySelectorAll('meta[property="og:url"]')];
+              const controls = [...document.querySelectorAll('a.ga-sort.nav-link')].map((element, index) => ({
+                index,
+                tag: element.tagName,
+                visible: visible(element),
+                text: (element.innerText || '').replace(/\s+/g, ' ').trim(),
+                classes: [...element.classList],
+                href: element.href,
+                hrefAttribute: element.getAttribute('href'),
+                ariaCurrent: element.getAttribute('aria-current'),
+                ariaPressed: element.getAttribute('aria-pressed'),
+                ariaSelected: element.getAttribute('aria-selected')
+              }));
+              return {
+                url: location.href,
+                canonical: canonical.length === 1 ? canonical[0].href : null,
+                ogUrl: ogUrls.length === 1 ? ogUrls[0].content : null,
+                controls
+              };
+            }"""
+        )
+        if not isinstance(state, Mapping):
+            raise DiscoveryIncompleteError("Yanmaga work sort state is unavailable")
+        return state
+
+    @staticmethod
+    def _validate_sort_controls(
+        controls: list[object],
+        work: YanmagaWorkParts,
+        *,
+        expected_active_label: str,
+    ) -> int:
+        if len(controls) != 2:
+            raise DiscoveryIncompleteError("Yanmaga sort controls are duplicated or incomplete")
+        normalized: dict[str, tuple[int, Mapping[str, object], str | None]] = {}
+        for index, control in enumerate(controls):
+            if not isinstance(control, Mapping):
+                raise DiscoveryIncompleteError("Yanmaga sort control is malformed")
+            label = control.get("text")
+            classes = control.get("classes")
+            if (
+                control.get("index") != index
+                or control.get("tag") != "A"
+                or control.get("visible") is not True
+                or not isinstance(label, str)
+                or label not in {_SORT_NEWEST_LABEL, _SORT_OLDEST_LABEL}
+                or not isinstance(classes, list)
+                or set(classes) - {"ga-sort", "nav-link", "active"}
+                or not {"ga-sort", "nav-link"}.issubset(set(classes))
+                or label in normalized
+            ):
+                raise DiscoveryIncompleteError("Yanmaga sort UI is unknown or contradictory")
+            sort_value = _sort_link_value(control.get("href"), work)
+            if sort_value is None:
+                raise DiscoveryIncompleteError("Yanmaga sort link is not bound to this work")
+            active = "active" in classes
+            expected_active = label == expected_active_label
+            if active is not expected_active:
+                raise DiscoveryIncompleteError("Yanmaga sort label conflicts with selected state")
+            if label == _SORT_OLDEST_LABEL and sort_value != "older":
+                raise DiscoveryIncompleteError("Yanmaga oldest-first link has an unknown sort query")
+            if label == _SORT_NEWEST_LABEL and sort_value != "newer":
+                raise DiscoveryIncompleteError("Yanmaga newest link has an unknown sort query")
+            for aria_name in ("ariaCurrent", "ariaPressed", "ariaSelected"):
+                aria_value = control.get(aria_name)
+                if aria_value is not None:
+                    raise DiscoveryIncompleteError("Yanmaga sort UI has an unobserved selected-state attribute")
+            normalized[label] = (index, control, sort_value)
+        if set(normalized) != {_SORT_NEWEST_LABEL, _SORT_OLDEST_LABEL}:
+            raise DiscoveryIncompleteError("Yanmaga sort labels are incomplete")
+        return normalized[_SORT_OLDEST_LABEL][0]
 
     async def _wait_for_stable_snapshot(
         self,
@@ -575,6 +903,17 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 !element.matches('.mod-episode-more-button'));
               const externalPagingControls = [...document.querySelectorAll('a[rel="next"],button[rel="next"]')]
                 .filter(visible).filter(element => !container?.contains(element));
+              const sortControls = [...document.querySelectorAll('a.ga-sort.nav-link')].map((element, index) => ({
+                index,
+                tag: element.tagName,
+                visible: visible(element),
+                text: (element.innerText || '').replace(/\s+/g, ' ').trim(),
+                classes: [...element.classList],
+                href: element.href,
+                ariaCurrent: element.getAttribute('aria-current'),
+                ariaPressed: element.getAttribute('aria-pressed'),
+                ariaSelected: element.getAttribute('aria-selected')
+              }));
               const button = moreButtons.length === 1 ? moreButtons[0] : null;
               const continuation = button ? {
                 text: (button.innerText || '').replace(/\s+/g, ' ').trim(),
@@ -600,15 +939,33 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 globalMoreCount: document.querySelectorAll('.mod-episode-more-button').length,
                 unsupportedControlCount: unsupportedControls.length,
                 externalPagingControlCount: externalPagingControls.length,
+                sortControls,
                 continuation,
               };
             }"""
         )
         if not isinstance(identity, Mapping):
             raise DiscoveryIncompleteError("Yanmaga work identity is unavailable")
-        self._validate_work_url(identity.get("url"), work)
+        _validate_work_document_url(
+            identity.get("url"),
+            work,
+            allow_sorted_document=telemetry.sorted_work_document_allowed,
+        )
         self._validate_work_url(identity.get("canonical"), work)
         self._validate_work_url(identity.get("ogUrl"), work)
+        sort_controls = identity.get("sortControls")
+        if not isinstance(sort_controls, list):
+            raise DiscoveryIncompleteError("Yanmaga sort state is unavailable")
+        if telemetry.sort_ui_mode == "oldest":
+            self._validate_sort_controls(
+                sort_controls,
+                work,
+                expected_active_label=_SORT_OLDEST_LABEL,
+            )
+        elif telemetry.sort_ui_mode == "absent" and sort_controls:
+            raise DiscoveryIncompleteError("Yanmaga sort controls appeared after initial inspection")
+        elif telemetry.sort_ui_mode is None:
+            raise DiscoveryIncompleteError("Yanmaga sort controls were not initialized")
 
         rows_value = identity.get("rows")
         if (

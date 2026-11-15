@@ -62,6 +62,23 @@ def test_yanmaga_work_and_episode_urls_keep_encoded_work_identity() -> None:
         assert parse_yanmaga_episode_url(url) is None
 
 
+def test_yanmaga_sorted_work_url_is_internal_only_and_exact() -> None:
+    expected = YanmagaWorkParts(SLUG)
+    sorted_url = f"{WORK_URL}?sort=older"
+
+    assert yanmaga_discovery._parse_yanmaga_sorted_work_url(sorted_url, expected)
+    assert parse_yanmaga_work_url(sorted_url) is None
+    for url in (
+        f"{WORK_URL}?sort=newer",
+        f"{WORK_URL}?sort=older&extra=1",
+        f"{BASE}/comics/other-work?sort=older",
+        f"https://user@yanmaga.jp/comics/{WORK_URL.split('/comics/', 1)[1]}?sort=older",
+        f"{WORK_URL}?%73ort=older",
+        f"{WORK_URL}?sort=older#episodes",
+    ):
+        assert not yanmaga_discovery._parse_yanmaga_sorted_work_url(url, expected)
+
+
 @pytest.mark.parametrize(
     ("sign_ins", "sign_outs", "states", "current_document", "overflow", "expected"),
     [
