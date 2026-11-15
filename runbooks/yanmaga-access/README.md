@@ -47,7 +47,7 @@
 
 **Discoveryは観測のみ**。全話リストの「もっと見る」、work+episode identity、canonical、完全性、並び、`global_display_position`、既存の未ログイン赤字無料の証拠を保持する。ログイン中のDOMと認証の正の根拠を新たに観測し、未ログイン用analytics telemetryをログイン済み判定の必須条件に流用しない。ログイン有無・マーカーの競合、初回無料と待つと無料、明確なポイントのみ、すでにレンタル中/開放済み、unknownを別々に検証する。HTML文字列部分一致や色だけでの判定禁止。
 
-`access_granted_until` は正のサイト情報（絶対時刻または検証済み残時間の安全側下限）で同期する。期限不明で現在Viewerが開くこと自体を期限の証拠にしない。ローカルで推定する場合はサイトの既知の契約と安全側の時刻計算が明確なケースに限定し、推定値とサイト観測値を区別する。期限の実測がなければDBへ架空の値を書かず、**再実行時にLive Reader可否を判定できるようにする**。Discoveryによるmode変更でも、期限が未観測であれば既存の有効Grantを無条件に消さない（`CatalogService.refresh_discovered_source` の現行規則を確認）。失効が確実なら消去・無効扱いの要否を検討する。
+`access_granted_until` は正のサイト情報（絶対時刻または検証済み残時間の安全側下限）で同期する。期限不明で現在Viewerが開くこと自体を期限の証拠にしない。ローカルで推定する場合はサイトの既知の契約と安全側の時刻計算が明確なケースに限定し、推定値とサイト観測値を区別する。期限の実測がなければDBへ架空の値を書かず、**再実行時にLive Reader可否を判定できるようにする**。ただし、**Plannerは`quota/paid`かつ有効Grant期限なしのSourceを通常`direct`候補にしない**。実際に再入場できると言うには、(A) siteの証拠から安全な期限下限を`access_granted_until`に保存できるか、(B) site-ownedの非消費Grant観測をDiscovery/Plannerにつなぎ`direct`候補にできることが必要。どちらもできなければ「初回無料後の失敗→再Discoveryでquota/paid→期限内再取得」は未対応と判定し、Stage02をPASSにしない。Discoveryによるmode変更でも、期限が未観測であれば既存の有効Grantを無条件に消さない（`CatalogService.refresh_discovered_source` の現行規則を確認）。失効が確実なら消去・無効扱いの要否を検討する。
 
 ### 2.2 captureのdirect（通常無料＋初回無料）
 
