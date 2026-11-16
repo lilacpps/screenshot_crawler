@@ -36,7 +36,11 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.access_guard import AccessProfile
-from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
+from screenshot_crawler.core.errors import (
+    AccessEntryNotAttemptedError,
+    AccessResourceUnavailableError,
+    AccessStopError,
+)
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import (
     PackageResult,
@@ -1420,10 +1424,18 @@ def test_candidate_error_context_uses_owned_watchlist_label(
     assert f"label={expected_label!r}" in context
 
 
-async def test_quota_state_remains_when_crawl_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize("entry_attempted", [True, False])
+async def test_quota_state_remains_when_crawl_fails(
+    tmp_path: Path, entry_attempted: bool
+) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
-    executor = make_executor(service, fail_crawl=True)
+
+    def entry_action(_adapter: SiteAdapter) -> None:
+        if not entry_attempted:
+            raise AccessEntryNotAttemptedError("crawler failed before entry")
+
+    executor = make_executor(service, fail_crawl=True, adapter_action=entry_action)
 
     with pytest.raises(BatchExecutionError, match="crawler failed") as failure:
         await executor.execute_candidate(object(), candidate, now=NOW)
@@ -1432,8 +1444,44 @@ async def test_quota_state_remains_when_crawl_fails(tmp_path: Path) -> None:
     assert f"key={source.discovery_key!r}" in str(failure.value)
     assert "label='Test Work 1'" in str(failure.value)
     assert source.quota_started_at == NOW.isoformat()
-    assert source.access_granted_until == "2026-09-18T15:00:00+09:00"
+    assert source.access_granted_until == (
+        "2026-09-18T15:00:00+09:00" if entry_attempted else None
+    )
+    policy = MangaOneSitePolicy()
+    assert policy.available_quota(service.list_sources(), NOW) == 3
+    decision = policy.evaluate(source, now=NOW, quota_available=3)
+    assert decision.access_strategy == ("direct" if entry_attempted else "quota")
     assert service.get_item(candidate.item_id).status == "pending"
+
+
+@pytest.mark.parametrize("later_evidence", [False, True])
+async def test_unattempted_entry_preserves_prior_or_later_grant(
+    tmp_path: Path, later_evidence: bool
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    old_grant = NOW - timedelta(hours=1)
+    service.record_quota_access(
+        candidate.source_id, quota_started_at=NOW - timedelta(days=1),
+        access_granted_until=old_grant,
+    )
+    new_grant = NOW + timedelta(hours=2)
+
+    def entry_action(_adapter: SiteAdapter) -> None:
+        if later_evidence:
+            service.record_quota_access(
+                candidate.source_id, quota_started_at=NOW,
+                access_granted_until=new_grant,
+            )
+        raise AccessEntryNotAttemptedError("entry was not attempted")
+
+    executor = make_executor(service, adapter_action=entry_action)
+    with pytest.raises(CandidateExecutionError, match="entry was not attempted"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == NOW.isoformat()
+    assert source.access_granted_until == (new_grant if later_evidence else old_grant).isoformat()
 
 
 async def test_packaging_failure_does_not_complete_item(tmp_path: Path) -> None:

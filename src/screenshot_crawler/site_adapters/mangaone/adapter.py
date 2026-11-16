@@ -18,6 +18,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
+    AccessEntryNotAttemptedError,
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
@@ -426,8 +427,16 @@ class MangaOneAdapter(SiteAdapter):
                 break
             remaining = deadline - loop.time()
             if remaining <= 0:
-                raise PageChangeTimeoutError(
-                    "Manga ONE quota entry button was not observed safely"
+                # No entry click has started here. Only this pre-click failure
+                # may tell Batch to withdraw its assumed re-reading grant.
+                login = page.get_by_role("button", name="ログインして読む", exact=True)
+                if await login.count() == 1 and await self._visible(login):
+                    raise AccessEntryNotAttemptedError(
+                        "Manga ONE requires login; free-life entry was not attempted"
+                    )
+                raise AccessEntryNotAttemptedError(
+                    "Manga ONE quota entry button was not observed safely; "
+                    "free-life entry was not attempted"
                 )
             await page.wait_for_timeout(
                 min(self.quota_entry_poll_interval_ms, max(1, round(remaining * 1000)))

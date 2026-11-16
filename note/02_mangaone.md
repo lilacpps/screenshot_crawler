@@ -58,7 +58,38 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-23
+最終同期: 2026-11-17
+
+## Quota入口未操作と誤ったdirect再実行の修正（2026-11-17）
+
+無料ライフ入口の最大2秒の探索で一意なvisible buttonが見つからなければ、
+click前に限り`AccessEntryNotAttemptedError`で停止する。「ログインして読む」が
+一意でvisibleならlogin必須をエラーに表示する。login操作は自動実行しない。
+この明示的な未操作の証拠がある場合、Batchは開始時に仮定した24時間grant期限を
+開始前の値へ戻す。quota timestamp/local枠は自動refundしない。後続のgrant更新は保持する。
+click開始後の失敗・消費不明・通常timeoutはgrantも保持し、directは無料ライフを消費しない。
+既存selector、capture、navigation、END、quota window、24時間grant自体は維持する。
+
+実サイト/保存diagnostics確認: source636の05:42のquota失敗は「ログインして読む」表示、
+06:07のdirect失敗は「無料ライフで読む」表示だった。最初の失敗時にclick前で止まったのに
+保存されたgrantがdirect再実行を招いていた。現在のlive無料ライフbuttonは既存の
+role/name selectorに一意に一致する。本文画像や認証情報をfixtureへ転用していない。
+
+既存データはsource636/637のquota失敗が旧実装のclick前専用エラーと一致し、
+後続quota成功/Artifactがないことを照合した上で、Catalog backupとrepair.jsonを
+`output/diagnostics/mangaone-unattempted-repair-20261117/`へ保存した。
+この明示的な一回限りの修復では2件の誤ったreservation/grantを解除し、履歴は保持した。
+自動処理のlocal枠保持とは別の保守操作である。
+同じkeyだけの`batch run --site mangaone --key ao-no-orchestra --limit 2`でquota2件を実行し、
+第14曲/source637・第15曲/source636とも22ページ、END、ZIP作成、Item completedを確認した。
+各ZIPの22画像とCRC検査は正常。metricsの2 completed / 0 failed / 403・429・challenge・CAPTCHA 0を確認した。
+Web上の残ライフ数の差分は独立計測していないため、正確なaccount残数の検証とは区別する。
+通常の既存libraryへ正規Batchで保存し、過去の成功archiveは変更していない。
+
+検証: Batch/Planner/validation-reuse/Catalog/Manga ONE Unit・browser Integrationの
+関連262件、最終targeted12件、ruff/diff checkが成功（skipなし）。全9252件の試行は
+変更対象外ComicDaysの50ms表示待ちtestで1件失敗した後に中断し、当該testの単体再実行は成功。
+全体greenは未確認。Researchは契約変更がなく個別未実行。対象2話の実サイト確認は上記のとおり完了。
 
 ## Shared work-key scope inventory (2026-10-22)
 
@@ -561,7 +592,9 @@ expects the viewer to be available after navigation. `quota` uses the
 observed `無料ライフで読む` entry once and bounded-waits for the viewer; it
 does not fall back to direct or auto when the entry is ambiguous. Batch quota
 state is recorded immediately before the crawl, while completed is recorded
-only after crawl and packaging succeed.
+only after crawl and packaging succeed. An explicitly unattempted entry failure
+restores the previous grant expiry while retaining the quota timestamp/local
+slot; unknown and post-attempt failures keep both fields.
 
 ## Phase 5B quota reader entry observation (2026-09-17)
 

@@ -1,3 +1,31 @@
+## Unattempted access entry failure (2026-11-17)
+
+Before-run quota reservations still persist the Policy grant immediately before
+crawling. The narrow `AccessEntryNotAttemptedError` contract lets an Adapter
+prove that it never attempted an action capable of consuming access rights.
+On this error only, Batch restores the Source's pre-run grant expiry, provided
+both stored reservation fields still equal its own write. It retains the quota
+timestamp/local slot, failed CrawlRun and pending Item. Later grant updates,
+unknown errors, click failures and post-click/viewer/packaging failures retain
+their existing state. Other adapters remain unchanged; Core has no site branch.
+Manga ONE emits the error only when its free-life entry search times out before
+clicking, with an explicit login message when the known login button is visible.
+No CLI/config/schema change or automatic direct-to-quota fallback is introduced.
+
+Validation: affected Batch/Planner/validation-reuse/Catalog/Manga ONE Unit and
+browser Integration selection passed 262 tests (zero skipped); final targeted
+entry/state regression passed 12 tests. `ruff check src tests` and scoped diff
+checks passed. A two-candidate live Manga ONE run completed both chapters and
+packaged 22 pages each; its source note records the explicit legacy-data repair,
+backup and evidence limits. Source-native/capture/END behavior is unchanged.
+The repository-wide attempt collected 9,252 tests and was interrupted after a
+failure in the unchanged ComicDays browser test
+`test_comicdays_hidden_ticket_control_stabilizes_before_classification`
+(50 ms delayed visibility). Its isolated rerun passed (one test, zero skipped);
+the whole suite is NOT verified green and the failure's cause is unconfirmed.
+The attempt log is `output/m1grant-full-20261117.log`. Research tests were not
+separately run because no Research/Probe contract changed.
+
 ## Candidate failure Discovery context (2026-11-05)
 
 Normal and grant-only `CandidateExecutionError` text includes the Item/Source
@@ -2948,6 +2976,8 @@ diagnostics_dir = <run directory>/diagnostics
 `CrawlRun(running)`を作成する。quota candidateだけはその後に`record_quota_access()`を呼び、
 Policyの`access_grant_until()`で計算したgrantを保存する。direct candidateはquota stateを
 変更しない。保存後にcrawl、viewer、packagingが失敗してもquota stateはrefundしない。
+ただし入口操作未試行を明示する`AccessEntryNotAttemptedError`の場合は、上記のとおり
+仮定したgrant期限だけを元へ戻す。quota timestampは保持する。
 
 Crawlerが`END`または`NEXT_CONTENT`で正常終了し、既存`package_crawl_output()`が成功した後、
 archiveの存在を確認してSHA-256 / byte sizeを計算する。Catalogのnarrow helperがArtifact(present)、

@@ -1,5 +1,14 @@
 # Design Decisions
 
+## 未操作のquota入口失敗では仮の再閲覧grantを取り消す（2026-11-17）
+
+Manga ONEでlogin切れのままquota入口探索に失敗しても、開始時に保存した24時間grantが
+残って次回をdirectへ誤誘導していた。既存の「失敗時もquota stateを保持する」原則には、
+Adapterが入口操作未試行を明示できる場合だけgrant期限を元へ戻す狭い例外を設ける。
+共通Batchはsite名やselectorを解釈せず`AccessEntryNotAttemptedError`だけを扱う。
+quota timestampは保持し、click開始後・消費不明の失敗・後続のgrant更新は保持する。
+Manga ONE以外のAdapterはこの例外を導入しない限り従来どおりである。
+
 ## Work削除の管理ジョブ確認は「将来の書込み競合」に限定（2026-11-15）
 
 終了済みpartialを未知状態と誤判定し、過去の中断/監督エラーだけで永久に削除を止める挙動を

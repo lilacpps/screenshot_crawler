@@ -27,6 +27,12 @@ The image-disappearance rule is a **site-specific practical heuristic based on t
 
 If no valid transition can be established within the bounded page-change timeout, the adapter raises a page-change error instead of progressing indefinitely.
 
+For `quota`, an entry-button search failure before any click raises
+`AccessEntryNotAttemptedError`; a visible exact `ログインして読む` button adds
+login guidance. Batch then restores only its speculative grant expiry and keeps
+the local quota reservation. Click errors and post-click failures keep both.
+`direct` never clicks the free-life entry and never falls back to quota.
+
 ## Ads and known limitations
 
 Chapter-end promotional pages are ordinary chapter images and currently have no stable DOM marker that distinguishes them from manga pages. They are kept to avoid deleting valid final content. A fixed number of trailing pages is intentionally not enabled.

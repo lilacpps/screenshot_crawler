@@ -47,7 +47,11 @@ from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogServi
 from screenshot_crawler.catalog.models import Item, Source, Work
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.access_guard import AccessEvent, AccessGuard
-from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
+from screenshot_crawler.core.errors import (
+    AccessEntryNotAttemptedError,
+    AccessResourceUnavailableError,
+    AccessStopError,
+)
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, archive_stem, package_crawl_output
 from screenshot_crawler.core.progress import atomic_write_json, normalize_path
@@ -263,6 +267,7 @@ class BatchExecutor:
         policy: SitePolicy | None = None
         consumption_checked = False
         grant_observer_active = False
+        speculative_grant: tuple[str | None, str | None] | None = None
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
@@ -332,10 +337,13 @@ class BatchExecutor:
 
             if candidate.consumes_quota and candidate.quota_commit_mode == "before_run":
                 grant_until = policy.access_grant_until(current)
-                self.catalog.record_quota_access(
+                reservation = self.catalog.record_quota_access(
                     candidate.source_id,
                     quota_started_at=current,
                     access_granted_until=grant_until,
+                )
+                speculative_grant = (
+                    reservation.quota_started_at, reservation.access_granted_until
                 )
 
             config = RunConfig(
@@ -440,6 +448,19 @@ class BatchExecutor:
                 stop_resource_pass=_stop_after_resource_consumption(candidate, adapter),
             )
         except BaseException as exc:
+            if isinstance(exc, AccessEntryNotAttemptedError) and speculative_grant is not None:
+                # Only this explicit adapter proof permits withdrawing an assumed
+                # grant. Keep the local slot and never overwrite later evidence.
+                try:
+                    latest = self.catalog.get_source(candidate.source_id)
+                    if (latest.quota_started_at, latest.access_granted_until) == speculative_grant:
+                        self.catalog.record_quota_access(
+                            candidate.source_id,
+                            quota_started_at=current,
+                            access_granted_until=source.access_granted_until,
+                        )
+                except Exception as recording_error:  # noqa: BLE001
+                    exc.add_note(f"Could not discard unattempted access grant: {recording_error}")
             resource_consumed = _confirmed_grant_consumption(candidate, adapter)
             if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
                 interrupted = BatchInterruptedError(

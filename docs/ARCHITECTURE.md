@@ -520,6 +520,12 @@ Site Adapterが必要なsite固有button/entry操作だけを担当する。
 
 Manga ONEのquota entryはCSR mount後に現れるため、Adapter内で最大2秒、100ms間隔のbounded waitを行う。候補数1件かつvisibleのbuttonだけをクリックし、曖昧な状態ではfirst要素を選択しない。
 
+入口click前の候補未確認はAdapterが`AccessEntryNotAttemptedError`で報告する。
+明示的な「ログインして読む」があればlogin必須をエラーに含める。
+Batchはこの証拠がある場合だけ開始前に仮定したgrant期限を元へ戻し、
+`quota_started_at`は保持する。開始前に保存した値から変化したgrantは上書きしない。
+click開始後・消費不明・通常のtimeoutは従来どおりquota/grantを保持する。
+
 ## 10. Duplicate handling
 
 The runner deduplicates each captured part using the complete key:

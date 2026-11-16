@@ -5,6 +5,7 @@ import pytest_asyncio
 from playwright.async_api import Browser, Page
 
 from screenshot_crawler.core.errors import (
+    AccessEntryNotAttemptedError,
     PageChangeTimeoutError,
 )
 from screenshot_crawler.site_adapters.mangaone.adapter import (
@@ -225,16 +226,25 @@ async def test_mangaone_direct_skips_quota_entry(
     assert await browser_page.evaluate("window.entryClicks") == 0
 
 
+@pytest.mark.parametrize("logged_out", [False, True])
 async def test_mangaone_quota_entry_fails_closed_without_button(
     browser_page: Page,
+    logged_out: bool,
 ) -> None:
-    await browser_page.set_content("<div class='viewer-container' hidden></div>")
+    await browser_page.set_content(
+        "<div class='viewer-container' hidden></div>"
+        + ("<button onclick='window.loginClicks++'>ログインして読む</button>" if logged_out else "")
+        + "<script>window.loginClicks = 0;</script>"
+    )
     adapter = MangaOneAdapter()
     adapter.quota_entry_wait_timeout_ms = 200
     await adapter.configure_run(browser_page, "quota")
 
-    with pytest.raises(PageChangeTimeoutError, match="not observed safely"):
+    message = "requires login" if logged_out else "not observed safely"
+    with pytest.raises(AccessEntryNotAttemptedError, match=message):
         await adapter.initialize(browser_page)
+    assert not adapter._quota_entry_clicked
+    assert await browser_page.evaluate("window.loginClicks") == 0
 
 
 async def test_mangaone_quota_entry_fails_closed_with_multiple_buttons(
@@ -264,5 +274,7 @@ async def test_mangaone_quota_entry_fails_if_viewer_does_not_appear(
     adapter.page_change_timeout_ms = 200
     await adapter.configure_run(browser_page, "quota")
 
-    with pytest.raises(PageChangeTimeoutError, match="did not reveal the viewer"):
+    with pytest.raises(PageChangeTimeoutError, match="did not reveal the viewer") as failure:
         await adapter.initialize(browser_page)
+    assert not isinstance(failure.value, AccessEntryNotAttemptedError)
+    assert adapter._quota_entry_clicked

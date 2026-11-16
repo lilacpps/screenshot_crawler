@@ -56,7 +56,11 @@ local state. Actual crawl integration remains Phase 5B.
 `batch run` now executes Manga ONE Batch candidates sequentially through the
 existing CrawlerRunner and manifest-based packaging. A quota candidate records
 its local quota start and Policy-provided grant expiry immediately before the
-crawl. Only successful crawl and packaging update the item to `completed`.
+crawl. If an Adapter explicitly proves that access entry was never attempted
+(`AccessEntryNotAttemptedError`), Batch restores only the pre-run grant expiry
+while retaining the local quota reservation. Later grant evidence is preserved.
+Unknown failures and failures after an entry attempt retain both fields.
+Only successful crawl and packaging update the item to `completed`.
 The plan command remains read-only; BookWalker Batch execution remains
 unsupported.
 

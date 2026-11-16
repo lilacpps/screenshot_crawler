@@ -1928,7 +1928,13 @@ crawl / viewer / packaging / Artifact persistence等が失敗した場合はCraw
 `finished_at`、`error_type`、短い `error_message` を記録する。Itemはcompletedにしない。
 
 quota stateを保存した後に失敗してもquota stateは消去しない。site上ですでに消費されている可能性が
-あるためである。生成済みarchiveがある状態でCatalog persistenceに失敗してもarchiveを自動削除しない。
+あるためである。ただしAdapterが`AccessEntryNotAttemptedError`で権利を利用する入口操作を
+一度も試行していないことを明示した場合は、`before_run`で仮定したgrant期限だけを開始前の値へ戻す。
+`quota_started_at`は保持し、local枠は自動refundしない。保存したtimestamp/期限から変化した
+後続のgrant証拠は保持する。click開始後や消費不明の失敗はこの例外を使ってはならない。
+Manga ONEは無料ライフ入口の探索timeoutにこの例外を使い、login入口が見える場合は理由も表示する。
+directからquotaへの暗黙fallbackは行わない。
+生成済みarchiveがある状態でCatalog persistenceに失敗してもarchiveを自動削除しない。
 
 Artifactの後日の移動・missing・削除はCrawlRun succeededやItem completedを取り消さない。
 
