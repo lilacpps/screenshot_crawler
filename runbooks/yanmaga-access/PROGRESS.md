@@ -4,6 +4,7 @@
 **Plan authored:** 2026-11-15.
 **Implementation branch:** `feat/yanmaga-access`, created from latest `origin/main` (`4407e975`).
 **Stage 01 implementation commit:** `26cbae8`.
+**Stage 03/04 implementation and verification commit:** `3585535`.
 **Authority:** [README.md](README.md), `runbooks/yanmaga-free/README.md`, `AGENTS.md`.
 **Workspace boundary:** live artifacts are isolated under `output/yanmaga_access_experiment/stage01/`, `stage02/`, and `stage03/`. No normal Catalog, Watchlist, library, or capture output was used. User-edited `crawler.yaml` and `watchlist.yaml` were preserved.
 
