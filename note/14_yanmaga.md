@@ -1,5 +1,380 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Odd-page terminal-only reader position (2026-11-17)
+
+Chapter 15 (Item 49631 / Source 49938) failed in normal Runs 25364 and 25427
+after all 15 body pages had already been saved as native WebP. After the final
+14/15 spread, the viewer's next turn displayed only the next-episode rental
+card. Its exact native `#menu_seekbar > #menu_slidercaption_base >
+#menu_slidercaption` changed to `-/15`; the last body moved beyond the right
+viewport edge and the rental occupied x=1280, y=0, width=1272, height=1800.
+The old positive-number counter parser returned no snapshot, so change-wait
+timed out instead of recognizing the terminal position. This was neither a
+grant failure nor a missing captured page.
+
+The ordinary public body-counter parser remains unchanged: `-/N` and N+1/N
+are not body counters. A separate private snapshot mode recognizes only the
+unique native caption/ancestry with exact `-/N`, odd N>=3, and the existing
+page-total bound. It uses an internal terminal position N+1, never a body
+identity or capture target. General total/duplicate/route/viewport/menu/gate
+checks still apply. The layout must have zero visible body wrappers, one loaded
+final N wrapper with the verified three-segment geometry and full height,
+all retained bodies beyond the right viewport edge, and the exact native
+rental slot above. The whole rental must be presented and own its center and
+eight inset perimeter points.
+
+END additionally requires the already captured sequence to be exactly 1..N
+and an existing proven terminal-card branch. For a next/read card, the unique
+normalized title must also match the unique immediately following same-work
+listing row; signup/wait/point/latest-author retain their existing stronger
+bindings. No click or next-episode navigation is performed. A terminal-only
+screen at initialization may be rewound through the existing bounded normal
+ArrowRight path, but cannot become END without all body pages being saved.
+Exact max-pages=N still permits final END, without a fabricated N+1 image.
+
+The dash counter also precedes the actual slide animation. Change-wait first
+waits for the same terminal layout/control signature to stabilize, then applies
+the positive-END predicate within the original deadline. It never presses a
+second key or spends the same budget on two successive stabilization waits.
+Transient body-visible/card-offscreen frames remain pending; malformed,
+obstructed, wrong-title, incomplete-sequence or unsupported layouts do not end.
+Diagnostics retain raw `native_counter="-/N"`, expose `terminal_only` and
+`terminal_only_layout_exact`, and set `native_counter_complete=false` for this
+mode rather than pretending the UI reports N/N. Existing complete body-count
+and sequence fields remain separate.
+
+The synthetic odd-three-page viewer starts on this terminal position, rewinds,
+captures all three body pages, and tests both next/read and point cards. It
+also covers delayed layout, bad/even/foreign/duplicate caption, wrong title,
+missing control/final wrapper, edge obstruction, wrong card size, visible body,
+and premature terminal entry. The final targeted group passed 14 tests with 0
+skipped, including explicit refusal to supply a body identity at `-/N`.
+The first live implementation exposed the counter-before-animation race and
+failed closed after saving all 15 pages; its isolated evidence is retained
+under `output/yanmaga-png-investigation/fixed-odd15-final/`. That incomplete
+attempt is not a successful crawl or Artifact verification.
+
+The final post-stabilization live check used a fresh isolated Catalog backup,
+the exact normal Planner candidate, real `BatchExecutor`, shared CDP Page, and
+normal packager. It completed Chapter 15 with 15 pre-JPEG WebP pages, zero PNG,
+positive END, ZIP, Completed, and one Artifact in that copy. The final UI had
+`-/15`, no visible body, a fully presented exact rental slot, and the proven
+next/read card. The previous stored grant was preserved exactly. Source GET=1,
+Viewer GET=1, other-episode/non-GET requests=0; quota/Work-resource state and
+the normal pending Catalog were unchanged. Evidence:
+`output/yanmaga-png-investigation/fixed-odd15-stable/` (`report.json`,
+`reader-trace.json`, genuine Manifest, Catalog, archive, and `audit.json`).
+`odd15_audit.py` independently verified the 15 ordered Manifest members,
+fingerprints, unique VP8L/opaque 1125×1600 decodes, ZIP CRC, real Artifact and
+Completed state, and absence of a terminal-card/fake page-16 entry. Archive
+SHA-256 is `c86179f88aa54abbccb67ffa6937fa6230ffffa9bca5216ff1fc944c479ad7b1`;
+the convenient exact copy is `fixed-odd15-stable/chapter-15-fixed.zip`.
+
+Adapter Unit/browser regression passed 198 tests with 0 skipped (477.07 seconds;
+23 existing asyncio/Python deprecation warnings). After the final bounded
+terminal-stabilization adjustment, all 14 affected odd-terminal cases passed
+again with 0 skipped, including counter-before-animation and no terminal body
+identity. Ordinary parser checks explicitly reject dash and N+1/N as body
+counters. `ruff check src tests` and changed-files diff checks passed. Full
+repository pytest and unrelated-site/Discovery suites were not rerun for this
+site-local counter/layout/END change; shared Core, Catalog, resource policy,
+capture format, and browser lifecycle code are unchanged. Other terminal
+layouts, even-total dash states, and one-page dash states remain unsupported.
+
+## Chapter 17 existing-rental recovery and delayed layout (2026-11-16)
+
+The reported normal Run 25360 (Item 49628 / Source 49935, Chapter 17) stopped
+in listing preflight with zero saved pages and no Source or Viewer entry.
+Catalog still classified the Source as `free` from the 14:21 observation and
+had no stored grant. An earlier 17:35 attempt had reached the requested Viewer
+but failed first-free notice/finite-grant confirmation before persistence.
+The later listing was markerless with a rental countdown. A metadata-only live
+probe confirmed an authenticated exact active Rental History card (`残り21時間`)
+and a finite conservative hour bound. Internal full Discovery already emitted
+`quota` plus `access_granted_until_observed=true` for that exact row; the Adapter
+had ignored that fresh evidence because its separate Catalog-grant input was
+empty. The original entry's precise consumption time remains unproven.
+
+For direct/auto capture only, the current Adapter can recover this exact state:
+authenticated, markerless raw-unknown row; no public/first-free/wait/red or
+restricted marker; internal Discovery's explicitly observed future grant;
+and a fresh second Rental History observation for exactly the requested ID.
+The second proof must be active with aware, future, finite hourly evidence and
+an observation no later than now. It retains the earlier of the Discovery and
+second bounds. After the existing live listing/URL/login/row pre-entry check,
+the existing synchronous `ConfirmedAccessGrant` observer must save that bound
+before Source GET or capture. Missing/duplicate/foreign/inactive/unbounded,
+expired/malformed, future-observed or conflicting evidence, missing observer,
+row drift, and persistence failure stop before Source entry. A still-future
+Catalog grant keeps the old path and is not extended or reported again.
+
+Only the source grant/timestamp is persisted through the existing site-neutral
+observer. No access-mode rewrite, inferred use time, quota start, Work cooldown,
+resource attempt, or fixed 24/72-hour lifetime is introduced. Day-only evidence
+is intentionally outside this automatic recovery path because the current
+observer's supported countdown category is hourly; normal full Discovery can
+still import a validated day bound for the existing trusted-Catalog-grant path.
+The quota/work-ticket attempt path never silently switches to recovery.
+`history_grant_recovery_state` records `not_attempted`, `candidate`,
+`reconfirmed`, or `persisted` in site-owned capture/failure metadata.
+
+The first isolated Batch check saved the recovered grant before its one Source
+GET, then failed after page 1 with `page turn did not reveal a new body page`.
+A second bounded same-grant check completed all 14 pages; its numeric reader
+trace proved that every turn's counter could lead the old visible frame by
+several reads. The wait loop had treated even a still-stable old captured frame
+as an immediate failure. It now continues observing the same turn inside the
+original deadline until an advanced, stable uncaptured body is proven. No
+second key press, forced identity, skipped page, or timeout extension is used.
+If the layout never arrives it times out. Page-total, route, geometry, gate,
+sequence, max-pages, and same-content protections remain. Diagnostics now also
+include `native_counter`, `visible_body_indices`, and `captured_body_indices`.
+
+Final verification used a fresh isolated SQLite backup and Watchlist copy,
+selected the exact normal Planner direct candidate, and ran the real
+`BatchExecutor` with its normal grant observer and packager. Chapter 17 reached
+positive END, 14 pre-JPEG WebP pages, ZIP, Completed, and one Artifact in that
+copy. A route observer independently checked the grant was already durable
+before Source entry. Source GET=1, Viewer GET=1, other-episode/non-GET requests=0;
+quota and Work-resource state were unchanged. The normal Catalog remains
+pending with no grant and was not written by these checks; its next Batch run
+will perform the same verified recovery automatically.
+
+Evidence is under ignored `output/yanmaga-png-investigation/`:
+`access17-preflight.json` is the metadata-only probe; `fixed-access17/` is the
+grant-persisted/page-turn-failed check; `fixed-access17-retry/` is the successful
+pre-wait-fix check with `reader-trace.json`; and `fixed-access17-final/` is the
+post-fix real Batch verification with its genuine Manifest, ZIP, Catalog,
+reader trace, and report. Final archive SHA-256:
+`6ed9db258fdea0df7994356b5799b952bbc87ee85af52ac181b91629d043bbcc`.
+The genuine Manifest's ordered members and all fingerprints matched the ZIP,
+which passed CRC. Each run was limited to the one exact existing rental; no
+ticket/point action or next-episode entry was performed.
+
+Final verification: the complete Adapter Unit and browser Integration files
+passed **185 tests, 0 skipped** in 426.24 seconds (23 existing asyncio/Python
+deprecation warnings). Targeted recovery/layout checks passed 17; the earlier
+affected access/grant group passed 45. Cases cover exact finite evidence,
+min-bound persistence before capture, missing/duplicate/wrong-target evidence,
+inactive/unbounded/day-only/future-observed/expired/malformed bounds, missing
+observer, write failure, pre-entry DOM drift, delayed layout without extra key
+presses, and bounded timeout if layout never arrives. `ruff check src tests`
+and changed-files diff checks passed. The final offline audit also verified
+all 14 unique VP8L/opaque 1125×1600 images, Manifest identities/fingerprints,
+and the isolated Catalog's real Completed/Artifact state. It is
+`fixed-access17-final/audit.json`; a convenient exact copy of the archive is
+`fixed-access17-final/chapter-17-fixed.zip`. Full repository pytest and
+unrelated-site/Discovery suites were not rerun because the changes are
+Yanmaga Adapter entry/wait logic and existing-observer use only. No shared
+Catalog schema, Batch, resource rule, or Core code changed.
+
+## Chapter 29 point-rental END and decoded-segment recovery (2026-11-16)
+
+The normal Batch failures for Item 49615 / Source 49922, Runs 25265 and 25266,
+saved all 14 body pages of `第２９話 調和` before timing out in `go_next`.
+The saved diagnostics prove a complete counter/sequence, correct route, hidden
+menu, unobstructed final body and rental card/title. The next Chapter 30 card
+instead had the observed point-rental CTA `レンタルして読む`; none of the
+previous next/read, signup, countdown, or latest-author branches accepted it.
+One failed run had all 14 WebP pages, while the other had 13 WebP plus one PNG,
+so the END failure was independent of the last page's file format.
+
+The current point-card branch requires all existing complete-body, route,
+ownership, semantic-gate, and stable-END checks. It additionally requires one
+presented exact `a#js-btn-rental.mod-button--orange.rental.content`, its direct
+native `form#form-rental.ga-viewer-rental-point`, POST to same-origin HTTPS
+`/viewer/rental` without credentials/query/fragment, one hidden 20-alphanumeric
+`jdcn`, one hidden `rental_type=point_rental`, and positive displayed point cost.
+The observed CDN thumbnail path must contain that exact code. The unique
+normalized title must match the unique immediately following row of the fresh
+same-work listing. Other terminal controls conflict. Point-code identity and
+button geometry participate in the stable snapshot signature. The form and
+button are observed only; no submission, point use, or next-episode entry is
+performed. Diagnostics expose the point-card count, presentation, exact-shape,
+and following-row proof booleans, without hidden form/account/token values.
+
+An isolated same-grant capture first verified the END correction with 13 WebP
+and one PNG. The separate bounded PNG trace identified the remaining cause:
+the regenerated middle segment of page 14 had exactly the same JPEG payload
+as its predecessor, but 1,151 RGBA channels differed by one. The predecessor
+was retained and valid; this was an actual pre-JPEG pixel collision, not missing
+history or a memory cap. The strict pre-JPEG matcher correctly rejected it and
+remains unchanged for this case; no tolerance or newest-candidate guess is used.
+
+When the pre-JPEG attempt specifically reports `segment_source_not_exactly_bound`,
+the adapter now tries the actual currently selected DOM image objects for the
+whole visible group. It reuses the complete geometry/style/ownership proof,
+validates each Blob as a bounded static JPEG (Content-Length and body size at
+most 1 MiB, JPEG MIME and signature), and reads opaque sRGB pixels at intrinsic
+segment dimensions. These are composited at the existing offsets/crop into
+1125×1600 and encoded as lossless WebP with exact RGBA round-trip verification.
+Only current browser-owned Blob URLs are read; this adds no server request.
+Actual image-object identities, immutable source URLs, geometry, and styles are
+revalidated through composition, encoding, and the final atomic spread check.
+Unknown/changed sources, non-JPEGs, or failed proof still use the safe PNG path
+or stop on changed body identity. No JPEG-image tolerance is added to pre-JPEG
+attribution, and all existing observer/transfer/page/retry caps remain.
+
+The lower source level is explicit: `capture_method=decoded_viewer_segment_lossless_webp`,
+`capture_provenance=decoded_visible_image_composition`,
+`source_native_bytes_used=false`, `source_native_pixels_used=true`, and
+`pre_jpeg_pixels_used=false`. A successful pre-JPEG capture sets the last flag
+true. The group retains the original native `fallback_reason`; a failed decoded
+attempt also records `decoded_failure_reason`. Both successful pixel paths use
+intrinsic dimensions, never a resized Locator screenshot. Decoded JPEG pixels
+are not claimed to be the earlier pre-JPEG pixels or original server-page bytes.
+
+The final same-grant shared-CDP `CrawlerRunner` verification reached positive
+END with 14 WebP pages and zero PNG: 13 pre-JPEG pages and one decoded-source
+page. Page 14's decoded WebP matched every RGBA byte of an independent direct
+DOM-image reference composition. All 14 files passed ordered Manifest hashes,
+unique fingerprints, VP8L/opaque decoding and dimensions; the exact-members ZIP
+passed CRC and every fingerprint. ZIP SHA-256:
+`caa6e5d6156e57f600597538e5ccde95366da2fe0600e7b0b1550bc38dc905a1`.
+One exact Source GET and one exact Viewer GET were used, with zero other-episode
+or first-party non-GET requests. The stored grant and null quota start were
+unchanged. This isolated verification did not rewrite normal failed runs,
+mark the normal pending Item completed, or create a normal Artifact.
+
+Evidence is under ignored `output/yanmaga-png-investigation/`:
+`fixed-point29/` is the END-only 13-WebP/1-PNG run;
+`point29-png-diagnostic/observations.json` records the exact collision;
+`fixed-point29-final/` contains the genuine Manifest, `decoded-reference-audit.json`,
+`audit.json`, and `chapter-29-fixed.zip`. The QA wrapper's native-attempt log
+still reports the page-14 native failure; the final Manifest and report record
+the successful decoded-source result. `audit_point29_final.py` is the offline
+artifact/Catalog audit. The observation does not guarantee other point-card
+layouts or that every unavailable source can avoid the retained PNG fallback.
+
+Verification: `tests/unit/test_yanmaga_adapter.py` and the entire
+`tests/integration/test_yanmaga_adapter_browser.py` passed **169 tests, 0
+skipped** (406.75 seconds; 23 existing asyncio/Python deprecation warnings).
+Coverage includes normal/native/decoded capture, exact all-pixel references,
+whole-spread selection, non-JPEG rejection, image/style drift, menu/gate/END,
+point-card positive and malformed/hidden/conflicting cases, resource entry,
+and Batch success/failure packaging contracts. `ruff check src tests` and the
+changed-files diff check passed. Full repository pytest and unrelated-site
+Integration/Discovery tests were not rerun because this changes only Yanmaga's
+capture and END contracts. No normal-Catalog Batch or extra paid/ticket action
+was performed; same-episode live verification and its offline audit are above.
+
+## Native capture: regenerated-segment PNG fallback (2026-11-16)
+
+The production observer now accepts a regenerated segment only with one fresh
+exact-byte candidate and a still-bound immediately preceding same-payload
+candidate with complete validated pixel history. After asynchronous Blob
+reading, dimensions and every immutable RGBA byte must be equal. A successful
+comparison carries that history forward; released history, any intervening
+rejected copy, differing RGBA despite identical JPEG, or multiple fresh matches
+still reject pre-JPEG attribution. The decoded-source path above may then be
+used after its independent proof. A later rejected Blob preserves earlier proven bindings.
+Full pixel comparisons run outside viewer hooks, no additional pixel copies
+are retained for history, and all existing caps and source/style/spread proof
+checks remain. Observer stats add `regeneratedBlobBindings`.
+
+The normal Catalog's latest Yanmaga Run 25261 completed `双星のアポクリファ`
+`第５３話 帰路へ` (episode `b7ae4530792bea5b258f31967418f513`) with 16
+pages. Its existing archive contains WebP pages 1–9 and PNG pages 10–16;
+its SHA-256 remains the Catalog Artifact's
+`955509d9128388c9cb32f591e25b69c93eb370eaf0f52ebacc6429920db39bac`.
+The original observer events were not logged, so that run's exact internal
+event sequence cannot be established retrospectively.
+
+Two fresh shared-CDP, isolated `CrawlerRunner` runs of the same public-free
+episode reproduced `segment_source_not_exactly_bound`: both reached positive
+END with 16 pages, WebP 1–13 and rendered PNG 14–16. Production capture code
+was unchanged. A QA-only instrumented observer logged bounded candidate,
+exact-byte Blob match, URL binding, and release events. Blob URLs were replaced
+by document-local numeric IDs in these logs; no source pixels or JPEG payloads
+were exported into the event log. Each run made one exact Source GET and one
+exact Viewer GET, with zero other-episode or first-party non-GET requests.
+The normal Catalog, its Artifact, and its archive were not rewritten.
+
+The observer initially copied and bound 48 segments. During navigation the
+viewer generated nine more segments, with JPEG payloads equal to existing
+bound candidates. The pre-fix `matchBlobParts()` searched both pending and
+already bound candidates; the duplicate triggered its ambiguity branch,
+removed the previous `byUrl` entry, and released both candidates. The new Blob
+was marked invalid and not bound. The later DOM images for pages 14–16 used the new URL IDs,
+so preserving only the previous bindings would not recover those pages.
+Capture then waits up to the existing 750 ms bound and falls back for the
+whole visible group. Neither run had pixel-buffer overflow, hook conflict,
+Blob read failure, or outstanding reads at the failed captures. The exact
+viewer-internal reason for regenerating these segments was not instrumented.
+
+The second diagnostic compared the immutable pre-JPEG RGBA arrays: all nine
+duplicate pairs were dimension-equal and byte-for-byte pixel-equal. This is
+evidence for the observed regeneration, not a general JPEG-to-RGBA equivalence
+rule. Two offline synthetic browser cases independently reproduced the old
+binding's removal: one used identical pixels, while the other changed one
+source channel by one and still produced identical JPEG bytes. Consequently,
+accepting repeated JPEG bytes alone cannot safely recover native pixels.
+The current pre-JPEG correction uses the exact pixel-history proof above rather
+than accepting JPEG equality alone. Missing/released history remains a pre-JPEG
+limitation; decoded-source proof is now attempted before the safe PNG fallback.
+
+A fresh post-fix shared-CDP `CrawlerRunner` recapture of the same Chapter 53
+reached positive END with all 16 pages native 1125×1600 WebP and zero fallback.
+The unmodified production observer reported 57 copies, 57 exact bindings,
+nine regenerated bindings, and zero ambiguity/miss/read-failure/overflow/hook
+conflict. One exact Source GET and one exact Viewer GET occurred; other-episode
+and first-party non-GET requests were zero. The isolated
+`fixed/chapter-53-fixed.zip` has SHA-256
+`410f21db7a0fc615b2ed53992bada4811193470cc8e3a5b0e61791dd33a4d12f`.
+All 16 files passed unique-hash, Manifest identity/order, VP8L/opaque decode,
+dimensions, and ZIP CRC/member/fingerprint checks. The old normal archive's
+hash and the completed Catalog Item were independently rechecked unchanged.
+
+Evidence and QA scripts are under ignored
+`output/yanmaga-png-investigation/`: `summary.json`, `probe.py`, `synthetic.py`,
+`audit.py`, and each run's `observations.json`, `report.json`, and genuine
+`capture/manifest.json`. `baseline/` stopped during listing preflight because
+the initial QA request allowlist incorrectly blocked `/episodes`; the corrected
+`baseline2/` and `attribution/` runs are the successful recaptures. The isolated
+`attribution/chapter-53-diagnostic.zip` preserves the final recapture's exact
+16 Manifest files. Its SHA-256 is
+`e05cebe51a6c066767804e12060814ffba5729b64c7c95f9cad48648d2fb5c3d`.
+The post-fix output, `fixed/audit.json`, and `audit_fixed.py` are in the same
+ignored investigation directory. `probe.py fixed` selects the production
+observer without the prior QA observer-script instrumentation.
+
+Verification: both offline synthetic causal assertions passed; all 32 recaptured
+files passed Manifest hash, image decoding, MIME, dimensions, and sequential
+group-identity checks; the diagnostic ZIP passed CRC, exact member order, and
+all 16 Manifest fingerprints. Post-fix affected native Unit/browser Integration
+passed 34 tests (0 skipped, 115 deselected), including two regeneration rounds,
+exact native output, preserved old bindings, pixel-collision rejection,
+released/rejected history, and simultaneous fresh-candidate ambiguity. The
+final rejection-history assertions were rerun with the encoder and existing
+Batch recrawl-sidecar boundary: 6 passed, 0 skipped, 249 deselected. Recrawl
+Unit tests passed 105 with 0 skipped. `ruff check scripts/prepare_recrawl.py
+src tests` passed. The initial targeted group passed 7 with 0 skipped; its
+pytest cache permission warning was avoided in the later checks by disabling
+the cache provider. Existing asyncio deprecation warnings remain. The full
+suite and unrelated site Integration were not rerun for this site-local
+capture fix and explicit recrawl-policy entry. The earlier offline synthetic
+probes are pre-fix causal evidence, not current-production expectations. The
+instrumentation and request routing can affect timing, so a fixed PNG boundary
+is not guaranteed, and original-run attribution remains qualified as above.
+
+### Recrawl preparation
+
+`scripts/prepare_recrawl.py` explicitly supports Yanmaga with WebP preferred
+and PNG fallback at every position; JPEG is unexpected. The existing
+classification and backup/apply services are reused. The normal-Catalog
+dry-run below reported Item 49591 as `FALLBACK_INCLUDED`, preferred 9 / fallback
+7, with one recrawl candidate and no unexpected/ambiguous/missing archive.
+No `--apply` was performed. Apply-policy Unit coverage verifies unchanged ZIP
+bytes after backup, Source and CrawlRun preservation, and Item-to-pending.
+
+```powershell
+.venv/Scripts/python.exe scripts/prepare_recrawl.py --site yanmaga --item-id 49591 --show-all
+```
+
+The default is read-only scanning; an explicit `--apply` moves the old archive
+to the configured backup tree and returns the Item to pending. It does not
+start capture, reset rights, or change the site's live access semantics.
+
 ## Existing-unknown Rental History recovery (2026-11-16)
 
 Authenticated full Discovery now joins raw-unknown listing rows and same-work
@@ -335,7 +710,10 @@ requires the exact Viewer, the exact first-free completion notice, and finite
 target-bound Rental History evidence before synchronously persisting the
 grant. A trusted stored
 grant can authorize direct retry only when its Catalog expiry is still future
-and a fresh same-target countdown is active. Unknown, conflicting, expired,
+and a fresh same-target countdown is active. The markerless existing-rental
+recovery above also permits a newly observed finite hourly grant to be
+reconfirmed and durably saved through the Batch observer before entry.
+Unknown, conflicting, expired,
 or unsupported states fail closed. The Stage 03 wait path requires a unique
 image-only marker, fresh charged state, verified no-target Rental History, and
 the exact source modal/form before one normal `読む` click. The wait path
@@ -366,10 +744,15 @@ imageである。
 
 Observerはstrictなtop-level Yanmaga viewer documentにだけinstallし、確認済みの
 `toDataURL('image/jpeg',0.9)`直前に限定サイズ・色空間のcanvas RGBAをcopyする。
-JPEG payload、Blob bytes、body image `blob:` sourceの一意なexact byte matchだけで
-candidateを結びつける。曖昧match、hook conflict、source drift、非opaque画素、
+JPEG payload、Blob bytes、body image `blob:` sourceに一意なfresh candidateをexact byte
+matchで結びつける。同payload再生成時には下記の画素履歴証明も必須とする。
+曖昧match、hook conflict、source drift、非opaque画素、
 上限超過、未確認style/layoutはnative groupを拒否する。hookは元のviewer呼び出しの
 引数・戻り値・例外を保ち、owned hookだけをcleanup時に復元する。
+同じJPEG payloadの再生成では、一意なfresh candidateと直前の同payload candidateの
+検証履歴・未解放のRGBA全byte一致をBlob非同期read後に確認する。履歴欠落・衝突・複数fresh
+候補は拒否し、既存の検証済みbindingは保持する。第53話は修正後16ページ全WebP・ENDを
+確認済み。詳細な判定とlive evidenceは本note冒頭を参照。
 
 確認済みのnested DOMは`#content-pN > .pt-img > 3 absolute clipped segment host > img`
 である。first-party page metadataとlogical `.pt-img` boxがnative pageを1125×1600と
@@ -385,7 +768,9 @@ style proofはcapture後・spread全体でも再検証する。
 dimensions、Pillow decode後のpixel equalityを確認する。Manifestは`image/webp` / `.webp`
 を記録し、metadataは`source_native_bytes_used=false`、
 `source_native_pixels_used=true`とする。source/geometry/style/group proofまたはencode検証が
-不成立なら該当のcapture group全体をrendered locator PNGへfail-closed fallbackし、理由を記録する。
+不成立なら理由を記録する。`segment_source_not_exactly_bound`に限り、表示中の実img参照から
+上記decoded-source pathをgroup全体で試す。こちらも証明できなければrendered locator PNGへ
+fail-closed fallbackする。decoded経路はJPEG decode後の画素でありpre-JPEG画素とは区別する。
 Fallbackは検証viewport 2560×1800で1266/1268×1800であり、source-native bytesとは呼ばない。
 
 Readerはnative counter `1/36`、direct `#content-pN` wrappers、見開き時の連続2ページ表示。
@@ -395,7 +780,11 @@ Readerはnative counter `1/36`、direct `#content-pN` wrappers、見開き時の
 
 positive ENDは全body indexのcapture完了、同じepisode route、stable final counter/body wrapperに加え、
 別領域の単一`#rental` cardがviewport内に全体表示され、visibleで他elementに覆われていないことを要求する。
-既存のnext/read・signup・wait終端では一意のtitleが表示される必要がある。signup・waitではさらにfresh listingの対応rowと一致することを確認する。
+奇数ページで最後の見開きを送った後のnative `-/N` は、冒頭のterminal-only専用検証で扱う。
+通常の本文counterやcapture identityにはせず、全本文保存済み・右側へ退避した最終wrapper・
+既知のslotに安定表示された正しい次話card・全周の遮蔽なしを要求する。
+既存のnext/read・signup・waitと新しいpoint-rental終端では一意のtitleが表示される必要がある。
+signup・wait・point-rentalではさらにfresh listingの対応rowと一致することを確認する。
 card内controlはexact `次の話を読む`一つとsignupなし、またはvalid-nextなしでexact
 `無料登録して読む` signup control一つのどちらか。signup URLはsame-origin HTTPS
 `/customers/sign-up`、credentials/fragmentなし、唯一のraw query fieldは
@@ -411,6 +800,8 @@ div.episode-modal-wait.content` blockを代替終端として受け入れる。b
 `#rental`配下にある観測済みauthor-follow cardを終端証拠にできる。対象話のtitle、next/read、signup、wait markerは存在してはいけない。
 一意の`a.author-info`、正確な表示文言`作者をフォローして次の更新を待つ！`、観測済みX/arrow画像、HTTPS `x.com`リンクと既知祖先構造を要求する。リンクは観測だけで、押さない。
 このbranchでもbody/route/ownership/access-gate/ENDの他検証はすべて維持する。
+観測済みpoint-rental cardも冒頭の厳密なform/thumbnail/title/表示検証で終端にできる。
+`レンタルして読む`やformは押さず、ポイントを使用しない。他の終端controlとの競合は拒否する。
 Unknown layout、page gap/duplicate、spread片側欠落、未知auxiliary/access gate、source/style drift、
 終端不明はfail-closed。next arrowは診断のみ。
 

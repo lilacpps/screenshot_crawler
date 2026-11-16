@@ -101,7 +101,8 @@ async def test_auto_direct_and_work_ticket_strategies_are_supported() -> None:
 def test_page_counter_is_bounded_and_consistent() -> None:
     assert parse_yanmaga_page_counter(" 1/36 ") == (1, 36)
     assert parse_yanmaga_page_counter("36/36") == (36, 36)
-    for value in (None, "0/36", "37/36", "1/0", "1 / 36", "1/2001", "1/2/3"):
+    for value in (None, "0/36", "37/36", "1/0", "1 / 36", "1/2001", "1/2/3",
+                  "-/15", "16/15", "-/3", "4/3"):
         assert parse_yanmaga_page_counter(value) is None
 
 

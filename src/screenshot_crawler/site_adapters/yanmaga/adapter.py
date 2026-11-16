@@ -50,6 +50,7 @@ from screenshot_crawler.site_adapters.yanmaga.discovery import (
 from screenshot_crawler.site_adapters.yanmaga.native_capture import (
     NativeCaptureOutcome,
     activate_yanmaga_native_observer,
+    capture_yanmaga_decoded_segment_webp,
     capture_yanmaga_native_webp,
     dispose_yanmaga_native_observer,
     install_yanmaga_native_observer,
@@ -180,6 +181,13 @@ class _ReaderSnapshot:
     rental_author_follow_label: str | None = None
     rental_author_follow_presented: bool = False
     rental_author_follow_exact: bool = False
+    rental_point_count: int = 0
+    rental_point_presented: bool = False
+    rental_point_exact: bool = False
+    rental_point_code: str | None = None
+    rental_point_geometry: tuple[float, float, float, float] | None = None
+    terminal_only: bool = False
+    rental_perimeter_owned: bool = False
 
     @property
     def visible_pages(self) -> tuple[_BodyPage, ...]:
@@ -237,7 +245,7 @@ def parse_yanmaga_page_counter(value: str | None) -> tuple[int, int] | None:
 def _read_snapshot_js() -> str:
     return r"""() => {
       const counterLeaves = [...document.querySelectorAll('body *')].filter(node =>
-        node.children.length === 0 && /^\s*[1-9][0-9]*\s*\/\s*[1-9][0-9]*\s*$/.test(node.innerText || ''));
+        node.children.length === 0 && /^\s*(?:[1-9][0-9]*|-)\s*\/\s*[1-9][0-9]*\s*$/.test(node.innerText || ''));
       const pagesRoots = [...document.querySelectorAll('.pages#content')];
       const root = pagesRoots.length === 1 ? pagesRoots[0] : null;
       const rect = node => {
@@ -380,7 +388,61 @@ def _read_snapshot_js() -> str:
       const waitLabelNode = waitChildren.length === 2 && waitChildren[1].tagName === 'SPAN'
         ? waitChildren[1] : null;
       const waitPresentation = presented(waitNode);
+      const pointNodes = rental ? [...rental.querySelectorAll('#js-btn-rental')] : [];
+      const pointNode = pointNodes.length === 1 ? pointNodes[0] : null;
+      const pointForms = rental ? [...rental.querySelectorAll('#form-rental')] : [];
+      const pointForm = pointForms.length === 1 ? pointForms[0] : null;
+      const pointCodes = pointForm ? [...pointForm.querySelectorAll('input[name="jdcn"]')] : [];
+      const pointTypes = pointForm ? [...pointForm.querySelectorAll('input[name="rental_type"]')] : [];
+      const pointLabels = pointNode ? [...pointNode.querySelectorAll(':scope > span')] : [];
+      const pointImages = rental ? [...rental.querySelectorAll(
+        '.episode-modal-thumbnail .episode-modal-image > img.content')] : [];
+      const pointCosts = rental ? [...rental.querySelectorAll(
+        'dl.episode-modal-point--necessary > dd > span.mod-episode-point--normal')] : [];
+      let pointFormExact = false, pointCode = null;
+      if (pointNode && pointForm && pointCodes.length === 1 && pointTypes.length === 1 &&
+          pointLabels.length === 1 && pointImages.length === 1 && pointCosts.length === 1) {
+        try {
+          const action = new URL(pointForm.action, location.href);
+          const thumbnail = new URL(pointImages[0].currentSrc || pointImages[0].src, location.href);
+          const code = pointCodes[0].value;
+          pointFormExact = pointNode.matches('a.mod-button--orange.rental.content') &&
+            pointNode.getAttribute('href') === null &&
+            pointNode.parentElement?.matches('.aspect-ratio-108-17.mt-button') &&
+            pointForm.parentElement === pointNode &&
+            pointForm.matches('form.ga-viewer-rental-point') &&
+            pointForm.method.toLowerCase() === 'post' &&
+            action.origin === 'https://yanmaga.jp' && action.pathname === '/viewer/rental' &&
+            !action.username && !action.password && !action.search && !action.hash &&
+            pointCodes[0].type === 'hidden' && /^[A-Za-z0-9]{20}$/.test(code) &&
+            pointTypes[0].type === 'hidden' && pointTypes[0].value === 'point_rental' &&
+            (pointLabels[0].innerText || '').trim() === 'レンタルして読む' &&
+            /^[1-9][0-9]{0,5}$/.test((pointCosts[0].innerText || '').trim()) &&
+            thumbnail.origin === 'https://eh96lnrmau.user-space.cdn.idcfcloud.net' &&
+            thumbnail.pathname === '/thumbnail/episode/'+code+'.jpg' &&
+            !thumbnail.username && !thumbnail.password && !thumbnail.search && !thumbnail.hash &&
+            pointImages[0].complete && pointImages[0].naturalWidth > 0 && visible(pointImages[0]);
+          if (pointFormExact) pointCode = code;
+        } catch {}
+      }
+      const pointPresentation = presented(pointNode);
       const rentalPresentation = presented(rental);
+      const rentalBox = rentalPresentation.box;
+      const rentalPerimeterOwned = !!rental && !!rentalBox && [
+        [4,4],[rentalBox.width/2,4],[rentalBox.width-4,4],
+        [4,rentalBox.height/2],[rentalBox.width-4,rentalBox.height/2],
+        [4,rentalBox.height-4],[rentalBox.width/2,rentalBox.height-4],
+        [rentalBox.width-4,rentalBox.height-4]
+      ].every(([x,y])=>{
+        const hit=document.elementFromPoint(rentalBox.x+x,rentalBox.y+y);
+        return !!hit && (hit===rental || rental.contains(hit));
+      });
+      const caption=counterLeaves.length===1?counterLeaves[0]:null;
+      const terminalCounterExact=!!caption && caption.tagName==='DIV' &&
+        caption.id==='menu_slidercaption' &&
+        document.querySelectorAll('#menu_slidercaption').length===1 &&
+        caption.matches('#menu_seekbar > #menu_slidercaption_base > #menu_slidercaption') &&
+        caption.closest('#menu')===document.getElementById('menu');
       const titlePresentation = presented(title);
       const nextPresentation = presented(next.length === 1 ? next[0] : null);
       const signupPresentation = presented(signup);
@@ -421,6 +483,7 @@ def _read_snapshot_js() -> str:
       return {
         counterCount:counterLeaves.length,
         counterText:counterLeaves.length === 1 ? (counterLeaves[0].innerText || '').trim() : '',
+        terminalCounterExact,
         pageContainerCount:pagesRoots.length,
         viewportWidth:innerWidth,viewportHeight:innerHeight,
         bodyPages,
@@ -429,11 +492,17 @@ def _read_snapshot_js() -> str:
         rentalCount:rentalNodes.length,
         rentalVisible:!!rental && visible(rental),
         rentalPresented:rentalPresentation.presented,
+        rentalPerimeterOwned,
         rentalGeometry:rentalPresentation.box,
         rentalTitle:title?.innerText?.trim() || null,
         rentalTitleCount:titles.length,
         rentalTitlePresented:titlePresentation.presented,
         rentalTitleGeometry:titlePresentation.box,
+        rentalPointCount:pointNodes.length,
+        rentalPointPresented:pointPresentation.presented,
+        rentalPointExact:pointFormExact,
+        rentalPointCode:pointCode,
+        rentalPointGeometry:pointPresentation.box,
         rentalAuthorFollowCount:authorLinks.length,
         rentalAuthorFollowLabel:authorName ? (authorName.innerText || '').trim() : null,
         rentalAuthorFollowPresented:!!authorLink && authorLinkPresentation.presented &&
@@ -495,6 +564,7 @@ class YanmagaAdapter(SiteAdapter):
         self._existing_access_grant_until: datetime | None = None
         self._first_free_entry_attempted = False
         self._first_free_release_state = "not_attempted"
+        self._history_grant_recovery_state = "not_attempted"
         self._first_free_grant: ConfirmedAccessGrant | None = None
         self._first_free_completion_notice_seen = False
         self._quota_resource: str | None = None
@@ -579,6 +649,7 @@ class YanmagaAdapter(SiteAdapter):
         self._work_key = work_key
         self._first_free_entry_attempted = False
         self._first_free_release_state = "not_attempted"
+        self._history_grant_recovery_state = "not_attempted"
         self._first_free_grant = None
         self._first_free_completion_notice_seen = False
         self._quota_resource = None
@@ -700,6 +771,7 @@ class YanmagaAdapter(SiteAdapter):
         )
         trusted_until = self._active_existing_grant_until()
         fresh_existing_grant: RentalCountdown | None = None
+        recovered_grant: ConfirmedAccessGrant | None = None
         if trusted_until is not None and not row.free_marker:
             if not listing.authenticated or listing.mypage_href is None:
                 raise AccessResourceUnavailableError("yanmaga_existing_grant_auth_unknown")
@@ -719,6 +791,25 @@ class YanmagaAdapter(SiteAdapter):
             )
             if fresh_existing_grant is None:
                 raise AccessResourceUnavailableError("yanmaga_existing_grant_not_active")
+
+        # Internal Discovery can recover an already-active rental after an
+        # earlier entry failed before its grant was persisted. Reconfirm that
+        # exact finite grant and save it before entering the Source again.
+        if (
+            trusted_until is None
+            and not quota_attempt
+            and listing.authenticated
+            and listing.mypage_href is not None
+            and match.source.access_mode == "quota"
+            and match.source.access_granted_until_observed is True
+            and not any((row.free_marker, row.first_free_marker, row.wait_free_marker,
+                         row.red_marker_present, row.known_restricted))
+        ):
+            self._history_grant_recovery_state = "candidate"
+            fresh_existing_grant, recovered_grant = await self._recover_observed_history_grant(
+                page, expected, listing.mypage_href, match.source.access_granted_until
+            )
+            self._history_grant_recovery_state = "reconfirmed"
 
         fresh_first_free = (
             authenticated_first_free and self._existing_access_grant_until is None
@@ -790,6 +881,10 @@ class YanmagaAdapter(SiteAdapter):
             wait_quota=row.wait_free_marker,
             require_charged=quota_attempt,
         )
+        if recovered_grant is not None:
+            self.report_confirmed_access_grant(recovered_grant)
+            self._existing_access_grant_until = recovered_grant.access_granted_until
+            self._history_grant_recovery_state = "persisted"
         if fresh_first_free and self._first_free_entry_attempted:
             raise AccessResourceUnavailableError("yanmaga_first_free_entry_already_attempted")
         self._first_free_entry_attempted = bool(fresh_first_free)
@@ -883,6 +978,63 @@ class YanmagaAdapter(SiteAdapter):
         ):
             return None
         return value
+
+    async def _recover_observed_history_grant(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+        observed_mypage_href: str,
+        discovered_until: datetime | str | None,
+    ) -> tuple[RentalCountdown, ConfirmedAccessGrant]:
+        if getattr(self, "_confirmed_access_grant_observer", None) is None:
+            raise AccessResourceUnavailableError("yanmaga_history_recovery_requires_batch_observer")
+        try:
+            bound = (
+                datetime.fromisoformat(discovered_until)
+                if isinstance(discovered_until, str) else discovered_until
+            )
+        except ValueError:
+            bound = None
+        now = datetime.now(UTC)
+        if (
+            not isinstance(bound, datetime)
+            or bound.tzinfo is None
+            or bound.utcoffset() is None
+            or bound.astimezone(UTC) <= now
+        ):
+            raise AccessResourceUnavailableError("yanmaga_history_recovery_discovery_bound_invalid")
+        proofs = await fetch_rental_history_countdowns(
+            page,
+            observed_mypage_href=observed_mypage_href,
+            targets=(expected,),
+            max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+        )
+        if len(proofs) != 1 or proofs[0][0] != self._expected_external_id:
+            raise AccessResourceUnavailableError("yanmaga_history_recovery_not_exact")
+        countdown = proofs[0][1]
+        expiry = countdown.access_granted_until
+        now = datetime.now(UTC)
+        if (
+            not countdown.active
+            or not isinstance(expiry, datetime)
+            or expiry.tzinfo is None
+            or expiry.utcoffset() is None
+            or expiry.astimezone(UTC) <= now
+            or bound.astimezone(UTC) <= now
+            or countdown.expiry_evidence != "site_countdown_lower_bound"
+            or countdown.observed_at.tzinfo is None
+            or countdown.observed_at.utcoffset() is None
+            or countdown.observed_at.astimezone(UTC) > now
+        ):
+            raise AccessResourceUnavailableError("yanmaga_history_recovery_finite_hour_bound_unconfirmed")
+        grant = ConfirmedAccessGrant(
+            site="yanmaga",
+            external_id=self._expected_external_id or "",
+            observed_at=countdown.observed_at,
+            access_granted_until=min(bound, expiry),
+            expiry_evidence="site_countdown_lower_bound",
+        )
+        return countdown, grant
 
     @property
     def first_free_release_state(self) -> str:
@@ -1666,6 +1818,15 @@ class YanmagaAdapter(SiteAdapter):
         if not isinstance(raw, dict):
             raise UnknownPageStateError("Yanmaga reader state is malformed")
         counter = parse_yanmaga_page_counter(raw.get("counterText"))
+        terminal_only = False
+        if counter is None and raw.get("terminalCounterExact") is True:
+            terminal_match = re.fullmatch(r"-/([1-9][0-9]*)", str(raw.get("counterText", "")))
+            if terminal_match is not None:
+                total = int(terminal_match[1])
+                if 3 <= total <= MAX_BODY_PAGES and total % 2 == 1:
+                    # This is a terminal UI position, never a content-page ID.
+                    counter = (total + 1, total)
+                    terminal_only = True
         if (
             raw.get("counterCount") != 1
             or counter is None
@@ -1742,6 +1903,7 @@ class YanmagaAdapter(SiteAdapter):
             "rentalCount",
             "rentalTitleCount",
             "rentalAuthorFollowCount",
+            "rentalPointCount",
             "rentalNextCount",
             "rentalSignupCount",
             "rentalWaitCount",
@@ -1768,6 +1930,7 @@ class YanmagaAdapter(SiteAdapter):
             counter_text=str(raw.get("counterText") or ""),
             current=current,
             total=total,
+            terminal_only=terminal_only,
             viewport_width=float(raw.get("viewportWidth") or 0),
             viewport_height=float(raw.get("viewportHeight") or 0),
             page_container_count=int(raw["pageContainerCount"]),
@@ -1777,6 +1940,7 @@ class YanmagaAdapter(SiteAdapter):
             rental_count=int(raw["rentalCount"]),
             rental_visible=raw.get("rentalVisible") is True,
             rental_presented=raw.get("rentalPresented") is True,
+            rental_perimeter_owned=raw.get("rentalPerimeterOwned") is True,
             rental_geometry=geometry("rentalGeometry"),
             rental_title=raw.get("rentalTitle") if isinstance(raw.get("rentalTitle"), str) else None,
             rental_title_presented=raw.get("rentalTitlePresented") is True,
@@ -1790,6 +1954,13 @@ class YanmagaAdapter(SiteAdapter):
             ),
             rental_author_follow_presented=raw.get("rentalAuthorFollowPresented") is True,
             rental_author_follow_exact=raw.get("rentalAuthorFollowExact") is True,
+            rental_point_count=int(raw["rentalPointCount"]),
+            rental_point_presented=raw.get("rentalPointPresented") is True,
+            rental_point_exact=raw.get("rentalPointExact") is True,
+            rental_point_code=(
+                raw.get("rentalPointCode") if isinstance(raw.get("rentalPointCode"), str) else None
+            ),
+            rental_point_geometry=geometry("rentalPointGeometry"),
             rental_next_label=raw.get("rentalNextLabel") if isinstance(raw.get("rentalNextLabel"), str) else None,
             rental_next_presented=raw.get("rentalNextPresented") is True,
             rental_next_geometry=geometry("rentalNextGeometry"),
@@ -1867,6 +2038,10 @@ class YanmagaAdapter(SiteAdapter):
         )
         if not tolerate_menu and not snapshot.menu_hidden:
             raise UnknownPageStateError("Yanmaga reader menu is not proven hidden for capture")
+        if snapshot.terminal_only:
+            if not self._terminal_only_layout_is_exact(snapshot):
+                raise UnknownPageStateError("Yanmaga terminal-only layout is not the observed odd-page shape")
+            return ()
         visible = snapshot.visible_pages
         if not visible or len(visible) > 2:
             raise UnknownPageStateError("Yanmaga viewer has an unsupported visible body-page group")
@@ -1899,6 +2074,26 @@ class YanmagaAdapter(SiteAdapter):
         if len(indices) == 2 and indices[1] != indices[0] + 1:
             raise UnknownPageStateError("Yanmaga visible spread is not a contiguous page pair")
         return indices
+
+    def _terminal_only_layout_is_exact(self, snapshot: _ReaderSnapshot) -> bool:
+        last = [item for item in snapshot.body_pages if item.index == snapshot.total]
+        box = snapshot.rental_geometry
+        return (
+            snapshot.terminal_only
+            and snapshot.total >= 3 and snapshot.total % 2 == 1
+            and snapshot.current == snapshot.total + 1
+            and not snapshot.visible_pages
+            and len(last) == 1
+            and all(item.x >= snapshot.viewport_width - 0.5 for item in snapshot.body_pages)
+            and abs(last[0].y) <= 0.5 and abs(last[0].height - VIEWPORT_HEIGHT) <= 0.5
+            and self._segments_form_observed_page(last[0])
+            and snapshot.rental_count == 1 and snapshot.rental_visible
+            and snapshot.rental_presented and snapshot.rental_perimeter_owned
+            and box is not None
+            and abs(box[0] - snapshot.viewport_width / 2) <= 0.5
+            and abs(box[1]) <= 0.5 and abs(box[2] - 1272) <= 0.5
+            and abs(box[3] - VIEWPORT_HEIGHT) <= 0.5
+        )
 
     @staticmethod
     def _segments_form_observed_page(page: _BodyPage) -> bool:
@@ -1964,6 +2159,8 @@ class YanmagaAdapter(SiteAdapter):
         return (
             snapshot.current,
             snapshot.total,
+            snapshot.terminal_only,
+            snapshot.rental_perimeter_owned,
             tuple(
                 (
                     page.index,
@@ -2002,6 +2199,11 @@ class YanmagaAdapter(SiteAdapter):
             snapshot.rental_author_follow_label,
             snapshot.rental_author_follow_presented,
             snapshot.rental_author_follow_exact,
+            snapshot.rental_point_count,
+            snapshot.rental_point_presented,
+            snapshot.rental_point_exact,
+            snapshot.rental_point_code,
+            snapshot.rental_point_geometry,
             snapshot.rental_next_label,
             snapshot.rental_next_presented,
             snapshot.rental_next_geometry,
@@ -2223,7 +2425,8 @@ class YanmagaAdapter(SiteAdapter):
         if self._captured_indices != list(range(1, snapshot.total + 1)):
             return False
         if (
-            snapshot.current != snapshot.total
+            (snapshot.current != snapshot.total if not snapshot.terminal_only else
+             not self._terminal_only_layout_is_exact(snapshot))
             or snapshot.rental_count != 1
             or snapshot.menu_count != 1
             or not snapshot.menu_hidden
@@ -2248,10 +2451,13 @@ class YanmagaAdapter(SiteAdapter):
             and snapshot.rental_next_presented
             and snapshot.rental_next_geometry is not None
             and snapshot.rental_signup_count == 0
+            and snapshot.rental_point_count == 0
+            and (not snapshot.terminal_only or self._rental_title_matches_immediate_next_row(snapshot))
         )
         registration_boundary = (
             title_proof
             and snapshot.rental_next_count == 0
+            and snapshot.rental_point_count == 0
             and snapshot.rental_signup_count == 1
             and snapshot.rental_signup_label == "無料登録して読む"
             and snapshot.rental_signup_same_origin
@@ -2266,15 +2472,19 @@ class YanmagaAdapter(SiteAdapter):
         latest_author_follow_boundary = self._latest_author_follow_matches_terminal(
             snapshot
         )
+        point_rental_boundary = title_proof and self._point_rental_matches_immediate_next_row(
+            snapshot
+        )
         if not (
             valid_next
             or registration_boundary
             or wait_countdown_boundary
             or latest_author_follow_boundary
+            or point_rental_boundary
         ):
             return False
         terminal_page = [page for page in snapshot.visible_pages if page.index == snapshot.total]
-        if (
+        if not snapshot.terminal_only and (
             len(terminal_page) != 1
             or not terminal_page[0].center_owned
             or not terminal_page[0].perimeter_owned
@@ -2285,6 +2495,43 @@ class YanmagaAdapter(SiteAdapter):
         return (
             self._viewer_url is None
             or parse_yanmaga_viewer_url(self._viewer_url) == expected
+        )
+
+    def _point_rental_matches_immediate_next_row(self, snapshot: _ReaderSnapshot) -> bool:
+        if (
+            snapshot.rental_point_count != 1
+            or not snapshot.rental_point_presented
+            or not snapshot.rental_point_exact
+            or snapshot.rental_point_code is None
+            or snapshot.rental_point_geometry is None
+            or snapshot.rental_next_count != 0
+            or snapshot.rental_signup_count != 0
+            or snapshot.rental_wait_count != 0
+            or snapshot.rental_author_follow_count != 0
+            or self._listing_rows is None
+            or not snapshot.rental_title
+        ):
+            return False
+        return self._rental_title_matches_immediate_next_row(snapshot)
+
+    def _rental_title_matches_immediate_next_row(self, snapshot: _ReaderSnapshot) -> bool:
+        if self._listing_rows is None or not snapshot.rental_title:
+            return False
+        expected = self._require_expected()
+        rows = self._listing_rows
+        indices = [index for index, row in enumerate(rows) if row.episode_id == expected.episode_id]
+        if len(indices) != 1 or indices[0] + 1 >= len(rows):
+            return False
+        following = rows[indices[0] + 1]
+        route = parse_yanmaga_episode_url(following.url)
+        title = " ".join(snapshot.rental_title.split())
+        return (
+            route is not None
+            and route.slug == expected.slug
+            and route.episode_id == following.episode_id
+            and sum(row.episode_id == following.episode_id for row in rows) == 1
+            and " ".join(following.title.split()) == title
+            and sum(" ".join(row.title.split()) == title for row in rows) == 1
         )
 
     def _latest_author_follow_matches_terminal(self, snapshot: _ReaderSnapshot) -> bool:
@@ -2311,6 +2558,7 @@ class YanmagaAdapter(SiteAdapter):
             and snapshot.rental_next_count == 0
             and snapshot.rental_signup_count == 0
             and snapshot.rental_wait_count == 0
+            and snapshot.rental_point_count == 0
             and snapshot.rental_author_follow_count == 1
             and snapshot.rental_author_follow_label == _LATEST_AUTHOR_FOLLOW_LABEL
             and snapshot.rental_author_follow_presented
@@ -2327,6 +2575,7 @@ class YanmagaAdapter(SiteAdapter):
             or _WAIT_END_LABEL.fullmatch(snapshot.rental_wait_label or "") is None
             or snapshot.rental_next_count != 0
             or snapshot.rental_signup_count != 0
+            or snapshot.rental_point_count != 0
             or self._listing_rows is None
         ):
             return False
@@ -2403,7 +2652,7 @@ class YanmagaAdapter(SiteAdapter):
         if self._total_pages is None:
             raise UnknownPageStateError("Yanmaga reader was not initialized")
         self._validate_snapshot(snapshot)
-        if snapshot.current == snapshot.total and self._captured_indices == list(
+        if (snapshot.current == snapshot.total or snapshot.terminal_only) and self._captured_indices == list(
             range(1, snapshot.total + 1)
         ):
             await self._wait_for_positive_terminal(page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS)
@@ -2493,8 +2742,23 @@ class YanmagaAdapter(SiteAdapter):
         else:
             fallback_reason = "native_observer_not_installed"
 
+        decoded_group = False
+        decoded_failure_reason: str | None = None
+        if fallback_reason == "segment_source_not_exactly_bound":
+            decoded_outcomes = [
+                await capture_yanmaga_decoded_segment_webp(page, f"content-p{index}")
+                for index in target_indices
+            ]
+            if all(outcome.capture is not None for outcome in decoded_outcomes):
+                native_outcomes = decoded_outcomes
+                decoded_group = True
+            else:
+                decoded_failure_reason = next(
+                    outcome.reason for outcome in decoded_outcomes if outcome.capture is None
+                )
+
         native_group = (
-            fallback_reason is None
+            (fallback_reason is None or decoded_group)
             and len(native_outcomes) == len(target_indices)
             and all(outcome.capture is not None for outcome in native_outcomes)
         )
@@ -2572,7 +2836,9 @@ class YanmagaAdapter(SiteAdapter):
         for index in target_indices:
             await release_yanmaga_native_page(page, f"content-p{index}")
         method = (
-            "native_pre_jpeg_lossless_webp"
+            "decoded_viewer_segment_lossless_webp"
+            if native_group and decoded_group
+            else "native_pre_jpeg_lossless_webp"
             if native_group
             else "rendered_dom_body_wrapper_png"
         )
@@ -2589,7 +2855,8 @@ class YanmagaAdapter(SiteAdapter):
                 }
                 for index, capture in zip(captured_now, captures, strict=True)
             ],
-            "fallback_reason": None if native_group else fallback_reason,
+            "fallback_reason": None if native_group and not decoded_group else fallback_reason,
+            "decoded_failure_reason": decoded_failure_reason,
         }
         self._captured_indices.extend(captured_now)
         return tuple(captures)
@@ -2621,6 +2888,8 @@ class YanmagaAdapter(SiteAdapter):
         snapshot = await self._read_snapshot(page)
         if snapshot is None:
             raise PageChangeTimeoutError("Yanmaga reader identity is not ready")
+        if snapshot.terminal_only:
+            raise UnknownPageStateError("Yanmaga terminal-only screen has no body identity")
         visible_indices = self._validate_snapshot(snapshot)
         page_ids = tuple(f"content-p{index}" for index in visible_indices)
         return ContentIdentity(
@@ -2706,6 +2975,19 @@ class YanmagaAdapter(SiteAdapter):
             candidate = await self._read_snapshot(page)
             if candidate is not None and candidate.total != self._total_pages:
                 raise UnknownPageStateError("Yanmaga reader page total changed after navigation")
+            if candidate is not None and candidate.terminal_only:
+                stable = await self._wait_for_stable_snapshot(
+                    page, timeout_ms=max(1, int((deadline - monotonic()) * 1000))
+                )
+                if not stable.terminal_only or not self._is_positive_terminal(stable):
+                    await page.wait_for_timeout(RENDER_POLL_MS)
+                    continue
+                # The stable signature already includes every terminal marker
+                # and geometry field; do not spend the same wait budget twice.
+                self._advance_pending = False
+                self._ended = True
+                await self._dispose_native_observer(page)
+                return
             if candidate is not None and candidate.current > previous:
                 stable = await self._wait_for_stable_snapshot(
                     page,
@@ -2715,7 +2997,11 @@ class YanmagaAdapter(SiteAdapter):
                 if stable.current <= previous or not any(
                     index not in self._captured_indices for index in indices
                 ):
-                    raise UnknownPageStateError("Yanmaga page turn did not reveal a new body page")
+                    # The counter can lead the slide animation while the old
+                    # body remains briefly stable. Keep observing this same
+                    # turn; never press again or accept the old frame as new.
+                    await page.wait_for_timeout(RENDER_POLL_MS)
+                    continue
                 self._advance_pending = False
                 return
             await page.wait_for_timeout(RENDER_POLL_MS)
@@ -2733,16 +3019,25 @@ class YanmagaAdapter(SiteAdapter):
         visible = snapshot.visible_pages if snapshot is not None else ()
         group = dict(self._last_capture_group)
         native_group = group.get("group_method") == "native_pre_jpeg_lossless_webp"
+        decoded_group = group.get("group_method") == "decoded_viewer_segment_lossless_webp"
         metadata: dict[str, object] = {
             "capture_provenance": (
                 "pre_jpeg_viewer_canvas_composition"
                 if native_group
+                else "decoded_visible_image_composition"
+                if decoded_group
                 else "rendered_dom_body_wrapper"
             ),
             "first_free_release_state": self._first_free_release_state,
+            "history_grant_recovery_state": self._history_grant_recovery_state,
+            "native_counter": snapshot.counter_text if snapshot is not None else None,
+            "terminal_only": snapshot.terminal_only if snapshot is not None else False,
+            "visible_body_indices": [item.index for item in visible],
+            "captured_body_indices": list(self._captured_indices),
             "capture_method": group.get("group_method", "capture_not_recorded"),
             "source_native_bytes_used": False,
-            "source_native_pixels_used": native_group,
+            "source_native_pixels_used": native_group or decoded_group,
+            "pre_jpeg_pixels_used": native_group,
             "capture_viewport": f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT}",
             "source_segment_count": 3,
             "source_segment_widths": sorted(
@@ -2752,14 +3047,15 @@ class YanmagaAdapter(SiteAdapter):
         }
         if (
             snapshot is not None
-            and snapshot.current == snapshot.total
+            and (snapshot.current == snapshot.total or snapshot.terminal_only)
             and self._captured_indices == list(range(1, snapshot.total + 1))
         ):
             terminal_page = [
                 item for item in visible if item.index == snapshot.total
             ]
             metadata["terminal_proof"] = {
-                "native_counter_complete": True,
+                "native_counter_complete": not snapshot.terminal_only,
+                "terminal_only_layout_exact": self._terminal_only_layout_is_exact(snapshot),
                 "captured_body_page_count": len(self._captured_indices),
                 "body_index_sequence_complete": True,
                 "terminal_wrapper_visible": len(terminal_page) == 1,
@@ -2782,6 +3078,12 @@ class YanmagaAdapter(SiteAdapter):
                 ),
                 "rental_signup_presented_in_viewport_unobstructed": snapshot.rental_signup_presented,
                 "rental_signup_count_one": snapshot.rental_signup_count == 1,
+                "point_rental_count": snapshot.rental_point_count,
+                "point_rental_presented": snapshot.rental_point_presented,
+                "point_rental_exact": snapshot.rental_point_exact,
+                "point_rental_matches_immediate_next_row": (
+                    self._point_rental_matches_immediate_next_row(snapshot)
+                ),
                 "latest_author_follow_count": snapshot.rental_author_follow_count,
                 "latest_author_follow_label_match": (
                     snapshot.rental_author_follow_label == _LATEST_AUTHOR_FOLLOW_LABEL

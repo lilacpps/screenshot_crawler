@@ -125,6 +125,10 @@ def _add_completed_archive(
         ("younganimal", ["001.PNG"], "FALLBACK_INCLUDED"),
         ("younganimal", ["001.webp", "002.png"], "FALLBACK_INCLUDED"),
         ("younganimal", ["001.jpg"], "UNEXPECTED_FORMAT"),
+        ("yanmaga", ["001.WEBP"], "PREFERRED_ONLY"),
+        ("yanmaga", ["001.PNG"], "FALLBACK_INCLUDED"),
+        ("yanmaga", ["001.webp", "002.png"], "FALLBACK_INCLUDED"),
+        ("yanmaga", ["001.jpg"], "UNEXPECTED_FORMAT"),
         ("magapoke", ["001.jpeg"], "PREFERRED_ONLY"),
     ],
 )
@@ -441,7 +445,7 @@ def test_force_without_item_scope_is_rejected_before_opening_catalog(tmp_path: P
     assert not path.exists()
 
 
-@pytest.mark.parametrize("site", ["comicdays", "hanayume", "younganimal"])
+@pytest.mark.parametrize("site", ["comicdays", "hanayume", "younganimal", "yanmaga"])
 def test_fallback_apply_moves_archive_updates_locator_and_pending(tmp_path: Path, site: str) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     _work, item, _source, _target, _run, artifact, archive_path = _add_completed_archive(

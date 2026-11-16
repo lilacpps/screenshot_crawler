@@ -99,6 +99,10 @@ SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
         preferred_extensions=frozenset({".webp"}),
         fallback_extensions=frozenset({".png"}),
     ),
+    "yanmaga": ArchivePolicy(
+        preferred_extensions=frozenset({".webp"}),
+        fallback_extensions=frozenset({".png"}),
+    ),
     "magapoke": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
         fallback_extensions=frozenset({".png"}),

@@ -3238,9 +3238,19 @@ are not inspected. It does not run Discovery or modify
 sources, source targets, crawl runs, or ZIP contents. The current site policy
 mapping is intentionally limited to the confirmed production capture paths:
 Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
-MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback. Hanayume's
+MANGA ONE, Hanayume, Younganimal, and Yanmaga prefer source-native WebP with PNG fallback. Hanayume's
 mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
 mapping was added on 2026-10-19 after the fractional-destination capture correction.
+Yanmaga's explicit mapping was added on 2026-11-16 with no positional PNG
+exception. `--site yanmaga --item-id 49591 --show-all` on the normal Catalog
+reported the existing Chapter 53 archive as `FALLBACK_INCLUDED` (9 preferred
+WebP, 7 fallback PNG) and one recrawl candidate; no normal `--apply` was run.
+The existing policy classification and archive-backup/apply Unit cases now
+include Yanmaga, including JPEG rejection and preservation of Source/Run/ZIP
+bytes. The complete recrawl Unit file passed 105 tests with 0 skipped, and the
+existing Batch recrawl-sidecar boundary also passed. The related site-local
+capture correction and isolated 16-WebP live verification are recorded in
+`14_yanmaga.md`; generic Batch/packaging behavior is unchanged.
 BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback.
 Only last-five-saved-page PNGs are accepted when the archive also contains
 at least one JPEG companion; opening PNGs outside that tail remain recrawl candidates.
