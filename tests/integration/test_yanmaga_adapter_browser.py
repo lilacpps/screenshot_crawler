@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import zipfile
 from datetime import UTC, datetime, timedelta
@@ -67,6 +68,14 @@ WAIT_NEXT_ORDER_LABEL = "\u7b2c\uff13\uff10\u8a71 \u30c6\u30b9\u30c8"
 WAIT_END_CLOCK_SRC = (
     "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
     "icon_clock-048e89030730e8f736d174dde55780bad06a38135282b236b2c20ae032812836.svg"
+)
+LATEST_AUTHOR_LINK_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "sns-x-9af04e53dce57ba890a7ccc29c10ef2d0359814ed03edf511023afb6a28b852b.png"
+)
+LATEST_AUTHOR_ARROW_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "arrow-right-402a9836009e2194d9ea5e0cfe96f36bc4dc1aa721be087f829dc8e19f2a1d11.png"
 )
 WAIT_MODAL_WORK_TITLE = "Synthetic work"
 WAIT_MODAL_EPISODE_TITLE = "\u7b2c\uff11\u8a71\u3000Synthetic"
@@ -214,6 +223,21 @@ def _viewer_html(
         '<a class="mod-button--orange content ga-viewer-rental-signup" '
         f'href="/customers/sign-up?forward={NEXT_EPISODE_ID}">無料登録して読む</a>'
     )
+    latest_author_control = (
+        '<div id="js-rental-box" class="rental-bg ga-viewer-rental">'
+        '<div id="js-modal-content" class="rental-modal">'
+        '<div class="wrapper-rental-button">'
+        '<div id="js-modal-button" class="wrapper-mod-modal background-transparent">'
+        '<a class="author-info" href="https://x.com/test-author" '
+        'target="_blank" rel="noopener noreferrer">'
+        f'<img class="author-link" src="{LATEST_AUTHOR_LINK_SRC}">'
+        '<span class="author-name">'
+        '\u4f5c\u8005\u3092\u30d5\u30a9\u30ed\u30fc\u3057\u3066'
+        '\u6b21\u306e\u66f4\u65b0\u3092\u5f85\u3064\uff01'
+        '</span>'
+        f'<img class="author-arrow" src="{LATEST_AUTHOR_ARROW_SRC}">'
+        '</a></div></div></div></div>'
+    )
     controls = {
         "valid_next": next_control,
         "signup": signup_control,
@@ -258,6 +282,9 @@ def _viewer_html(
             f'<img class="icon-clock" src="{WAIT_END_CLOCK_SRC}">'
             '<span>あと22:04で無料</span></div></div>'
         ),
+        "latest_author": latest_author_control,
+        "latest_author_nonlatest": latest_author_control,
+        "latest_author_missing": "",
         "missing": "",
     }
     if terminal_control == "wait_countdown_bad_time":
@@ -303,7 +330,13 @@ def _viewer_html(
             '<div class="episode-modal-short">\u30ec\u30f3\u30bf\u30eb\u4e2d</div>'
             f"{dialog}</div></div></div>"
         )
-    rental_content = "" if unsafe_end else rental_title + controls[terminal_control] + rental_card
+    rental_content = (
+        ""
+        if unsafe_end
+        else controls[terminal_control]
+        if terminal_control.startswith("latest_author")
+        else rental_title + controls[terminal_control] + rental_card
+    )
     rental = f'<div id="rental" style="display:none">{rental_content}</div>'
     rental_top = "1900px" if terminal_geometry == "offscreen" else "20px"
     obstruction_css = (
@@ -641,6 +674,28 @@ async def _set_routes(
             else authenticated_listing
         )
         next_title = WAIT_NEXT_ORDER_LABEL if next_wait_free_marker else NEXT_ORDER_LABEL
+        latest_author_terminal = terminal_control.startswith("latest_author") and (
+            terminal_control != "latest_author_nonlatest"
+        )
+        target_row = YanmagaListingRow(
+            episode_id=EPISODE_ID,
+            title="第1話",
+            url=SOURCE_URL,
+            free_marker=access_mode == "free",
+            red_marker_present=access_mode == "free",
+            known_restricted=access_mode == "known_restricted",
+            first_free_marker=first_free,
+            wait_free_marker=wait_free,
+        )
+        following_row = YanmagaListingRow(
+            episode_id=NEXT_EPISODE_ID,
+            title=next_title,
+            url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
+            free_marker=not next_wait_free_marker,
+            red_marker_present=not next_wait_free_marker,
+            known_restricted=False,
+            wait_free_marker=next_wait_free_marker,
+        )
         _self.last_snapshot = YanmagaListingSnapshot(
             title="テスト作品",
             anonymous=not authenticated,
@@ -650,27 +705,7 @@ async def _set_routes(
                 if authenticated
                 else None
             ),
-            rows=(
-                YanmagaListingRow(
-                    episode_id=EPISODE_ID,
-                    title="第1話",
-                    url=SOURCE_URL,
-                    free_marker=access_mode == "free",
-                    red_marker_present=access_mode == "free",
-                    known_restricted=access_mode == "known_restricted",
-                    first_free_marker=first_free,
-                    wait_free_marker=wait_free,
-                ),
-                YanmagaListingRow(
-                    episode_id=NEXT_EPISODE_ID,
-                    title=next_title,
-                    url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
-                    free_marker=not next_wait_free_marker,
-                    red_marker_present=not next_wait_free_marker,
-                    known_restricted=False,
-                    wait_free_marker=next_wait_free_marker,
-                ),
-            ),
+            rows=(target_row,) if latest_author_terminal else (target_row, following_row),
             continuation=None,
         )
         if sorted_listing:
@@ -698,18 +733,19 @@ async def _set_routes(
                 available=True,
             ),
         )
-        yield DiscoveredRecord(
-            item=DiscoveredItem(
-                canonical_title="\u30c6\u30b9\u30c8\u4f5c\u54c1",
-                order_label=next_title,
-            ),
-            source=DiscoveredSource(
-                external_id=f"{SLUG}:{NEXT_EPISODE_ID}",
-                url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
-                access_mode="quota" if next_wait_free_marker else "free",
-                available=True,
-            ),
-        )
+        if not latest_author_terminal:
+            yield DiscoveredRecord(
+                item=DiscoveredItem(
+                    canonical_title="\u30c6\u30b9\u30c8\u4f5c\u54c1",
+                    order_label=next_title,
+                ),
+                source=DiscoveredSource(
+                    external_id=f"{SLUG}:{NEXT_EPISODE_ID}",
+                    url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
+                    access_mode="quota" if next_wait_free_marker else "free",
+                    available=True,
+                ),
+            )
 
     monkeypatch.setattr(YanmagaDiscoveryAdapter, "iter_records", fake_records)
     wrong_viewer_url = f"https://yanmaga.jp/viewer/comics/別作品/{EPISODE_ID}"
@@ -827,6 +863,16 @@ async def _set_routes(
         )
 
     await page.route(WAIT_END_CLOCK_SRC, route_wait_clock)
+    if terminal_control.startswith("latest_author"):
+        tiny = io.BytesIO()
+        Image.new("RGBA", (2, 2), (255, 255, 255, 255)).save(tiny, format="PNG")
+        image_bytes = tiny.getvalue()
+
+        async def route_author_asset(route):
+            await route.fulfill(status=200, content_type="image/png", body=image_bytes)
+
+        await page.route(LATEST_AUTHOR_LINK_SRC, route_author_asset)
+        await page.route(LATEST_AUTHOR_ARROW_SRC, route_author_asset)
     original_goto = page.goto
 
     async def goto_final_viewer_for_public_episode(url, *args, **kwargs):
@@ -2077,6 +2123,49 @@ async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
     if terminal_control == "wait_countdown":
         assert await browser_page.locator(".episode-modal-wait.content").is_visible()
         assert await browser_page.locator("#js-btn-valid-next-episode").count() == 0
+
+
+@pytest.mark.parametrize(
+    ("terminal_control", "terminal_geometry", "access_gate", "accepted"),
+    [
+        ("latest_author", "valid", False, True),
+        ("latest_author_nonlatest", "valid", False, False),
+        ("latest_author_missing", "valid", False, False),
+        ("latest_author", "valid", True, False),
+        ("latest_author", "obstructed", False, False),
+    ],
+)
+async def test_yanmaga_latest_listed_author_card_is_a_bounded_end_signal(
+    browser_page,
+    tmp_path,
+    monkeypatch,
+    terminal_control,
+    terminal_geometry,
+    access_gate,
+    accepted,
+) -> None:
+    await _set_routes(
+        browser_page,
+        monkeypatch,
+        terminal_control=terminal_control,
+        terminal_geometry=terminal_geometry,
+        access_gate=access_gate,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 300)
+
+    if accepted:
+        result = await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
+        assert result.stop_state is PageState.END
+        assert len(result.pages) == 4
+    else:
+        expected_error = PageChangeTimeoutError if access_gate else UnknownPageStateError
+        with pytest.raises(expected_error):
+            await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
+    assert browser_page.url == VIEWER_NAVIGATION_URL
+    author_count = await browser_page.locator("a.author-info").count()
+    assert author_count == (0 if terminal_control.endswith("_missing") else 1)
+    if author_count:
+        assert await browser_page.locator("a.author-info").get_attribute("target") == "_blank"
 
 
 @pytest.mark.parametrize(

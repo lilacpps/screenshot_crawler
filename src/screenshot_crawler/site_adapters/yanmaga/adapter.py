@@ -95,6 +95,15 @@ _WAIT_END_CLOCK_SRC = (
     "icon_clock-048e89030730e8f736d174dde55780bad06a38135282b236b2c20ae032812836.svg"
 )
 _WAIT_END_LABEL = re.compile(r"^\u3042\u3068(?:[0-9]|1[0-9]|2[0-3]):[0-5][0-9]\u3067\u7121\u6599$")
+_LATEST_AUTHOR_FOLLOW_LABEL = "\u4f5c\u8005\u3092\u30d5\u30a9\u30ed\u30fc\u3057\u3066\u6b21\u306e\u66f4\u65b0\u3092\u5f85\u3064\uff01"
+_LATEST_AUTHOR_LINK_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "sns-x-9af04e53dce57ba890a7ccc29c10ef2d0359814ed03edf511023afb6a28b852b.png"
+)
+_LATEST_AUTHOR_ARROW_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "arrow-right-402a9836009e2194d9ea5e0cfe96f36bc4dc1aa721be087f829dc8e19f2a1d11.png"
+)
 _FIRST_FREE_COMPLETION_NOTICE = "\u7121\u6599\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
 _WAIT_TICKET_COMPLETION_NOTICE = "\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
 
@@ -166,6 +175,11 @@ class _ReaderSnapshot:
     rental_wait_label: str | None = None
     rental_wait_clock_src: str | None = None
     rental_wait_presented: bool = False
+    rental_title_count: int = 0
+    rental_author_follow_count: int = 0
+    rental_author_follow_label: str | None = None
+    rental_author_follow_presented: bool = False
+    rental_author_follow_exact: bool = False
 
     @property
     def visible_pages(self) -> tuple[_BodyPage, ...]:
@@ -313,6 +327,49 @@ def _read_snapshot_js() -> str:
       }
       const titles = rental ? [...rental.querySelectorAll('.episode-modal-eptitle')] : [];
       const title = titles.length === 1 ? titles[0] : null;
+      const authorLinks = rental ? [...rental.querySelectorAll('a.author-info')] : [];
+      const latestAuthorLinks = rental ? [...rental.querySelectorAll(
+        ':scope > #js-rental-box.rental-bg.ga-viewer-rental > ' +
+        '#js-modal-content.rental-modal > .wrapper-rental-button > ' +
+        '#js-modal-button.wrapper-mod-modal.background-transparent > ' +
+        'a.author-info[target="_blank"][rel="noopener noreferrer"]'
+      )] : [];
+      const authorLink = authorLinks.length === 1 && latestAuthorLinks.length === 1
+        ? latestAuthorLinks[0] : null;
+      const authorChildren = authorLink ? [...authorLink.children] : [];
+      const authorLogo = authorChildren.length === 3 && authorChildren[0].tagName === 'IMG'
+        ? authorChildren[0] : null;
+      const authorName = authorChildren.length === 3 && authorChildren[1].tagName === 'SPAN'
+        ? authorChildren[1] : null;
+      const authorArrow = authorChildren.length === 3 && authorChildren[2].tagName === 'IMG'
+        ? authorChildren[2] : null;
+      const expectedImage = (image, expected) => {
+        if (!image || image.classList.length !== 1 || !image.complete || image.naturalWidth <= 0 ||
+            !visible(image)) return false;
+        try { return new URL(image.currentSrc || image.src, location.href).href === expected; }
+        catch { return false; }
+      };
+      let authorHrefValid = false;
+      if (authorLink) {
+        try {
+          const url = new URL(authorLink.href, location.href);
+          authorHrefValid = url.protocol === 'https:' && url.origin === 'https://x.com' &&
+            !url.username && !url.password && !url.port && !url.search && !url.hash &&
+            /^\/[^/]+\/?$/.test(url.pathname);
+        } catch {}
+      }
+      const authorLinkPresentation = presented(authorLink);
+      const authorNamePresentation = presented(authorName);
+      const authorFollowExact = !!authorLink && authorChildren.length === 3 &&
+        authorLink.getAttribute('rel') === 'noopener noreferrer' &&
+        authorLink.getAttribute('target') === '_blank' && authorHrefValid &&
+        authorLogo?.className === 'author-link' &&
+        authorName?.className === 'author-name' &&
+        (authorName.innerText || '').trim() === '\u4f5c\u8005\u3092\u30d5\u30a9\u30ed\u30fc\u3057\u3066\u6b21\u306e\u66f4\u65b0\u3092\u5f85\u3064\uff01' &&
+        authorArrow?.className === 'author-arrow' &&
+        expectedImage(authorLogo, 'https://viewer-assets.yanmaga.jp/viewer/assets/img/sns-x-9af04e53dce57ba890a7ccc29c10ef2d0359814ed03edf511023afb6a28b852b.png') &&
+        expectedImage(authorArrow, 'https://viewer-assets.yanmaga.jp/viewer/assets/img/arrow-right-402a9836009e2194d9ea5e0cfe96f36bc4dc1aa721be087f829dc8e19f2a1d11.png') &&
+        authorLinkPresentation.presented && authorNamePresentation.presented;
       const waitNodes = rental ? [...rental.querySelectorAll(
         '.aspect-ratio-2-27.mt-wait > div.episode-modal-wait.content')] : [];
       const waitNode = waitNodes.length === 1 ? waitNodes[0] : null;
@@ -374,8 +431,14 @@ def _read_snapshot_js() -> str:
         rentalPresented:rentalPresentation.presented,
         rentalGeometry:rentalPresentation.box,
         rentalTitle:title?.innerText?.trim() || null,
+        rentalTitleCount:titles.length,
         rentalTitlePresented:titlePresentation.presented,
         rentalTitleGeometry:titlePresentation.box,
+        rentalAuthorFollowCount:authorLinks.length,
+        rentalAuthorFollowLabel:authorName ? (authorName.innerText || '').trim() : null,
+        rentalAuthorFollowPresented:!!authorLink && authorLinkPresentation.presented &&
+          authorNamePresentation.presented,
+        rentalAuthorFollowExact:authorFollowExact,
         rentalNextLabel:next.length === 1 ? (next[0].innerText || '').replace(/\s+/g,' ').trim() : null,
         rentalNextCount:next.length,
         rentalNextPresented:nextPresentation.presented,
@@ -1677,6 +1740,8 @@ class YanmagaAdapter(SiteAdapter):
                 raise UnknownPageStateError("Yanmaga native page geometry is malformed") from exc
         for field in (
             "rentalCount",
+            "rentalTitleCount",
+            "rentalAuthorFollowCount",
             "rentalNextCount",
             "rentalSignupCount",
             "rentalWaitCount",
@@ -1716,6 +1781,15 @@ class YanmagaAdapter(SiteAdapter):
             rental_title=raw.get("rentalTitle") if isinstance(raw.get("rentalTitle"), str) else None,
             rental_title_presented=raw.get("rentalTitlePresented") is True,
             rental_title_geometry=geometry("rentalTitleGeometry"),
+            rental_title_count=int(raw["rentalTitleCount"]),
+            rental_author_follow_count=int(raw["rentalAuthorFollowCount"]),
+            rental_author_follow_label=(
+                raw.get("rentalAuthorFollowLabel")
+                if isinstance(raw.get("rentalAuthorFollowLabel"), str)
+                else None
+            ),
+            rental_author_follow_presented=raw.get("rentalAuthorFollowPresented") is True,
+            rental_author_follow_exact=raw.get("rentalAuthorFollowExact") is True,
             rental_next_label=raw.get("rentalNextLabel") if isinstance(raw.get("rentalNextLabel"), str) else None,
             rental_next_presented=raw.get("rentalNextPresented") is True,
             rental_next_geometry=geometry("rentalNextGeometry"),
@@ -1921,8 +1995,13 @@ class YanmagaAdapter(SiteAdapter):
             snapshot.rental_presented,
             snapshot.rental_geometry,
             snapshot.rental_title,
+            snapshot.rental_title_count,
             snapshot.rental_title_presented,
             snapshot.rental_title_geometry,
+            snapshot.rental_author_follow_count,
+            snapshot.rental_author_follow_label,
+            snapshot.rental_author_follow_presented,
+            snapshot.rental_author_follow_exact,
             snapshot.rental_next_label,
             snapshot.rental_next_presented,
             snapshot.rental_next_geometry,
@@ -2154,20 +2233,25 @@ class YanmagaAdapter(SiteAdapter):
             not snapshot.rental_visible
             or not snapshot.rental_presented
             or snapshot.rental_geometry is None
-            or not snapshot.rental_title
-            or not snapshot.rental_title_presented
-            or snapshot.rental_title_geometry is None
         ):
             return False
+        title_proof = (
+            snapshot.rental_title_count == 1
+            and bool(snapshot.rental_title)
+            and snapshot.rental_title_presented
+            and snapshot.rental_title_geometry is not None
+        )
         valid_next = (
-            snapshot.rental_next_count == 1
+            title_proof
+            and snapshot.rental_next_count == 1
             and snapshot.rental_next_label == "次の話を読む"
             and snapshot.rental_next_presented
             and snapshot.rental_next_geometry is not None
             and snapshot.rental_signup_count == 0
         )
         registration_boundary = (
-            snapshot.rental_next_count == 0
+            title_proof
+            and snapshot.rental_next_count == 0
             and snapshot.rental_signup_count == 1
             and snapshot.rental_signup_label == "無料登録して読む"
             and snapshot.rental_signup_same_origin
@@ -2178,8 +2262,16 @@ class YanmagaAdapter(SiteAdapter):
         )
         wait_countdown_boundary = self._wait_countdown_matches_immediate_next_row(
             snapshot
+        ) and title_proof
+        latest_author_follow_boundary = self._latest_author_follow_matches_terminal(
+            snapshot
         )
-        if not (valid_next or registration_boundary or wait_countdown_boundary):
+        if not (
+            valid_next
+            or registration_boundary
+            or wait_countdown_boundary
+            or latest_author_follow_boundary
+        ):
             return False
         terminal_page = [page for page in snapshot.visible_pages if page.index == snapshot.total]
         if (
@@ -2193,6 +2285,36 @@ class YanmagaAdapter(SiteAdapter):
         return (
             self._viewer_url is None
             or parse_yanmaga_viewer_url(self._viewer_url) == expected
+        )
+
+    def _latest_author_follow_matches_terminal(self, snapshot: _ReaderSnapshot) -> bool:
+        rows = self._listing_rows
+        expected = self._require_expected()
+        if rows is None or not rows:
+            return False
+        current_indices = [
+            index for index, row in enumerate(rows) if row.episode_id == expected.episode_id
+        ]
+        final_row = rows[-1]
+        final_route = parse_yanmaga_episode_url(final_row.url)
+        return (
+            current_indices == [len(rows) - 1]
+            and final_row.episode_id == expected.episode_id
+            and final_route == expected
+            and final_row.url == self._source_url
+            and bool(self._episode_title)
+            and " ".join(final_row.title.split()) == " ".join(self._episode_title.split())
+            and snapshot.rental_title_count == 0
+            and snapshot.rental_title is None
+            and not snapshot.rental_title_presented
+            and snapshot.rental_title_geometry is None
+            and snapshot.rental_next_count == 0
+            and snapshot.rental_signup_count == 0
+            and snapshot.rental_wait_count == 0
+            and snapshot.rental_author_follow_count == 1
+            and snapshot.rental_author_follow_label == _LATEST_AUTHOR_FOLLOW_LABEL
+            and snapshot.rental_author_follow_presented
+            and snapshot.rental_author_follow_exact
         )
 
     def _wait_countdown_matches_immediate_next_row(
@@ -2644,6 +2766,7 @@ class YanmagaAdapter(SiteAdapter):
                 "rental_count_one": snapshot.rental_count == 1,
                 "rental_visible": snapshot.rental_visible,
                 "rental_presented_in_viewport_unobstructed": snapshot.rental_presented,
+                "rental_title_count": snapshot.rental_title_count,
                 "rental_title_present": bool(snapshot.rental_title),
                 "rental_title_presented_in_viewport_unobstructed": snapshot.rental_title_presented,
                 "rental_next_label_match": snapshot.rental_next_label == "次の話を読む",
@@ -2659,6 +2782,15 @@ class YanmagaAdapter(SiteAdapter):
                 ),
                 "rental_signup_presented_in_viewport_unobstructed": snapshot.rental_signup_presented,
                 "rental_signup_count_one": snapshot.rental_signup_count == 1,
+                "latest_author_follow_count": snapshot.rental_author_follow_count,
+                "latest_author_follow_label_match": (
+                    snapshot.rental_author_follow_label == _LATEST_AUTHOR_FOLLOW_LABEL
+                ),
+                "latest_author_follow_presented": snapshot.rental_author_follow_presented,
+                "latest_author_follow_exact": snapshot.rental_author_follow_exact,
+                "latest_listed_episode_match": self._latest_author_follow_matches_terminal(
+                    snapshot
+                ),
                 "menu_hidden": snapshot.menu_hidden,
                 "terminal_wrapper_perimeter_owned": (
                     len(terminal_page) == 1 and terminal_page[0].perimeter_owned

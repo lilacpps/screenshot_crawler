@@ -244,6 +244,20 @@ audits passed. The affected scope passed 261 tests with 0 skips and 305
 deselections. The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was
 controlled-stopped and is not a full pass.
 
+## Latest-listed terminal follow-up (2026-11-16)
+
+The normal Catalog still contains the original failed chapter-53 item and its
+saved output. A separate isolated Catalog/output copy was used to verify the
+new latest-listed END branch. On that copy, Source 49898 / Item 49591 completed
+Run 25261 with 16 pages and `stop_reason=end`; the final UI had the observed
+author-follow card and matched the unique last row of the complete fresh
+listing. The run used one Source GET and one Viewer GET, with no other episode
+request or ticket POST. Root audited the genuine 16-page Manifest and ZIP
+(SHA-256 `61f770a67145554065ea67f9ccec243abc91f6f8030451845eb314adb90e53f4`).
+The isolated run did not modify the user's normal Catalog or overwrite the
+original failed output. Focused verification passed 30 relevant adapter browser
+tests and 10 adapter unit tests; no full-suite rerun was performed.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
@@ -380,7 +394,8 @@ Readerはnative counter `1/36`、direct `#content-pN` wrappers、見開き時の
 順次capture、route/counter/index/source/styleの安定性も必須。
 
 positive ENDは全body indexのcapture完了、同じepisode route、stable final counter/body wrapperに加え、
-別領域の単一`#rental` cardとtitleがviewport内に全体表示され、visibleで他elementに覆われていないことを要求する。
+別領域の単一`#rental` cardがviewport内に全体表示され、visibleで他elementに覆われていないことを要求する。
+既存のnext/read・signup・wait終端では一意のtitleが表示される必要がある。signup・waitではさらにfresh listingの対応rowと一致することを確認する。
 card内controlはexact `次の話を読む`一つとsignupなし、またはvalid-nextなしでexact
 `無料登録して読む` signup control一つのどちらか。signup URLはsame-origin HTTPS
 `/customers/sign-up`、credentials/fragmentなし、唯一のraw query fieldは
@@ -392,7 +407,10 @@ div.episode-modal-wait.content` blockを代替終端として受け入れる。b
 `img.icon-clock`（観測済みclock asset）と`span`の順で、表示文言は`あとH:MMで無料`
 （Hは0〜23、分は00〜59）に一致する必要がある。countdownや他controlは操作しない。
 これは終端cardの一種として本文全page capture、route、ownership、semantic-gate、安定性検査を
-置き換えない。
+置き換えない。完全なfresh listingで対象話が一意な最後のrowの場合は、例外として、同じ
+`#rental`配下にある観測済みauthor-follow cardを終端証拠にできる。対象話のtitle、next/read、signup、wait markerは存在してはいけない。
+一意の`a.author-info`、正確な表示文言`作者をフォローして次の更新を待つ！`、観測済みX/arrow画像、HTTPS `x.com`リンクと既知祖先構造を要求する。リンクは観測だけで、押さない。
+このbranchでもbody/route/ownership/access-gate/ENDの他検証はすべて維持する。
 Unknown layout、page gap/duplicate、spread片側欠落、未知auxiliary/access gate、source/style drift、
 終端不明はfail-closed。next arrowは診断のみ。
 

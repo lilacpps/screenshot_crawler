@@ -124,6 +124,14 @@ further popup action was attempted. The ignored QA popup helper, including this
 observed DIV shape, has only passed compile checks and has not been live tested.
 The Stage 02 final gate is PASS. Stage 03 is accepted with qualified composite live evidence and independent BLOCKING 0: wait classification, work-scoped Policy, automatic ticket persistence, grant-only, same-grant capture, positive END, ZIP, and Completed were verified across the bounded runs. Two ticket uses were recorded: dual chapter 29 from frozen exact-history evidence and novel chapter 10 through automatic grant-only persistence. A5 completed the dual chapter-29 same-grant capture with 14 pages and positive END; Root audited the genuine Manifest and ZIP. The grant and work cooldown remained unchanged and A5 used no ticket POST. Post-capture full/incremental Discovery completed and preserved the target, grant, and artifacts with zero Source, Viewer, or native rental POST activity. Stage 04 A6 existing-grant capture on work-novel chapter 10 and A7 public-free capture on work-dual chapter 51 both completed with positive END, ZIP, and Completed; neither changed grant/quota state or used a new right. Independent Tester audits and 261 affected tests passed (0 skipped, 305 deselected). The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and is not a full pass.
 
+### Latest-listed terminal follow-up (2026-11-16)
+
+The latest-listed terminal branch was exercised on an isolated copy for chapter
+53. It captured 16 pages and reached `stop_reason=end` with the observed
+author-follow card matching the unique final row of the complete fresh listing.
+Source=1, Viewer=1, ticket POST=0. Root audited the 16-page Manifest and ZIP.
+The user's normal Catalog and original failed output were left unchanged.
+
 ## Discovery
 
 `YanmagaDiscoveryAdapter` is registered in the CLI Discovery registry under
@@ -373,10 +381,13 @@ segments; it does not infer arbitrary crops.
 
 At completion, every body index must have been captured and the stable final
 counter and native wrapper must match the requested episode. A single sibling
-`#rental` card and its title must be fully inside the viewport, visible, and
-center-owned by that element (or one of its descendants). The card must contain
-either exactly one presented `次の話を読む` control and no signup control, or
-exactly one presented `無料登録して読む` signup control at the same-origin
+`#rental` card must be fully inside the viewport, visible, and center-owned by
+that element (or one of its descendants). Existing next/read, signup, and wait
+branches still require one unique presented rental title. Signup and wait
+proofs also match that title to the corresponding fresh listing row. A card
+can qualify through either exactly one presented `次の話を読む` control and
+no signup control, or exactly one presented
+`無料登録して読む` signup control at the same-origin
 `/customers/sign-up` path and no valid-next control. That signup URL must use
 HTTPS, have no credentials or fragment, and contain exactly one raw query field:
 `forward=<32 lowercase hex episode ID>`. The token must identify the unique
@@ -394,10 +405,25 @@ has no next/read or signup control, one exact visible
 terminal signal when it contains the observed clock image followed by one span
 matching `あとH:MMで無料` (H 0–23, minutes 00–59). Its title must match the unique
 immediate next row in the fresh listing, and that row must carry the exact wait
-marker without a conflicting free marker. The timer is not activated. All
-existing route, captured-body, ownership, access-gate, and stable-END checks
-still apply. Unknown layouts, missing halves, page/source drift, gates, or an
-unproven terminal state fail closed.
+marker without a conflicting free marker. The timer is not activated. For a
+complete fresh listing whose exact current episode is the unique final row, a
+fourth terminal branch accepts only the observed author-follow card: one
+visible `a.author-info` under `#rental > #js-rental-box.rental-bg.ga-viewer-rental
+> #js-modal-content.rental-modal > .wrapper-rental-button
+> #js-modal-button.wrapper-mod-modal.background-transparent`, with the exact
+label `作者をフォローして次の更新を待つ！`, the observed X and arrow image
+assets, and an HTTPS `x.com` link. In this branch there must be no rental title,
+next/read, signup, or wait marker. The link is observed only and is never
+activated. All existing route, captured-body, ownership, access-gate, and
+stable-END checks still apply. Unknown layouts, missing halves, page/source
+drift, gates, or an unproven terminal state fail closed.
+
+The latest-listed branch was verified on an isolated copy using chapter 53.
+The run captured all 16 pages and ended on the exact final listing row with the
+observed author-follow card. It completed with no ticket POST and left the
+user's normal Catalog and original failed output untouched. Root audited the
+16-page Manifest/ZIP; this evidence does not claim a repair of the normal
+Catalog.
 
 A fresh reader can show the native full-screen `#menu` over its first page. The
 adapter tolerates only the observed menu/header/controller/transparent-overlay

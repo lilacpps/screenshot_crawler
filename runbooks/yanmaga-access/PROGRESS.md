@@ -9,6 +9,21 @@
 **Authority:** [README.md](README.md), `runbooks/yanmaga-free/README.md`, `AGENTS.md`.
 **Workspace boundary:** Stage 01–04 live artifacts are isolated under `output/yanmaga_access_experiment/stage01/`, `stage02/`, and `stage03/`. The separately authorized Discovery follow-up used a backed-up normal Catalog for metadata-only repair; it made no capture output or access action. User-edited `crawler.yaml` and `watchlist.yaml` were preserved.
 
+## Latest-listed terminal follow-up (2026-11-16)
+
+The adapter now recognizes the observed author-follow card as a terminal
+signal only when the exact current episode is the unique final row of a
+complete fresh listing, with all existing body, route, ownership, menu, and
+access-gate proofs intact. The isolated-copy capture of chapter 53 completed
+Run 25261 with 16 pages and `stop_reason=end`; Source=1, Viewer=1, ticket
+POST=0. Root audited the genuine 16-page Manifest and ZIP
+(`61f770a67145554065ea67f9ccec243abc91f6f8030451845eb314adb90e53f4`). The
+user's normal Catalog remains pending for its original failed item, and its
+saved output was preserved; this successful retry used an isolated copy only.
+The focused terminal/END browser selection passed 30 tests and the adapter Unit
+file passed 10 tests. No full-suite run was performed for this site-local
+change.
+
 | Stage | Status | Gate |
 | --- | --- | --- |
 | 01 Site probe / Discovery | PASS (observed subset); independent BLOCKING 0 | Its original sample kept wait rows unknown; Stage 03 later verified the wait marker/charged state. Paid-only classification, recovery timing, and an absolute grant expiry remain unverified. |
