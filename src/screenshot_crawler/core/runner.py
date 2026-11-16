@@ -176,6 +176,7 @@ class CrawlerRunner:
         state: PageState = PageState.UNKNOWN,
         current_context: object | None = None,
         saved_pages: int = 0,
+        include_page_snapshot: bool = True,
     ) -> None:
         if isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
             return
@@ -216,6 +217,7 @@ class CrawlerRunner:
                     self.config.diagnostics_dir,
                     metadata=metadata,
                     error=error,
+                    include_page_snapshot=include_page_snapshot,
                 ),
                 timeout=20,
             )
@@ -259,7 +261,15 @@ class CrawlerRunner:
         if owns_guard:
             guard.start(page)
         try:
-            await self._adapter_call(adapter.prepare_page(page), "prepare_page")
+            prepare_page = (
+                adapter.prepare_entry_only_page
+                if self.config.entry_only
+                else adapter.prepare_page
+            )
+            await self._adapter_call(
+                prepare_page(page),
+                "prepare_entry_only_page" if self.config.entry_only else "prepare_page",
+            )
             await self._adapter_call(
                 adapter.configure_run(page, self.config.access_strategy),
                 "configure_run",
@@ -302,15 +312,25 @@ class CrawlerRunner:
             initial_context = await self._adapter_call(
                 adapter.get_content_context(page), "get_content_context"
             )
-            store = ProgressStore(
-                manifest_path=output_dir / "manifest.json",
-                progress_path=output_dir / "progress.json",
-                source_url=self.config.source_url,
-                site=self.config.site,
-                content_context=initial_context,
-            )
+            if self.config.entry_only:
+                # Retain the second preflight normally performed by ProgressStore.
+                ensure_new_run(output_dir)
+                store = None
+            else:
+                store = ProgressStore(
+                    manifest_path=output_dir / "manifest.json",
+                    progress_path=output_dir / "progress.json",
+                    source_url=self.config.source_url,
+                    site=self.config.site,
+                    content_context=initial_context,
+                )
         except BaseException as exc:
-            await self._write_failure_diagnostics(page, exc, adapter=adapter)
+            await self._write_failure_diagnostics(
+                page,
+                exc,
+                adapter=adapter,
+                include_page_snapshot=not self.config.entry_only,
+            )
             if owns_guard:
                 await self._close_guard(guard, suppress_cancellation=True)
             self._access_guard = None
@@ -475,6 +495,7 @@ class CrawlerRunner:
                     captured_pages.append(captured)
                     captured_fingerprints.append(fingerprint)
                     captured_keys.append(capture_key)
+                assert store is not None
                 store.add_pages(captured_pages, captured_fingerprints)
                 saved_pages.extend(captured_pages)
                 seen_capture_keys.update(captured_keys)
@@ -502,6 +523,7 @@ class CrawlerRunner:
                 state=locals().get("state", PageState.UNKNOWN),
                 current_context=locals().get("current_context"),
                 saved_pages=len(saved_pages),
+                include_page_snapshot=not self.config.entry_only,
             )
             raise
         finally:

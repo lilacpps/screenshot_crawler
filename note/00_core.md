@@ -1261,10 +1261,16 @@ CLI `_discovery_registry()` registers the site-local Yanmaga Discovery adapter;
 `_registry()` registers `YanmagaAdapter` for manual Crawl/Runner;
 `_batch_adapter_registry()` registers the same adapter for Batch; and
 `_batch_policy_registry()` registers `YanmagaSitePolicy`. The policy selects
-only available free sources via `direct`, with no resource/grant-only pass.
-Batch uses the existing Planner, Executor, packager, Artifact, and Completed
-path after the adapter's fresh free preflight and positive END. DiscoveryService,
-Catalog schema, BrowserSession, shared Core behavior, and other sites were not changed. See
+available public/first-free rows via `direct`, uses a trusted future grant
+directly, and may select a validated wait-free `quota` source for the
+work-scoped `work_ticket` resource pass. That resource is also grant-only
+eligible, while ordinary `free` rows are excluded. Wait entry requires the
+site-observed image marker, charged state, exact source modal/form, and one
+normal click; the live post-click consumption proof remains unverified. Batch
+uses the existing Planner, Executor, packager, Artifact, and Completed path
+after the adapter's fresh access preflight and positive END. Catalog schema is
+unchanged. Shared Core exposes only site-neutral hooks; Yanmaga selectors and
+policy remain site-local, and other adapters keep their default hooks. See
 [`14_yanmaga.md`](14_yanmaga.md) for the site-local implementation and limits.
 
 ## Resource pass stop after successful consumption (2026-10-19)
@@ -3058,6 +3064,11 @@ state plus the source grant. Local cooldown skips happen before browser/page
 creation; confirmed grant-only runs do not capture, package, or complete the
 Item. Premium Ticket grant-only and policy-ordered `all` are implemented in
 Phase 5; Premium balance remains live-only and is not stored in Catalog.
+The shared entry-only path writes no page Manifest or Progress state and creates
+no ZIP; failures retain metadata-only diagnostics. This does not change normal
+capture output or its Manifest/Progress behavior. The optional
+`prepare_entry_only_page()` adapter hook defaults to `prepare_page()` and may
+skip capture-only setup; it retains the normal Page/AccessGuard cleanup contract.
 Normal Batch and grant-only share the observed resource-consumption persistence
 helper; confirmed Work Ticket consumption updates source grant and Work state,
 and later failure does not undo either update.

@@ -117,24 +117,43 @@ _HISTORY_LINK_CLASSES = frozenset(
         "tw:pb-[11px]",
     }
 )
+_RENTAL_COLLECTION_CLASSES = frozenset(
+    {
+        "tw:grid",
+        "tw:grid-cols-1",
+        "tw:xl:grid-cols-4",
+        "tw:xl:gap-4xs",
+        "tw:md:py-xs",
+    }
+)
 _HIDE_CLASS = r"(?:^|[-_:])(?:hidden|hide|invisible|sr-only)(?:$|[-_:])"
 _MAX_HISTORY_BYTES = 4 * 1024 * 1024
 _MAX_COUNTDOWN_HOURS = 23
+MAX_WAIT_RENTAL_COUNTDOWN_HOURS = 72
 _MAX_DATE_SKEW_SECONDS = 5
 
 
 @dataclass(frozen=True, slots=True)
 class RentalCountdown:
-    """Exact target's native positive remaining-hour field and safe lower bound."""
+    """Exact target's native remaining-time field and safe lower bound."""
 
     observed_at: datetime
     remaining_hours: int
     access_granted_until: datetime | None
     expiry_evidence: str | None
+    remaining_days: int | None = None
 
     @property
     def active(self) -> bool:
-        return self.remaining_hours > 0
+        return self.remaining_hours > 0 or (self.remaining_days or 0) > 0
+
+
+@dataclass(frozen=True, slots=True)
+class RentalHistoryObservation:
+    """Verified status for one target in the observed complete rental list."""
+
+    external_id: str
+    countdown: RentalCountdown | None
 
 
 def rental_history_target_url(target: YanmagaEpisodeParts) -> str:
@@ -155,15 +174,52 @@ def rental_history_snapshot_js() -> str:
       const parentClasses = new Set(args.parentClasses);
       const anchorClasses = new Set(args.anchorClasses);
       const ancestorClasses = args.ancestorClasses.map(value => new Set(value));
+      const collectionClasses = args.collectionClasses
+        ? new Set(args.collectionClasses) : null;
       const sameSet = (actual, expected) => actual.length === expected.size &&
         actual.every(value => expected.has(value));
-      const targetAnchors = [...parsed.querySelectorAll('a[href]')].filter(anchor => {
+      const collections = collectionClasses
+        ? [...parsed.querySelectorAll('ul')].filter(node =>
+            node.id === 'content_card_list' &&
+            sameSet([...node.classList], collectionClasses)) : [];
+      const collection = collections.length === 1 ? collections[0] : null;
+      const collectionRows = collection ? [...collection.children] : [];
+      const indices = collectionRows.map(row => row.getAttribute('data-index'));
+      const cardsValid = collectionRows.every(row => {
+        if (row.tagName !== 'LI' || row.classList.length !== 0 ||
+            row.getAttributeNames().length !== 1 ||
+            row.getAttributeNames()[0] !== 'data-index' ||
+            !/^\d+$/.test(row.getAttribute('data-index') || '')) return false;
+        const anchors = [...row.querySelectorAll('a[href]')];
+        if (anchors.length !== 1 || !sameSet([...anchors[0].classList], anchorClasses))
+          return false;
+        try {
+          const href = new URL(anchors[0].getAttribute('href'), target.origin);
+          return href.origin === target.origin &&
+            /^\/comics\/[^/]+\/[0-9a-f]{32}$/.test(href.pathname) &&
+            !href.username && !href.password && !href.search && !href.hash;
+        } catch { return false; }
+      });
+      const pagingScope = collection?.parentElement || collection;
+      const pagination = pagingScope ? [...pagingScope.querySelectorAll(
+        'button,a[rel="next"],[data-next],[class*="pagination" i],'
+        + '[class*="infinite" i],[data-infinite-scroll],[data-load-more]')] : [];
+      const collectionValid = !!collection &&
+        [...new Set(indices)].length === indices.length && cardsValid &&
+        collection.getAttributeNames().length === 2 &&
+        collection.getAttributeNames().includes('class') &&
+        collection.getAttributeNames().includes('id') &&
+        collection.id === 'content_card_list' && pagination.length === 0;
+      const exactTargetAnchors = [...parsed.querySelectorAll('a[href]')].filter(anchor => {
         try {
           const url = new URL(anchor.getAttribute('href'), target.origin);
           return url.origin === target.origin && url.pathname === target.pathname &&
             !url.username && !url.password && !url.search && !url.hash;
         } catch { return false; }
       });
+      const targetAnchors = collectionClasses
+        ? exactTargetAnchors.filter(anchor => collectionValid && anchor.closest('ul') === collection)
+        : exactTargetAnchors;
       const unsafeHidden = node => {
         for (let current = node; current; current = current.parentElement) {
           const style = current.style;
@@ -182,7 +238,8 @@ def rental_history_snapshot_js() -> str:
         const labels = leaves.filter(node => sameSet([...node.classList], labelClasses) &&
           (node.textContent || '').trim() === args.label);
         const values = leaves.filter(node => sameSet([...node.classList], valueClasses) &&
-          /^\s*\u6b8b\u308a\s*[0-9]+\s*\u6642\u9593\s*$/.test(node.textContent || ''));
+          (/^\s*\u6b8b\u308a\s*[0-9]+\s*\u6642\u9593\s*$/.test(node.textContent || '') ||
+           (args.allowDays && /^\s*\u6b8b\u308a\s*[0-9]+\s*\u65e5\s*$/.test(node.textContent || ''))));
         const pairs = [];
         for (const label of labels) for (const value of values) {
           const parent = label.parentElement;
@@ -202,23 +259,38 @@ def rental_history_snapshot_js() -> str:
             pathValid = pathValid && path === anchor && path.tagName === 'A' &&
               sameSet([...path.classList], anchorClasses);
             if (!pathValid) continue;
-            const match = /^\s*\u6b8b\u308a\s*([0-9]+)\s*\u6642\u9593\s*$/.exec(value.textContent || '');
-            pairs.push({label, value, parent, hours: match ? Number(match[1]) : null});
+            const hoursMatch = /^\s*\u6b8b\u308a\s*([0-9]+)\s*\u6642\u9593\s*$/.exec(value.textContent || '');
+            const daysMatch = args.allowDays
+              ? /^\s*\u6b8b\u308a\s*([0-9]+)\s*\u65e5\s*$/.exec(value.textContent || '') : null;
+            pairs.push({label, value, parent,
+              hours: hoursMatch ? Number(hoursMatch[1]) : null,
+              days: daysMatch ? Number(daysMatch[1]) : null});
           }
         }
+        const hours = pairs.length === 1 ? pairs[0].hours : null;
+        const days = pairs.length === 1 ? pairs[0].days : null;
+        const hoursValid = Number.isSafeInteger(hours) && hours > 0 && hours <= args.maxHours;
+        const daysValid = args.allowDays && Number.isSafeInteger(days) && days > 0 &&
+          days * 24 <= args.maxHours;
         const valid = pairs.length === 1 && !unsafeHidden(anchor) &&
           !unsafeHidden(pairs[0].label) && !unsafeHidden(pairs[0].value) &&
-          Number.isSafeInteger(pairs[0].hours) && pairs[0].hours > 0;
+          hoursValid !== daysValid;
         return {
           labelCount: labels.length,
           valueCount: values.length,
           pairCount: pairs.length,
           hidden: targetAnchors.length !== 1 || (pairs.length === 1 &&
             (unsafeHidden(anchor) || unsafeHidden(pairs[0].label) || unsafeHidden(pairs[0].value))),
-          hours: valid ? pairs[0].hours : null
+          hours: valid && hoursValid ? hours : null,
+          days: valid && daysValid ? days : null
         };
       });
-      return {targetAnchorCount: targetAnchors.length, cards};
+      return {
+        targetAnchorCount: exactTargetAnchors.length,
+        targetInCollectionCount: targetAnchors.length,
+        cards,
+        collectionValid: collectionClasses ? collectionValid : null
+      };
     }"""
 
 
@@ -228,10 +300,17 @@ async def parse_rental_history_html(
     *,
     target: YanmagaEpisodeParts,
     observed_at: datetime,
+    max_countdown_hours: int = _MAX_COUNTDOWN_HOURS,
 ) -> RentalCountdown | None:
     """Parse one exact native card; ambiguous, hidden, or malformed data is unknown."""
 
-    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+    if (
+        observed_at.tzinfo is None
+        or observed_at.utcoffset() is None
+        or isinstance(max_countdown_hours, bool)
+        or not isinstance(max_countdown_hours, int)
+        or not 1 <= max_countdown_hours <= MAX_WAIT_RENTAL_COUNTDOWN_HOURS
+    ):
         return None
     if not isinstance(html, str) or not html:
         return None
@@ -248,6 +327,8 @@ async def parse_rental_history_html(
                 "ancestorClasses": [sorted(classes) for classes in _ANCESTOR_CLASSES],
                 "anchorClasses": sorted(_ANCHOR_CLASSES),
                 "hideClass": _HIDE_CLASS,
+                "maxHours": max_countdown_hours,
+                "allowDays": max_countdown_hours > _MAX_COUNTDOWN_HOURS,
             },
         )
     except (PlaywrightError, PlaywrightTimeoutError, TypeError, ValueError):
@@ -259,42 +340,61 @@ async def parse_rental_history_html(
         return None
     card = cards[0]
     hours = card.get("hours")
+    days = card.get("days")
+    valid_hours = (
+        not isinstance(hours, bool)
+        and isinstance(hours, int)
+        and 1 <= hours <= max_countdown_hours
+    )
+    valid_days = (
+        max_countdown_hours > _MAX_COUNTDOWN_HOURS
+        and not isinstance(days, bool)
+        and isinstance(days, int)
+        and days > 0
+        and days * 24 <= max_countdown_hours
+    )
     if (
         card.get("labelCount") != 1
         or card.get("valueCount") != 1
         or card.get("pairCount") != 1
         or card.get("hidden") is not False
-        or isinstance(hours, bool)
-        or not isinstance(hours, int)
-        or hours <= 0
-        or hours > _MAX_COUNTDOWN_HOURS
+        or valid_hours == valid_days
     ):
         return None
     return RentalCountdown(
         observed_at=observed_at.astimezone(UTC),
-        remaining_hours=hours,
+        remaining_hours=hours if valid_hours else 0,
         # A parsed card alone has no response-freshness proof. Only the bounded
         # runtime fetch below may derive a finite grant lower bound.
         access_granted_until=None,
         expiry_evidence=None,
+        remaining_days=days if valid_days else None,
     )
 
 
-async def fetch_rental_history_countdowns(
+async def _fetch_rental_history_observations(
     page: Page,
     *,
     observed_mypage_href: str,
     targets: tuple[YanmagaEpisodeParts, ...],
-) -> tuple[tuple[str, RentalCountdown], ...]:
-    """Fetch MyPage and its observed history href in-page, returning target-only scalars."""
+    require_complete_collection: bool,
+    max_countdown_hours: int,
+) -> tuple[RentalHistoryObservation, ...] | None:
+    """Fetch the observed history page and distinguish no target from unknown."""
 
+    if (
+        isinstance(max_countdown_hours, bool)
+        or not isinstance(max_countdown_hours, int)
+        or not 1 <= max_countdown_hours <= MAX_WAIT_RENTAL_COUNTDOWN_HOURS
+    ):
+        return None
     try:
         current = urlsplit(page.url)
         mypage = urlsplit(observed_mypage_href)
         port = mypage.port
         current_query = parse_qsl(current.query, keep_blank_values=True)
     except ValueError:
-        return ()
+        return None
     expected_work_path = f"/comics/{quote(targets[0].slug, safe='')}" if targets else ""
     expected_viewer_paths = {
         f"/viewer/comics/{quote(target.slug, safe='')}/{target.episode_id}"
@@ -329,7 +429,7 @@ async def fetch_rental_history_countdowns(
         or len({target.episode_id for target in targets}) != len(targets)
         or len({target.slug for target in targets}) != 1
     ):
-        return ()
+        return None
     observed_at = datetime.now(UTC)
     target_args = [
         {
@@ -387,9 +487,9 @@ async def fetch_rental_history_countdowns(
         return new TextDecoder('utf-8').decode(joined);
       }};
       const mypageHref = safeUrl(args.mypageHref, '/mypage');
-      if (!mypageHref || mypageHref.search || origin !== 'https://yanmaga.jp') return {{proofs:[]}};
+      if (!mypageHref || mypageHref.search || origin !== 'https://yanmaga.jp') return {{ok:false}};
       const mypageHtml = await readDocument(mypageHref.href);
-      if (!mypageHtml) return {{proofs:[]}};
+      if (!mypageHtml) return {{ok:false}};
       const mypageDoc = new DOMParser().parseFromString(mypageHtml, 'text/html');
       const rental = '\u30ec\u30f3\u30bf\u30eb', history = '\u5c65\u6b74';
       const historyClasses = new Set(args.historyLinkClasses);
@@ -422,27 +522,44 @@ async def fetch_rental_history_countdowns(
             label === rental + history && anchor.getAttribute('target') === null) links.push(url.href);
       }}
       const uniqueLinks = [...new Set(links)];
-      if (links.length !== 1 || uniqueLinks.length !== 1) return {{proofs:[]}};
+      if (links.length !== 1 || uniqueLinks.length !== 1) return {{ok:false}};
       const historyHref = safeUrl(uniqueLinks[0], '/mypage');
-      if (!historyHref) return {{proofs:[]}};
+      if (!historyHref) return {{ok:false}};
       const historyHtml = await readDocument(historyHref.href);
-      if (!historyHtml) return {{proofs:[]}};
+      if (!historyHtml) return {{ok:false}};
       const parse = {parser};
       const proofs = [];
+      const observations = [];
       for (const target of args.targets) {{
         const snapshot = parse({{html:historyHtml,targetUrl:target.targetUrl,
           label:args.label,labelClasses:args.labelClasses,valueClasses:args.valueClasses,
           parentClasses:args.parentClasses,ancestorClasses:args.ancestorClasses,
-          anchorClasses:args.anchorClasses,hideClass:args.hideClass}});
-        if (snapshot.targetAnchorCount !== 1 || !Array.isArray(snapshot.cards) ||
-            snapshot.cards.length !== 1) continue;
+          anchorClasses:args.anchorClasses,hideClass:args.hideClass,
+          maxHours:args.maxHours,allowDays:args.allowDays,
+          collectionClasses:args.collectionClasses}});
+        if (args.requireCompleteCollection && snapshot.collectionValid !== true)
+          return {{ok:false}};
+        if (snapshot.targetAnchorCount === 0) {{
+          observations.push({{externalId:target.externalId,status:'absent'}});
+          continue;
+        }}
+        if (snapshot.targetAnchorCount !== 1 ||
+            snapshot.targetInCollectionCount !== 1 || !Array.isArray(snapshot.cards) ||
+            snapshot.cards.length !== 1) return {{ok:false}};
         const card = snapshot.cards[0];
+        const hoursValid = Number.isSafeInteger(card.hours) && card.hours > 0 &&
+          card.hours <= args.maxHours;
+        const daysValid = args.allowDays && Number.isSafeInteger(card.days) && card.days > 0 &&
+          card.days * 24 <= args.maxHours;
         if (card.labelCount === 1 && card.valueCount === 1 && card.pairCount === 1 &&
-            card.hidden === false && Number.isSafeInteger(card.hours) && card.hours > 0 &&
-            card.hours <= args.maxHours)
-          proofs.push({{externalId:target.externalId,hours:card.hours}});
+            card.hidden === false && hoursValid !== daysValid) {{
+          const hours = hoursValid ? card.hours : null;
+          const days = daysValid ? card.days : null;
+          proofs.push({{externalId:target.externalId,hours,days}});
+          observations.push({{externalId:target.externalId,status:'active',hours,days}});
+        }} else return {{ok:false}};
       }}
-      return {{proofs}};
+      return {{ok:true,proofs,observations}};
     }}"""
     try:
         raw = await page.evaluate(
@@ -450,8 +567,15 @@ async def fetch_rental_history_countdowns(
             {
                 "mypageHref": observed_mypage_href,
                 "targets": target_args,
+                "requireCompleteCollection": require_complete_collection,
+                "collectionClasses": (
+                    sorted(_RENTAL_COLLECTION_CLASSES)
+                    if require_complete_collection
+                    else None
+                ),
                 "maxBytes": _MAX_HISTORY_BYTES,
-                "maxHours": _MAX_COUNTDOWN_HOURS,
+                "maxHours": max_countdown_hours,
+                "allowDays": max_countdown_hours > _MAX_COUNTDOWN_HOURS,
                 "maxDateSkewMs": _MAX_DATE_SKEW_SECONDS * 1000,
                 "label": "\u30ec\u30f3\u30bf\u30eb\u671f\u9593",
                 "labelClasses": sorted(_LABEL_CLASSES),
@@ -464,46 +588,124 @@ async def fetch_rental_history_countdowns(
             },
         )
     except (PlaywrightError, PlaywrightTimeoutError, TypeError, ValueError):
-        return ()
-    if not isinstance(raw, dict) or not isinstance(raw.get("proofs"), list):
-        return ()
-    proofs: list[tuple[str, RentalCountdown]] = []
+        return None
+    if (
+        not isinstance(raw, dict)
+        or raw.get("ok") is not True
+        or not isinstance(raw.get("observations"), list)
+        or len(raw["observations"]) != len(targets)
+    ):
+        return None
+    observations: list[RentalHistoryObservation] = []
     seen: set[str] = set()
-    for entry in raw["proofs"]:
+    for entry in raw["observations"]:
         if not isinstance(entry, dict):
-            return ()
+            return None
         external_id = entry.get("externalId")
+        status = entry.get("status")
         hours = entry.get("hours")
-        if (
-            not isinstance(external_id, str)
-            or external_id in seen
-            or isinstance(hours, bool)
-            or not isinstance(hours, int)
-            or not 1 <= hours <= _MAX_COUNTDOWN_HOURS
-        ):
-            return ()
+        days = entry.get("days")
+        if not isinstance(external_id, str) or external_id in seen:
+            return None
         seen.add(external_id)
-        lower_bound = (
-            observed_at
-            - timedelta(seconds=_MAX_DATE_SKEW_SECONDS)
-            + timedelta(hours=hours - 1)
-            if hours > 1
-            else None
+        if status == "absent":
+            observations.append(RentalHistoryObservation(external_id, None))
+            continue
+        valid_hours = (
+            not isinstance(hours, bool)
+            and isinstance(hours, int)
+            and 1 <= hours <= max_countdown_hours
         )
-        proofs.append(
-            (
+        valid_days = (
+            max_countdown_hours > _MAX_COUNTDOWN_HOURS
+            and not isinstance(days, bool)
+            and isinstance(days, int)
+            and days > 0
+            and days * 24 <= max_countdown_hours
+        )
+        if status != "active" or valid_hours == valid_days:
+            return None
+        if valid_hours:
+            lower_bound = (
+                observed_at
+                - timedelta(seconds=_MAX_DATE_SKEW_SECONDS)
+                + timedelta(hours=hours - 1)
+                if hours > 1
+                else None
+            )
+            remaining_hours = hours
+            remaining_days = None
+            expiry_evidence = "site_countdown_lower_bound"
+        else:
+            lower_bound = (
+                observed_at
+                - timedelta(seconds=_MAX_DATE_SKEW_SECONDS)
+                + timedelta(days=days - 1)
+                if days > 1
+                else None
+            )
+            remaining_hours = 0
+            remaining_days = days
+            expiry_evidence = "site_day_countdown_lower_bound"
+        observations.append(
+            RentalHistoryObservation(
                 external_id,
                 RentalCountdown(
                     observed_at=observed_at,
-                    remaining_hours=hours,
+                    remaining_hours=remaining_hours,
                     access_granted_until=lower_bound,
-                    expiry_evidence=(
-                        "site_countdown_lower_bound" if lower_bound is not None else None
-                    ),
+                    expiry_evidence=expiry_evidence if lower_bound is not None else None,
+                    remaining_days=remaining_days,
                 ),
             )
         )
-    return tuple(proofs)
+    expected_ids = {f"{target.slug}:{target.episode_id}" for target in targets}
+    if seen != expected_ids:
+        return None
+    return tuple(observations)
+
+
+async def fetch_rental_history_observations(
+    page: Page,
+    *,
+    observed_mypage_href: str,
+    targets: tuple[YanmagaEpisodeParts, ...],
+    max_countdown_hours: int = _MAX_COUNTDOWN_HOURS,
+) -> tuple[RentalHistoryObservation, ...] | None:
+    """Return active or verified-absent targets, or ``None`` when unknown."""
+
+    return await _fetch_rental_history_observations(
+        page,
+        observed_mypage_href=observed_mypage_href,
+        targets=targets,
+        require_complete_collection=True,
+        max_countdown_hours=max_countdown_hours,
+    )
+
+
+async def fetch_rental_history_countdowns(
+    page: Page,
+    *,
+    observed_mypage_href: str,
+    targets: tuple[YanmagaEpisodeParts, ...],
+    max_countdown_hours: int = _MAX_COUNTDOWN_HOURS,
+) -> tuple[tuple[str, RentalCountdown], ...]:
+    """Preserve the positive-only API used by trusted direct-grant refreshes."""
+
+    observations = await _fetch_rental_history_observations(
+        page,
+        observed_mypage_href=observed_mypage_href,
+        targets=targets,
+        require_complete_collection=False,
+        max_countdown_hours=max_countdown_hours,
+    )
+    if observations is None:
+        return ()
+    return tuple(
+        (observation.external_id, observation.countdown)
+        for observation in observations
+        if observation.countdown is not None
+    )
 
 
 

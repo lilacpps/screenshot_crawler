@@ -26,11 +26,18 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.site_adapters.base import ConfirmedAccessGrant, SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessConsumption,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.yanmaga.access import yanmaga_access_profile
 from screenshot_crawler.site_adapters.yanmaga.discovery import (
     _SORT_OLDEST_LABEL,
     SITE_HOST,
+    WAIT_ASSET_PATH,
+    WAIT_BADGE_CLASS,
+    WAIT_BADGE_TEXT,
     YanmagaDiscoveryAdapter,
     YanmagaEpisodeParts,
     YanmagaListingRow,
@@ -50,8 +57,10 @@ from screenshot_crawler.site_adapters.yanmaga.native_capture import (
     verify_yanmaga_native_group,
 )
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
     RentalCountdown,
     fetch_rental_history_countdowns,
+    fetch_rental_history_observations,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
@@ -77,6 +86,17 @@ _PAGE_COUNTER = re.compile(r"^(?P<current>[1-9][0-9]*)/(?P<total>[1-9][0-9]*)$")
 _PAGE_ID = re.compile(r"^content-p(?P<index>[1-9][0-9]*)$")
 _BANNER_ID = re.compile(r"^banners-p(?:notice_banner|after_viewer)_[1-9][0-9]*$")
 _ALLOWED_AUXILIARY_IDS = frozenset({"ads", "recommend", "rental"})
+_WAIT_RENTAL_MODAL_TITLE = "\u300c\u5f85\u3064\u3068\u7121\u6599....!\u300d\u3067\u30ec\u30f3\u30bf\u30eb"
+_WAIT_RENTAL_PERIOD_LABEL = "\u30ec\u30f3\u30bf\u30eb\u671f\u9593"
+_WAIT_RENTAL_PERIOD_VALUE = "3\u65e5\u9593"
+_WAIT_RENTAL_READ_LABEL = "\u8aad\u3080"
+_WAIT_END_CLOCK_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "icon_clock-048e89030730e8f736d174dde55780bad06a38135282b236b2c20ae032812836.svg"
+)
+_WAIT_END_LABEL = re.compile(r"^\u3042\u3068(?:[0-9]|1[0-9]|2[0-3]):[0-5][0-9]\u3067\u7121\u6599$")
+_FIRST_FREE_COMPLETION_NOTICE = "\u7121\u6599\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
+_WAIT_TICKET_COMPLETION_NOTICE = "\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +162,10 @@ class _ReaderSnapshot:
     rental_signup_forward_episode_id: str | None = None
     rental_signup_presented: bool = False
     rental_signup_geometry: tuple[float, float, float, float] | None = None
+    rental_wait_count: int = 0
+    rental_wait_label: str | None = None
+    rental_wait_clock_src: str | None = None
+    rental_wait_presented: bool = False
 
     @property
     def visible_pages(self) -> tuple[_BodyPage, ...]:
@@ -289,6 +313,16 @@ def _read_snapshot_js() -> str:
       }
       const titles = rental ? [...rental.querySelectorAll('.episode-modal-eptitle')] : [];
       const title = titles.length === 1 ? titles[0] : null;
+      const waitNodes = rental ? [...rental.querySelectorAll(
+        '.aspect-ratio-2-27.mt-wait > div.episode-modal-wait.content')] : [];
+      const waitNode = waitNodes.length === 1 ? waitNodes[0] : null;
+      const waitChildren = waitNode ? [...waitNode.children] : [];
+      const waitImage = waitChildren.length === 2 &&
+        waitChildren[0].tagName === 'IMG' && waitChildren[0].classList.contains('icon-clock')
+        ? waitChildren[0] : null;
+      const waitLabelNode = waitChildren.length === 2 && waitChildren[1].tagName === 'SPAN'
+        ? waitChildren[1] : null;
+      const waitPresentation = presented(waitNode);
       const rentalPresentation = presented(rental);
       const titlePresentation = presented(title);
       const nextPresentation = presented(next.length === 1 ? next[0] : null);
@@ -315,7 +349,9 @@ def _read_snapshot_js() -> str:
       const semanticGateSelector = '[role="dialog"],[aria-modal="true"],dialog';
       const inlineRentalSelector = '.episode-modal-expire,.episode-modal-rental-detail,' +
         '.mod-modal-content-inner.episode-modal,.mod-modal-content.wrapper-mod-modal,' +
-        '#js-modal-content.rental-modal';
+        '#js-modal-content.rental-modal,.episode-modal-point,' +
+        'dl.episode-modal-point--posession,dl.episode-modal-point--necessary,' +
+        '.episode-modal-short';
       const knownInlineRentalCard = node => {
         if (!rental || !rental.contains(node) || !node.matches(inlineRentalSelector) ||
             node.matches(semanticGateSelector)) return false;
@@ -351,6 +387,11 @@ def _read_snapshot_js() -> str:
         rentalSignupForwardEpisodeId:signupForwardEpisodeId,
         rentalSignupPresented:signupPresentation.presented,
         rentalSignupGeometry:signupPresentation.box,
+        rentalWaitCount:waitNodes.length,
+        rentalWaitLabel:waitLabelNode ? (waitLabelNode.innerText || '').replace(/\s+/g,' ').trim() : null,
+        rentalWaitClockSrc:waitImage ? (waitImage.currentSrc || waitImage.src || null) : null,
+        rentalWaitPresented:!!waitNode && !!waitImage && !!waitLabelNode &&
+          waitPresentation.presented && visible(waitImage) && visible(waitLabelNode),
         menuCount:menuNodes.length,
         menuHidden,
         menuOverlayKnown,
@@ -393,6 +434,11 @@ class YanmagaAdapter(SiteAdapter):
         self._first_free_release_state = "not_attempted"
         self._first_free_grant: ConfirmedAccessGrant | None = None
         self._first_free_completion_notice_seen = False
+        self._quota_resource: str | None = None
+        self._quota_entry_attempted = False
+        self._quota_entry_started_at: datetime | None = None
+        self._quota_release_state = "not_attempted"
+        self._access_consumption = AccessConsumption()
 
     def configure_existing_access_grant(
         self, access_granted_until: datetime | None
@@ -414,6 +460,10 @@ class YanmagaAdapter(SiteAdapter):
             return
         self._native_observer_installed = True
 
+    async def prepare_entry_only_page(self, page: Page) -> None:
+        del page
+        self._native_observer_installed = False
+
     def get_access_profile(self) -> AccessProfile:
         return yanmaga_access_profile()
 
@@ -427,9 +477,9 @@ class YanmagaAdapter(SiteAdapter):
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
-        if access_strategy not in {"auto", "direct"}:
+        if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
-                "Yanmaga free capture supports access_strategy='auto' or 'direct' only"
+                "Yanmaga supports access_strategy='auto', 'direct', or 'quota'"
             )
         self._access_strategy = access_strategy
 
@@ -437,9 +487,23 @@ class YanmagaAdapter(SiteAdapter):
         self, page: Page, quota_resource: str | None
     ) -> None:
         del page
-        if quota_resource is not None:
+        if self._access_strategy == "quota":
+            if quota_resource != "work_ticket":
+                raise UnsupportedAccessStrategyError(
+                    "Yanmaga quota access requires quota_resource='work_ticket'"
+                )
+            if self._expected is None or self._expected_external_id is None:
+                raise UnknownPageStateError(
+                    "Yanmaga work_ticket requires a configured Catalog target identity"
+                )
+            self._quota_resource = quota_resource
+            self._quota_entry_attempted = False
+            self._quota_entry_started_at = None
+            self._quota_release_state = "not_attempted"
+            self._access_consumption = AccessConsumption()
+        elif quota_resource is not None:
             raise UnsupportedAccessStrategyError(
-                "Yanmaga does not support quota or resource-based access"
+                "Yanmaga work_ticket requires access_strategy='quota'"
             )
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
@@ -454,6 +518,11 @@ class YanmagaAdapter(SiteAdapter):
         self._first_free_release_state = "not_attempted"
         self._first_free_grant = None
         self._first_free_completion_notice_seen = False
+        self._quota_resource = None
+        self._quota_entry_attempted = False
+        self._quota_entry_started_at = None
+        self._quota_release_state = "not_attempted"
+        self._access_consumption = AccessConsumption()
         self._existing_access_grant_until = None
         self._listing_rows = None
         self._viewer_url = None
@@ -479,12 +548,26 @@ class YanmagaAdapter(SiteAdapter):
 
     async def initialize(self, page: Page) -> None:
         try:
-            await self._initialize_impl(page)
+            await self._initialize_impl(page, entry_only=False)
         except BaseException:
             await self._dispose_native_observer(page)
             raise
 
-    async def _initialize_impl(self, page: Page) -> None:
+    async def initialize_entry_only(self, page: Page) -> None:
+        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Yanmaga entry-only execution requires quota/work_ticket"
+            )
+        try:
+            await self._initialize_impl(page, entry_only=True)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
+
+    async def _initialize_impl(self, page: Page, *, entry_only: bool) -> None:
         expected = self._require_expected()
         if self._source_url is None or self._work_url is None:
             raise UnknownPageStateError("Yanmaga target URL was not resolved before navigation")
@@ -531,6 +614,24 @@ class YanmagaAdapter(SiteAdapter):
         if match.source.url != self._source_url:
             raise UnknownPageStateError("Yanmaga listing route differs from the requested source URL")
         classified_free = match.source.access_mode == "free"
+        quota_candidate = (
+            match.source.access_mode == "quota"
+            and row.wait_free_marker
+            and listing.authenticated
+            and not row.free_marker
+            and not row.first_free_marker
+        )
+        quota_attempt = self._access_strategy == "quota"
+        if quota_attempt and (
+            self._quota_resource != "work_ticket" or not quota_candidate
+        ):
+            raise AccessResourceUnavailableError(
+                "yanmaga_work_ticket_requires_exact_authenticated_wait_target"
+            )
+        if entry_only and not quota_attempt:
+            raise UnsupportedAccessStrategyError(
+                "Yanmaga entry-only execution requires a current wait/work_ticket candidate"
+            )
         authenticated_first_free = (
             row.first_free_marker and listing.authenticated and classified_free
         )
@@ -543,6 +644,7 @@ class YanmagaAdapter(SiteAdapter):
                 page,
                 observed_mypage_href=listing.mypage_href,
                 targets=(expected,),
+                max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
             )
             fresh_existing_grant = next(
                 (
@@ -558,7 +660,38 @@ class YanmagaAdapter(SiteAdapter):
         fresh_first_free = (
             authenticated_first_free and self._existing_access_grant_until is None
         )
-        if row.free_marker and classified_free:
+        if quota_attempt:
+            if fresh_existing_grant is not None:
+                raise AccessResourceUnavailableError(
+                    "yanmaga_wait_target_already_has_untrusted_active_history"
+                )
+            if listing.mypage_href is None:
+                raise UnknownPageStateError(
+                    "Yanmaga wait target has no observed account link"
+                )
+            history = await fetch_rental_history_observations(
+                page,
+                observed_mypage_href=listing.mypage_href,
+                targets=(expected,),
+                max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+            )
+            observation = next(
+                (
+                    value
+                    for value in history or ()
+                    if value.external_id == self._expected_external_id
+                ),
+                None,
+            )
+            if history is None or observation is None:
+                raise UnknownPageStateError(
+                    "Yanmaga wait target history status is unknown"
+                )
+            if observation.countdown is not None and observation.countdown.active:
+                raise AccessResourceUnavailableError(
+                    "yanmaga_wait_target_has_active_history_without_trusted_grant"
+                )
+        elif row.free_marker and classified_free:
             pass
         elif fresh_first_free:
             if listing.mypage_href is None:
@@ -591,12 +724,18 @@ class YanmagaAdapter(SiteAdapter):
             listing,
             trusted_grant=fresh_existing_grant is not None,
             classified_access_mode=match.source.access_mode,
+            wait_quota=row.wait_free_marker,
+            require_charged=quota_attempt,
         )
         if fresh_first_free and self._first_free_entry_attempted:
             raise AccessResourceUnavailableError("yanmaga_first_free_entry_already_attempted")
         self._first_free_entry_attempted = bool(fresh_first_free)
         if fresh_first_free:
             self._first_free_release_state = "attempted_unknown"
+        if quota_attempt and self._quota_entry_attempted:
+            raise AccessResourceUnavailableError(
+                "yanmaga_work_ticket_entry_already_attempted"
+            )
         if fresh_existing_grant is not None:
             self._require_live_existing_grant(fresh_existing_grant)
         try:
@@ -615,13 +754,47 @@ class YanmagaAdapter(SiteAdapter):
                         f"{type(confirmation_error).__name__}"
                     )
             raise
-        self._validate_viewer_route(page)
+        if quota_attempt:
+            try:
+                await self._submit_wait_rental_modal(page, expected)
+            except AccessStopError:
+                raise
+            except (PlaywrightError, TimeoutError, AccessResourceUnavailableError) as entry_error:
+                if not self._quota_entry_attempted:
+                    raise
+                try:
+                    await self._confirm_and_record_quota_consumption(
+                        page, expected, listing.mypage_href or ""
+                    )
+                except AccessStopError:
+                    raise
+                except Exception as confirmation_error:  # noqa: BLE001
+                    entry_error.add_note(
+                        "Yanmaga work-ticket post-submit confirmation remained unknown: "
+                        f"{type(confirmation_error).__name__}"
+                    )
+                raise
+            if not await self._confirm_and_record_quota_consumption(
+                page, expected, listing.mypage_href or ""
+            ):
+                raise AccessResourceUnavailableError(
+                    "yanmaga_work_ticket_consumption_unconfirmed_no_retry"
+                )
+            if self._access_consumption.access_granted_until is None:
+                raise UnknownPageStateError(
+                    "yanmaga_work_ticket_confirmed_grant_expiry_unavailable"
+                )
+        else:
+            self._validate_viewer_route(page)
         if fresh_first_free and not await self._confirm_and_persist_first_free_grant(
                 page, expected, listing.mypage_href or ""
         ):
             raise AccessResourceUnavailableError(
                 "yanmaga_first_free_access_or_finite_grant_unconfirmed"
             )
+        if entry_only:
+            self._viewer_url = page.url
+            return
         snapshot = await self._wait_for_stable_snapshot(
             page,
             timeout_ms=PAGE_CHANGE_TIMEOUT_MS,
@@ -653,6 +826,12 @@ class YanmagaAdapter(SiteAdapter):
         """Return a non-sensitive state for this run's one permitted entry."""
 
         return self._first_free_release_state
+
+    @property
+    def quota_release_state(self) -> str:
+        """Return whether this run's one ticket entry was confirmed."""
+
+        return self._quota_release_state
 
     def _require_live_existing_grant(self, countdown: RentalCountdown) -> None:
         trusted_until = self._active_existing_grant_until()
@@ -726,6 +905,79 @@ class YanmagaAdapter(SiteAdapter):
         self._first_free_release_state = "persisted"
         return True
 
+    async def _confirm_and_record_quota_consumption(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+        observed_mypage_href: str,
+    ) -> bool:
+        if self._access_consumption.consumed:
+            return self._quota_release_state == "site_confirmed"
+        started_at = self._quota_entry_started_at
+        if (
+            not self._quota_entry_attempted
+            or started_at is None
+            or self._expected_external_id is None
+        ):
+            raise AccessResourceUnavailableError(
+                "yanmaga_work_ticket_confirmation_without_entry_attempt"
+            )
+        self._validate_viewer_route(page)
+        if not await self._has_first_free_access_proof(
+            page, expected, completion_notice=_WAIT_TICKET_COMPLETION_NOTICE
+        ):
+            return False
+        observations = await fetch_rental_history_observations(
+            page,
+            observed_mypage_href=observed_mypage_href,
+            targets=(expected,),
+            max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+        )
+        observation = next(
+            (
+                value
+                for value in observations or ()
+                if value.external_id == self._expected_external_id
+            ),
+            None,
+        )
+        countdown = observation.countdown if observation is not None else None
+        observed_at = countdown.observed_at if countdown is not None else None
+        now = datetime.now(UTC)
+        if (
+            countdown is None
+            or not countdown.active
+            or observed_at is None
+            or observed_at.tzinfo is None
+            or observed_at.utcoffset() is None
+            or observed_at.astimezone(UTC) < started_at.astimezone(UTC)
+            or observed_at.astimezone(UTC) > now
+        ):
+            return False
+        self._validate_viewer_route(page)
+        if not await self._has_first_free_access_proof(
+            page, expected, completion_notice=_WAIT_TICKET_COMPLETION_NOTICE
+        ):
+            return False
+        access_granted_until = countdown.access_granted_until
+        if (
+            countdown.expiry_evidence
+            not in {"site_countdown_lower_bound", "site_day_countdown_lower_bound"}
+            or access_granted_until is None
+            or access_granted_until.tzinfo is None
+            or access_granted_until.utcoffset() is None
+            or access_granted_until.astimezone(UTC) <= now
+        ):
+            access_granted_until = None
+        self._access_consumption = AccessConsumption(
+            consumed=True,
+            resource="work_ticket",
+            consumed_at=observed_at,
+            access_granted_until=access_granted_until,
+        )
+        self._quota_release_state = "site_confirmed"
+        return True
+
     async def _validate_pre_entry_target(
         self,
         page: Page,
@@ -735,6 +987,8 @@ class YanmagaAdapter(SiteAdapter):
         *,
         trusted_grant: bool,
         classified_access_mode: str,
+        wait_quota: bool,
+        require_charged: bool,
     ) -> None:
         expected_public_path = (
             f"/comics/{quote(expected.slug, safe='')}/{expected.episode_id}"
@@ -787,6 +1041,35 @@ class YanmagaAdapter(SiteAdapter):
               });
               const markers = row ? [...row.querySelectorAll('.mod-episode-point--free')] : [];
               const first = markers.filter(marker => marker.classList.contains('by_first_time'));
+              const waitBadges = row ? [...row.querySelectorAll('span.mod-episode-free_browse')] : [];
+              const waitBadge = waitBadges.length === 1 ? waitBadges[0] : null;
+              const waitImages = waitBadge ? [...waitBadge.querySelectorAll('img')] : [];
+              const waitImage = waitImages.length === 1 ? waitImages[0] : null;
+              let originalURL = null;
+              try {
+                const original = row?.getAttribute('data-original-url');
+                originalURL = original ? new URL(original, location.href).href : null;
+              } catch (_) {}
+              const waitBadgeOkay = waitBadges.length === 1 && visible(waitBadge) &&
+                waitBadge.className === args.waitBadgeClass &&
+                (waitBadge.innerText || '').trim() === args.waitBadgeText &&
+                waitImages.length === 1 && visible(waitImage) &&
+                waitImage.src === args.waitAssetUrl &&
+                row?.getAttribute('data-is-free') === 'true' &&
+                originalURL === args.sourceUrl && anchors.length === 1 &&
+                exactAnchors.length === 1 && !first.length && !markers.length;
+              const chargedCards = [...document.querySelectorAll(
+                '.episode-ui .episode-free-time.charged')];
+              const chargedCard = chargedCards.length === 1 ? chargedCards[0] : null;
+              const chargeLabels = chargedCard
+                ? [...chargedCard.querySelectorAll('.episode-free-time-bar-label')] : [];
+              const chargeImages = chargedCard
+                ? [...chargedCard.querySelectorAll('.episode-free-time-label img')] : [];
+              const chargedProof = chargedCards.length === 1 && chargedCard.tagName === 'DIV' &&
+                visible(chargedCard) && chargeLabels.length === 1 && visible(chargeLabels[0]) &&
+                (chargeLabels[0].innerText || '').replace(/\s+/g, ' ').trim() === args.chargedLabel &&
+                chargeImages.length === 1 && visible(chargeImages[0]) &&
+                chargeImages[0].src === args.waitAssetUrl;
               const inactive = element => {
                 const ariaDisabled = element.getAttribute('aria-disabled');
                 return element.hasAttribute('disabled') || element.hasAttribute('inert') ||
@@ -829,7 +1112,9 @@ class YanmagaAdapter(SiteAdapter):
               const loginOkay = args.authenticated
                 ? myPages.length > 0 && signIns.length === 0 && signOuts.length === 0
                 : myPages.length === 0 && signIns.length > 0 && signOuts.length === 0;
-              const modeOkay = args.firstFree
+              const modeOkay = args.waitQuota
+                ? waitBadgeOkay
+                : args.firstFree
                 ? markers.length === 1 && firstExact && !redExact
                 : args.trustedGrant
                   ? markers.length === 0 && row.querySelector('.by_wait,.js-modal') === null
@@ -850,7 +1135,10 @@ class YanmagaAdapter(SiteAdapter):
                   exactAnchors.length === 1 && visible(anchors[0]),
                 targetInactive: row === null || inactive(row) || anchors.some(inactive),
                 modeOkay,
-                noWaitModal: row !== null && row.querySelector('.by_wait,.js-modal') === null,
+                waitBadgeOkay,
+                chargedProof,
+                noWaitModal: row !== null && !row.matches('.by_wait,.js-modal') &&
+                  row.querySelector('.by_wait,.js-modal') === null,
                 noOtherFreeBadge: !otherFreeBadge,
                 noRowButtons: row !== null && row.querySelectorAll(
                   'button,[role="button"],input[type="button"],input[type="submit"]').length === 0,
@@ -866,6 +1154,11 @@ class YanmagaAdapter(SiteAdapter):
                 "authenticated": listing.authenticated,
                 "firstFree": row.first_free_marker and classified_access_mode == "free",
                 "trustedGrant": trusted_grant,
+                "waitQuota": wait_quota,
+                "waitBadgeClass": WAIT_BADGE_CLASS,
+                "waitBadgeText": WAIT_BADGE_TEXT,
+                "waitAssetUrl": f"https://{SITE_HOST}{WAIT_ASSET_PATH}",
+                "chargedLabel": "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86",
                 "firstLabel": "\u521d\u56de\u7121\u6599",
                 "freeLabel": "\u7121\u6599",
                 "freeColor": "rgb(220, 0, 0)",
@@ -921,6 +1214,8 @@ class YanmagaAdapter(SiteAdapter):
             or state.get("targetVisible") is not True
             or state.get("targetInactive") is not False
             or state.get("modeOkay") is not True
+            or (wait_quota and state.get("waitBadgeOkay") is not True)
+            or (require_charged and state.get("chargedProof") is not True)
             or state.get("noWaitModal") is not True
             or state.get("noOtherFreeBadge") is not True
             or state.get("noRowButtons") is not True
@@ -932,8 +1227,255 @@ class YanmagaAdapter(SiteAdapter):
                 "Yanmaga target row, login state, or access marker changed before entry"
             )
 
+    async def _validate_wait_rental_modal(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+    ) -> Locator:
+        """Bind the observed wait-rental POST form to this exact episode."""
+
+        expected_action_path = (
+            f"/rental/episodes/{expected.episode_id}/by_free_waits"
+        )
+        state = await page.evaluate(
+            r"""(args) => {
+              const visible = element => {
+                if (!element || element.getClientRects().length === 0) return false;
+                for (let node = element; node; node = node.parentElement) {
+                  const style = getComputedStyle(node);
+                  if (node.hidden || style.display === 'none' || style.visibility === 'hidden' ||
+                      style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+                }
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              };
+              const normalize = value => (value || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+              const current = new URL(location.href);
+              const canonical = [...document.querySelectorAll('link[rel="canonical"]')];
+              const og = [...document.querySelectorAll('meta[property="og:url"]')];
+              const visibleOuter = [...document.querySelectorAll(
+                'div.mod-modal-content.js-modal-content')].filter(visible);
+              const active = [...document.querySelectorAll(
+                'div.mod-modal-content-inner.episode-modal.active')].filter(visible);
+              const modal = active.length === 1 ? active[0] : null;
+              const outer = modal ? modal.closest('div.mod-modal-content.js-modal-content') : null;
+              const titles = modal ? [...modal.querySelectorAll('p.mod-modal-title')]
+                .filter(visible) : [];
+              const workTitles = modal ? [...modal.querySelectorAll('p.episode-modal-title')]
+                .filter(visible) : [];
+              const episodeTitles = modal ? [...modal.querySelectorAll('p.episode-modal-eptitle')]
+                .filter(visible) : [];
+              const details = modal ? [...modal.querySelectorAll('div.episode-modal-rental-detail')] : [];
+              const detail = details.length === 1 ? details[0] : null;
+              const periods = detail ? [...detail.querySelectorAll('div.episode-modal-expire')] : [];
+              const period = periods.length === 1 ? periods[0] : null;
+              const values = period ? [...period.querySelectorAll('span')].filter(visible) : [];
+              const forms = modal ? [...modal.querySelectorAll('form.button_to')] : [];
+              const form = forms.length === 1 ? forms[0] : null;
+              const buttons = form ? [...form.querySelectorAll(
+                'button#free-browse-rental.mod-button--orange[type="submit"]')].filter(visible) : [];
+              const button = buttons.length === 1 ? buttons[0] : null;
+              const elements = form ? [...form.elements] : [];
+              const submitterOverrides = ['formaction', 'formmethod', 'formtarget',
+                'formenctype', 'formnovalidate', 'form'];
+              const submitterOverridesAbsent = button !== null &&
+                submitterOverrides.every(name => !button.hasAttribute(name));
+              const authFields = elements.filter(element => element.tagName === 'INPUT' &&
+                element.type === 'hidden' && element.name === 'authenticity_token');
+              const otherFields = elements.filter(element => element !== button &&
+                !authFields.includes(element));
+              let actionOkay = false;
+              try {
+                const actionAttribute = form?.getAttribute('action');
+                const action = new URL(actionAttribute || '', location.href);
+                actionOkay = actionAttribute === args.actionPath &&
+                  action.protocol === 'https:' && action.origin === 'https://yanmaga.jp' &&
+                  !action.username && !action.password && action.pathname === args.actionPath &&
+                  !action.search && !action.hash;
+              } catch (_) {}
+              const sourceOkay = current.protocol === 'https:' &&
+                current.origin === 'https://yanmaga.jp' && !current.username && !current.password &&
+                current.href === args.sourceUrl && !current.search && !current.hash;
+              const canonicalOkay = canonical.length === 1 && canonical[0].href === args.workUrl;
+              const ogOkay = og.length === 1 && og[0].content === args.sourceUrl;
+              const titleOkay = titles.length === 1 && normalize(titles[0].textContent) === args.modalTitle;
+              const workOkay = workTitles.length === 1 &&
+                normalize(workTitles[0].textContent) === normalize(args.workTitle);
+              const episodeOkay = episodeTitles.length === 1 &&
+                normalize(episodeTitles[0].textContent) === normalize(args.episodeTitle);
+              const periodOkay = details.length === 1 && detail && period &&
+                period.parentElement === detail && normalize(period.textContent) ===
+                  args.periodLabel + ' / ' + args.periodValue && values.length === 1 &&
+                normalize(values[0].textContent) === args.periodValue;
+              const chargedCards = [...document.querySelectorAll(
+                '.episode-ui .episode-free-time.charged')].filter(visible);
+              const charged = chargedCards.length === 1 ? chargedCards[0] : null;
+              const chargedLabels = charged
+                ? [...charged.querySelectorAll('.episode-free-time-bar-label')].filter(visible) : [];
+              const chargedImages = charged
+                ? [...charged.querySelectorAll('.episode-free-time-label img')].filter(visible) : [];
+              const chargedOkay = chargedCards.length === 1 && charged.tagName === 'DIV' &&
+                chargedLabels.length === 1 && normalize(chargedLabels[0].textContent) ===
+                  args.chargedLabel && chargedImages.length === 1 &&
+                chargedImages[0].src === args.waitAssetUrl;
+              const myPages = [...document.querySelectorAll('a[href]')].filter(anchor => {
+                try {
+                  const url = new URL(anchor.href);
+                  return visible(anchor) && url.protocol === 'https:' &&
+                    url.origin === 'https://yanmaga.jp' && url.pathname === '/mypage' &&
+                    !url.username && !url.password && !url.search && !url.hash;
+                } catch (_) { return false; }
+              });
+              const signIns = [...document.querySelectorAll('a[href]')].filter(anchor => {
+                try {
+                  const url = new URL(anchor.href);
+                  return visible(anchor) && url.origin === 'https://yanmaga.jp' &&
+                    ['/customers/sign-in', '/customers/sign-up'].includes(url.pathname) &&
+                    /ログイン|会員登録|新規登録/.test(anchor.innerText || '');
+                } catch (_) { return false; }
+              });
+              const signOuts = [...document.querySelectorAll('a[href],button')].filter(element => {
+                const path = element instanceof HTMLAnchorElement ? element.pathname : '';
+                return visible(element) && /(?:sign.?out|log.?out)/i.test(
+                  path + ' ' + element.className);
+              });
+              const authOkay = myPages.length > 0 && signIns.length === 0 && signOuts.length === 0;
+              const formOkay = forms.length === 1 && form && form.method.toLowerCase() === 'post' &&
+                form.getAttribute('method') === 'post' && form.dataset.remote === 'true' &&
+                !form.hasAttribute('target') && actionOkay &&
+                elements.length === 2 && authFields.length === 1 && otherFields.length === 0 &&
+                buttons.length === 1 && button.form === form &&
+                button.closest('form') === form && submitterOverridesAbsent &&
+                !button.disabled &&
+                normalize(button.innerText) === args.readLabel;
+              return {
+                sourceOkay,
+                canonicalOkay,
+                ogOkay,
+                authOkay,
+                chargedOkay,
+                visibleOuterCount: visibleOuter.length,
+                activeCount: active.length,
+                outerBound: outer !== null && visible(outer) && visibleOuter.includes(outer),
+                titleOkay,
+                workOkay,
+                episodeOkay,
+                periodOkay,
+                formOkay,
+                buttonVisible: button !== null && visible(button),
+                buttonEnabled: button !== null && !button.disabled &&
+                  button.getAttribute('aria-disabled') !== 'true',
+                submitterOverridesAbsent
+              };
+            }""",
+            {
+                "sourceUrl": self._source_url,
+                "workUrl": self._work_url,
+                "actionPath": expected_action_path,
+                "modalTitle": _WAIT_RENTAL_MODAL_TITLE,
+                "workTitle": self._work_title,
+                "episodeTitle": self._episode_title,
+                "periodLabel": _WAIT_RENTAL_PERIOD_LABEL,
+                "periodValue": _WAIT_RENTAL_PERIOD_VALUE,
+                "readLabel": _WAIT_RENTAL_READ_LABEL,
+                "chargedLabel": "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86",
+                "waitAssetUrl": f"https://{SITE_HOST}{WAIT_ASSET_PATH}",
+            },
+        )
+        if not isinstance(state, dict) or any(
+            state.get(key) is not True
+            for key in (
+                "sourceOkay",
+                "canonicalOkay",
+                "ogOkay",
+                "authOkay",
+                "chargedOkay",
+                "outerBound",
+                "titleOkay",
+                "workOkay",
+                "episodeOkay",
+                "periodOkay",
+                "formOkay",
+                "buttonVisible",
+                "buttonEnabled",
+                "submitterOverridesAbsent",
+            )
+        ) or state.get("visibleOuterCount") != 1 or state.get("activeCount") != 1:
+            raise UnknownPageStateError(
+                "Yanmaga wait-rental modal did not match the exact observed episode form"
+            )
+
+        expected_action = (
+            f"/rental/episodes/{expected.episode_id}/by_free_waits"
+        )
+        return page.locator(
+            "div.mod-modal-content.js-modal-content "
+            "div.mod-modal-content-inner.episode-modal.active "
+            f'form.button_to[method="post"][data-remote="true"][action="{expected_action}"]:not([target]) '
+            '> button#free-browse-rental.mod-button--orange[type="submit"]'
+            ':not([formaction]):not([formmethod]):not([formtarget]):not([formenctype])'
+            ':not([formnovalidate]):not([form])'
+        )
+
+    async def _submit_wait_rental_modal(
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+    ) -> None:
+        # The Source document's DOMContentLoaded can precede the site's
+        # client-rendered rental modal. Wait for the observed active modal and
+        # its visible button before taking the strict, final DOM snapshot.
+        await page.locator(
+            "div.mod-modal-content.js-modal-content "
+            "div.mod-modal-content-inner.episode-modal.active #free-browse-rental"
+        ).wait_for(state="visible", timeout=PAGE_CHANGE_TIMEOUT_MS)
+
+        action_url = (
+            f"https://{SITE_HOST}/rental/episodes/{expected.episode_id}/by_free_waits"
+        )
+        action_path = urlsplit(action_url).path
+
+        def expected_response(response) -> bool:
+            request = response.request
+            parsed = urlsplit(response.url)
+            return (
+                request.method.upper() == "POST"
+                and parsed.scheme == "https"
+                and parsed.netloc == SITE_HOST
+                and parsed.path == action_path
+                and not parsed.query
+                and not parsed.fragment
+                and response.url == action_url
+            )
+
+        async with page.expect_response(
+            expected_response,
+            timeout=PAGE_CHANGE_TIMEOUT_MS,
+        ) as response_info:
+            button = await self._validate_wait_rental_modal(page, expected)
+            # Source GET only displayed the rental form. Mark the one possible
+            # ticket action immediately before the observed UI click.
+            self._quota_entry_attempted = True
+            self._quota_entry_started_at = datetime.now(UTC)
+            self._quota_release_state = "attempted_unknown"
+            await button.click(timeout=PAGE_CHANGE_TIMEOUT_MS, no_wait_after=True)
+        response = await response_info.value
+        if response.status >= 400:
+            raise AccessResourceUnavailableError(
+                "yanmaga_wait_rental_submit_response_not_successful"
+            )
+        await page.wait_for_url(
+            lambda value: parse_yanmaga_viewer_url(str(value)) == expected,
+            timeout=PAGE_CHANGE_TIMEOUT_MS,
+            wait_until="domcontentloaded",
+        )
+
     async def _has_first_free_access_proof(
-        self, page: Page, expected: YanmagaEpisodeParts
+        self,
+        page: Page,
+        expected: YanmagaEpisodeParts,
+        *,
+        completion_notice: str = _FIRST_FREE_COMPLETION_NOTICE,
     ) -> bool:
         deadline = monotonic() + min(
             FIRST_FREE_ACCESS_PROOF_TIMEOUT_MS, PAGE_CHANGE_TIMEOUT_MS
@@ -993,7 +1535,7 @@ class YanmagaAdapter(SiteAdapter):
                       };
                     }""",
                     {
-                        "completionNotice": "\u7121\u6599\u30ec\u30f3\u30bf\u30eb\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f"
+                        "completionNotice": completion_notice
                     },
                 )
             except PlaywrightError:
@@ -1137,6 +1679,7 @@ class YanmagaAdapter(SiteAdapter):
             "rentalCount",
             "rentalNextCount",
             "rentalSignupCount",
+            "rentalWaitCount",
             "nextArrowCount",
             "pageContainerCount",
             "menuCount",
@@ -1204,6 +1747,18 @@ class YanmagaAdapter(SiteAdapter):
             ),
             rental_signup_presented=raw.get("rentalSignupPresented") is True,
             rental_signup_geometry=geometry("rentalSignupGeometry"),
+            rental_wait_count=int(raw["rentalWaitCount"]),
+            rental_wait_label=(
+                raw.get("rentalWaitLabel")
+                if isinstance(raw.get("rentalWaitLabel"), str)
+                else None
+            ),
+            rental_wait_clock_src=(
+                raw.get("rentalWaitClockSrc")
+                if isinstance(raw.get("rentalWaitClockSrc"), str)
+                else None
+            ),
+            rental_wait_presented=raw.get("rentalWaitPresented") is True,
         )
 
     def _validate_snapshot(
@@ -1379,6 +1934,10 @@ class YanmagaAdapter(SiteAdapter):
             snapshot.rental_signup_presented,
             snapshot.rental_signup_geometry,
             snapshot.rental_signup_count,
+            snapshot.rental_wait_count,
+            snapshot.rental_wait_label,
+            snapshot.rental_wait_clock_src,
+            snapshot.rental_wait_presented,
             snapshot.menu_count,
             snapshot.menu_hidden,
             snapshot.menu_overlay_known,
@@ -1617,7 +2176,10 @@ class YanmagaAdapter(SiteAdapter):
             and snapshot.rental_signup_presented
             and snapshot.rental_signup_geometry is not None
         )
-        if not (valid_next or registration_boundary):
+        wait_countdown_boundary = self._wait_countdown_matches_immediate_next_row(
+            snapshot
+        )
+        if not (valid_next or registration_boundary or wait_countdown_boundary):
             return False
         terminal_page = [page for page in snapshot.visible_pages if page.index == snapshot.total]
         if (
@@ -1631,6 +2193,47 @@ class YanmagaAdapter(SiteAdapter):
         return (
             self._viewer_url is None
             or parse_yanmaga_viewer_url(self._viewer_url) == expected
+        )
+
+    def _wait_countdown_matches_immediate_next_row(
+        self, snapshot: _ReaderSnapshot
+    ) -> bool:
+        if (
+            snapshot.rental_wait_count != 1
+            or not snapshot.rental_wait_presented
+            or snapshot.rental_wait_clock_src != _WAIT_END_CLOCK_SRC
+            or _WAIT_END_LABEL.fullmatch(snapshot.rental_wait_label or "") is None
+            or snapshot.rental_next_count != 0
+            or snapshot.rental_signup_count != 0
+            or self._listing_rows is None
+        ):
+            return False
+
+        expected = self._require_expected()
+        current_indices = [
+            index
+            for index, row in enumerate(self._listing_rows)
+            if row.episode_id == expected.episode_id
+        ]
+        if len(current_indices) != 1:
+            return False
+        next_index = current_indices[0] + 1
+        if next_index >= len(self._listing_rows):
+            return False
+        next_row = self._listing_rows[next_index]
+        next_route = parse_yanmaga_episode_url(next_row.url)
+        return (
+            next_row.wait_free_marker
+            and not next_row.free_marker
+            and not next_row.first_free_marker
+            and not next_row.red_marker_present
+            and not next_row.known_restricted
+            and next_route is not None
+            and next_route.slug == expected.slug
+            and next_route.episode_id == next_row.episode_id
+            and sum(row.episode_id == next_row.episode_id for row in self._listing_rows) == 1
+            and snapshot.rental_title is not None
+            and " ".join(snapshot.rental_title.split()) == next_row.title
         )
 
     def _signup_forward_matches_immediate_next_row(

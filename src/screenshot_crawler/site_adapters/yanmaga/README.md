@@ -1,12 +1,12 @@
 # YanmagaWeb Site Adapter
 
-**Implemented scope:** public-list Discovery (Phase 02), the observed
-rendered-page Viewer/Capture path (Phase 03), and direct-only normal Batch
-(Phase 04). CLI registrations cover Discovery, manual Crawl/Runner, Batch
-adapter, and Batch policy. Existing Planner, Executor, packager, Artifact, and
-Completed services are reused. Shared Core exposes only the optional
-confirmed-grant observer; Catalog provides the grant-only persistence
-operation.
+**Implemented scope:** public-list Discovery, the observed rendered-page
+Viewer/Capture path, and normal Batch. Batch supports public-free and
+first-free direct access, trusted existing grants, and the bounded Yanmaga
+`work_ticket` resource path described below. CLI registrations cover
+Discovery, manual Crawl/Runner, Batch adapter, and Batch policy. Existing
+Planner, Executor, packager, Artifact, and Completed services are reused.
+Shared Core exposes only site-neutral access-grant and entry-only hooks.
 
 ## Stage 02 current state (2026-11-16; C8 verified, Stage 02 PASS with independent BLOCKING 0)
 
@@ -63,8 +63,9 @@ identity, visible login evidence, unique visible marker, row, and queryless
 source href. The observed public episode route can grant access automatically.
 Before any pixel-readiness wait, the adapter requires the same exact Viewer
 episode, a unique page counter and visible body wrapper, no known access gate,
-the exact completion notice, and a fresh finite same-target Rental History
-proof. It persists an immutable site-neutral grant synchronously through Batch
+the exact first-free completion notice `無料レンタルが完了しました`, and a
+fresh finite same-target Rental History proof. It persists an immutable
+site-neutral grant synchronously through Batch
 before capture readiness. Unknown access, missing or stale expiry, route drift,
 or any gate stops without another entry. Existing grants require fresh active
 same-target countdown evidence and a still-future stored Catalog bound.
@@ -121,8 +122,7 @@ completed. The bounded work-intro popup observation found a visible
 disappearance; the listing remained at 57 rows with no More control, so no
 further popup action was attempted. The ignored QA popup helper, including this
 observed DIV shape, has only passed compile checks and has not been live tested.
-The Stage 02 final gate is PASS; independent Reviewer reported BLOCKING 0 after Root completed documentation synchronization.
-Yanmaga work-ticket selection remains disabled.
+The Stage 02 final gate is PASS. Stage 03 is accepted with qualified composite live evidence and independent BLOCKING 0: wait classification, work-scoped Policy, automatic ticket persistence, grant-only, same-grant capture, positive END, ZIP, and Completed were verified across the bounded runs. Two ticket uses were recorded: dual chapter 29 from frozen exact-history evidence and novel chapter 10 through automatic grant-only persistence. A5 completed the dual chapter-29 same-grant capture with 14 pages and positive END; Root audited the genuine Manifest and ZIP. The grant and work cooldown remained unchanged and A5 used no ticket POST. Post-capture full/incremental Discovery completed and preserved the target, grant, and artifacts with zero Source, Viewer, or native rental POST activity. Stage 04 A6 existing-grant capture on work-novel chapter 10 and A7 public-free capture on work-dual chapter 51 both completed with positive END, ZIP, and Completed; neither changed grant/quota state or used a new right. Independent Tester audits and 261 affected tests passed (0 skipped, 305 deselected). The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and is not a full pass.
 
 ## Discovery
 
@@ -154,10 +154,12 @@ comes from the observed full DOM order (oldest is 1). It does not infer or
 repair positions from episode IDs, dates, or titles; bounded Discovery is
 unsupported and inferred positions are disabled.
 
-The Stage 01 observed listing classification remains current: only verified
-public-free and first-free rows map to `access_mode="free"`. Rows remain
-`available=True`; other or unverified states are `unknown`. Stage 02 adds the
-separate trusted-grant path described below.
+The current listing classification recognizes verified public-free and
+first-free rows as `access_mode="free"`, and recognizes the wait marker as
+`access_mode="quota"` when authenticated exact-row proof is present. Before
+ticket use, the Adapter additionally requires a fresh work-level charged
+state. Rows remain `available=True`; other or unverified states are `unknown`.
+Stage 02 adds the separate trusted-grant path described below.
 
 A public-free row requires one visible `.mod-episode-point--free` element with
 exact text `無料`, the exact class name, and computed color
@@ -185,15 +187,16 @@ but any observed state must be `true`. The observer remains main-frame bound,
 resets on navigation, reads only the exact login field, and is detached on all
 exit paths.
 
-The live Stage 01 sample was `work-dual`.
-Two first-free rows were visible in the initial viewport. The post-change
-complete 57-row listing contained 27 first-free rows, 8 public-free rows, and
-22 unknown. No wait-free, paid-only, or active-grant/expiry state was
-observed. Those states remain `unknown`; the daily-limit notice scope is not
-inferred. A separate temporary empty-context comparison saw no `/mypage` link,
-two sign-in links, and false login telemetry. No episode or access CTA was
-opened. A read-only request observer found analytics POSTs to third-party
-hosts only and no first-party Yanmaga POST during the sampled listing read.
+The Stage 01 `work-dual` snapshot was a historical checkpoint: two first-free
+rows were visible in the initial viewport, and its complete 57-row listing
+contained 27 first-free rows, 8 public-free rows, and 22 then-unclassified
+rows. The wait marker was positively identified and added to the current
+classifier in Stage 03; this does not establish paid-only or active-grant /
+expiry behavior. The daily-limit notice scope remains unknown. A separate
+temporary empty-context comparison saw no `/mypage` link, two sign-in links,
+and false login telemetry. No episode or access CTA was opened in Stage 01. A
+read-only request observer found analytics POSTs to third-party hosts only and
+no first-party Yanmaga POST during that sampled listing read.
 
 All listed rows remain `available=True`. Yanmaga sends `free_until=None` on
 each refresh because no explicit free expiry was observed; the existing Catalog
@@ -267,13 +270,22 @@ the original Catalog `source_url` and freshly validates the exact requested
 source. The normal public-free path still requires the exact visible red-free
 marker. Stage 02 also permits one public-episode GET for a fresh authenticated
 exact first-free row; that route may grant access automatically, and the
-adapter requires the exact Viewer, completion notice, and finite target-bound
-Rental History evidence before synchronously saving the grant. A trusted
+adapter requires the exact Viewer, the exact first-free notice
+`無料レンタルが完了しました`, and finite target-bound Rental History evidence
+before synchronously saving the grant. A trusted
 stored grant can authorize direct retry only when its Catalog expiry is still
 future and a fresh same-target countdown is active. All other unknown,
-conflicting, expired, or unsupported access states fail closed. `direct` and
-`auto` are supported; site ticket/quota selection is not enabled. This does
-not establish that the site has no daily cap beyond the observed sample.
+conflicting, expired, or unsupported access states fail closed. For wait-free
+rows, the adapter also requires the exact image marker, charged signal, and
+verified target absence from Rental History; it validates the observed
+same-episode modal and POST form before one normal click. Its exact completion
+notice is `レンタルが完了しました`; it does not accept the first-free notice
+as a substitute. Novel chapter 10 grant-only verified the exact post-click
+Viewer, notice, active history, and automatic persistence. Dual chapter 29 Run
+10 required later frozen-history recovery; its same-grant capture succeeded in
+a separate run. `direct`, `auto`, and the bounded `work_ticket` strategy are
+supported. This does not establish the
+site's daily-cap scope beyond the observed samples.
 
 The public episode route normally redirects to
 `/viewer/comics/<same-slug>/<same-episode-id>`. Live navigation also showed the
@@ -354,9 +366,16 @@ obstructed, conflicting, duplicate, foreign, non-adjacent, title-mismatched, or
 malformed preloaded-card signals fail closed. These presentation checks and the
 final-body proof must remain stable across repeated snapshots within the bounded
 page-change window. The reader next arrow is retained as diagnostic metadata
-only because its visibility is transient during normal traversal. Unknown
-layouts, missing halves, page/source drift, gates, or an unproven terminal state
-fail closed.
+only because its visibility is transient during normal traversal. If the card
+has no next/read or signup control, one exact visible
+`.aspect-ratio-2-27.mt-wait > div.episode-modal-wait.content` block can be the
+terminal signal when it contains the observed clock image followed by one span
+matching `あとH:MMで無料` (H 0–23, minutes 00–59). Its title must match the unique
+immediate next row in the fresh listing, and that row must carry the exact wait
+marker without a conflicting free marker. The timer is not activated. All
+existing route, captured-body, ownership, access-gate, and stable-END checks
+still apply. Unknown layouts, missing halves, page/source drift, gates, or an
+unproven terminal state fail closed.
 
 A fresh reader can show the native full-screen `#menu` over its first page. The
 adapter tolerates only the observed menu/header/controller/transparent-overlay
@@ -372,8 +391,11 @@ before saving the page; no CSS is changed to conceal reader controls.
 
 `YanmagaSitePolicy` admits a valid available `free` source directly. A
 `quota` or `paid` source is also direct only when Catalog has a valid aware
-future confirmed grant; it never starts a quota/resource pass and exposes no
-grant-only pass. Invalid, expired, or absent grants are skipped. `free_until=None` is allowed because current Discovery
+future confirmed grant. Without one, a validated wait-free `quota` source may
+use one work-scoped `work_ticket` pass with after-observed-consumption
+persistence. Grant-only supports that resource and excludes ordinary `free`
+and first-free rows. Invalid or expired grants do not become direct.
+`free_until=None` is allowed because current Discovery
 explicitly refreshes public-free rows with no observed deadline; NULL alone
 does not create a free classification. A valid aware future timestamp is
 allowed, while expired/equal, malformed, or timezone-naive expiry values are
@@ -382,15 +404,85 @@ so a malformed persisted timestamp can fail the whole plan with
 `BatchPlanningError`; the shared Planner keeps its existing fail-closed behavior.
 
 The normal Batch Executor creates a fresh Yanmaga adapter and validates the
-exact target before opening its public episode URL. The public-free path requires
-the current red-free marker. The first-free path requires fresh authenticated
-Discovery, one bounded source entry, the exact Viewer completion notice, and a
-finite Rental History proof saved before capture readiness. A trusted Catalog
-grant permits direct retry only while its stored expiry is future and a fresh
-same-target countdown is active. All other unknown, conflicting, expired, or
-unsupported states fail closed. Only positive END and normal packaging can mark
-the Catalog Item completed. Ticket, point, purchase, quota, and grant-only passes
-remain unsupported.
+exact target before opening its public episode URL. Public-free, first-free,
+and trusted-grant checks remain in place. The wait-ticket path requires an
+authenticated exact row, one observed wait image marker, visible charged state,
+verified target absence from the complete Rental History collection, and the
+observed exact modal form. The POST is initiated only by one normal click; no
+resource fallback is used. The source modal and pre-click history shapes were
+observed read-only on `work-dual` chapter 29 and `work-novel` chapter 10. The
+Root later verified the exact native ticket notice, Viewer, and active history from retained evidence; the production run itself did not latch or persist the use.
+Wait countdown parsing accepts the observed exact `残りH時間` or `残りD日`
+field only when the explicit wait/trusted-history bound permits it (up to 72
+hours); ordinary first-free history remains capped at 23 hours and does not
+accept day fields. A day countdown of D>=2 yields the conservative
+`site_day_countdown_lower_bound` at observation start plus (D-1) days minus 5
+seconds; D=1 proves active access but gives no finite expiry. Hour and day
+evidence remain distinct, and no fixed grant duration is synthesized.
+Entry-only writes no page Manifest or Progress state, captures no image,
+creates no ZIP, and leaves the Item pending; failure diagnostics are
+metadata-only. Normal capture, positive END, and packaging checks remain strict.
+Yanmaga's `prepare_entry_only_page()` skips its capture-only native pixel
+observer on the fresh Batch-owned Page; no general Page-reuse guarantee is
+added for a Page that already has that observer.
+
+### Stage 03 live and test status
+
+Read-only Discovery observed the image-only wait marker on 22 of 57 `work-dual`
+rows and 29 of 37 `work-novel` rows, plus the exact charged label. Read-only
+Source GETs for dual chapter 29 and novel chapter 10 showed the exact modal,
+three-day period, and episode-bound `/by_free_waits` form. Run 9 stopped before
+submit because the client-rendered modal was not yet visible. Run 10 emitted one
+native ticket POST, but the then-current production postcondition did not latch
+or persist the use. Root later verified the exact native notice, Viewer, and
+active history from retained evidence and applied one frozen history observation
+to Source 25/work state. Its bound is anchored at observation time, not a claim
+about the exact POST timestamp.
+
+Novel chapter 10 grant-only then succeeded with one native wait-ticket POST,
+`stop_reason=entry_confirmed`, zero pages, Item 26 pending, and no Artifact. Its
+Source grant expiry is `2026-11-17T09:35:11.467066+09:00`; quota start and work
+last-consumed time are `2026-11-16T09:35:16.467066+09:00`. Source=3 and Viewer=2
+are request totals; route types were not recorded. The successful automatic
+notice/history confirmation and persistence are covered by
+`stage03/novel/grant_only-report.json`.
+
+Dual chapter 29 same-grant retry attempt 3 had Source=1, Viewer=1, and no native
+ticket POST. It saved 13 pages, then failed before END with a reader-gate
+timeout; no Artifact was created and the grant remained unchanged. Attempt 4
+saved all 14 body pages but failed to recognize the terminal boundary, with no
+Artifact. A5 later completed the same target with 14 pages and positive END;
+Root audited the genuine Manifest and ZIP. The stored grant and work cooldown
+remained unchanged, and no ticket POST occurred. The observed next-chapter card under the
+unique `#rental` auxiliary includes point and rental-short metadata; the gate
+now excludes the exact `.episode-modal-point`,
+`dl.episode-modal-point--posession`,
+`dl.episode-modal-point--necessary`, and `.episode-modal-short` nodes there.
+Semantic dialogs remain gates, and the existing body ownership, pixel, and END
+checks are unchanged. The observed inline wait countdown terminal variant is
+accepted only when it matches the immediate next wait-marked listing row and no
+next/read or signup CTA is present. No further ticket action is authorized.
+
+Wait/trusted history accepts exact `残りH時間` or `残りD日` within the explicit
+72-hour bound. D>=2 uses observation start plus (D-1) days minus 5 seconds as
+`site_day_countdown_lower_bound`; D=1 and H=1 are active without finite expiry.
+First-free remains limited to 23-hour hour notation; no fixed grant period is
+invented.
+
+Focused synthetic checks: Rental History browser tests 37; wait-ticket/rental-
+form adapter browser selection 18 passed / 106 deselected; first-free regression
+selection 15 passed / 109 deselected; adapter and policy unit files 41 passed.
+The first-free selection initially exposed six cases with a stale fixed-time
+fixture; it now uses a test-relative observation and passes. Independent review
+of the notice/day/late-record changes passed BLOCKING 0. Five focused browser
+cases cover the observed terminal countdown branch, and the Yanmaga adapter
+unit file passed 10 tests. Stage 03 is accepted with qualified composite
+evidence and independent BLOCKING 0. Post-capture full/incremental Discovery
+preserved the target, grant, and artifacts with zero Source, Viewer, or native
+rental POST activity. Stage 04 A6/A7 captures, independent Tester audits, and
+the 261-test affected scope passed with 0 skips and 305 deselections. The final
+Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and
+is not a full pass.
 
 ## Verification and limits
 

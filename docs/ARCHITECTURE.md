@@ -576,6 +576,7 @@ metadata overrideはmanifest/source URLのauthorityにはならない。
 
 ```python
 prepare_page(page)
+prepare_entry_only_page(page)  # optional; defaults to prepare_page
 configure_run(page, access_strategy)
 initialize(page)
 initialize_entry_only(page)  # optional; used when RunConfig.entry_only=True
@@ -591,6 +592,13 @@ wait_for_change(page, previous_identity)
 ```
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
+
+`entry_only=True` は権利確認と消費確認のみを行う。RunnerはContent capture/save,
+Manifest / Progress更新、packaging、Item completionを行わず、失敗diagnosticはmetadata/errorに
+限定してscreenshotとHTML snapshotを省略する。Adapterがcapture専用の準備（例: pixel observer）を
+避ける必要がある場合は`prepare_entry_only_page(page)`をoverrideできる。Base defaultは通常の
+`prepare_page(page)`へ委譲する。Overrideはtarget validation、Page/AccessGuard ownershipおよびcleanupを
+弱めない。通常capture pathの`prepare_page` behaviorは変更しない。
 
 `capture_page()`は任意の直接capture hookである。非`None`の非空tupleを返した場合、Coreは
 Locator captureを行わない。`None`、`CaptureUnavailableError`、bounded timeoutでは既存の

@@ -9,7 +9,9 @@ from playwright.async_api import Page
 from screenshot_crawler.site_adapters.yanmaga.discovery import YanmagaEpisodeParts
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
     RentalCountdown,
+    RentalHistoryObservation,
     fetch_rental_history_countdowns,
+    fetch_rental_history_observations,
     parse_rental_history_html,
 )
 
@@ -62,6 +64,9 @@ TEST_ANCHOR_CLASSES = frozenset({"tw:no-underline", "tw:text-inherit"})
 TEST_HISTORY_LINK_CLASSES = frozenset(
     {"tw:text-button-sm", "tw:text-center", "tw:h-8", "tw:text-gray-dusty-dark", "tw:pb-[11px]"}
 )
+TEST_RENTAL_COLLECTION_CLASSES = frozenset(
+    {"tw:grid", "tw:grid-cols-1", "tw:xl:grid-cols-4", "tw:xl:gap-4xs", "tw:md:py-xs"}
+)
 
 
 def _card(
@@ -113,6 +118,8 @@ async def _run_runtime_history_probe(
     *,
     history_links: str,
     bad_history_headers: str | None = None,
+    history_cards: str | None = None,
+    pagination: str = "",
 ) -> tuple[tuple[tuple[str, RentalCountdown], ...], tuple[str, ...]]:
     requests: list[str] = []
 
@@ -129,7 +136,16 @@ async def _run_runtime_history_probe(
         elif parsed.path == "/mypage" and not parsed.query:
             body = "<html><body>" + history_links + "</body></html>"
         elif parsed.path == "/mypage" and parsed.query == "tab=rental":
-            body = "<html><body>" + _card() + "</body></html>"
+            cards = _card() if history_cards is None else history_cards
+            body = (
+                "<html><body><ul id=\"content_card_list\" class=\""
+                + " ".join(sorted(TEST_RENTAL_COLLECTION_CLASSES))
+                + "\">"
+                + cards
+                + "</ul>"
+                + pagination
+                + "</body></html>"
+            )
             if bad_history_headers == "age":
                 headers["age"] = "0"
             elif bad_history_headers == "invalid_date":
@@ -159,6 +175,194 @@ async def _run_runtime_history_probe(
         targets=(TARGET,),
     )
     return proofs, tuple(requests)
+
+
+async def _run_runtime_history_observation_probe(
+    page: Page,
+    *,
+    history_cards: str,
+    outside_cards: str = "",
+    pagination: str = "",
+    max_countdown_hours: int = 23,
+):
+    requests: list[str] = []
+
+    async def route_handler(route) -> None:
+        parsed = urlsplit(route.request.url)
+        requests.append(parsed.path + parsed.query)
+        headers = {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, max-age=0, must-revalidate",
+            "date": datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT"),
+        }
+        if parsed.path == "/comics/work":
+            body = "<html><body>work fixture</body></html>"
+        elif parsed.path == "/mypage" and not parsed.query:
+            body = "<html><body>" + _history_link() + "</body></html>"
+        elif parsed.path == "/mypage" and parsed.query == "tab=rental":
+            body = (
+                "<html><body><ul id=\"content_card_list\" class=\""
+                + " ".join(sorted(TEST_RENTAL_COLLECTION_CLASSES))
+                + "\">"
+                + history_cards
+                + "</ul>"
+                + outside_cards
+                + pagination
+                + "</body></html>"
+            )
+        else:
+            await route.abort()
+            return
+        await route.fulfill(status=200, headers=headers, body=body)
+
+    await page.route("**/*", route_handler)
+    await page.goto("https://yanmaga.jp/comics/work?sort=older", wait_until="domcontentloaded")
+    observations = await fetch_rental_history_observations(
+        page,
+        observed_mypage_href="https://yanmaga.jp/mypage",
+        targets=(TARGET,),
+        max_countdown_hours=max_countdown_hours,
+    )
+    return observations, requests
+
+
+async def test_yanmaga_rental_history_observations_distinguish_active_and_verified_absent(
+    browser_page: Page,
+) -> None:
+    active, active_requests = await _run_runtime_history_observation_probe(
+        browser_page, history_cards=f'<li data-index="0">{_card()}</li>'
+    )
+    assert active == (
+        RentalHistoryObservation(
+            external_id=f"{TARGET.slug}:{TARGET.episode_id}",
+            countdown=active[0].countdown if active else None,
+        ),
+    )
+    assert active[0].countdown is not None
+    assert active[0].countdown.remaining_hours == 22
+    assert active_requests[1:] == ["/mypage", "/mypagetab=rental"]
+
+    other_id = "1123456789abcdef0123456789abcdef"
+    absent, absent_requests = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=f'<li data-index="0">{_card(episode_id=other_id)}</li>',
+    )
+    assert absent == (RentalHistoryObservation(f"{TARGET.slug}:{TARGET.episode_id}", None),)
+    assert absent_requests[1:] == ["/mypage", "/mypagetab=rental"]
+
+
+async def test_yanmaga_wait_rental_history_allows_observed_72_hour_countdown_only_when_requested(
+    browser_page: Page,
+) -> None:
+    standard, _ = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=f'<li data-index="0">{_card(value="\u6b8b\u308a72\u6642\u9593")}</li>',
+    )
+    assert standard is None
+
+    wait, _ = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=f'<li data-index="0">{_card(value="\u6b8b\u308a72\u6642\u9593")}</li>',
+        max_countdown_hours=72,
+    )
+    assert wait is not None
+    countdown = wait[0].countdown
+    assert countdown is not None
+    assert countdown.remaining_hours == 72
+    assert countdown.access_granted_until is not None
+    assert countdown.access_granted_until == (
+        countdown.observed_at + timedelta(hours=71) - timedelta(seconds=5)
+    )
+
+
+@pytest.mark.parametrize("days", (1, 2, 3))
+async def test_yanmaga_wait_rental_history_parses_native_days_with_day_lower_bound(
+    browser_page: Page, days: int
+) -> None:
+    day_text = f"\u6b8b\u308a{days}\u65e5"
+    cards = f'<li data-index="0">{_card(value=day_text)}</li>'
+    ordinary, _ = await _run_runtime_history_observation_probe(
+        browser_page, history_cards=cards, max_countdown_hours=23
+    )
+    assert ordinary is None
+
+    wait, _ = await _run_runtime_history_observation_probe(
+        browser_page, history_cards=cards, max_countdown_hours=72
+    )
+    assert wait is not None
+    countdown = wait[0].countdown
+    assert countdown is not None
+    assert countdown.active is True
+    assert countdown.remaining_hours == 0
+    assert countdown.remaining_days == days
+    if days == 1:
+        assert countdown.access_granted_until is None
+        assert countdown.expiry_evidence is None
+    else:
+        assert countdown.access_granted_until == (
+            countdown.observed_at + timedelta(days=days - 1) - timedelta(seconds=5)
+        )
+        assert countdown.expiry_evidence == "site_day_countdown_lower_bound"
+
+
+async def test_yanmaga_wait_rental_history_rejects_days_beyond_requested_bound(
+    browser_page: Page,
+) -> None:
+    day_text = "\u6b8b\u308a4\u65e5"
+    observations, _ = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=f'<li data-index="0">{_card(value=day_text)}</li>',
+        max_countdown_hours=72,
+    )
+
+    assert observations is None
+
+
+async def test_yanmaga_rental_history_incomplete_collection_is_unknown(
+    browser_page: Page,
+) -> None:
+    observations, requests = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=f'<li data-index="0">{_card()}</li>',
+        pagination='<button>More</button>',
+    )
+
+    assert observations is None
+    assert requests[1:] == ["/mypage", "/mypagetab=rental"]
+
+
+@pytest.mark.parametrize(
+    ("history_cards", "outside_cards"),
+    [
+        (
+            f'<li data-index="0">{_card(episode_id="1123456789abcdef0123456789abcdef")}</li>',
+            _card(),
+        ),
+        (
+            f'<li data-index="0">{_card()}</li>',
+            _card(),
+        ),
+        (
+            f'<li data-index="0">{_card(episode_id="1123456789abcdef0123456789abcdef")}</li>',
+            (
+                '<ul class="other">'
+                f'<li data-index="0">{_card()}</li>'
+                "</ul>"
+            ),
+        ),
+    ],
+    ids=("target-outside-known-list", "target-duplicated-outside-list", "decoy-list"),
+)
+async def test_yanmaga_rental_history_target_outside_collection_is_unknown(
+    browser_page: Page, history_cards: str, outside_cards: str
+) -> None:
+    observations, _requests = await _run_runtime_history_observation_probe(
+        browser_page,
+        history_cards=history_cards,
+        outside_cards=outside_cards,
+    )
+
+    assert observations is None
 
 
 async def test_yanmaga_runtime_rental_history_helper_fetches_observed_native_ui_links(

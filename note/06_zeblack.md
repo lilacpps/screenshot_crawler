@@ -91,6 +91,10 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Current implementation snapshot (updated 2026-10-29)
 
 ## Conditional predecessor rereading (implemented 2026-10-29)

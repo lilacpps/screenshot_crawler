@@ -68,6 +68,10 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 # Hanayume current implementation
 
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Previously read target without a current rental (2026-11-06)
 
 The exact account target classes `mode-current mode-read mode-store-item-blank

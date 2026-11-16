@@ -1,18 +1,147 @@
 # Yanmaga access expansion progress
 
-**Status:** Stage 01 PASS (observed Discovery subset); Stage 02 PASS with independent final review BLOCKING 0. C1 verified one exact first-free release and synchronous grant persistence before an intentional capture-hook failure; C2 reused that grant without a new right. The v4 full/incremental metadata refresh passed Root's Catalog audit. C3 stopped before Source entry; C4-C6 failed before complete content, and C7 stopped before END after the nonsemantic inline rental card was misidentified as a gate. The site-local fix preserves semantic-dialog, body-ownership, pixel, page-count, and positive-END checks. C8 then completed the target using the same existing grant: 14 pages, positive END, ZIP, Artifact, and Item completion were independently audited. The archive contains 13 native WebP pages plus one safe PNG fallback for the last page. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental returned five known rows and `known_streak` with `complete=null` (not evaluated). Its Source/Viewer counts are unknown because the observer was not installed. The post-full plan had no candidates because the target Item was already completed. The additional first-free allowance is exhausted; the user's manual chapter-26 use is excluded from our attempt count and is not recorded as ticket/quota use. Stage 03 read-only investigation has started; Stage 03 implementation and Stage 04 have not started.
+**Status:** Stage 01 PASS (observed Discovery subset); Stage 02 PASS (independent final review BLOCKING 0); Stage 03 PASS with qualified composite live evidence and independent BLOCKING 0; Stage 04 live runs, affected tests, and independent Tester audits PASS; final Reviewer gate PASS (independent BLOCKING 0). A6 existing-grant work-novel chapter 10 and A7 public-free work-dual chapter 51 completed through END/ZIP/Completed. Pre/post Discovery preserved Catalog state with zero Source/Viewer/rental POST. The affected scope passed 261 tests, 0 skipped, with 305 deselected. The full-suite run was controlled-stopped and is not a clean full-suite pass. No new rights are authorized. First-free budget is exhausted, and manual chapter-26 use is excluded from ticket/quota use.
 **Plan authored:** 2026-11-15.
 **Implementation branch:** `feat/yanmaga-access`, created from latest `origin/main` (`4407e975`).
 **Stage 01 implementation commit:** `26cbae8`.
 **Authority:** [README.md](README.md), `runbooks/yanmaga-free/README.md`, `AGENTS.md`.
-**Workspace boundary:** live artifacts are isolated under `output/yanmaga_access_experiment/stage01/` and `output/yanmaga_access_experiment/stage02/`. No normal Catalog, Watchlist, library, or capture output was used. User-edited `crawler.yaml` and `watchlist.yaml` were preserved.
+**Workspace boundary:** live artifacts are isolated under `output/yanmaga_access_experiment/stage01/`, `stage02/`, and `stage03/`. No normal Catalog, Watchlist, library, or capture output was used. User-edited `crawler.yaml` and `watchlist.yaml` were preserved.
 
 | Stage | Status | Gate |
 | --- | --- | --- |
-| 01 Site probe / Discovery | PASS (observed subset); independent BLOCKING 0 | Wait-free, paid-only, and grant/expiry evidence remains unverified. |
+| 01 Site probe / Discovery | PASS (observed subset); independent BLOCKING 0 | Its original sample kept wait rows unknown; Stage 03 later verified the wait marker/charged state. Paid-only classification, recovery timing, and an absolute grant expiry remain unverified. |
 | 02 First-free capture | PASS; independent final review BLOCKING 0 | C1 used one additional first-free attempt on position 31. C2 reused the same grant without a new right. V4 pre-capture full/incremental and plan passed independent Catalog audit. C3 stopped before Source entry under a QA budget guard. C4-C6 failed before complete capture. C7 saved 13 WebP pages and reached 14/14, then failed before END because the nonsemantic `#rental` card matched the broad modal gate. The site-local exemption preserves semantic-dialog, body-ownership, and positive-END checks. C8 completed the same existing-grant target with one Source GET and one Viewer GET, no other episode or non-GET request, and zero new first-free use. Run 8 succeeded with 14 pages and `stop_reason=end`; Item 27 completed and one Artifact was present. The 14-page ZIP and genuine Manifest match exactly and Root's artifact audit passed. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental returned `known_streak` with five known rows and `complete=null` (not evaluated), and its Source/Viewer request counts are unknown because its observer was not installed. The post-full plan had zero candidates because Item 27 was complete. The independent final review accepted Stage 02 with BLOCKING 0. No new right is authorized. |
-| 03 Work ticket | READ-ONLY INVESTIGATION STARTED; implementation NOT STARTED | No wait-free signal or ticket/cooldown behavior has been confirmed live. Do not infer or enable quota. |
-| 04 E2E / final review | NOT STARTED | Depends on earlier accepted stages and live access evidence. |
+| 03 Work ticket | PASS (qualified composite live evidence); focused checks and independent review BLOCKING 0 | Run 10's native POST was verified later from retained exact notice/Viewer/history evidence and applied once using a frozen observation anchor. Novel chapter 10 grant-only succeeded with one POST, `entry_confirmed`, zero pages, pending Item, and no Artifact. Cumulative ticket actions=2. Dual chapter 29 same-grant attempts 3/4 were incomplete; attempt 5 completed 14 pages with positive END, ZIP, and Completed without another POST. Root audited the genuine Manifest/ZIP; the grant and cooldown remained unchanged. Post-capture full/incremental Discovery preserved the target, Items, Sources, flags, grants, and artifacts; Source/Viewer/native rental POST=0. No further ticket action is authorized. |
+| 04 E2E / final review | PASS (independent final Reviewer BLOCKING 0) | A6 completed work-novel Source 26 / chapter 10 with its existing grant: 18 WebP pages, positive END, ZIP, Completed, unchanged grant, and no new ticket POST. A7 completed public-free work-dual Source 3 / chapter 51: 16 WebP pages, positive END, ZIP, Completed, unchanged quota/grant state, and Source=1/Viewer=1/other=0/POST and non-GET=0. Pre/post full/incremental Discovery preserved state with zero Source/Viewer/rental POST. Tester independently passed both ZIP/Manifest/SQL and visual audits. Core/local-viewer passed 55 / 0 skip / 8 deselected; Batch/CLI/Catalog passed 61 / 0 skip / 297 deselected; Yanmaga site + five entry-only representatives passed 145 / 0 skip / 0 deselected (129 Yanmaga tests + 16 representative cases). Total affected scope: 261 passed, 0 skipped, 305 deselected. The final Reviewer gate passed with independent BLOCKING 0. The full suite did not complete; do not claim a full pass. No new first-free/ticket/paid rights were used. |
+
+## Stage 04 current checkpoint (2026-11-16)
+
+Stage 04 started after the Stage 03 qualified PASS and independent BLOCKING 0.
+A6 completed the first bounded target, work-novel Source 26 / chapter 10, using
+its existing grant. Run 2 succeeded with 18 WebP pages and positive END; Item
+26 completed and Artifact 1 was present. The ZIP SHA-256 is
+`4c2f204c4600b6c9b7360bcc0d4e8203705af7aa1df134bc46837e7dab34ebb1`
+(18,706,580 bytes). Root's nine-check artifact audit passed. Source=1,
+Viewer=1, other episodes=0, and POST/non-GET=0; the grant and work timestamp
+were unchanged. Pre/post Discovery used no Source, Viewer, or native rental
+POST. The next bounded target is work-dual Source 3 / chapter 51 using
+public-free access. Target-only flags and dedicated Catalog/output remain
+required. No new first-free or work-ticket action is authorized; Source 28
+(the user-reported manual chapter-26 use) remains excluded.
+
+A7 completed work-dual Source 3 / chapter 51 through the ordinary public-free
+path. Run 14 succeeded with 16 native 1125x1600 WebP pages, positive END, Item
+3 completed at `2026-11-16T10:21:36.821596+09:00`, and Artifact 3 present. The
+ZIP SHA-256 is
+`e731f5450a3410e65b8f2f0e4c744ff1b35b937171d2cc40ad6bf94736b24231`
+(13,092,610 bytes); Root's nine-check audit passed. Source=1, Viewer=1, other
+episodes=0, POST/non-GET=0; Source grant/quota fields and the work anchor were
+unchanged. Pre/post full Discovery had 57 known rows and `complete=true`;
+incremental had five known rows and stopped at `known_streak` with
+`complete=null`. Both metadata refreshes had zero Source, Viewer, or native
+rental POST. Selected source flags/IDs and Artifacts 1/2/3 remained unchanged;
+normal and grant-only post-capture plans were empty.
+
+### Final validation checkpoint
+
+The accepted affected scope includes Core/local-viewer, Batch/CLI/Catalog/
+resource behavior, all Yanmaga adapter browser tests, and five other entry-only
+representatives. Core/local-viewer passed 55, skipped 0, deselected 8. The
+Batch/Catalog affected run passed 61, skipped 0, deselected 297. The Yanmaga
+site plus five entry-only representatives passed 145, skipped 0, deselected
+0 (129 Yanmaga cases and 16 representative cases). Total affected scope:
+261 passed, 0 skipped, 305 deselected. The independent Tester audit passed both
+A6/A7 manifests, ZIPs, SQL state, and first/middle/final visual checks. Root reports
+`ruff check src tests` and owned-path `git diff --check` passed.
+
+The full-suite v2 did not complete. The earlier `a086` run stopped after 560
+passes at a 120-second ComicFuz browser teardown timeout; an isolated rerun of
+that node passed once with no skips. The later v2 run first had four QA
+import-path collection errors, corrected in the ignored helper, then recorded
+1,013 visible calls before a controlled stop after the agreed affected scope.
+Evidence is `output/yanmaga_access_experiment/stage03/resume-suite-controlled-stop.json`.
+This is not a clean full-suite pass and does not establish 9,180 passing tests.
+
+## Stage 03 current checkpoint (2026-11-16)
+
+Authenticated metadata-only Discovery verified the image-only
+`span.mod-episode-free_browse` marker and exact logo asset: 22 `quota` rows in
+the 57-row `work-dual` listing and 29 in the 37-row `work-novel` listing;
+`work-dual` retains two unknown rows. The visible exact
+`.episode-free-time.charged` / `チャージ完了` state was observed in the same
+work. `data-is-free="true"` alone is not classification evidence.
+
+Read-only Source pages for `work-dual` chapter 29 and `work-novel` chapter 10
+showed the same active modal with exact work/episode identity, the label
+`レンタル期間 / 3日間`, and one enabled `読む` submitter. The observed
+same-origin POST is bound to the exact episode's
+`/rental/episodes/<episode-id>/by_free_waits` path. Source GET itself did not
+consume a ticket. The exact work-ticket success notice observed after the dual
+chapter-29 submit was `レンタルが完了しました`; the distinct first-free notice remains
+`無料レンタルが完了しました`. Run 10's production postcondition did not
+latch or persist the use. Root later verified the exact notice, Viewer, and
+active target history from retained evidence, then applied one frozen history
+observation to Source 25 and work cooldown state. The observation at
+`2026-11-16T00:23:46.090627Z` showed `残り2日`, with the lower bound
+`2026-11-17T00:23:41.090627Z`; it is an observation anchor, not the exact POST
+time. The applied record is `stage03/dual/late-confirmation-applied.json`; a
+reapply is rejected and cannot move the bound.
+
+Dual chapter 29 same-grant direct retry attempt 3 made Source=1, Viewer=1, and
+native ticket POST=0. It saved 13 pages and failed before END. Attempt 4 saved
+all 14 native WebP body pages and then failed to recognize a terminal boundary;
+no Artifact was created and Source/Work grant state stayed unchanged. Attempt 5
+then completed all 14 pages and positive END without a new ticket POST. Root
+audited the genuine Manifest and ZIP; Source 25/Work grant and cooldown stayed
+unchanged. Its ZIP SHA-256 is
+`b1ffc5c22c175d22a1bc44af291ceeb141500d20a7a5a934e99c9b8d7afe5cff` (12,548,287
+bytes); the genuine Manifest SHA-256 is
+`16186b30fa07320821d3847e61299ba220c4277070804d2ba3b394fe60a46c3e`.
+The saved
+page identified the inline next-chapter point/rental metadata as the false gate
+source. The gate now excludes only the observed point, possession,
+necessary-point, and short-description nodes inside the unique `#rental` card;
+semantic dialogs remain gates. A separate terminal branch accepts the observed
+visible native wait countdown only when it matches the exact immediate next
+wait-marked row and no next/read or signup CTA is present. Body ownership and
+positive-END checks remain strict. The observed terminal countdown variant
+matches the immediate next wait-marked listing row when no next/read or signup
+CTA exists. Stage 03 capture is verified; no further ticket submit is
+authorized.
+
+Novel chapter 10 grant-only run succeeded with `stop_reason=entry_confirmed`,
+zero pages, Item 26 pending, and no Artifact. It emitted one native wait-rental
+POST; Source=3 and Viewer=2 are request totals with route types unrecorded. No
+other rental POST or episode was observed. The updated automatic ticket proof
+and Catalog persistence worked on this path. Its Source grant expiry is
+`2026-11-17T09:35:11.467066+09:00`; quota start and work last-consumed time are
+`2026-11-16T09:35:16.467066+09:00`. The report is
+`stage03/novel/grant_only-report.json`. Cumulative Stage 03 ticket actions are
+two: dual chapter 29 and novel chapter 10. No further ticket action is
+authorized.
+
+Wait/trusted-history parsing accepts the observed exact `残りH時間` or
+`残りD日` field only when the explicit 72-hour bound permits it. For D>=2 the
+lower bound is observation start plus (D-1) days minus 5 seconds, labeled
+`site_day_countdown_lower_bound`; D=1 and H=1 establish active access but no
+finite expiry. No fixed 72-hour grant is synthesized. Ordinary first-free
+history remains capped at 23 hours and rejects day notation.
+
+Focused synthetic verification: Rental History browser tests **37 passed**;
+wait-ticket/rental-form adapter browser selection **18 passed / 106 deselected**;
+first-free adapter regression selection **15 passed / 109 deselected**; adapter
+and policy unit files **41 passed**. The first-free selection initially failed
+six cases because a fixed November 15 grant fixture had expired against the
+current clock; it now anchors to test execution and passes. Independent review
+of the notice/day/late-record code passed BLOCKING 0. Five focused browser cases
+cover the observed terminal countdown branch and the adapter Unit file passed
+10 tests. Stage 03 post-capture full/incremental Discovery completed with
+Source=0, Viewer=0, and native rental POST=0; Root's audit confirmed the target,
+grant, cooldown, and artifacts were preserved. Stage 03 is accepted with
+qualified composite evidence and independent BLOCKING 0. Stage 04 A6/A7 live
+runs and independent Tester audits passed; final Yanmaga affected-test count
+and the final Reviewer gate passed with independent BLOCKING 0. The full-suite run was
+controlled-stopped and is not a full pass.
 
 ## Stage 01: site probe and Discovery
 
@@ -43,7 +172,7 @@ All files below are sanitized and isolated under `output/yanmaga_access_experime
 - Positive authenticated evidence is a visible exact same-origin `/mypage` UI link without credentials/query/fragment, no visible sign-in link, current work-document identity, and no observer overflow. Analytics true is supporting only; it may be absent, but any observed state must agree.
 - First-free classification requires exactly one total free marker and one first-free marker, exact displayed badge text translated as `first-free`, exact class-token set `mod-episode-point--free` + `by_first_time`, authenticated page proof, and no wait/modal/red/conflicting free badge. Public red-free classification retains its exact marker proof and accepts verified anonymous or authenticated page identity.
 - Confirmed first-free and public-free rows map to existing `access_mode=free`; no schema or new mode was added. Capture remains anonymous-only in Stage 01, so Discovery recognition does not authorize first-free Viewer entry.
-- Wait-free, paid, quota, grant, expiry, and reset-time selectors remain unsupported. Missing `data-limit` continuation and invalid episode URL shapes continue to fail closed. No shared Core, Catalog, or Planner policy behavior changed.
+- At this Stage 01 checkpoint, wait-free/paid/quota/grant selectors were unsupported; the later evidence-backed wait marker and `work_ticket` behavior are recorded under Stage 03 below. Missing `data-limit` continuation and invalid episode URL shapes continue to fail closed. No Stage 01 shared Core, Catalog, or Planner policy behavior changed.
 - Yanmaga planning remains direct-only and uses Catalog order. `test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions` confirms two free direct candidates retain Catalog insertion order while artifact prefixes preserve `display_position` (`013`, `002`); unknown/quota/paid/owned/unavailable rows are skipped. The shared `test_display_position_order_preserves_direct_quota_slots_and_quota_selection` confirms direct candidates stay before work-quota candidates and `display_position` reorders only within each pool. This is shared planner behavior, not evidence for a future Yanmaga quota policy.
 - Every Yanmaga refresh sends `free_until=None` because no expiry was observed; the existing Catalog contract clears stale free expiry. Yanmaga does not observe grants, so `access_granted_until_observed=False` preserves an existing grant. An explicitly observed null remains authoritative and clears it. Lead separately ran both Catalog grant-preservation regression cases; Stage 01 had no live grant evidence.
 
@@ -79,7 +208,7 @@ No cookies, auth state, personal account data, or full analytics request URLs we
 
 ### Stage 01 gate
 
-**PASS (observed Discovery subset); independent BLOCKING 0.** Lead accepted the review. Stage 02 is recorded below under its own phase contract. Stage 03 read-only investigation has started; no wait-free signal or quota/ticket behavior has been confirmed, and implementation remains unstarted. Unknown behavior remains fail-closed.
+**PASS (observed Discovery subset); independent BLOCKING 0.** At the Stage 01 checkpoint, wait-free/quota behavior was still unknown and disabled. Later Stage 03 evidence and implementation are recorded in the current checkpoint above; this historical observation is not the current classifier status. Unknown behavior remains fail-closed.
 
 ## Stage 02: first-free capture
 
@@ -1006,7 +1135,16 @@ reached positive END, produced an exactly matching genuine Manifest and ZIP,
 and completed Item 27; Root's artifact audit passed. Post-capture full Discovery completed; the incremental CLI stopped with
 `known_streak` and `complete=null`, which does not establish incremental
 completeness. The post-full plan had zero candidates because Item 27 was already
-completed. The independent final review accepted Stage 02 with BLOCKING 0. Post-capture full Discovery completed with 57 known rows and `complete=true`; incremental stopped at `known_streak` with `complete=null` (not evaluated), and its Source/Viewer request counts are unknown because the observer was not installed. The post-full plan had zero candidates because Item 27 was complete. Stage 03 read-only investigation has started; Stage 03 implementation and Stage 04 have not started. The additional first-free budget is exhausted;
+completed. The independent final review accepted Stage 02 with BLOCKING 0. The
+later post-A5 full/incremental refresh preserved the target, grant, cooldown,
+and Artifacts with zero Source, Viewer, or native rental POST activity. Stage 03
+is accepted with qualified composite live evidence and independent BLOCKING 0;
+its wait-ticket use, grant-only persistence, same-grant capture, positive END,
+ZIP, and Completed state were verified across bounded runs. Stage 04 A6/A7 live
+runs and independent Tester audits passed. The final Yanmaga affected-test
+count passed and the final Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped
+and is not a full pass. The
+additional first-free budget is exhausted;
 C8 used no new right, ticket, point, paid action, retry, or alternate episode. The separate ignored QA watcher now skips identical snapshot
 rewrites and retries transient Windows replace-permission failures; its local
 selftest passed. This QA-only adjustment does not change production capture.

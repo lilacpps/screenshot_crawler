@@ -45,13 +45,20 @@ def _row(
             '<span class="mod-episode-point--normal">70</span>'
         ),
         "wait": '<span class="mod-episode-point--free by_wait">無料</span>',
+        "wait_browse": (
+            '<span class="mod-episode-free_browse">'
+            '<img src="/assets/logo_free_browse-96b8e1d8.svg"></span>'
+            '<span class="mod-episode-point--normal">70</span>'
+        ),
         "point": '<span class="mod-episode-point">70</span>',
         "none": "",
     }[marker]
     modal = ' js-modal' if marker in {"wait", "point"} else ""
     style = ' style="display:none"' if hidden else ""
     href = href or f"{WORK_URL}/{episode_id}"
-    return f'''<li class="mod-episode-item{modal}" data-is-free="false" data-modal="registration"{style}>
+    data_is_free = "true" if marker == "wait_browse" else "false"
+    original_url = f' data-original-url="{href}"' if marker == "wait_browse" else ""
+    return f'''<li class="mod-episode-item{modal}" data-is-free="{data_is_free}" data-modal="registration"{original_url}{style}>
       <a class="mod-episode-link" href="{href}">
         <p class="mod-episode-title">{title}</p>{access}{extra_badge}
       </a>
@@ -351,6 +358,33 @@ async def test_yanmaga_full_expands_complete_oldest_list_and_repeat_refreshes_ca
     assert len(catalog.list_sources(site="yanmaga")) == 3
 
 
+@pytest.mark.parametrize(
+    ("authenticated", "expected_mode"),
+    [(True, "quota"), (False, "unknown")],
+)
+async def test_yanmaga_wait_browse_badge_requires_authenticated_listing(
+    browser_page,
+    tmp_path: Path,
+    authenticated: bool,
+    expected_mode: str,
+) -> None:
+    html = _listing_html(
+        [(_episode_id(29), "Wait marker", "wait_browse")],
+        anonymous=not authenticated,
+        signin=not authenticated,
+        mypage=authenticated,
+    )
+    catalog, result, _service, _state = await _run_discovery(
+        browser_page, tmp_path / str(authenticated), html
+    )
+
+    source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(29)}")
+    assert result.complete is True
+    assert source is not None
+    assert source.access_mode == expected_mode
+    assert source.free_until is None
+
+
 async def test_yanmaga_access_refresh_clears_expiry_and_incomplete_full_preserves_history(
     browser_page,
     tmp_path: Path,
@@ -532,9 +566,16 @@ async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
     )
     observed_target = yanmaga_discovery.YanmagaEpisodeParts(SLUG, _episode_id(1))
 
-    async def mutate_during_history_fetch(_page, *, observed_mypage_href, targets):
+    async def mutate_during_history_fetch(
+        _page,
+        *,
+        observed_mypage_href,
+        targets,
+        max_countdown_hours=23,
+    ):
         assert observed_mypage_href == f"{BASE}/mypage"
         assert targets == (observed_target,)
+        assert max_countdown_hours == 72
         await browser_page.evaluate(
             "document.querySelector('.mod-episode-title').textContent='changed during probe'"
         )

@@ -77,6 +77,11 @@ class SiteAdapter(ABC):
 
         return
 
+    async def prepare_entry_only_page(self, page: Page) -> None:
+        """Prepare an entry-only page, defaulting to the normal setup."""
+
+        await self.prepare_page(page)
+
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         """Return the adapter-selected URL used for the first navigation.
 

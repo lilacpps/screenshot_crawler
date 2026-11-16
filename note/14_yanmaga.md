@@ -33,8 +33,8 @@ The adapter permits a normal public-episode GET only for a fresh exact
 first-free candidate after rechecking the authenticated work identity, row,
 marker, and queryless public URL. Because this GET may grant access
 automatically, it requires the exact Viewer, visible body wrapper and counter,
-no known gate, the exact completion notice, and fresh finite same-target Rental
-History evidence. The site-neutral grant is saved synchronously before pixel
+no known gate, the exact first-free notice `無料レンタルが完了しました`, and
+fresh finite same-target Rental History evidence. The site-neutral grant is saved synchronously before pixel
 readiness. Unknown evidence, route drift, or persistence failure does not
 trigger another entry. Trusted existing grants require a still-future Catalog
 bound and fresh active evidence for the exact target.
@@ -114,9 +114,110 @@ was complete/exhausted; incremental stopped at `known_streak` with
 `complete=null` (not evaluated); and incremental Source/Viewer counts are unknown
 because its request observer was not installed. Root directly audited the genuine
 Manifest, ZIP, Catalog, and Artifact. The independent final review accepted Stage
-02 with BLOCKING 0. Wait-free, paid-only classification, charged state semantics,
-and 23-hour recovery remain unverified and unsupported. Stage 03 read-only
-investigation has started; its implementation and Stage 04 have not started.
+02 with BLOCKING 0. Stage 03 has since implemented the observed wait-marker
+classification, `work_ticket` Policy and one-shot modal entry. Run 10's postcondition
+did not latch inline; Root later verified the exact native notice, Viewer, and
+active history from retained evidence and recorded one use from a frozen exact-
+history observation. Its timestamp is an observation anchor, not the precise
+POST time. Same-grant attempts 3 and 4 exposed and fixed inline-card gate and END
+recognition issues. Attempt 5 then completed the same target with 14 pages and
+positive END; Root audited the genuine Manifest and ZIP, and the grant and work
+cooldown remained unchanged. Post-capture full/incremental Discovery has also
+completed. Stage 03 is accepted with qualified composite live evidence and
+independent BLOCKING 0. Stage 04 has started. Its existing-grant work-novel
+chapter-10 capture completed with 18 WebP pages and positive END; the grant was
+unchanged. The work-dual chapter-51 public-free capture completed with 16 WebP
+pages and positive END, with grant/quota state unchanged. Both ZIPs and
+Completed states passed Root's artifact audits. Independent Tester audits of
+both A6/A7 ZIPs, Manifests, Catalog state, and first/middle/final pages passed.
+The affected scope passed 261 tests with 0 skips and 305 deselections. The final
+Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and
+is not a full pass.
+
+## Stage 03 current implementation (2026-11-16; qualified PASS, independent BLOCKING 0)
+
+Authenticated Discovery classifies the exact image-only
+`span.mod-episode-free_browse` marker as `quota` when bound to a unique
+authenticated row/source without conflicting access markers. The image has no
+text node; `data-is-free="true"` alone is not evidence. Metadata Discovery
+verified 22 such rows among 57 in `work-dual` and 29 among 37 in `work-novel`;
+two `work-dual` rows remain unknown. The visible exact
+`.episode-free-time.charged` / `チャージ完了` is required before a ticket action.
+
+Yanmaga Policy supports one work-scoped `work_ticket` pass, limit one,
+after-observed-consumption persistence, grant-only, and the existing 23-hour
+local cooldown. A trusted future Catalog grant plus fresh active same-target
+Rental History remains direct; history alone never imports a new trusted grant.
+The shared `entry_only` path writes no page Manifest or Progress state, image,
+ZIP, or completed Item; failure diagnostics are metadata-only. Normal capture
+output is unchanged. Yanmaga's `prepare_entry_only_page()` skips its
+capture-only native pixel observer for the fresh Batch-owned Page; it does not
+generalize reuse behavior for a Page that already has that observer.
+
+Read-only Source GETs for `work-dual` chapter 29 and `work-novel` chapter 10
+showed the exact episode-bound modal, three-day period, and normal same-origin
+POST form at `/rental/episodes/<episode-id>/by_free_waits`. The first-free
+notice remains exact `無料レンタルが完了しました`; ticket success uses the distinct
+exact `レンタルが完了しました`. The work-ticket path does not accept a generic
+notice or the first-free notice.
+
+Dual chapter 29 Run 10 emitted one native ticket POST, but the then-current
+production postcondition did not latch or persist it. Root later verified the
+exact notice, Viewer, and active history from retained evidence and applied one
+frozen exact-history observation to Source 25 and work cooldown state. The
+observation at `2026-11-16T00:23:46.090627Z` showed `残り2日`, producing lower bound
+`2026-11-17T00:23:41.090627Z`; this anchor is not the precise POST time. The
+applied record is `stage03/dual/late-confirmation-applied.json`; reapplication
+is rejected. Same-grant attempts 3 and 4 were incomplete: attempt 3 saved 13
+pages before a reader-gate timeout; attempt 4 saved 14 body pages but did not
+establish END. Root's saved page showed the next-chapter point/rental metadata inside the unique
+`#rental` auxiliary. The site-local gate now excludes only the observed
+`.episode-modal-point`, `dl.episode-modal-point--posession`,
+`dl.episode-modal-point--necessary`, and `.episode-modal-short` nodes there;
+semantic dialogs and all body/END checks remain gates. Attempt 5 then completed
+all 14 pages with positive END and no new ticket POST. Root audited the genuine
+Manifest and ZIP. The existing grant and work cooldown were unchanged. The
+Stage 03 full/incremental post-capture metadata refresh also completed with zero
+Source, Viewer, and native rental POST activity. Its audit confirmed the target
+and completed Item/Artifact state remained unchanged. No second ticket submit
+is authorized.
+
+Novel chapter 10 grant-only run succeeded with `stop_reason=entry_confirmed`,
+zero pages, pending Item 26, and no Artifact. It emitted one native ticket POST;
+Source=3 and Viewer=2 are request totals whose route types were not recorded.
+The updated automatic notice/history proof and persistence succeeded. The
+Source grant expiry is `2026-11-17T09:35:11.467066+09:00`; quota start and work
+last-consumed time are `2026-11-16T09:35:16.467066+09:00`. The report is
+`stage03/novel/grant_only-report.json`. These are the two Stage 03 ticket uses;
+no more ticket action is authorized.
+
+Wait and trusted-history parsing accepts exact `残りH時間` or `残りD日` within the
+explicit 72-hour bound. For D>=2 the lower bound is observation start plus
+(D-1) days minus 5 seconds with evidence `site_day_countdown_lower_bound`;
+D=1 and H=1 prove active access but have no finite expiry. No fixed 72-hour
+grant is created. Ordinary first-free remains capped at 23 hours and rejects
+day notation.
+
+Focused synthetic verification: Rental History browser tests 37; wait-ticket /
+rental-form browser selection 18; first-free adapter regression 15; adapter and
+policy unit files 41. Six initial first-free failures were caused by a fixed
+November 15 test grant that had expired; the test fixture now uses a fresh
+relative timestamp and all selected tests pass. Independent review of the
+notice/day/late-record code passed BLOCKING 0. Five focused browser cases cover
+the observed terminal countdown branch, and the Yanmaga adapter unit file passed
+10 tests. Attempt 5 completed 14 pages with positive END and an audited genuine
+Manifest/ZIP; the existing grant and work cooldown remained unchanged. The
+post-capture full/incremental metadata refresh also preserved the target,
+grant, and artifacts with zero Source, Viewer, and native rental POST activity.
+Stage 03 is accepted with qualified composite evidence and independent BLOCKING
+0. Stage 04 A6/A7 captures completed: work-novel chapter 10 used its existing
+grant for 18 WebP pages; work-dual chapter 51 used public-free access for 16
+WebP pages. Both reached positive END, ZIP, and Completed with no new right and
+unchanged grant/quota state. Pre/post full/incremental Discovery preserved
+Catalog state without Source, Viewer, or native rental POST. Independent Tester
+audits passed. The affected scope passed 261 tests with 0 skips and 305
+deselections. The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was
+controlled-stopped and is not a full pass.
 
 ## Discovery target pacing (2026-11-13)
 
@@ -191,12 +292,20 @@ the original Catalog `source_url` and freshly validates the exact requested
 source. The normal public-free path still requires the exact visible red-free
 marker. Stage 02 also permits one public-episode GET for a fresh authenticated
 exact first-free row; that route may grant access automatically. The adapter
-requires the exact Viewer, completion notice, and finite target-bound Rental
-History evidence before synchronously persisting the grant. A trusted stored
+requires the exact Viewer, the exact first-free completion notice, and finite
+target-bound Rental History evidence before synchronously persisting the
+grant. A trusted stored
 grant can authorize direct retry only when its Catalog expiry is still future
 and a fresh same-target countdown is active. Unknown, conflicting, expired,
-or unsupported states fail closed. `direct` and `auto` are supported; ticket
-or quota selection is not enabled. Daily-limit scope remains unverified.
+or unsupported states fail closed. The Stage 03 wait path requires a unique
+image-only marker, fresh charged state, verified no-target Rental History, and
+the exact source modal/form before one normal `読む` click. The wait path
+requires the distinct exact work-ticket completion notice. Novel chapter 10
+grant-only verified the exact post-click Viewer, notice, active history, and
+automatic persistence. Dual chapter 29 Run 10 required later frozen-history
+recovery; its same-grant capture succeeded in a separate run. `direct`, `auto`,
+and the bounded `work_ticket` strategy are supported; daily-limit scope remains
+unverified.
 
 実navigationではpublic episode URLが同じslug/episode IDを持つ
 `/viewer/comics/<slug>/<episode-id>` にredirectした。Viewer URLには一度、
@@ -252,6 +361,13 @@ card内controlはexact `次の話を読む`一つとsignupなし、またはvali
 `/customers/sign-up`、credentials/fragmentなし、唯一のraw query fieldは
 `forward=<32 lowercase hex episode ID>`。tokenはfresh same-work listingのunique immediate next row IDと一致し、
 表示titleもnormalized exact matchする。tokenをURLとして解釈・遷移せず、CTAを操作しない。
+これらのcontrolが無い場合は、unique immediate next listing rowがexact wait markerとして
+分類され、表示titleと一致するときに限り、unique visible `.aspect-ratio-2-27.mt-wait >
+div.episode-modal-wait.content` blockを代替終端として受け入れる。blockのdirect childは
+`img.icon-clock`（観測済みclock asset）と`span`の順で、表示文言は`あとH:MMで無料`
+（Hは0〜23、分は00〜59）に一致する必要がある。countdownや他controlは操作しない。
+これは終端cardの一種として本文全page capture、route、ownership、semantic-gate、安定性検査を
+置き換えない。
 Unknown layout、page gap/duplicate、spread片側欠落、未知auxiliary/access gate、source/style drift、
 終端不明はfail-closed。next arrowは診断のみ。
 
@@ -299,10 +415,11 @@ not extend or replace that expiry during Discovery. The general Catalog contract
 still treats an explicitly observed null as authoritative. Lead's isolated
 regression run confirmed preservation and clear behavior.
 
-Stage 01's anonymous-only capture limitation was superseded by the Stage 02
-first-free and trusted-grant paths described above. Wait-free and paid-only
-classification, charged-state semantics, and 23-hour recovery remain unverified
-and unsupported. Discovery itself opens no episode or access CTA.
+The Stage 01 authenticated sample had no wait marker classification and kept
+those rows unknown at that checkpoint. Stage 03 has since added only the
+observed image marker and charged-state classification described above;
+Discovery still opens no episode or access CTA. Paid-only classification,
+daily-limit scope, and live ticket consumption remain unverified.
 
 Live evidence on 2026-11-15 JST: `work-dual` returned 57 rows after the
 Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated
@@ -366,22 +483,34 @@ boundary without allocating a cap-sized buffer. A bounded isolated ordinary CLI 
 page 1; it saved one native 1125×1600 WebP and intentionally exited at `--max-pages 1`, without
 reaching END or packaging. No page-ID association is inferred for the other retained candidates.
 
-### Phase 04 Batch, extended by Stage 02
+### Phase 04 Batch, extended by Stages 02 and 03
 
 `YanmagaSitePolicy` admits an available, correctly identified `free` source
 when its observed `free_until` is absent or still future. An available
-`quota` or `paid` source is eligible for the same `direct` strategy only
-when it has a valid exact episode identity and a timezone-aware
-`access_granted_until` later than the current time. Malformed, expired, or
-missing grants fail closed. No Yanmaga resource or grant-only pass is
-enabled; `quota_available` is not consumed.
+`quota` or `paid` source is direct only with a valid exact episode identity and
+a timezone-aware future `access_granted_until`. Without that grant, a validated
+wait-free `quota` source uses one work-scoped `work_ticket` pass with
+after-observed-consumption persistence. The resource supports grant-only while
+ordinary free and first-free rows remain excluded from that pass. Malformed,
+expired, or missing grants do not become direct; the Planner's existing
+fail-closed behavior remains.
 
 The capture adapter preserves three direct-entry cases: the public red-free
 row, the fresh authenticated first-free row with one bounded source entry
 and finite grant proof, and a trusted stored grant revalidated by fresh
-same-target active Rental History evidence. Unknown access, wait-free,
-paid-only without a trusted grant, identity drift, or a visible gate does
-not authorize entry. Normal image, END, and packaging checks remain strict.
+same-target active Rental History evidence. A work-ticket candidate requires
+the exact authenticated wait row and charged signal, a verified absent target
+in the supported Rental History collection, and the observed same-episode
+modal with its exact native POST form. Only its visible enabled `読む` button
+may be clicked, once. The source modal and pre-click history shapes were
+observed read-only. Run 10 made one normal click and emitted one native POST,
+but its automatic postcondition did not latch or persist the use. Root later
+verified the exact notice, Viewer, and active history read-only and applied the
+frozen history observation once to Source/work state; its anchor is not the
+precise POST time. The same-grant direct retry is described in the current
+Stage 03 section above. No second click is authorized. Unknown access, paid-only without a trusted grant, identity drift,
+or a visible gate does not authorize entry. Normal image, END, and packaging
+checks remain strict.
 A bounded Stage 02 C1 CLI run used one additional first-free entry on the
 separate candidate `episode-ff-capture-01` (position 31; the earlier research
 release was position 32). It confirmed the first-free access and synchronously

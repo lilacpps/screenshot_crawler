@@ -40,6 +40,7 @@ from screenshot_crawler.site_adapters.yanmaga import adapter as adapter_module
 from screenshot_crawler.site_adapters.yanmaga.adapter import YanmagaAdapter
 from screenshot_crawler.site_adapters.yanmaga.discovery import (
     YanmagaDiscoveryAdapter,
+    YanmagaEpisodeParts,
     YanmagaListingRow,
     YanmagaListingSnapshot,
 )
@@ -49,7 +50,10 @@ from screenshot_crawler.site_adapters.yanmaga.native_capture import (
     dispose_yanmaga_native_observer,
     install_yanmaga_native_observer,
 )
-from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
+from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    RentalCountdown,
+    RentalHistoryObservation,
+)
 from screenshot_crawler.site_policies import SitePolicyRegistry, YanmagaSitePolicy
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
@@ -59,13 +63,20 @@ SLUG = "ウサギとカメのゆる山歩"
 EPISODE_ID = "2de76848d607c9920f18147b763a6aec"
 NEXT_EPISODE_ID = "abcdef0123456789abcdef0123456789"
 NEXT_ORDER_LABEL = "\u6b21\u306e\u8a71 \u6b69\u8abf"
+WAIT_NEXT_ORDER_LABEL = "\u7b2c\uff13\uff10\u8a71 \u30c6\u30b9\u30c8"
+WAIT_END_CLOCK_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "icon_clock-048e89030730e8f736d174dde55780bad06a38135282b236b2c20ae032812836.svg"
+)
+WAIT_MODAL_WORK_TITLE = "Synthetic work"
+WAIT_MODAL_EPISODE_TITLE = "\u7b2c\uff11\u8a71\u3000Synthetic"
 WORK_URL = f"https://yanmaga.jp/comics/{quote(SLUG, safe='')}"
 SOURCE_URL = f"{WORK_URL}/{EPISODE_ID}"
 VIEWER_URL = f"https://yanmaga.jp/viewer/comics/{quote(SLUG, safe='')}/{EPISODE_ID}"
 VIEWER_NAVIGATION_URL = f"{VIEWER_URL}?cid=AbCd0123456789EfGhIj"
 WORK_KEY = f"yanmaga:{SLUG}"
 NOW = datetime(2026, 10, 20, 12, tzinfo=JST)
-GRANT_OBSERVED_AT = datetime(2026, 11, 15, 0, tzinfo=UTC)
+GRANT_OBSERVED_AT = datetime.now(UTC) - timedelta(minutes=5)
 GRANT_UNTIL = GRANT_OBSERVED_AT + timedelta(hours=21)
 
 
@@ -81,6 +92,7 @@ def _segment_data(color: str, index: int) -> str:
 def _viewer_html(
     *,
     first_free_completion_notice: bool = False,
+    quota_completion_notice: bool = False,
     access_proof_delay_ms: int = 0,
     access_proof_never_ready: bool = False,
     access_gate_text: str | None = None,
@@ -195,7 +207,8 @@ def _viewer_html(
             'style="position:absolute;right:10px;bottom:50px;width:220px;height:100px">'
             'ポイントを使って読む</div>'
         )
-    title = '<span class="episode-modal-eptitle">次の話 歩調</span>'
+    title_label = WAIT_NEXT_ORDER_LABEL if terminal_control.startswith("wait_countdown") else NEXT_ORDER_LABEL
+    title = f'<span class="episode-modal-eptitle">{title_label}</span>'
     next_control = '<a id="js-btn-valid-next-episode">次の話を読む</a>'
     signup_control = (
         '<a class="mod-button--orange content ga-viewer-rental-signup" '
@@ -239,13 +252,32 @@ def _viewer_html(
         ),
         "signup_and_next": signup_control + next_control,
         "duplicate_signup": signup_control + signup_control,
+        "wait_countdown": (
+            '<div class="aspect-ratio-2-27 mt-wait">'
+            '<div class="episode-modal-wait content">'
+            f'<img class="icon-clock" src="{WAIT_END_CLOCK_SRC}">'
+            '<span>あと22:04で無料</span></div></div>'
+        ),
         "missing": "",
     }
+    if terminal_control == "wait_countdown_bad_time":
+        controls[terminal_control] = controls["wait_countdown"].replace(
+            "あと22:04で無料", "あと22:90で無料"
+        )
+    elif terminal_control in {
+        "wait_countdown_bad_time",
+        "wait_countdown_wrong_title",
+        "wait_countdown_semantic_dialog",
+        "wait_countdown_missing_marker",
+    }:
+        controls[terminal_control] = controls["wait_countdown"]
     if terminal_control not in controls:
         raise ValueError(f"unsupported synthetic terminal control: {terminal_control}")
     rental_title = title
     if terminal_control == "signup_wrong_title":
         rental_title = title.replace(NEXT_ORDER_LABEL, "\u5225\u306e\u8a71")
+    elif terminal_control == "wait_countdown_wrong_title":
+        rental_title = title.replace(WAIT_NEXT_ORDER_LABEL, "\u5225\u306e\u8a71")
     rental_card = ""
     if inline_rental_card:
         dialog = (
@@ -262,6 +294,13 @@ def _viewer_html(
             "\u30ec\u30f3\u30bf\u30eb\u4e2d</div>"
             '<div class="episode-modal-expire">'
             "\u6b8b\u308a23\u6642\u9593</div>"
+            '<div class="episode-modal-point">'
+            "\u30dd\u30a4\u30f3\u30c8 70</div>"
+            '<dl class="episode-modal-point--posession">'
+            '<dt>\u4fdd\u6709\u30dd\u30a4\u30f3\u30c8</dt><dd>70</dd></dl>'
+            '<dl class="episode-modal-point--necessary">'
+            '<dt>\u5fc5\u8981\u30dd\u30a4\u30f3\u30c8</dt><dd>70</dd></dl>'
+            '<div class="episode-modal-short">\u30ec\u30f3\u30bf\u30eb\u4e2d</div>'
             f"{dialog}</div></div></div>"
         )
     rental_content = "" if unsafe_end else rental_title + controls[terminal_control] + rental_card
@@ -289,6 +328,12 @@ def _viewer_html(
         if first_free_completion_notice
         else ""
     )
+    quota_notice = (
+        "<div>" + "".join(map(chr, (0x30ec, 0x30f3, 0x30bf, 0x30eb,
+                                     0x304c, 0x5b8c, 0x4e86, 0x3057, 0x307e, 0x3057, 0x305f))) + "</div>"
+        if quota_completion_notice
+        else ""
+    )
     return f'''<!doctype html><html><head><meta charset="utf-8"><title>Test | YanmagaWeb</title>
     <style>
       html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
@@ -304,6 +349,9 @@ def _viewer_html(
       #arrow-content.hide .arrow-next-page{{display:none}}
       .arrow-next-page{{width:40px;height:40px}}
       #rental{{position:absolute;top:{rental_top};left:{'8px' if inline_rental_card else '20px'};width:{'1272px' if inline_rental_card else '500px'};height:{'1700px' if inline_rental_card else '300px'};background:#eee}}
+      #rental .aspect-ratio-2-27.mt-wait{{width:220px;height:32px}}
+      #rental .episode-modal-wait.content{{display:flex;align-items:center;gap:6px;width:220px;height:32px}}
+      #rental .episode-modal-wait img.icon-clock{{width:16px;height:16px}}
       #menu{{position:fixed;inset:0;display:{menu_initial_display};z-index:30;background:rgba(0,0,0,.01)}}
       #menu_transparent{{position:absolute;inset:0;background:rgba(0,0,0,.01)}}
       #menu_header{{position:absolute;top:0;left:0;width:100%;height:100px;background:#ddd}}
@@ -311,7 +359,7 @@ def _viewer_html(
       #edge-obstruction{{position:fixed;left:0;top:0;width:8px;height:8px;z-index:40;background:#f00}}
       #ads,#recommend{{position:absolute;width:1px;height:1px;overflow:hidden}}
       {obstruction_css}
-    </style></head><body>{first_free_notice}
+    </style></head><body>{first_free_notice}{quota_notice}
     <span id="counter">{initial_page}/4</span>
     {arrow}
     <div class="pages" id="content">{''.join(wrappers)}{rental}{auxiliary}</div>
@@ -398,6 +446,7 @@ def _viewer_html(
 def _work_listing_html(
     access_mode: str,
     *,
+    authenticated_listing: bool | None = None,
     target_href: str | None = None,
     marker_hidden: bool = False,
     anchor_attributes: str = "",
@@ -405,9 +454,15 @@ def _work_listing_html(
     canonical_href: str | None = None,
     og_url: str | None = None,
     sort_ui_state: str = "none",
+    charged_ui: bool = True,
 ) -> str:
     first_free = access_mode == "first_free"
-    authenticated = first_free or access_mode == "trusted_grant"
+    wait_free = access_mode in {"wait_free", "trusted_wait"}
+    authenticated = (
+        first_free or access_mode in {"trusted_grant", "wait_free", "trusted_wait"}
+        if authenticated_listing is None
+        else authenticated_listing
+    )
     marker_style = ' style="display:none"' if marker_hidden else ""
     if first_free:
         label = "".join(map(chr, (0x521d, 0x56de, 0x7121, 0x6599)))
@@ -418,6 +473,12 @@ def _work_listing_html(
     elif access_mode == "free":
         label = "".join(map(chr, (0x7121, 0x6599)))
         badge = f'<span class="mod-episode-point--free"{marker_style}>{label}</span>'
+    elif wait_free:
+        badge = (
+            '<span class="mod-episode-free_browse">'
+            '<img src="/assets/logo_free_browse-96b8e1d8.svg"></span>'
+            '<span class="mod-episode-point--normal">70</span>'
+        )
     else:
         badge = ""
     allowed_sort_states = {"none", "older", "newer", "both"}
@@ -443,17 +504,76 @@ def _work_listing_html(
     target_href = target_href or SOURCE_URL
     canonical_href = canonical_href or WORK_URL
     og_url = og_url or WORK_URL
+    if wait_free and not row_attributes:
+        row_attributes = f'data-is-free="true" data-original-url="{target_href}"'
+    charged_markup = (
+        '<div class="episode-ui"><div class="episode-free-time charged">'
+        '<span class="episode-free-time-bar-label">\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86</span>'
+        '<span class="episode-free-time-label">'
+        '<img src="/assets/logo_free_browse-96b8e1d8.svg"></span>'
+        '</div></div>'
+        if wait_free and charged_ui
+        else ""
+    )
     return f'''<!doctype html><html><head>
       <meta charset="utf-8">
       <link rel="canonical" href="{canonical_href}">
       <meta property="og:url" content="{og_url}">
       <style>.mod-episode-point--free {{ color: rgb(220, 0, 0); }}</style>
-      </head><body>{account}
+      </head><body>{account}{charged_markup}
       {sort_markup}
       <div class="detailv2-episodes"><ul>
       <li class="mod-episode-item" {row_attributes}><a class="mod-episode-link" href="{target_href}" {anchor_attributes}>
       <p class="mod-episode-title">Episode 1</p>{badge}</a></li>
       </ul></div></body></html>'''
+
+
+def _wait_rental_intro_html(
+    form_episode_id: str = EPISODE_ID,
+    button_attributes: str = "",
+    modal_delay_ms: int = 0,
+) -> str:
+    modal_hidden_attribute = (
+        'style="display: none"'
+        if modal_delay_ms
+        else ""
+    )
+    modal_script = (
+        '<script>setTimeout(() => { '
+        'document.querySelector(".mod-modal-content.js-modal-content").removeAttribute("style"); '
+        f'}}, {modal_delay_ms});</script>'
+        if modal_delay_ms
+        else ""
+    )
+    return f'''<!doctype html><html><head>
+      <meta charset="utf-8">
+      <link rel="canonical" href="{WORK_URL}">
+      <meta property="og:url" content="{SOURCE_URL}">
+      </head><body>
+      <a href="/mypage">My page</a>
+      <div class="episode-ui"><div class="episode-free-time charged">
+        <span class="episode-free-time-bar-label">チャージ完了</span>
+        <span class="episode-free-time-label"><img src="/assets/logo_free_browse-96b8e1d8.svg"></span>
+      </div></div>
+      <div class="mod-modal-content js-modal-content" {modal_hidden_attribute}>
+        <div class="mod-modal-content-inner episode-modal active">
+          <p class="mod-modal-title">\u300c\u5f85\u3064\u3068\u7121\u6599....!\u300d\u3067\u30ec\u30f3\u30bf\u30eb</p>
+          <p class="episode-modal-title">{WAIT_MODAL_WORK_TITLE}</p>
+          <p class="episode-modal-eptitle">{WAIT_MODAL_EPISODE_TITLE}</p>
+          <div class="episode-modal-rental-detail">
+            <div class="episode-modal-expire">\u30ec\u30f3\u30bf\u30eb\u671f\u9593 /
+              <span>3\u65e5\u9593</span>
+            </div>
+          </div>
+          <form class="button_to" method="post"
+                action="/rental/episodes/{form_episode_id}/by_free_waits" data-remote="true">
+            <button id="free-browse-rental" class="mod-button--orange" type="submit" {button_attributes}>\u8aad\u3080</button>
+            <input type="hidden" name="authenticity_token" value="synthetic-token">
+          </form>
+        </div>
+      </div>
+      {modal_script}
+      </body></html>'''
 
 
 async def _set_routes(
@@ -470,6 +590,13 @@ async def _set_routes(
     canonical_shape: str = "base",
     og_shape: str = "base",
     sort_ui_state: str = "none",
+    charged_ui: bool = True,
+    authenticated_listing: bool | None = None,
+    next_wait_free_marker: bool = False,
+    wait_form_episode_id: str = EPISODE_ID,
+    wait_button_attributes: str = "",
+    wait_modal_delay_ms: int = 0,
+    quota_completion_notice: bool = False,
     source_goto_failure: str | None = None,
     first_free_completion_notice: bool = False,
     access_proof_delay_ms: int = 0,
@@ -506,13 +633,22 @@ async def _set_routes(
         assert target.url == WORK_URL
         assert mode == "full"
         first_free = access_mode == "first_free"
-        trusted_grant = access_mode == "trusted_grant"
+        trusted_grant = access_mode in {"trusted_grant", "trusted_wait"}
+        wait_free = access_mode in {"wait_free", "trusted_wait"}
+        authenticated = (
+            first_free or trusted_grant or wait_free
+            if authenticated_listing is None
+            else authenticated_listing
+        )
+        next_title = WAIT_NEXT_ORDER_LABEL if next_wait_free_marker else NEXT_ORDER_LABEL
         _self.last_snapshot = YanmagaListingSnapshot(
             title="テスト作品",
-            anonymous=not (first_free or trusted_grant),
-            authenticated=first_free or trusted_grant,
+            anonymous=not authenticated,
+            authenticated=authenticated,
             mypage_href=(
-                "https://yanmaga.jp/mypage" if first_free or trusted_grant else None
+                "https://yanmaga.jp/mypage"
+                if authenticated
+                else None
             ),
             rows=(
                 YanmagaListingRow(
@@ -523,14 +659,16 @@ async def _set_routes(
                     red_marker_present=access_mode == "free",
                     known_restricted=access_mode == "known_restricted",
                     first_free_marker=first_free,
+                    wait_free_marker=wait_free,
                 ),
                 YanmagaListingRow(
                     episode_id=NEXT_EPISODE_ID,
-                    title=NEXT_ORDER_LABEL,
+                    title=next_title,
                     url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
-                    free_marker=True,
-                    red_marker_present=True,
+                    free_marker=not next_wait_free_marker,
+                    red_marker_present=not next_wait_free_marker,
                     known_restricted=False,
+                    wait_free_marker=next_wait_free_marker,
                 ),
             ),
             continuation=None,
@@ -544,10 +682,15 @@ async def _set_routes(
             if access_mode in {"known_restricted", "trusted_grant"}
             else "free"
             if first_free
+            else "quota"
+            if wait_free
             else access_mode
         )
         yield DiscoveredRecord(
-            item=DiscoveredItem(canonical_title="テスト作品", order_label="第1話"),
+            item=DiscoveredItem(
+                canonical_title=WAIT_MODAL_WORK_TITLE if wait_free else "\u30c6\u30b9\u30c8\u4f5c\u54c1",
+                order_label=WAIT_MODAL_EPISODE_TITLE if wait_free else "\u7b2c1\u8a71",
+            ),
             source=DiscoveredSource(
                 external_id=f"{SLUG}:{EPISODE_ID}",
                 url=SOURCE_URL,
@@ -558,12 +701,12 @@ async def _set_routes(
         yield DiscoveredRecord(
             item=DiscoveredItem(
                 canonical_title="\u30c6\u30b9\u30c8\u4f5c\u54c1",
-                order_label=NEXT_ORDER_LABEL,
+                order_label=next_title,
             ),
             source=DiscoveredSource(
                 external_id=f"{SLUG}:{NEXT_EPISODE_ID}",
                 url=f"{WORK_URL}/{NEXT_EPISODE_ID}",
-                access_mode="free",
+                access_mode="quota" if next_wait_free_marker else "free",
                 available=True,
             ),
         )
@@ -596,6 +739,7 @@ async def _set_routes(
                 content_type="text/html",
                 body=_work_listing_html(
                     access_mode,
+                    authenticated_listing=authenticated_listing,
                     target_href=target_href,
                     marker_hidden=marker_hidden,
                     anchor_attributes=anchor_attributes,
@@ -603,6 +747,7 @@ async def _set_routes(
                     canonical_href=metadata_url(canonical_shape),
                     og_url=metadata_url(og_shape),
                     sort_ui_state=sort_ui_state,
+                    charged_ui=charged_ui,
                 ),
             )
         elif path in {
@@ -630,6 +775,7 @@ async def _set_routes(
                     first_page_overlay=first_page_overlay,
                     menu_hideable=menu_hideable,
                     first_free_completion_notice=first_free_completion_notice,
+                    quota_completion_notice=quota_completion_notice,
                     edge_obstruction=edge_obstruction,
                     adjacent_overlap=adjacent_overlap,
                     terminal_control=terminal_control,
@@ -642,14 +788,51 @@ async def _set_routes(
                     native_wrapper_transform=native_wrapper_transform,
                 ),
             )
+        elif path == unquote(urlsplit(SOURCE_URL).path) and access_mode == "wait_free":
+            await route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=_wait_rental_intro_html(
+                    wait_form_episode_id,
+                    button_attributes=wait_button_attributes,
+                    modal_delay_ms=wait_modal_delay_ms,
+                ),
+            )
+        elif (
+            path == f"/rental/episodes/{EPISODE_ID}/by_free_waits"
+            and access_mode == "wait_free"
+            and route.request.method.upper() == "POST"
+        ):
+            await route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=f'<script>location.replace("{VIEWER_NAVIGATION_URL}")</script>',
+            )
+        elif path == "/assets/logo_free_browse-96b8e1d8.svg":
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="102" height="16"></svg>',
+            )
         else:
             await route.fulfill(status=404, body="not found")
 
     await page.route("https://yanmaga.jp/**", route_handler)
+
+    async def route_wait_clock(route):
+        await route.fulfill(
+            status=200,
+            content_type="image/svg+xml",
+            body='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>',
+        )
+
+    await page.route(WAIT_END_CLOCK_SRC, route_wait_clock)
     original_goto = page.goto
 
     async def goto_final_viewer_for_public_episode(url, *args, **kwargs):
         if url == SOURCE_URL:
+            if access_mode == "wait_free":
+                return await original_goto(url, *args, **kwargs)
             requested.append(url)
             destination = wrong_viewer_url if wrong_route else VIEWER_NAVIGATION_URL
             result = await original_goto(destination, *args, **kwargs)
@@ -680,7 +863,9 @@ def _config(tmp_path, *, source_url: str = SOURCE_URL) -> RunConfig:
     )
 
 
-def _seed_batch_candidate(tmp_path):
+def _seed_batch_candidate(
+    tmp_path, *, access_mode="free", output_mode="capture"
+):
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
         WorkInput(work_key="yanmaga-usagi", title="テスト作品")
@@ -693,7 +878,7 @@ def _seed_batch_candidate(tmp_path):
             site="yanmaga",
             external_id=f"{SLUG}:{EPISODE_ID}",
             discovery_key="yanmaga-isolated-fixture",
-            access_mode="free",
+            access_mode=access_mode,
             available=True,
             free_until=None,
             display_position=3,
@@ -708,7 +893,12 @@ def _seed_batch_candidate(tmp_path):
     adapters = AdapterRegistry()
     adapters.register("yanmaga", YanmagaAdapter)
     planner = synchronized_legacy_planner(catalog, policies)
-    plan = planner.plan(site="yanmaga", now=NOW)
+    plan = planner.plan(
+        site="yanmaga",
+        now=NOW,
+        quota_resource="work_ticket" if access_mode == "quota" else None,
+        output_mode=output_mode,
+    )
     assert len(plan.candidates) == 1
     return catalog, policies, adapters, plan.candidates[0], item, source, target, planner.watchlist
 
@@ -716,11 +906,18 @@ def _seed_batch_candidate(tmp_path):
 def _install_rental_history_proof(monkeypatch):
     calls: list[tuple[str, tuple[object, ...]]] = []
 
-    async def fake_fetch(_page, *, observed_mypage_href, targets):
+    async def fake_fetch(
+        _page,
+        *,
+        observed_mypage_href,
+        targets,
+        max_countdown_hours=23,
+    ):
         calls.append((observed_mypage_href, tuple(targets)))
         assert observed_mypage_href == "https://yanmaga.jp/mypage"
         assert len(targets) == 1
         assert targets[0].episode_id == EPISODE_ID
+        assert max_countdown_hours in {23, 72}
         return (
             (
                 f"{SLUG}:{EPISODE_ID}",
@@ -737,7 +934,14 @@ def _install_rental_history_proof(monkeypatch):
     return calls
 
 
-async def _adapter_at_work(page, monkeypatch, *, access_mode="free", **route_options):
+async def _adapter_at_work(
+    page,
+    monkeypatch,
+    *,
+    access_mode="free",
+    access_strategy="direct",
+    **route_options,
+):
     requested = await _set_routes(
         page,
         monkeypatch,
@@ -745,12 +949,420 @@ async def _adapter_at_work(page, monkeypatch, *, access_mode="free", **route_opt
         **route_options,
     )
     adapter = YanmagaAdapter()
-    await adapter.configure_run(page, "direct")
+    await adapter.configure_run(page, access_strategy)
     await adapter.configure_target_identity(f"{SLUG}:{EPISODE_ID}", WORK_KEY)
+    if access_strategy == "quota":
+        await adapter.configure_quota_resource(page, "work_ticket")
     adapter.resolve_initial_navigation_url(SOURCE_URL)
     adapter.set_confirmed_access_grant_observer(lambda _grant: None)
     await page.goto(WORK_URL, wait_until="domcontentloaded")
     return requested, adapter
+
+
+def _install_wait_history_observations(
+    monkeypatch,
+    *,
+    initial: str = "absent",
+    remaining_hours: int = 22,
+    remaining_days: int | None = None,
+):
+    calls: list[tuple[str, tuple[object, ...]]] = []
+    external_id = f"{SLUG}:{EPISODE_ID}"
+
+    def active_observation() -> RentalHistoryObservation:
+        observed_at = datetime.now(UTC)
+        if remaining_days is not None:
+            expiry = (
+                observed_at + timedelta(days=remaining_days - 1) - timedelta(seconds=5)
+                if remaining_days > 1
+                else None
+            )
+            evidence = "site_day_countdown_lower_bound" if expiry is not None else None
+        else:
+            expiry = (
+                observed_at + timedelta(hours=remaining_hours - 1) - timedelta(seconds=5)
+                if remaining_hours > 1
+                else None
+            )
+            evidence = "site_countdown_lower_bound" if expiry is not None else None
+        return RentalHistoryObservation(
+            external_id,
+            RentalCountdown(
+                observed_at=observed_at,
+                remaining_hours=remaining_hours if remaining_days is None else 0,
+                access_granted_until=expiry,
+                expiry_evidence=evidence,
+                remaining_days=remaining_days,
+            ),
+        )
+
+    async def fetch(
+        _page,
+        *,
+        observed_mypage_href,
+        targets,
+        max_countdown_hours=23,
+    ):
+        calls.append((observed_mypage_href, tuple(targets)))
+        assert observed_mypage_href == "https://yanmaga.jp/mypage"
+        assert len(targets) == 1
+        assert targets[0].episode_id == EPISODE_ID
+        assert max_countdown_hours == 72
+        if len(calls) == 1:
+            if initial == "unknown":
+                return None
+            if initial == "active":
+                return (active_observation(),)
+            return (RentalHistoryObservation(external_id, None),)
+        return (active_observation(),)
+
+    monkeypatch.setattr(adapter_module, "fetch_rental_history_observations", fetch)
+    return calls
+
+
+async def test_yanmaga_wait_ticket_confirms_once_from_notice_and_fresh_history(
+    browser_page, monkeypatch
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        quota_completion_notice=True,
+        wait_modal_delay_ms=100,
+    )
+    requests = []
+    browser_page.on("request", lambda request: requests.append((request.method, request.url)))
+    history_calls = _install_wait_history_observations(monkeypatch)
+    await adapter.prepare_page(browser_page)
+
+    await adapter.initialize(browser_page)
+
+    consumption = adapter.get_access_consumption()
+    assert consumption.consumed is True
+    assert consumption.resource == "work_ticket"
+    assert consumption.consumed_at is not None
+    assert consumption.access_granted_until is not None
+    assert adapter.quota_release_state == "site_confirmed"
+    assert adapter._first_free_grant is None
+    assert len(history_calls) == 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert sum(
+        method == "POST"
+        and urlsplit(url).path == f"/rental/episodes/{EPISODE_ID}/by_free_waits"
+        for method, url in requests
+    ) == 1
+    assert browser_page.url == VIEWER_NAVIGATION_URL
+
+
+@pytest.mark.parametrize(
+    ("initial_history", "charged_ui", "expected_error"),
+    [
+        ("unknown", True, UnknownPageStateError),
+        ("active", True, AccessResourceUnavailableError),
+        ("absent", False, UnknownPageStateError),
+    ],
+    ids=("unknown-history", "untrusted-active-history", "missing-charged-state"),
+)
+async def test_yanmaga_wait_ticket_unknown_or_inconsistent_preflight_never_enters(
+    browser_page, monkeypatch, initial_history, charged_ui, expected_error
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        charged_ui=charged_ui,
+    )
+    history_calls = _install_wait_history_observations(
+        monkeypatch, initial=initial_history
+    )
+
+    with pytest.raises(expected_error):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert adapter.get_access_consumption().consumed is False
+    assert adapter.quota_release_state == "not_attempted"
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 0
+    assert len(history_calls) == 1
+
+
+async def test_yanmaga_wait_rental_form_for_another_episode_is_not_submitted(
+    browser_page, monkeypatch
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        wait_form_episode_id=NEXT_EPISODE_ID,
+    )
+    _install_wait_history_observations(monkeypatch)
+
+    await adapter.prepare_entry_only_page(browser_page)
+    with pytest.raises(UnknownPageStateError):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert adapter.quota_release_state == "not_attempted"
+    assert adapter.get_access_consumption().consumed is False
+    assert not any(
+        urlsplit(url).path.startswith("/rental/episodes/")
+        and urlsplit(url).path.endswith("/by_free_waits")
+        for url in requested
+    )
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+@pytest.mark.parametrize(
+    "button_attributes",
+    [
+        'formaction="/rental/episodes/other/by_free_waits"',
+        'formmethod="get"',
+        'formtarget="_blank"',
+        'formenctype="text/plain"',
+        "formnovalidate",
+        'form="other-form"',
+    ],
+    ids=("formaction", "formmethod", "formtarget", "formenctype", "formnovalidate", "form-owner"),
+)
+async def test_yanmaga_wait_rental_submitter_overrides_are_rejected(
+    browser_page, monkeypatch, button_attributes
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        wait_button_attributes=button_attributes,
+    )
+    _install_wait_history_observations(monkeypatch)
+
+    await adapter.prepare_entry_only_page(browser_page)
+    with pytest.raises(UnknownPageStateError):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert adapter.quota_release_state == "not_attempted"
+    assert adapter.get_access_consumption().consumed is False
+    assert not any("/by_free_waits" in url for url in requested)
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+async def test_yanmaga_wait_ticket_entry_only_confirms_without_pixel_initialization(
+    browser_page, monkeypatch
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        quota_completion_notice=True,
+    )
+    history_calls = _install_wait_history_observations(monkeypatch)
+    await adapter.prepare_entry_only_page(browser_page)
+
+    await adapter.initialize_entry_only(browser_page)
+
+    assert adapter.get_access_consumption().consumed is True
+    assert adapter._total_pages is None
+    assert len(history_calls) == 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+async def test_yanmaga_wait_ticket_batch_grant_only_persists_use_without_capture(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        quota_completion_notice=True,
+    )
+    history_calls = _install_wait_history_observations(monkeypatch)
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = (
+        _seed_batch_candidate(
+            tmp_path, access_mode="quota", output_mode="grant_only"
+        )
+    )
+    assert candidate.access_strategy == "quota"
+    assert candidate.quota_resource == "work_ticket"
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "library",
+    )
+
+    result = await executor.execute_grant_only_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        max_pages=8,
+        now=NOW,
+    )
+
+    assert result.resource_consumed is True
+    assert result.resource == "work_ticket"
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    saved_source = catalog.get_source(source.id)
+    assert saved_source.quota_started_at is not None
+    assert saved_source.access_granted_until is not None
+    assert datetime.fromisoformat(saved_source.access_granted_until) == (
+        datetime.fromisoformat(saved_source.quota_started_at)
+        + timedelta(hours=21)
+        - timedelta(seconds=5)
+    )
+    state = catalog.get_quota_resource_state(
+        item.work_id, site="yanmaga", resource="work_ticket"
+    )
+    assert state is not None and state.last_consumed_at is not None
+    assert len(history_calls) == 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    run_dirs = list((tmp_path / "batch-output" / "yanmaga").iterdir())
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert (run_dir / "diagnostics" / "entry_trace.json").is_file()
+    assert not (run_dir / "manifest.json").exists()
+    assert not (run_dir / "progress.json").exists()
+    assert not list(run_dir.glob("page-*.*"))
+    assert not list((tmp_path / "library").rglob("*.zip"))
+
+
+async def test_yanmaga_wait_ticket_day_grant_survives_capture_failure(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        quota_completion_notice=True,
+        thin_segment=True,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 350)
+    history_calls = _install_wait_history_observations(
+        monkeypatch, remaining_days=2
+    )
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = (
+        _seed_batch_candidate(tmp_path, access_mode="quota")
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=8,
+            now=NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    saved_source = catalog.get_source(source.id)
+    assert saved_source.quota_started_at is not None
+    assert saved_source.access_granted_until is not None
+    expiry = datetime.fromisoformat(saved_source.access_granted_until).astimezone(UTC)
+    assert datetime.now(UTC) + timedelta(hours=23) < expiry
+    assert expiry < datetime.now(UTC) + timedelta(days=1)
+    state = catalog.get_quota_resource_state(
+        item.work_id, site="yanmaga", resource="work_ticket"
+    )
+    assert state is not None and state.last_consumed_at is not None
+    assert len(history_calls) == 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert sum(
+        urlsplit(url).path == f"/rental/episodes/{EPISODE_ID}/by_free_waits"
+        for url in requested
+    ) == 1
+    assert not list((tmp_path / "batch-output").rglob("page-*.*"))
+    assert not list((tmp_path / "library").rglob("*.zip"))
+
+
+async def test_yanmaga_wait_ticket_h1_latches_consumption_without_inventing_expiry(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    requested = await _set_routes(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        quota_completion_notice=True,
+    )
+    history_calls = _install_wait_history_observations(
+        monkeypatch, remaining_hours=1
+    )
+    catalog, policies, adapters, candidate, item, source, _target, watchlist = (
+        _seed_batch_candidate(
+            tmp_path, access_mode="quota", output_mode="grant_only"
+        )
+    )
+    executor = BatchExecutor(catalog, policies, adapters, watchlist=watchlist)
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_grant_only_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            max_pages=8,
+            now=NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    saved_source = catalog.get_source(source.id)
+    assert saved_source.quota_started_at is not None
+    assert saved_source.access_granted_until is None
+    state = catalog.get_quota_resource_state(
+        item.work_id, site="yanmaga", resource="work_ticket"
+    )
+    assert state is not None and state.last_consumed_at is not None
+    assert len(history_calls) == 2
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+    assert not list((tmp_path / "batch-output").rglob("page-*.*"))
+    assert not list((tmp_path / "library").rglob("*.zip"))
+
+
+@pytest.mark.parametrize(
+    "first_free_completion_notice", (False, True), ids=("missing", "wrong-first-free-text")
+)
+async def test_yanmaga_wait_ticket_requires_generic_completion_proof_and_never_retries(
+    browser_page, monkeypatch, first_free_completion_notice
+) -> None:
+    requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="wait_free",
+        access_strategy="quota",
+        first_free_completion_notice=first_free_completion_notice,
+    )
+    history_calls = _install_wait_history_observations(monkeypatch)
+
+    with pytest.raises(AccessResourceUnavailableError):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert adapter.quota_release_state == "attempted_unknown"
+    assert adapter.get_access_consumption().consumed is False
+    assert len(history_calls) == 1
+    assert sum(urlsplit(url).path == urlsplit(SOURCE_URL).path for url in requested) == 1
+
+
+async def test_yanmaga_first_free_proof_does_not_accept_wait_ticket_notice(
+    browser_page, monkeypatch
+) -> None:
+    _requested, adapter = await _adapter_at_work(
+        browser_page,
+        monkeypatch,
+        access_mode="first_free",
+        quota_completion_notice=True,
+    )
+    await browser_page.goto(VIEWER_NAVIGATION_URL, wait_until="domcontentloaded")
+
+    assert not await adapter._has_first_free_access_proof(
+        browser_page, YanmagaEpisodeParts(SLUG, EPISODE_ID)
+    )
 
 
 async def test_yanmaga_runner_rewinds_captures_spread_and_stops_at_verified_end(
@@ -1423,14 +2035,28 @@ async def test_yanmaga_hides_fresh_reader_menu_with_normal_roundtrip_before_capt
         ("signup_fragment", False),
         ("signup_and_next", False),
         ("duplicate_signup", False),
+        ("wait_countdown", True),
+        ("wait_countdown_wrong_title", False),
+        ("wait_countdown_bad_time", False),
+        ("wait_countdown_missing_marker", False),
+        ("wait_countdown_semantic_dialog", False),
         ("missing", False),
     ],
 )
 async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
     browser_page, tmp_path, monkeypatch, terminal_control, accepted
 ) -> None:
+    wait_countdown = terminal_control.startswith("wait_countdown")
     requested = await _set_routes(
-        browser_page, monkeypatch, terminal_control=terminal_control
+        browser_page,
+        monkeypatch,
+        terminal_control=terminal_control,
+        inline_rental_card=wait_countdown,
+        inline_rental_dialog=terminal_control == "wait_countdown_semantic_dialog",
+        authenticated_listing=True if wait_countdown else None,
+        next_wait_free_marker=(
+            wait_countdown and terminal_control != "wait_countdown_missing_marker"
+        ),
     )
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 300)
 
@@ -1439,10 +2065,18 @@ async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
         assert result.stop_state is PageState.END
         assert len(result.pages) == 4
     else:
-        with pytest.raises(UnknownPageStateError):
+        expected_error = (
+            PageChangeTimeoutError
+            if terminal_control == "wait_countdown_semantic_dialog"
+            else UnknownPageStateError
+        )
+        with pytest.raises(expected_error):
             await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
     assert browser_page.url == VIEWER_NAVIGATION_URL
     assert not any(urlsplit(url).path == "/customers/sign-up" for url in requested)
+    if terminal_control == "wait_countdown":
+        assert await browser_page.locator(".episode-modal-wait.content").is_visible()
+        assert await browser_page.locator("#js-btn-valid-next-episode").count() == 0
 
 
 @pytest.mark.parametrize(
@@ -2060,8 +2694,15 @@ async def test_yanmaga_existing_grant_recheck_uses_catalog_expiry_and_active_cou
     adapter.configure_existing_access_grant(expiry)
     calls = []
 
-    async def fake_fetch(_page, *, observed_mypage_href, targets):
+    async def fake_fetch(
+        _page,
+        *,
+        observed_mypage_href,
+        targets,
+        max_countdown_hours=23,
+    ):
         calls.append((observed_mypage_href, targets))
+        assert max_countdown_hours == 72
         return (
             (
                 f"{SLUG}:{EPISODE_ID}",

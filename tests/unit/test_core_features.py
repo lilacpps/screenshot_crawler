@@ -365,7 +365,18 @@ async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_entry_only_stops_after_confirmed_access_without_capture(tmp_path: Path) -> None:
+async def test_entry_only_stops_without_writing_manifest_or_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ensure_calls: list[Path] = []
+    ensure_original = runner_module.ensure_new_run
+
+    def record_ensure(path: str | Path) -> Path:
+        ensure_calls.append(Path(path))
+        return ensure_original(path)
+
+    monkeypatch.setattr(runner_module, "ensure_new_run", record_ensure)
+    output_dir = tmp_path / "run"
     adapter = EntryOnlyAdapter(
         [PageState.CONTENT],
         [ContentIdentity(page_number=1, source_id="work-1")],
@@ -374,7 +385,7 @@ async def test_entry_only_stops_after_confirmed_access_without_capture(tmp_path:
         RunConfig(
             site="test",
             source_url="https://example.test/viewer",
-            output_dir=tmp_path / "run",
+            output_dir=output_dir,
             diagnostics_dir=tmp_path / "diagnostics",
             entry_only=True,
             access_strategy="quota",
@@ -387,6 +398,9 @@ async def test_entry_only_stops_after_confirmed_access_without_capture(tmp_path:
     assert result.stop_reason == "entry_confirmed"
     assert adapter.initialize_calls == 0
     assert adapter.initialize_entry_only_calls == 1
+    assert ensure_calls == [output_dir, output_dir]
+    assert output_dir.is_dir()
+    assert list(output_dir.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -397,17 +411,25 @@ async def test_entry_only_raises_typed_error_when_consumption_is_unconfirmed(
         AccessConsumptionUnconfirmedError,
         match="access resource consumption was not confirmed",
     ):
+        output_dir = tmp_path / "run-unconfirmed"
+        diagnostics_dir = tmp_path / "diagnostics-unconfirmed"
         await CrawlerRunner(
             RunConfig(
                 site="test",
                 source_url="https://example.test/viewer",
-                output_dir=tmp_path / "run-unconfirmed",
-                diagnostics_dir=tmp_path / "diagnostics-unconfirmed",
+                output_dir=output_dir,
+                diagnostics_dir=diagnostics_dir,
                 entry_only=True,
                 access_strategy="quota",
                 quota_resource="work_ticket",
             )
             ).run(FakePage(), UnconfirmedEntryOnlyAdapter([], []))
+
+    assert list(output_dir.iterdir()) == []
+    assert (diagnostics_dir / "metadata.json").is_file()
+    assert (diagnostics_dir / "error.txt").is_file()
+    assert not (diagnostics_dir / "screenshot.png").exists()
+    assert not (diagnostics_dir / "page.html").exists()
 
 
 @pytest.mark.asyncio

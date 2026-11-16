@@ -1,34 +1,34 @@
 # Stage 03 — 待つと無料（work_ticket）の通常Batch / grant-only
 
-**Status:** NOT STARTED
-**前提:** Stage01のサイト側チャージ・レンタル状態の証拠、Stage02の既存Grant直取得がPASS。未確認のセレクタ・回復時間・閲覧期限の実装は禁止。
+**Status:** PASS with qualified composite live evidence and independent BLOCKING 0. Wait classification, Policy, exact entry, automatic ticket persistence, novel chapter 10 grant-only, and dual chapter 29 same-grant capture through positive END/ZIP/Completed were verified. The dual final run used the existing grant and made no ticket POST; the grant and work cooldown stayed unchanged. No more ticket action is authorized.
+**前提:** Stage01/02 are accepted. Stage03 uses only the observed wait marker, charged indicator, exact episode rental form, and Rental History structure recorded in `PROGRESS.md`. Dual chapter 29 Run 10's postcondition was not confirmed inline; Root later applied one frozen exact-history observation to the Source grant and work cooldown using the observation-time anchor, not the precise POST time. Novel chapter 10 grant-only then verified automatic ticket confirmation and persistence. Dual same-grant attempts 3/4 were incomplete; attempt 5 completed capture through positive END/ZIP/Completed without a new submit. Stage03 is accepted with qualified composite evidence and independent BLOCKING 0. No further ticket submit is authorized; no unobserved selector or fixed expiry is assumed.
 **終了条件:** 同一workでの23h消費抑止、liveチャージ可否、確定した1回のチケット消費、通常Batchとgrant-only双方の成功/失敗の扱い。
 
 ## 1. Policy（既存仕組みを利用）
 
 変更先：`src/screenshot_crawler/site_policies/yanmaga.py`。 `hanayume.py` / `younganimal.py` / `magapoke.py` を参照し、site共通化・新DB列はしない。
 
-- `batch_ordering` はStage01で検証した順序を採用。既存のplanのwork quota分離を理解し、作品の順番を勝手に再配置しない。
+- `batch_ordering` は既存のYanmaga順序を維持する。既存planのwork quota分離を使い、作品の順番を勝手に再配置しない。
 - `supported_access_resources`, `ordered_access_resource_passes`, `grant_only_supported_access_resources` が `("work_ticket",)` を返す。`resource_state_scope("work_ticket") == "work"`。
 - `free` は従来の `direct`（初回無料も含む）。`quota` は対象話の有効Grantがあれば `direct`、それ以外は `PolicyDecision(eligible=True, access_strategy="quota", consumes_quota=True, quota_resource="work_ticket", quota_scope="work", quota_limit=1, quota_commit_mode="after_observed_consumption")` とする。
 - `paid` は新規支払い禁止。**初回無料や待つと無料で実際に得た同じ話の有効Grant**が既存DBで確認できる場合だけ `direct` を候補にして、site側Viewerでも正の検証を必須にする。
 - `unknown`, `owned`, 他のmodeは勝手にquota/purchaseへ昇格しない。
 - `grant_only_skip_reason` / `grant_only_retry_at` により、最後の**確定済み**同作品 `work_ticket` 消費から23時間以内はサイトへアクセスする前にローカルSKIP。`work_ticket_cooldown_hours` の設定があってもサイト既定の23hより短縮しない。naive/不正日時はfail-closed。
-- `access_grant_until` はStage01の**サイト実測の閲覧権限有効期間**に基づいてのみ決定（23h回復と混同しない）。本人の正確な期限が取得できるならそれを優先。期限不明なら架空の一律有効期間を付与せず、サイトの可否に従う。
+- `access_grant_until` は対象話のRental Historyで実測したカウントダウンから保守的下限を計算し、23hの作品チャージ回復と混同しない。wait/trusted-historyでは exact `残りH時間` または `残りD日` を明示上限72hまで扱う。D>=2は観測開始+(D-1)日-5秒の `site_day_countdown_lower_bound`、D=1とH=1はactiveのみでfinite expiryなし。通常のfirst-free履歴は最大23hの時間表記だけを使い、日の表記は受け付けない。72h固定で期限を作らない。
 - `defer_quota_access_to_grant_phase` や独自resolverの追加は既存の簡単な同一話clickでは足りないと**実測で確認された場合だけ**。不要な汎用抽象化はしない。
 
 ## 2. Adapterのwork-ticket入場
 
-`src/screenshot_crawler/site_adapters/yanmaga/adapter.py` の `configure_run` を `quota` に拡張し、`configure_quota_resource(page, "work_ticket")` を受ける。`get_access_consumption()`、`initialize_entry_only()` は既存共通Runnerの契約に合わせる。
+`src/screenshot_crawler/site_adapters/yanmaga/adapter.py` のquota pathは、実測済みのwait rowとcharged表示を照合し、観測されたSource modalの同一話 `読む` formを使う。`get_access_consumption()`、`initialize_entry_only()` は既存共通Runnerの契約に合わせる。
 
-1. 計画された対象話のsource/episode IDとサイトの入場状態をfreshに照合。**アカウントログイン・チケット利用可・無料操作の一意性・作品単位のチャージが完了していること**をサイト由来の正の証拠で確認する。
+1. 計画された対象話のsource/episode IDとサイトの入場状態をfreshに照合する。authenticated work listingの一意なwait画像marker、対象行、visible charged表示、および対象話がRental Historyに未掲載であることを確認する。History取得失敗・対象の重複・未対応collectionは入場を止める。
 2. 同一話の閲覧権限が**既に有効ならクリックしない**。通常Batchはそのまま本文取得へ。grant-onlyは「既にGrantあり」として成功した消費に数えない。
-3. 「待つと無料」だけが有効な場合、対象work/episodeとボタン/リソースを最後に再検証し、**1クリックのみ**。初回無料・コイン/ポイント・広告報酬・別作品への暗黙fallbackを禁止。
-4. ボタンclickの返り値だけで確定しない。確認された同一話のサイトGrant変化と本文閲覧可能状態から `AccessConsumption(consumed=True, resource="work_ticket", consumed_at=aware日時, access_granted_until=検証済み期限)` をラッチ。結果が不明なら**二度押ししない**。確認待ちはbounded read-only polling。タイムアウトやキャンセル時も、可能なら同一話の消費事実を照合して記録。
+3. Source GETだけではチケットを消費しない。fresh Source modalのwork/episode/title/3日間表示、同一話にbindされた `POST /rental/episodes/<episode-id>/by_free_waits` form、visible enabled exact `読む` buttonを再検証してから、通常Locator clickを最大1回行う。初回無料・コイン/ポイント・広告報酬・別作品への暗黙fallbackは禁止。
+4. clickの返り値だけでは確定しない。既存の同話Viewer・work-ticket固有のexact完了notice `レンタルが完了しました`・body-access proofと、post-clickのexact active Rental Historyがすべて成立した場合だけ `AccessConsumption(consumed=True, resource="work_ticket", consumed_at=aware日時, access_granted_until=検証済み期限)` をラッチする。first-freeの `無料レンタルが完了しました` はwork-ticket noticeの代替にしない。Novel chapter 10 grant-onlyで、このticket notice/history/persistence経路が実サイトで1回確認された。Dual chapter 29 Run 10は当時postconditionをinlineで保存できず、後から凍結した正のHistory観測で一度だけ復旧記録した。結果不明なら**二度押ししない**。H=1またはD=1で消費は確認できてもexpiryが作れない場合は消費を記録してcapture前に失敗し、期限なしGrantで成功扱いにしない。
 5. 通常Batchでは**開放後の同じPage**で既存Yanmaga本文先頭→Capture→ENDへ。grant-onlyでは入口/権限の確認だけ行い、画像・Manifest・ZIPは作らない。Itemはpendingのまま。
-6. 後段の画像取得/END/ZIPが失敗しても消費確認済みなら、既存 `BatchExecutor` の `after_observed_consumption` フローでSourceの `quota_started_at` と `access_granted_until`、work `quota_resource_states` を記録。**消費未確認**と**消費済み・後処理失敗**を別々に報告する。
+6. 後段の画像取得/END/ZIPが失敗しても消費確認済みなら、既存 `BatchExecutor` の `after_observed_consumption` フローでSourceの `quota_started_at` と、finite expiryが確認できた場合の `access_granted_until`、work `quota_resource_states` を記録する。**消費未確認**と**消費済み・後処理失敗**を別々に報告する。
 
-サイトが読取用の認証表示/チャージ画面を出すだけで消費済みか不明な場合は、DBの使用履歴を作り上げない。最後に読める状態になっても、閲覧可能であることと「今回の新規チケット消費」は区別する。
+サイトが読取用の認証表示/チャージ画面を出すだけで消費済みか不明な場合は、DBの使用履歴を作り上げない。Source modalの表示とPOST form確認は消費ではなく、クリック後の同一話post-stateでのみ「今回の新規チケット消費」を確定する。Dual chapter 29とNovel chapter 10の2回のnative ticket POSTが記録され、Novelでは自動保存が、Dualでは遅延したexact-history復旧記録が確認された。Dualの後続same-grant captureは別runで完了し、追加POSTは発生していない。Stage 03はqualified composite evidenceでPASS、独立BLOCKING 0。Stage 04は未開始。
 
 ## 3. Discoveryとの整合性
 

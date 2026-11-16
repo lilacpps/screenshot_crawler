@@ -60,6 +60,10 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 11. Younganimal current implementation
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
 The site behavior below uses Catalog v7 and an explicit matching Watchlist.

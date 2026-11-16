@@ -21,6 +21,7 @@ from screenshot_crawler.discovery.models import (
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
     fetch_rental_history_countdowns,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
@@ -32,6 +33,11 @@ MORE_SELECTOR = ".mod-episode-more-button"
 SORT_SELECTOR = "a.ga-sort.nav-link"
 FREE_SELECTOR = ".mod-episode-point--free"
 FREE_COLOR = "rgb(220, 0, 0)"
+WAIT_SELECTOR = "span.mod-episode-free_browse"
+WAIT_BADGE_CLASS = "mod-episode-free_browse"
+# The observed badge is image-only: both innerText and textContent are empty.
+WAIT_BADGE_TEXT = ""
+WAIT_ASSET_PATH = "/assets/logo_free_browse-96b8e1d8.svg"
 WAIT_TIMEOUT_MS = 15_000
 STABILITY_TIMEOUT_MS = 5_000
 STABILITY_POLL_MS = 100
@@ -72,6 +78,7 @@ class YanmagaListingRow:
     red_marker_present: bool
     known_restricted: bool
     first_free_marker: bool = False
+    wait_free_marker: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +350,76 @@ def classify_yanmaga_first_free_marker(
     ):
         return "free"
     return "unknown"
+
+
+def classify_yanmaga_wait_marker(
+    *,
+    marker_count: int,
+    free_marker_count: int,
+    marker_visible: bool,
+    marker_classes: tuple[str, ...],
+    marker_text: str | None,
+    image_count: int,
+    image_visible: bool,
+    image_url: str | None,
+    data_is_free: str | None,
+    anchor_url: str | None,
+    original_url: str | None,
+    authenticated: bool,
+    modal_marker: bool,
+    restricted_marker: bool,
+    red_marker_present: bool,
+    first_free_count: int,
+) -> str:
+    """Classify only the authenticated, exact wait badge seen in the listing."""
+
+    if (
+        marker_count != 1
+        or free_marker_count != 0
+        or not marker_visible
+        or marker_classes != (WAIT_BADGE_CLASS,)
+        or marker_text != WAIT_BADGE_TEXT
+        or image_count != 1
+        or not image_visible
+        or not _is_yanmaga_wait_asset(image_url)
+        or data_is_free != "true"
+        or not _same_yanmaga_episode(anchor_url, original_url)
+        or not authenticated
+        or modal_marker
+        or restricted_marker
+        or red_marker_present
+        or first_free_count != 0
+    ):
+        return "unknown"
+    return "quota"
+
+
+def _same_yanmaga_episode(anchor_url: str | None, original_url: str | None) -> bool:
+    if not isinstance(anchor_url, str) or not isinstance(original_url, str):
+        return False
+    anchor = parse_yanmaga_episode_url(anchor_url)
+    original = parse_yanmaga_episode_url(original_url)
+    return anchor is not None and anchor == original
+
+
+def _is_yanmaga_wait_asset(value: str | None) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and (parsed.hostname or "").lower() == SITE_HOST
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == WAIT_ASSET_PATH
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def has_yanmaga_anonymous_proof(
@@ -652,6 +729,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                         page,
                         observed_mypage_href=final_snapshot.mypage_href,
                         targets=tuple(eligible_targets),
+                        max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
                     )
                     self._fresh_active_grants = {
                         external_id
@@ -1015,7 +1093,16 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   element.classList.contains('by_first_time'));
                 const firstFreeMarker = firstFreeMarkers.length === 1
                   ? firstFreeMarkers[0] : null;
+                const waitBadges = [...row.querySelectorAll('span.mod-episode-free_browse')];
+                const waitBadge = waitBadges.length === 1 ? waitBadges[0] : null;
+                const waitImages = waitBadge ? [...waitBadge.querySelectorAll('img')] : [];
+                const waitImage = waitImages.length === 1 ? waitImages[0] : null;
                 const href = anchors.length === 1 ? new URL(anchors[0].href, location.href) : null;
+                let originalURL = null;
+                try {
+                  const rawOriginal = row.getAttribute('data-original-url');
+                  originalURL = rawOriginal ? new URL(rawOriginal, location.href).href : null;
+                } catch (_) {}
                 return {
                   index,
                   tag: row.tagName,
@@ -1031,6 +1118,16 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   firstFreeVisible: visible(firstFreeMarker),
                   firstFreeText: firstFreeMarker ? (firstFreeMarker.innerText || '').trim() : null,
                   firstFreeClasses: firstFreeMarker ? [...firstFreeMarker.classList] : [],
+                  waitBadgeCount: waitBadges.length,
+                  waitBadgeVisible: visible(waitBadge),
+                  waitBadgeText: waitBadge ? (waitBadge.innerText || '').replace(/\s+/g, ' ').trim() : null,
+                  waitBadgeClasses: waitBadge ? [...waitBadge.classList] : [],
+                  waitImageCount: waitImages.length,
+                  waitImageVisible: visible(waitImage),
+                  waitImageUrl: waitImage ? waitImage.src : null,
+                  dataIsFree: row.getAttribute('data-is-free'),
+                  originalUrl: originalURL,
+                  anchorUrl: href?.href || null,
                   conflictingFreeBadge: [...row.querySelectorAll(
                     '.mod-episode-point,[class*="mod-episode-point--"]')].some(element => {
                       if (!visible(element) || element === marker || element === firstFreeMarker) return false;
@@ -1214,7 +1311,10 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             marker_visible = raw_row.get("markerVisible") is True
             marker_text = raw_row.get("markerText") if isinstance(raw_row.get("markerText"), str) else None
             marker_color = raw_row.get("markerColor") if isinstance(raw_row.get("markerColor"), str) else None
-            wait_marker = raw_row.get("waitMarker") is True
+            wait_badge_count = raw_row.get("waitBadgeCount", 0)
+            wait_marker = raw_row.get("waitMarker") is True or (
+                isinstance(wait_badge_count, int) and wait_badge_count > 0
+            )
             modal_marker = raw_row.get("modalMarker") is True
             restricted_marker = raw_row.get("restrictedMarker") is True
             conflicting_free_badge = raw_row.get("conflictingFreeBadge") is True
@@ -1226,6 +1326,44 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 and marker_class == "mod-episode-point--free"
                 and marker_color == FREE_COLOR
             )
+            wait_free_marker = classify_yanmaga_wait_marker(
+                marker_count=wait_badge_count,
+                free_marker_count=marker_count,
+                marker_visible=raw_row.get("waitBadgeVisible") is True,
+                marker_classes=tuple(
+                    class_name
+                    for class_name in raw_row.get("waitBadgeClasses", [])
+                    if isinstance(class_name, str)
+                ),
+                marker_text=(
+                    raw_row.get("waitBadgeText")
+                    if isinstance(raw_row.get("waitBadgeText"), str)
+                    else None
+                ),
+                image_count=raw_row.get("waitImageCount", 0),
+                image_visible=raw_row.get("waitImageVisible") is True,
+                image_url=(
+                    raw_row.get("waitImageUrl")
+                    if isinstance(raw_row.get("waitImageUrl"), str)
+                    else None
+                ),
+                data_is_free=(
+                    raw_row.get("dataIsFree")
+                    if isinstance(raw_row.get("dataIsFree"), str)
+                    else None
+                ),
+                anchor_url=raw_row.get("anchorUrl")
+                if isinstance(raw_row.get("anchorUrl"), str)
+                else None,
+                original_url=raw_row.get("originalUrl")
+                if isinstance(raw_row.get("originalUrl"), str)
+                else None,
+                authenticated=authenticated,
+                modal_marker=modal_marker,
+                restricted_marker=restricted_marker or conflicting_free_badge,
+                red_marker_present=red_marker_present,
+                first_free_count=first_free_count,
+            ) == "quota"
             first_free_marker = classify_yanmaga_first_free_marker(
                 marker_count=marker_count,
                 first_free_count=first_free_count,
@@ -1267,10 +1405,16 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                     url=href,
                     free_marker=free_marker,
                     first_free_marker=first_free_marker,
+                    wait_free_marker=wait_free_marker,
                     red_marker_present=red_marker_present,
                     known_restricted=anonymous
                     and not red_marker_present
-                    and (wait_marker or modal_marker or restricted_marker or point_only_marker),
+                    and (
+                        wait_marker
+                        or modal_marker
+                        or restricted_marker
+                        or point_only_marker
+                    ),
                 )
             )
 
@@ -1371,6 +1515,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                         access_mode=(
                             "free"
                             if row.free_marker or row.first_free_marker
+                            else "quota"
+                            if row.wait_free_marker
                             else "unknown"
                         ),
                         free_until=None,

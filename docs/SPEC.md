@@ -304,6 +304,7 @@ CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
 ## 8. Site Adapterの責務
 
 - `prepare_page`
+- optional `prepare_entry_only_page` (default delegates to `prepare_page`)
 - `initialize`
 - `detect_state`
 - optional `capture_page`
@@ -521,6 +522,8 @@ manifestは保存ページのauthorityである。
 
 `progress.json` は実行中のlast sequence / identity / fingerprint / contextを記録するが、現時点では自動resume機能ではない。
 
+Grant-onlyの`entry_only`では権利確認と消費記録だけを行い、CONTENTページはcapture/saveしない。成功時も失敗時もpage Manifest / Progress stateを作らず、packageやItem completionへ進まない。失敗diagnosticにはmetadataとerrorのみを保存し、screenshot / HTML snapshotは含めない。Adapterはcapture専用の初期化を避ける必要がある場合だけ`prepare_entry_only_page`をoverrideできる。通常の`prepare_page`はdefault behaviorとして維持し、Page/Guard ownershipとcleanup contractを変えない。
+
 JSONはtemporary file → replaceで更新する。
 
 ## 18. Packaging / output metadata
@@ -589,6 +592,8 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 ## 21. Diagnostics
 
 失敗時は設定されたdiagnostics directoryへ、可能な範囲で以下を保存する。
+
+Grant-only `entry_only` is the explicit exception to page snapshots: it keeps only metadata/error diagnostics and omits the screenshot/HTML described here. See the entry-only output contract in section 17.
 
 - screenshot
 - HTML

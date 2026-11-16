@@ -646,7 +646,11 @@ stored in Catalog. `--grant-only all` executes the Policy-ordered passes,
 replans Catalog between passes, shares the total site-attempt `--limit`, and
 keeps local skips out of that limit. A resource-pass exhaustion stops only the
 current pass, while AccessGuard fatal stops end the whole run. Grant-only
-passes never capture, package, create artifacts, or complete Items.
+passes never capture content, update page Manifest/Progress, package, create
+artifacts, or complete Items. Failure diagnostics retain metadata/error only
+and omit screenshots and HTML snapshots. Adapters may override the optional
+`prepare_entry_only_page()` hook to skip capture-only preparation; its default
+delegates to `prepare_page()`, and normal capture preparation is unchanged.
 
 ### Phase 6 - regression and live verification
 

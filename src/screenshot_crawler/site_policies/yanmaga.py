@@ -1,13 +1,14 @@
-"""Direct-only Batch eligibility for currently public-free Yanmaga sources."""
+"""Batch eligibility for public-free, existing-grant, and work-ticket sources."""
 
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies.base import (
+    BatchOrdering,
     PolicyDecision,
     SitePolicy,
     SitePolicyError,
@@ -17,9 +18,56 @@ _EXTERNAL_ID = re.compile(r"^(?P<slug>.+):(?P<episode>[0-9a-f]{32})$")
 
 
 class YanmagaSitePolicy(SitePolicy):
-    """Select only available free rows and never enter a resource pass."""
+    """Select public-free rows and the observed work-ticket resource pass."""
 
     site = "yanmaga"
+
+    def batch_ordering(self) -> BatchOrdering:
+        return "catalog"
+
+    def supported_access_resources(self) -> tuple[str, ...]:
+        return ("work_ticket",)
+
+    def ordered_access_resource_passes(self) -> tuple[str, ...]:
+        return ("work_ticket",)
+
+    def grant_only_supported_access_resources(self) -> tuple[str, ...]:
+        return ("work_ticket",)
+
+    def resource_state_scope(self, resource: str) -> str | None:
+        return "work" if resource == "work_ticket" else None
+
+    def grant_only_skip_reason(
+        self,
+        *,
+        resource: str,
+        last_consumed_at: datetime | None,
+        now: datetime,
+        cooldown_hours: int | None,
+    ) -> str | None:
+        if resource != "work_ticket" or last_consumed_at is None:
+            return None
+        self._require_aware(now, "now")
+        self._require_aware(last_consumed_at, "last_consumed_at")
+        if now.astimezone(JST) < last_consumed_at.astimezone(JST) + timedelta(
+            hours=self._cooldown_hours(cooldown_hours)
+        ):
+            return "work_ticket_cooldown"
+        return None
+
+    def grant_only_retry_at(
+        self,
+        *,
+        resource: str,
+        last_consumed_at: datetime | None,
+        cooldown_hours: int | None,
+    ) -> datetime | None:
+        if resource != "work_ticket" or last_consumed_at is None:
+            return None
+        self._require_aware(last_consumed_at, "last_consumed_at")
+        return last_consumed_at.astimezone(JST) + timedelta(
+            hours=self._cooldown_hours(cooldown_hours)
+        )
 
     def evaluate(
         self,
@@ -42,19 +90,32 @@ class YanmagaSitePolicy(SitePolicy):
                 self._parse_grant_until(source.access_granted_until)
             except (TypeError, ValueError):
                 return PolicyDecision(False, None, "invalid_access_grant_until")
+        if source.access_mode in {"quota", "paid"}:
+            try:
+                grant_until = self._parse_grant_until(source.access_granted_until)
+            except (TypeError, ValueError):
+                return PolicyDecision(False, None, "invalid_access_grant_until")
+            if grant_until is not None and grant_until > current:
+                if not self._valid_external_id(source.external_id):
+                    return PolicyDecision(False, None, "invalid_episode_identity")
+                return PolicyDecision(True, "direct", "active_confirmed_grant")
+            if source.access_mode == "quota":
+                if not self._valid_external_id(source.external_id):
+                    return PolicyDecision(False, None, "invalid_episode_identity")
+                return PolicyDecision(
+                    True,
+                    "quota",
+                    "work_ticket_candidate",
+                    consumes_quota=True,
+                    quota_resource="work_ticket",
+                    quota_scope="work",
+                    quota_limit=1,
+                    quota_commit_mode="after_observed_consumption",
+                )
+            if grant_until is not None:
+                return PolicyDecision(False, None, "expired_access_grant")
+            return PolicyDecision(False, None, "access_grant_not_observed")
         if source.access_mode != "free":
-            if source.access_mode in {"quota", "paid"}:
-                try:
-                    grant_until = self._parse_grant_until(source.access_granted_until)
-                except (TypeError, ValueError):
-                    return PolicyDecision(False, None, "invalid_access_grant_until")
-                if grant_until is not None and grant_until > current:
-                    if not self._valid_external_id(source.external_id):
-                        return PolicyDecision(False, None, "invalid_episode_identity")
-                    return PolicyDecision(True, "direct", "active_confirmed_grant")
-                if grant_until is not None:
-                    return PolicyDecision(False, None, "expired_access_grant")
-                return PolicyDecision(False, None, "access_grant_not_observed")
             reason = {
                 "owned": "owned_not_verified",
                 "grant": "grant_not_supported",
@@ -108,6 +169,19 @@ class YanmagaSitePolicy(SitePolicy):
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("access_granted_until must be timezone-aware")
         return parsed.astimezone(JST)
+
+    @staticmethod
+    def _require_aware(value: datetime, name: str) -> None:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise SitePolicyError(f"{name} must be a timezone-aware datetime")
+
+    @staticmethod
+    def _cooldown_hours(value: int | None) -> int:
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise SitePolicyError("cooldown_hours must be a non-negative integer")
+        return max(23, value or 0)
 
 
 __all__ = ["YanmagaSitePolicy"]

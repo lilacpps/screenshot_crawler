@@ -81,7 +81,7 @@ async def test_composite_identity_is_configured_and_source_url_is_retained() -> 
 
 
 @pytest.mark.asyncio
-async def test_only_auto_and_direct_strategies_are_supported() -> None:
+async def test_auto_direct_and_work_ticket_strategies_are_supported() -> None:
     adapter = YanmagaAdapter()
 
     await adapter.configure_run(None, "auto")
@@ -89,7 +89,11 @@ async def test_only_auto_and_direct_strategies_are_supported() -> None:
     await adapter.configure_quota_resource(None, None)
 
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(None, "quota")
+        await adapter.configure_run(None, "paid")
+
+    await adapter.configure_target_identity(f"{SLUG}:{EPISODE_ID}", "watchlist-main")
+    await adapter.configure_run(None, "quota")
+    await adapter.configure_quota_resource(None, "work_ticket")
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(None, "ticket")
 

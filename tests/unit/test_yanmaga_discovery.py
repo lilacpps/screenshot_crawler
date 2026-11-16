@@ -13,6 +13,7 @@ from screenshot_crawler.site_adapters.yanmaga import (
     YanmagaWorkParts,
     classify_yanmaga_first_free_marker,
     classify_yanmaga_free_marker,
+    classify_yanmaga_wait_marker,
     has_yanmaga_anonymous_proof,
     has_yanmaga_authenticated_proof,
     parse_yanmaga_episode_url,
@@ -430,3 +431,43 @@ def test_yanmaga_free_classification_requires_complete_red_row_proof(evidence, e
 )
 def test_yanmaga_first_free_requires_exact_authenticated_row_proof(evidence, expected) -> None:
     assert classify_yanmaga_first_free_marker(**evidence) == expected
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "quota"),
+        ({"authenticated": False}, "unknown"),
+        ({"image_url": f"{BASE}/assets/logo_free_browse-96b8e1d8.svg?x=1"}, "unknown"),
+        ({"original_url": f"{BASE}/comics/{SLUG}/ffffffffffffffffffffffffffffffff"}, "unknown"),
+        ({"data_is_free": "false"}, "unknown"),
+        ({"marker_count": 2}, "unknown"),
+        ({"free_marker_count": 1}, "unknown"),
+        ({"marker_classes": ("mod-episode-free_browse", "other")}, "unknown"),
+        ({"first_free_count": 1}, "unknown"),
+    ],
+)
+def test_yanmaga_wait_marker_requires_exact_authenticated_row_proof(
+    overrides: dict[str, object], expected: str
+) -> None:
+    evidence: dict[str, object] = {
+        "marker_count": 1,
+        "free_marker_count": 0,
+        "marker_visible": True,
+        "marker_classes": ("mod-episode-free_browse",),
+        "marker_text": "",
+        "image_count": 1,
+        "image_visible": True,
+        "image_url": f"{BASE}/assets/logo_free_browse-96b8e1d8.svg",
+        "data_is_free": "true",
+        "anchor_url": f"{BASE}/comics/{SLUG}/{EPISODE_ID}",
+        "original_url": f"{BASE}/comics/{SLUG}/{EPISODE_ID}",
+        "authenticated": True,
+        "modal_marker": False,
+        "restricted_marker": False,
+        "red_marker_present": False,
+        "first_free_count": 0,
+    }
+    evidence.update(overrides)
+
+    assert classify_yanmaga_wait_marker(**evidence) == expected  # type: ignore[arg-type]
