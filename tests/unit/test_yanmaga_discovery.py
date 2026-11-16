@@ -20,6 +20,7 @@ from screenshot_crawler.site_adapters.yanmaga import (
     parse_yanmaga_work_url,
 )
 from screenshot_crawler.site_adapters.yanmaga import discovery as yanmaga_discovery
+from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
 from screenshot_crawler.watchlist import WatchlistTarget
 
 BASE = "https://yanmaga.jp"
@@ -169,6 +170,145 @@ def test_yanmaga_recovery_preserves_only_same_scope_source_with_fresh_proofs() -
     assert adapter._grant_candidates == {}
     assert adapter._fresh_active_grants == set()
     assert adapter.reconcile_access_mode("unknown", trusted, target) == "unknown"
+
+
+def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
+    target = WatchlistTarget(
+        key="yanmaga-test",
+        work_key="yanmaga:test-work",
+        site="yanmaga",
+        url=WORK_URL,
+        label="test work",
+    )
+    work = YanmagaWorkParts(SLUG)
+    now = datetime.now(UTC)
+    expiry = now + timedelta(days=1)
+    def external_id(number: int) -> str:
+        return f"{SLUG}:{number:032x}"
+
+    unknown_existing = external_id(2)
+    expired_known = external_id(3)
+    trusted = external_id(4)
+    owned = external_id(5)
+    adapter = YanmagaDiscoveryAdapter()
+    adapter.configure_source_snapshots(
+        target,
+        (
+            DiscoverySourceSnapshot(
+                external_id=unknown_existing,
+                discovery_key=target.key,
+                access_mode="unknown",
+                available=True,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=expired_known,
+                discovery_key=target.key,
+                access_mode="paid",
+                available=True,
+                access_granted_until=now - timedelta(seconds=1),
+            ),
+            DiscoverySourceSnapshot(
+                external_id=trusted,
+                discovery_key=target.key,
+                access_mode="free",
+                available=True,
+                access_granted_until=expiry,
+            ),
+            DiscoverySourceSnapshot(
+                external_id=owned,
+                discovery_key=target.key,
+                access_mode="owned",
+                available=True,
+            ),
+        ),
+    )
+
+    def row(number: int, *, free: bool = False, first: bool = False, wait: bool = False):
+        episode_id = f"{number:032x}"
+        return yanmaga_discovery.YanmagaListingRow(
+            episode_id=episode_id,
+            title=f"episode {number}",
+            url=f"{WORK_URL}/{episode_id}",
+            free_marker=free,
+            red_marker_present=free,
+            known_restricted=False,
+            first_free_marker=first,
+            wait_free_marker=wait,
+        )
+
+    snapshot = yanmaga_discovery.YanmagaListingSnapshot(
+        title="test work",
+        anonymous=False,
+        rows=(
+            row(1),
+            row(2),
+            row(3),
+            row(4),
+            row(5),
+            row(6),
+            row(7),
+            row(8, wait=True),
+            row(9, free=True),
+            row(10, first=True),
+        ),
+        continuation=None,
+        authenticated=True,
+        mypage_href=f"{BASE}/mypage",
+    )
+    targets = adapter._history_targets(snapshot, work, adapter._grant_candidates)
+    assert [target.episode_id for target in targets] == [
+        f"{number:032x}" for number in (1, 2, 3, 4, 5, 6, 7)
+    ]
+
+    def countdown(hours: int, until: datetime | None, evidence: str | None):
+        return RentalCountdown(
+            observed_at=now,
+            remaining_hours=hours,
+            access_granted_until=until,
+            expiry_evidence=evidence,
+        )
+
+    adapter._apply_history_countdowns(
+        snapshot,
+        work,
+        (
+            (external_id(1), countdown(14, expiry, "site_countdown_lower_bound")),
+            (unknown_existing, countdown(7, expiry, "site_countdown_lower_bound")),
+            (expired_known, countdown(2, expiry, "site_countdown_lower_bound")),
+            (trusted, countdown(14, now + timedelta(days=2), "site_countdown_lower_bound")),
+            (owned, countdown(14, expiry, "site_countdown_lower_bound")),
+            (external_id(6), countdown(1, None, None)),
+        ),
+    )
+    records = {
+        record.source.external_id: record.source
+        for record in adapter._records_from_snapshot(
+            snapshot, target, work, adapter._fresh_history_grants
+        )
+    }
+    assert records[external_id(1)].access_mode == "quota"
+    assert records[external_id(1)].access_granted_until == expiry
+    assert records[external_id(1)].access_granted_until_observed is True
+    assert records[unknown_existing].access_mode == "quota"
+    assert records[expired_known].access_mode == "quota"
+    assert records[owned].access_mode == "unknown"
+    assert records[external_id(6)].access_mode == "unknown"
+    assert records[external_id(6)].access_granted_until is None
+    assert records[external_id(7)].access_mode == "unknown"
+    assert records[external_id(8)].access_mode == "quota"
+    assert records[external_id(8)].access_granted_until is None
+    assert records[external_id(9)].access_mode == "free"
+    assert records[external_id(10)].access_mode == "free"
+    assert records[trusted].access_mode == "unknown"
+    assert records[trusted].access_granted_until is None
+    assert records[trusted].access_granted_until_observed is False
+    assert adapter.reconcile_access_mode("unknown", adapter._source_snapshots[trusted], target) == "free"
+    assert trusted in adapter._fresh_active_grants
+
+    adapter._fresh_history_grants.clear()
+    duplicate = (external_id(1), countdown(14, expiry, "site_countdown_lower_bound"))
+    adapter._apply_history_countdowns(snapshot, work, (duplicate, duplicate))
+    assert adapter._fresh_history_grants == {}
 
 
 @pytest.mark.parametrize(

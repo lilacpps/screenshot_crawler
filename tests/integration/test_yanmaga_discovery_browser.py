@@ -531,6 +531,103 @@ async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
     assert forbidden_requests == []
 
 
+async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
+    browser_page,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    episode_id = _episode_id(29)
+    external_id = f"{SLUG}:{episode_id}"
+    target = _target()
+    html = _listing_html(
+        [(episode_id, "episode 29", "none")],
+        anonymous=False,
+        signin=False,
+        mypage=True,
+    )
+    now = datetime.now(UTC)
+    expiry = now + timedelta(days=2)
+    history_calls = 0
+
+    async def history_countdowns(
+        _page,
+        *,
+        observed_mypage_href,
+        targets,
+        max_countdown_hours=23,
+    ):
+        nonlocal history_calls
+        history_calls += 1
+        assert observed_mypage_href == f"{BASE}/mypage"
+        assert targets == (yanmaga_discovery.YanmagaEpisodeParts(SLUG, episode_id),)
+        assert max_countdown_hours == 72
+        if history_calls == 1:
+            return ()
+        return (
+            (
+                external_id,
+                RentalCountdown(
+                    observed_at=now,
+                    remaining_hours=0,
+                    remaining_days=3,
+                    access_granted_until=expiry,
+                    expiry_evidence="site_day_countdown_lower_bound",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        yanmaga_discovery, "fetch_rental_history_countdowns", history_countdowns
+    )
+    catalog, first, service, _state = await _run_discovery(browser_page, tmp_path, html)
+    source = catalog.find_source("yanmaga", external_id)
+    assert first.complete is True
+    assert source is not None and source.access_mode == "unknown"
+    assert source.access_granted_until is None
+
+    item = catalog.get_item(source.item_id)
+    web_target = catalog.find_source_target(source.id, "web")
+    crawl_run = catalog.create_crawl_run(
+        item_id=item.id,
+        source_id=source.id,
+        target_id=web_target.id,
+        access_strategy="direct",
+    )
+    _sequence, artifact, completed_item = catalog.finalize_successful_crawl(
+        crawl_run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="b" * 64,
+            byte_size=128,
+            storage_backend="local",
+            locator="existing-completed-item.zip",
+            state="present",
+        ),
+        page_count=1,
+    )
+    completed_at = completed_item.completed_at
+
+    refreshed = await service.discover(browser_page, target, "full")
+    current = catalog.find_source("yanmaga", external_id)
+    current_item = catalog.get_item(item.id)
+    assert refreshed.complete is True
+    assert current is not None and current.id == source.id
+    assert current.item_id == source.item_id
+    assert current.access_mode == "quota"
+    assert current.access_granted_until is not None
+    assert datetime.fromisoformat(current.access_granted_until) == expiry
+    assert current.quota_started_at is None
+    assert current_item.status == "completed"
+    assert current_item.completed_at == completed_at
+    assert catalog.get_crawl_run(crawl_run.id).status == "succeeded"
+    assert [saved.id for saved in catalog.list_artifacts(item_id=item.id)] == [artifact.id]
+    assert catalog.get_quota_resource_state(
+        item.work_id, site="yanmaga", resource="work_ticket"
+    ) is None
+    assert history_calls == 2
+
+
 async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
     browser_page, monkeypatch
 ) -> None:

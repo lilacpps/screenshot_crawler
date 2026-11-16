@@ -158,8 +158,30 @@ The current listing classification recognizes verified public-free and
 first-free rows as `access_mode="free"`, and recognizes the wait marker as
 `access_mode="quota"` when authenticated exact-row proof is present. Before
 ticket use, the Adapter additionally requires a fresh work-level charged
-state. Rows remain `available=True`; other or unverified states are `unknown`.
-Stage 02 adds the separate trusted-grant path described below.
+state. Rows remain `available=True`; other or unverified states start as
+`unknown`.
+
+On an authenticated complete listing, Discovery also makes one bounded
+same-work Rental History lookup for raw-unknown rows and same-work sources with
+trusted grants. An exact active Rental History card with a fresh finite native
+countdown can promote a raw-unknown row to `quota` and set the observed grant
+expiry. This recovers previously absent or unknown Catalog sources without
+inferring a consumption time or cooldown. Active evidence without a finite
+bound, missing or duplicate cards, and identity mismatches do not promote a
+row; `owned` rows are never imported. A previously trusted future grant keeps
+its existing mode and expiry when active history confirms it; Discovery does
+not extend that expiry. The lookup is metadata-only and does not open an
+episode or invoke an access control.
+
+On 2026-11-16, an isolated validation and the authorized normal-Catalog full
+Discovery both recovered the previously `unknown` work-dual chapters 26, 27,
+and 29 as `quota` with finite observed bounds. The normal run preserved their
+Source/Item identities and states, Artifacts, acquisition flags, and work
+state; its direct plan consumed no resource. Source/Viewer/rental POST counts
+were zero. The evidence report is
+`output/yanmaga_access_experiment/followup-active/normal-repair-v1/report.json`.
+The focused unit/browser and existing-grant checks passed 96 tests, with 0
+skips and 126 deselected; the full suite was not rerun.
 
 A public-free row requires one visible `.mod-episode-point--free` element with
 exact text `無料`, the exact class name, and computed color
@@ -191,8 +213,8 @@ The Stage 01 `work-dual` snapshot was a historical checkpoint: two first-free
 rows were visible in the initial viewport, and its complete 57-row listing
 contained 27 first-free rows, 8 public-free rows, and 22 then-unclassified
 rows. The wait marker was positively identified and added to the current
-classifier in Stage 03; this does not establish paid-only or active-grant /
-expiry behavior. The daily-limit notice scope remains unknown. A separate
+classifier in Stage 03; later authenticated Rental History recovery is
+described above. This does not establish paid-only or daily-limit behavior. A separate
 temporary empty-context comparison saw no `/mypage` link, two sign-in links,
 and false login telemetry. No episode or access CTA was opened in Stage 01. A
 read-only request observer found analytics POSTs to third-party hosts only and

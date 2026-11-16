@@ -22,6 +22,7 @@ from screenshot_crawler.discovery.models import (
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
     MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+    RentalCountdown,
     fetch_rental_history_countdowns,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
@@ -612,7 +613,9 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
     def __init__(self) -> None:
         self.last_snapshot: YanmagaListingSnapshot | None = None
         self._grant_candidates: dict[str, DiscoverySourceSnapshot] = {}
+        self._source_snapshots: dict[str, DiscoverySourceSnapshot] = {}
         self._fresh_active_grants: set[str] = set()
+        self._fresh_history_grants: dict[str, datetime] = {}
         self._grant_work_slug: str | None = None
 
     def configure_source_snapshots(
@@ -621,7 +624,9 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         snapshots: tuple[DiscoverySourceSnapshot, ...],
     ) -> None:
         self._grant_candidates = {}
+        self._source_snapshots = {}
         self._fresh_active_grants = set()
+        self._fresh_history_grants = {}
         work = parse_yanmaga_work_url(target.url)
         self._grant_work_slug = work.slug if work is not None else None
         if target.site != "yanmaga" or work is None:
@@ -633,11 +638,14 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 snapshot.discovery_key != target.key
                 or parsed_id is None
                 or parsed_id[0] != work.slug
-                or snapshot.access_mode not in {"free", "quota", "paid"}
-                or not _has_future_catalog_grant(snapshot, now)
             ):
                 continue
-            self._grant_candidates[snapshot.external_id] = snapshot
+            self._source_snapshots[snapshot.external_id] = snapshot
+            if (
+                snapshot.access_mode in {"free", "quota", "paid"}
+                and _has_future_catalog_grant(snapshot, now)
+            ):
+                self._grant_candidates[snapshot.external_id] = snapshot
 
     def reconcile_access_mode(
         self,
@@ -671,6 +679,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         del mode  # DiscoveryService owns its shared latest-first known-streak rule.
         self.last_snapshot = None
         self._fresh_active_grants = set()
+        self._fresh_history_grants = {}
         work = parse_yanmaga_work_url(target.url)
         if work is None:
             raise DiscoveryIncompleteError("Watchlist target must be a canonical Yanmaga work URL")
@@ -718,32 +727,27 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError(
                     "Yanmaga identity, access evidence or listing changed before emission"
                 )
-            if self._grant_candidates and final_snapshot.authenticated and final_snapshot.mypage_href:
-                eligible_targets: list[YanmagaEpisodeParts] = []
-                for external_id in self._grant_candidates:
-                    parsed_id = _parse_composite_id(external_id)
-                    if parsed_id is not None and parsed_id[0] == work.slug:
-                        eligible_targets.append(YanmagaEpisodeParts(*parsed_id))
-                if eligible_targets:
-                    fresh = await fetch_rental_history_countdowns(
-                        page,
-                        observed_mypage_href=final_snapshot.mypage_href,
-                        targets=tuple(eligible_targets),
-                        max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+            history_targets = self._history_targets(
+                final_snapshot, work, self._grant_candidates
+            )
+            if history_targets and final_snapshot.authenticated and final_snapshot.mypage_href:
+                fresh = await fetch_rental_history_countdowns(
+                    page,
+                    observed_mypage_href=final_snapshot.mypage_href,
+                    targets=history_targets,
+                    max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
+                )
+                self._apply_history_countdowns(final_snapshot, work, fresh)
+                post_history_snapshot = await self._snapshot(page, work, telemetry)
+                if post_history_snapshot != final_snapshot:
+                    raise DiscoveryIncompleteError(
+                        "Yanmaga identity, access evidence or listing changed during grant verification"
                     )
-                    self._fresh_active_grants = {
-                        external_id
-                        for external_id, countdown in fresh
-                        if countdown.active
-                    }
-                    post_history_snapshot = await self._snapshot(page, work, telemetry)
-                    if post_history_snapshot != final_snapshot:
-                        raise DiscoveryIncompleteError(
-                            "Yanmaga identity, access evidence or listing changed during grant verification"
-                        )
-                    final_snapshot = post_history_snapshot
+                final_snapshot = post_history_snapshot
             self.last_snapshot = final_snapshot
-            records = self._records_from_snapshot(final_snapshot, target, work)
+            records = self._records_from_snapshot(
+                final_snapshot, target, work, self._fresh_history_grants
+            )
             # DiscoveryService mutates Catalog as each item is yielded. All
             # paging, row identity, access evidence and stability checks have
             # completed before this point so a partial full run cannot reconcile.
@@ -1491,16 +1495,85 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError("Yanmaga continuation did not preserve native row order")
 
     @staticmethod
+    def _history_targets(
+        snapshot: YanmagaListingSnapshot,
+        work: YanmagaWorkParts,
+        previous_grants: Mapping[str, DiscoverySourceSnapshot] | None = None,
+    ) -> tuple[YanmagaEpisodeParts, ...]:
+        """Select raw-unknown rows plus previously trusted grant targets."""
+
+        episode_ids: list[str] = []
+        seen: set[str] = set()
+        for row in snapshot.rows:
+            if row.free_marker or row.first_free_marker or row.wait_free_marker:
+                continue
+            if row.episode_id not in seen:
+                seen.add(row.episode_id)
+                episode_ids.append(row.episode_id)
+        for external_id in (previous_grants or {}):
+            parsed = _parse_composite_id(external_id)
+            if parsed is not None and parsed[0] == work.slug and parsed[1] not in seen:
+                seen.add(parsed[1])
+                episode_ids.append(parsed[1])
+        return tuple(YanmagaEpisodeParts(work.slug, episode_id) for episode_id in episode_ids)
+
+    def _apply_history_countdowns(
+        self,
+        snapshot: YanmagaListingSnapshot,
+        work: YanmagaWorkParts,
+        countdowns: tuple[tuple[str, RentalCountdown], ...],
+    ) -> None:
+        expected_ids = {
+            f"{target.slug}:{target.episode_id}"
+            for target in self._history_targets(snapshot, work, self._grant_candidates)
+        }
+        by_external_id = dict(countdowns)
+        if len(by_external_id) != len(countdowns) or not set(by_external_id) <= expected_ids:
+            return
+
+        now = datetime.now(UTC)
+        for external_id, countdown in by_external_id.items():
+            if not isinstance(countdown, RentalCountdown) or not countdown.active:
+                continue
+            if external_id in self._grant_candidates:
+                self._fresh_active_grants.add(external_id)
+                continue
+            previous = self._source_snapshots.get(external_id)
+            if previous is not None and previous.access_mode == "owned":
+                continue
+            expiry = countdown.access_granted_until
+            if (
+                isinstance(expiry, datetime)
+                and expiry.tzinfo is not None
+                and expiry.utcoffset() is not None
+                and expiry.astimezone(UTC) > now
+                and countdown.expiry_evidence
+                in {"site_countdown_lower_bound", "site_day_countdown_lower_bound"}
+            ):
+                episode_id = external_id.rsplit(":", 1)[-1]
+                self._fresh_history_grants[episode_id] = expiry
+
+    @staticmethod
     def _records_from_snapshot(
         snapshot: YanmagaListingSnapshot,
         target: WatchlistTarget,
         work: YanmagaWorkParts,
+        history_grants: Mapping[str, datetime] | None = None,
     ) -> list[DiscoveredRecord]:
         observed_at = datetime.now(UTC).isoformat()
         total = len(snapshot.rows)
         records: list[DiscoveredRecord] = []
         for index in reversed(range(total)):
             row = snapshot.rows[index]
+            external_id = f"{work.slug}:{row.episode_id}"
+            history_grant = (history_grants or {}).get(row.episode_id)
+            access_mode = (
+                "free"
+                if row.free_marker or row.first_free_marker
+                else "quota"
+                if row.wait_free_marker or history_grant is not None
+                else "unknown"
+            )
             records.append(
                 DiscoveredRecord(
                     item=DiscoveredItem(
@@ -1510,16 +1583,12 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                         order_label=row.title,
                     ),
                     source=DiscoveredSource(
-                        external_id=f"{work.slug}:{row.episode_id}",
+                        external_id=external_id,
                         url=row.url,
-                        access_mode=(
-                            "free"
-                            if row.free_marker or row.first_free_marker
-                            else "quota"
-                            if row.wait_free_marker
-                            else "unknown"
-                        ),
+                        access_mode=access_mode,
                         free_until=None,
+                        access_granted_until=history_grant,
+                        access_granted_until_observed=history_grant is not None,
                         available=True,
                         access_checked_at=observed_at,
                         last_seen_at=observed_at,

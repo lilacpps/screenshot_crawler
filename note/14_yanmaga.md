@@ -1,5 +1,27 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Existing-unknown Rental History recovery (2026-11-16)
+
+Authenticated full Discovery now joins raw-unknown listing rows and same-work
+trusted-grant targets to one bounded native Rental History observation. An
+exact active card with a fresh finite countdown promotes a raw-unknown row to
+`quota` and stores the conservative observed expiry; it does not infer
+`quota_started_at` or a cooldown. Active history without a finite bound,
+missing/duplicate evidence, and identity mismatches do not promote a row, and
+`owned` rows are excluded. A still-valid trusted grant preserves its existing
+mode and expiry when active; the new history bound never extends it. The join
+does not enter a Source or Viewer or consume a right.
+
+Root's normal-Catalog full Discovery repair changed only the three exact
+`work-dual` rows for chapters 26, 27, and 29 from `unknown`/no grant to
+`quota`/finite grant. The standard run preserved Source/Item identities,
+Completed state, Artifacts, acquisition flags, and work state; its direct plan
+did not consume a resource. Source, Viewer, and rental POST counts were zero.
+Evidence: `output/yanmaga_access_experiment/followup-active/normal-repair-v1/report.json`.
+The isolated validation run and normal-Catalog repair both used the updated
+full Discovery path. Focused tests passed 96 with 0 skipped and 126 deselected;
+the full suite was not rerun.
+
 ## Stage 02 current implementation (2026-11-16; capture and post-capture audit verified, PASS / BLOCKING 0)
 
 The C sort and canonical/og corrections and BODY pre-live review passed
@@ -147,7 +169,10 @@ two `work-dual` rows remain unknown. The visible exact
 Yanmaga Policy supports one work-scoped `work_ticket` pass, limit one,
 after-observed-consumption persistence, grant-only, and the existing 23-hour
 local cooldown. A trusted future Catalog grant plus fresh active same-target
-Rental History remains direct; history alone never imports a new trusted grant.
+Rental History remains direct without extending its stored expiry. Separately,
+Discovery may import a fresh finite grant for an exact active Rental History
+card when the current row is raw `unknown`; it does not infer a cooldown or
+import an `owned` row.
 The shared `entry_only` path writes no page Manifest or Progress state, image,
 ZIP, or completed Item; failure diagnostics are metadata-only. Normal capture
 output is unchanged. Yanmaga's `prepare_entry_only_page()` skips its
@@ -409,17 +434,21 @@ Yanmaga sends `free_until=None` on each refresh because no free-expiry value was
 observed; under the existing Catalog refresh contract this clears a stale
 free-expiry value. A public listing does not assert a new grant expiry, so
 `access_granted_until_observed=False` and Catalog preserves an existing grant.
-The adapter uses fresh exact-target Rental History evidence only to retain a
-previous access mode while its trusted stored expiry remains future; it does
-not extend or replace that expiry during Discovery. The general Catalog contract
-still treats an explicitly observed null as authoritative. Lead's isolated
-regression run confirmed preservation and clear behavior.
+Fresh exact-target Rental History evidence retains a previous mode only while
+its trusted stored expiry remains future; it does not extend that expiry. For
+raw-unknown rows, a fresh exact active card with a finite countdown imports a
+new `quota` classification and observed expiry. Missing, duplicate, mismatched,
+or active-without-finite-expiry evidence leaves the raw classification
+unchanged; `owned` is excluded. The general Catalog contract still treats an
+explicitly observed null as authoritative. Lead's isolated regression run
+confirmed preservation and clear behavior.
 
 The Stage 01 authenticated sample had no wait marker classification and kept
-those rows unknown at that checkpoint. Stage 03 has since added only the
-observed image marker and charged-state classification described above;
-Discovery still opens no episode or access CTA. Paid-only classification,
-daily-limit scope, and live ticket consumption remain unverified.
+those rows unknown at that checkpoint. Stage 03 added the observed image marker
+and charged-state requirement for ticket use; the later authenticated Rental
+History join above recovers exact active rentals with finite bounds. Discovery
+still opens no episode or access CTA. Paid-only classification and daily-limit
+scope remain unverified.
 
 Live evidence on 2026-11-15 JST: `work-dual` returned 57 rows after the
 Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated
