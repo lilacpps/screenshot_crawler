@@ -1,5 +1,14 @@
 # Design Decisions
 
+## BookWalkerの同一ページ再描画では旧artifactを破棄して一度だけnativeを取り直す（2026-11-17）
+
+retained final joinでraw current anchorが同一CID/counter/canvas/世代/安全flagを保ち、
+geometry/contentの両versionだけが進むsingle-partのraceに限り、新しいdraw/source/target
+snapshotを選び直せる。旧JPEG/PNGの承認条件は緩めない。fresh current ROIのpinとfinal atomic
+joinを全て通過したnative pixelsだけを返し、JPEG解析を繰り返さない。source/layout変更、
+証拠欠落、pixel-only mismatch、2回目のraceはUNKNOWN。quota/nav/既存exact-twoは変更しない。
+詳細authorityは`CAPTURE_STRATEGY.md`、実サイト確認範囲と未確認事項は`note/01_bookwalker.md`。
+
 ## 未操作のquota入口失敗では仮の再閲覧grantを取り消す（2026-11-17）
 
 Manga ONEでlogin切れのままquota入口探索に失敗しても、開始時に保存した24時間grantが

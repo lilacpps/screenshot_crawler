@@ -86,6 +86,25 @@ from screenshot_crawler.site_adapters.bookwalker.terminal_match import (
 
 
 @dataclass(frozen=True, slots=True)
+class _RetainedRedrawRetry:
+    """Raw same-frame redraw evidence, never reconstructed from diagnostics."""
+
+    renderer: Any
+    initial: dict[str, Any]
+    observed: dict[str, Any]
+    selected: list[dict[str, Any]]
+    boxes: list[dict[str, int]]
+    token: Any
+    diagnostic: dict[str, Any]
+
+
+class _RetainedRedrawError(UnknownPageStateError):
+    def __init__(self, retry: _RetainedRedrawRetry) -> None:
+        super().__init__("BookWalker retained capture final renderer join failed")
+        self.retry = retry
+
+
+@dataclass(frozen=True, slots=True)
 class _UniformMappingRefinement:
     """Codec-only uniform view of a proven direct tile mapping.
 
@@ -3535,8 +3554,27 @@ _BOOKWALKER_CAPTURE_WINDOW_ROI_SCRIPT = """
         || !present(mismatchAnchor[field])
         || !same(common[field], mismatchAnchor[field])
     )) || null;
+    // Only a complete same-page redraw may authorize a NEW capture attempt.
+    // This never makes the old ROI, native snapshot, or JPEG acceptable.
+    const fixed = commonFields.filter(field => ![
+      'geometryVersion', 'targetContentVersion',
+    ].includes(field));
+    const redraw = anchors.every((anchor, index) => anchor
+      && fixed.every(field => present(common[field]) && present(anchor[field])
+        && same(common[field], anchor[field]))
+      && anchor.connected === true && anchor.geometryHistoryIncomplete === false
+      && anchor.observerFlushed === true && anchor.observerAvailable === true
+      && anchor.observerTakeRecordsAvailable === true && anchor.unknownMutation === false
+      && ['geometryVersion', 'targetContentVersion'].every(field =>
+        Number.isInteger(common[field]) && Number.isInteger(anchor[field])
+        && anchor[field] > common[field]
+        && anchor[field] === anchors[0][field])
+      && selectedFields.every(field => present(anchor.selected?.[field])
+        && same(anchor.selected[field], parts[index][field])));
     return {available: false, exact: false, reason: 'capture window common anchor changed',
       mismatch: mismatchField,
+      redrawAnchor: redraw
+        ? Object.fromEntries(commonFields.map(field => [field, anchors[0][field]])) : null,
       diagnostic: diagnosticAnchor(mismatchAnchor)};
   }
   for (let index = 0; index < parts.length; index += 1) {
@@ -5987,6 +6025,9 @@ class BookWalkerAdapter(SiteAdapter):
                 ),
                 "capture_window_final_join": self._safe_diagnostic_value(
                     capture.get("capture_window_final_join")
+                ),
+                "retained_redraw_retry": self._safe_diagnostic_value(
+                    capture.get("retained_redraw_retry")
                 ),
             }
         )
@@ -10577,6 +10618,8 @@ class BookWalkerAdapter(SiteAdapter):
         initial_anchor: dict[str, Any] | None,
         renderer_handle: Any | None,
         roi_baseline: Any | None,
+        *,
+        required: bool = False,
     ) -> dict[str, Any]:
         """Join a retained-boundary capture to the final live renderer state."""
 
@@ -10589,8 +10632,8 @@ class BookWalkerAdapter(SiteAdapter):
             isinstance(call, dict) and call.get("captureWindowRetained") is True
             for call in selected_draw_calls
         )
-        result: dict[str, Any] = {"required": retained, "exact": False}
-        if not retained:
+        result: dict[str, Any] = {"required": retained or required, "exact": False}
+        if not retained and not required:
             result.update({"exact": True, "reason": "retained boundary not used"})
             return result
         if len(tokens) != 1 or None in tokens:
@@ -10621,6 +10664,9 @@ class BookWalkerAdapter(SiteAdapter):
             renderer = {"available": False, "exact": False,
                         "reason": "current renderer join failed"}
         result["renderer"] = self._safe_diagnostic_value(renderer)
+        # Keep raw production authority separate from sanitized diagnostics.
+        if isinstance(renderer, dict) and isinstance(renderer.get("redrawAnchor"), dict):
+            result["redraw_anchor"] = renderer["redrawAnchor"]
         result["exact"] = bool(
             isinstance(renderer, dict)
             and renderer.get("available") is True
@@ -10635,6 +10681,28 @@ class BookWalkerAdapter(SiteAdapter):
         return result
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        """Discard a proven same-page redraw once; never reuse its old bytes."""
+
+        try:
+            return await self._capture_page_attempt(page)
+        except _RetainedRedrawError as exc:
+            try:
+                await page.wait_for_timeout(100)
+                return await self._capture_page_attempt(page, retained_retry=exc.retry)
+            finally:
+                # Also covers cancellation during the bounded inter-attempt settle.
+                try:
+                    await self._clear_native_capture(page)
+                    await self._dispose_capture_snapshot_handles()
+                finally:
+                    try:
+                        await exc.retry.renderer.dispose()
+                    except PlaywrightError:
+                        pass
+
+    async def _capture_page_attempt(
+        self, page: Page, *, retained_retry: _RetainedRedrawRetry | None = None,
+    ) -> tuple[CaptureResult, ...] | None:
         """Prefer native source crops and return None for the legacy fallback."""
 
         if self.capture_mode == "canvas":
@@ -10653,10 +10721,16 @@ class BookWalkerAdapter(SiteAdapter):
         retry_roi_baseline: Any | None = None
         trace_id: str | None = None
         diagnostic_draw_calls: list[dict[str, Any]] = []
-        selected_capture_window_retained = False
+        current_renderer_join_required = False
         p4b_initial_anchor: dict[str, Any] | None = None
         p4b_renderer_handle: Any | None = None
         capture_window_roi_baseline: Any | None = None
+        defer_native_cleanup = False
+        if retained_retry is not None:
+            self._capture_debug["bookwalker_capture"]["retained_redraw_retry"] = {
+                "attempted": True, "attempt_count": 1, "output_verified": False,
+                "first_failure": retained_retry.diagnostic,
+            }
 
         async def finish(
             captures: tuple[CaptureResult, ...],
@@ -10664,7 +10738,7 @@ class BookWalkerAdapter(SiteAdapter):
             native_png_fallback: bool = False,
         ) -> tuple[CaptureResult, ...]:
             final_join: dict[str, Any] | None = None
-            if selected_capture_window_retained:
+            if current_renderer_join_required:
                 try:
                     final_join = await self._capture_window_final_join(
                         page,
@@ -10672,6 +10746,7 @@ class BookWalkerAdapter(SiteAdapter):
                         p4b_initial_anchor,
                         p4b_renderer_handle,
                         capture_window_roi_baseline,
+                        required=retained_retry is not None,
                     )
                 except Exception as exc:  # noqa: BLE001 - diagnose, then fail closed
                     final_join = {
@@ -10695,20 +10770,41 @@ class BookWalkerAdapter(SiteAdapter):
                 self._capture_debug["bookwalker_capture"][
                     "diagnostic_history"
                 ] = {"available": False, "reason": "diagnostic history read failed"}
-            if selected_capture_window_retained and final_join is None:
+            if current_renderer_join_required and final_join is None:
                 final_join = {
                     "required": True,
                     "exact": False,
                     "reason": "capture window final renderer join unavailable",
                 }
-            if selected_capture_window_retained and final_join is not None:
+            if current_renderer_join_required and final_join is not None:
                 self._capture_debug["bookwalker_capture"][
                     "capture_window_final_join"
                 ] = self._safe_diagnostic_value(final_join)
                 if final_join.get("exact") is not True:
+                    observed = final_join.get("redraw_anchor")
+                    if (
+                        retained_retry is None
+                        and not self._p4b_redraw_attempted
+                        and len(selected_draw_calls) == 1
+                        and isinstance(observed, dict)
+                        and isinstance(p4b_initial_anchor, dict)
+                    ):
+                        raise _RetainedRedrawError(_RetainedRedrawRetry(
+                            renderer=p4b_renderer_handle,
+                            initial=p4b_initial_anchor.get("common", p4b_initial_anchor),
+                            observed=observed,
+                            selected=selected_draw_calls,
+                            boxes=boxes,
+                            token=selected_draw_calls[0].get("captureWindowToken"),
+                            diagnostic=self._safe_diagnostic_value(final_join),
+                        ))
                     raise UnknownPageStateError(
                         "BookWalker retained capture final renderer join failed"
                     )
+                if retained_retry is not None:
+                    self._capture_debug["bookwalker_capture"]["retained_redraw_retry"][
+                        "output_verified"
+                    ] = True
             if initial_anchor_retried:
                 if retry_roi_baseline is None:
                     raise UnknownPageStateError("BookWalker initial batch retry settled ROI baseline missing")
@@ -10771,7 +10867,35 @@ class BookWalkerAdapter(SiteAdapter):
                     )
                 except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
                     selection_anchor = None
+            if retained_retry is not None:
+                fixed = (
+                    "traceId", "actualCanvasId", "bookIdentity", "counter", "geometryToken",
+                    "traceEpoch", "resetEpoch", "canvasWidth", "canvasHeight", "connected",
+                    "geometryHistoryIncomplete", "observerFlushed", "observerAvailable",
+                    "observerTakeRecordsAvailable", "unknownMutation",
+                )
+                same_renderer = p4b_renderer_handle is not None and await capture_canvas.evaluate(
+                    "(element, original) => element === original", retained_retry.renderer,
+                )
+                current_token = await page.evaluate(
+                    "() => window.__bookwalkerCaptureWindowToken ?? null"
+                )
+                if (
+                    not same_renderer or current_token != retained_retry.token
+                    or not isinstance(selection_anchor, dict)
+                    or any(selection_anchor.get(key) != retained_retry.initial.get(key) for key in fixed)
+                ):
+                    raise UnknownPageStateError("BookWalker retained redraw retry identity changed")
+                for key in ("geometryVersion", "targetContentVersion"):
+                    current_version = selection_anchor.get(key)
+                    if (
+                        not isinstance(current_version, int) or isinstance(current_version, bool)
+                        or current_version < retained_retry.observed[key]
+                    ):
+                        raise UnknownPageStateError("BookWalker retained redraw retry version regressed")
             boxes = await self._page_draw_rectangles(page, capture_canvas)
+            if retained_retry is not None and boxes != retained_retry.boxes:
+                raise UnknownPageStateError("BookWalker retained redraw retry geometry changed")
             selection_debug: dict[str, Any] = {
                 "outcome": "rejected",
                 "rejection_branch": None,
@@ -10831,6 +10955,28 @@ class BookWalkerAdapter(SiteAdapter):
             selection_debug["outcome"] = "selected"
             selection_debug["selected_count"] = len(selected)
             selected_draw_calls = selected
+            if retained_retry is not None:
+                if len(selected) != len(retained_retry.selected):
+                    raise UnknownPageStateError("BookWalker retained redraw retry part count changed")
+                for old, new in zip(retained_retry.selected, selected, strict=True):
+                    if any(old.get(key) != new.get(key) for key in (
+                        "canvasId", "sourceId", "sourceCanvasId", "sourceRect", "destination", "traceEpoch",
+                    )):
+                        raise UnknownPageStateError("BookWalker retained redraw retry source changed")
+                    for key in (
+                        "traceOperationIndex", "sourceContentVersion", "targetContentVersionAfter",
+                    ):
+                        value, previous = new.get(key), old.get(key)
+                        if (
+                            not isinstance(value, int) or isinstance(value, bool)
+                            or not isinstance(previous, int) or isinstance(previous, bool)
+                            or value <= previous
+                        ):
+                            raise UnknownPageStateError("BookWalker retained redraw retry draw is not fresh")
+                    if any(new.get(key) in (None, old.get(key)) for key in (
+                        "fullSourceSnapshotId", "targetSnapshotId",
+                    )):
+                        raise UnknownPageStateError("BookWalker retained redraw retry snapshot is not fresh")
             p4b_initial_anchor_failure: str | None = None
             if (
                 p4b_renderer_handle is not None
@@ -10919,6 +11065,7 @@ class BookWalkerAdapter(SiteAdapter):
                         )
                         if (
                             not self._p4b_redraw_attempted
+                            and retained_retry is None
                             and self._initial_batch_redraw_retry_allowed(selection_anchor, selected, probe)
                         ):
                             initial_anchor_retried = True
@@ -10948,12 +11095,12 @@ class BookWalkerAdapter(SiteAdapter):
                         )
                     except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
                         p4b_initial_anchor = None
-            selected_capture_window_retained = any(
+            current_renderer_join_required = any(
                 isinstance(call, dict)
                 and call.get("captureWindowRetained") is True
                 for call in selected
-            )
-            if selected_capture_window_retained:
+            ) or retained_retry is not None
+            if current_renderer_join_required:
                 anchor_common = (
                     p4b_initial_anchor.get("common", p4b_initial_anchor)
                     if isinstance(p4b_initial_anchor, dict)
@@ -11081,7 +11228,12 @@ class BookWalkerAdapter(SiteAdapter):
                         "BookWalker native PNG dimensions do not match source rectangle"
                     )
                 captures.append(capture)
-            if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
+            if (
+                self.capture_mode != "native" or not self.enable_original_jpeg_capture
+                or retained_retry is not None
+            ):
+                # The old JPEG work already raced a redraw. Prefer newly proven
+                # native pixels on the single retry instead of repeating it.
                 self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
                 return await finish(tuple(captures), native_png_fallback=True)
             native_captures = tuple(captures)
@@ -11327,7 +11479,7 @@ class BookWalkerAdapter(SiteAdapter):
             )
         except CaptureUnavailableError as exc:
             self._capture_debug["bookwalker_capture"]["failure_reason"] = str(exc)
-            if selected_capture_window_retained:
+            if current_renderer_join_required or retained_retry is not None:
                 raise UnknownPageStateError(
                     "BookWalker retained capture became unavailable"
                 ) from exc
@@ -11335,6 +11487,7 @@ class BookWalkerAdapter(SiteAdapter):
                 raise UnknownPageStateError("BookWalker initial batch retry capture unavailable") from exc
             return None
         except UnknownPageStateError as exc:
+            defer_native_cleanup = isinstance(exc, _RetainedRedrawError)
             self._capture_debug["bookwalker_capture"]["failure_reason"] = str(exc)
             raise
         except (
@@ -11350,7 +11503,7 @@ class BookWalkerAdapter(SiteAdapter):
             self._capture_debug["bookwalker_capture"]["failure_reason"] = (
                 f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
             )
-            if selected_capture_window_retained:
+            if current_renderer_join_required or retained_retry is not None:
                 raise UnknownPageStateError(
                     "BookWalker retained capture failed closed"
                 ) from exc
@@ -11365,7 +11518,10 @@ class BookWalkerAdapter(SiteAdapter):
                     except PlaywrightError:
                         pass
                 await self._refresh_cover_renderer_diagnostics(page)
-                await self._clear_native_capture(page)
+                # Preserve the bounded native ledger only for fresh reselection;
+                # the failed attempt's ROI handles are still disposed below.
+                if not defer_native_cleanup:
+                    await self._clear_native_capture(page)
             finally:
                 await self._dispose_capture_snapshot_handles()
             capture_timing = self._capture_debug["bookwalker_capture"]["timing_ms"]

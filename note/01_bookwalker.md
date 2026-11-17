@@ -74,7 +74,48 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-11-02
+最終同期: 2026-11-17
+
+## Single-part retained final-join redraw recovery (2026-11-17)
+
+Source1927の18:09 Batchは2画像保存後、counter `3/374` のcaptureで停止した。
+保存diagnosticsはCID、counter、renderer canvas、trace/reset epoch、寸法が同じで、
+`geometryVersion`が3→4、`targetContentVersion`が34→41、同一配置のrenderer drawが
+operation4917→8576、source canvas4のcontent versionが4805→8408へ変化していた。
+古いreconstructed JPEGの最終照合を拒否した停止であり、チケット入口・403・429の問題ではない。
+別Workのarchive maintenance warningはこの停止原因ではなく、過去ZIP/statusを変更していない。
+
+現在はsingle-partのretained final joinに限り、完全なraw atomic anchorで両versionの増加と
+全fixed field/安全flag/旧selected tupleの一致が確認できれば、失敗した画像を全て破棄して
+100ms後に1回だけfresh native captureを試す。sanitized diagnostic JSONはretry authorityにしない。
+新しい選択でも同一CID/counter/canvas object/window token/geometry generation/trace/reset epoch/
+寸法/安全flagを維持し、source objectとsource/destination矩形が一致することが必須。
+draw・source content・target content versionが進み、source/target snapshot IDも新しくなければ停止する。
+retryは新しいROI baselineをpinし、fresh drawのretained flagがfalseでも完全なfinal atomic ROI joinを
+必須にする。JPEG解析は繰り返さず新しいnative PNGを既存のlossless WebPへencodeして返す。
+古いJPEG/PNGを再利用しない。pixel-only mismatch、source/layout/identity変更、証拠欠落、
+2回目のrace、既存redraw retry使用済みはUNKNOWN。exact-twoの挙動は変更しない。
+cancelを含めnative ledger/snapshots/ROI handlesとretry用pinned renderer handleは終了時に解放する。
+CLI/config/output naming、navigation、max_pages、same-content guard、quota ruleは変更しない。
+diagnosticsの`retained_redraw_retry`にattempt数・first failure・output_verifiedを保存する。
+
+live確認は18:09に開始済みの同一viewer URLだけをshared Chrome/CDPの専用Pageで開き、
+新しいまる読み入口をclickせず、Catalog/ZIPへのwriteなしで最大6画像に限定した。
+元のactual位置3/374を記録し、通常RunnerのHome rewind後に1/374、2/374、3/374、
+見開き5/374、6/374で合計6画像を保存し、max_pages=6の通常guardで停止した。
+3/374と6/374のretained final joinはexact。実サイトでは新retryは発生していないため、
+live retry成功や全374ページ/ZIP完成とは扱わない。finallyで3/374へ戻して作成Pageだけをcloseした。
+証拠は`output/diagnostics/bw1927-retained-redraw-20261117-live1/summary.json`。
+実account残時間の増減は独立計測しておらず、quota予約は解除/復元していない。
+実サイト本文をfixtureへ転用していない。合成browser testでは旧JPEGを捨てて新色のnative pixelsを返すこと、
+fresh non-retained drawでも最終join必須、再race、source/layout/counter/window/reset変更、
+settle中のidentity変更、cancel時のcleanupを確認する。
+
+関連Unit/browser Integrationは545 passed、最終cleanupを含むtargeted確認は20 passed、ともに0 skipped。
+ruff/diff checkも成功。
+共通Core/Batch/Browserの変更はないため`note/00_core.md`更新とfull pytestは不要と判断した。
+Research/Probe helperは変更しておらず個別Research suiteは未実行。
+全巻の再取得・quota Batch再実行と、実サイトで新retryを発生させた検証は未実施。
 
 ## Current normal-crawl initial position guard (2026-10-31)
 
@@ -4276,8 +4317,10 @@ output route, including an exact original JPEG, reconstructed JPEG, and native
 PNG. It rechecks the unique current capture-window token, current page/CID and
 counter against the selected native calls, the same connected renderer canvas,
 the selected source tuple, and an exact current-ROI atomic proof. A stale,
-missing, one-pixel-different, or otherwise unavailable final join raises
-UNKNOWN rather than returning an older native PNG. This final renderer proof is
+missing, one-pixel-different, or otherwise unavailable final join rejects the
+old result. The single-part same-page redraw exception above permits only one
+fresh native attempt with new snapshots and complete final proof; other cases
+raise UNKNOWN rather than returning an older native PNG. This final renderer proof is
 separate from the JPEG-vs-native-PNG RGBA comparison; the latter remains a
 codec/output gate and is not renderer identity evidence.
 
