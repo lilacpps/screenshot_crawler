@@ -514,6 +514,7 @@ def _parser() -> argparse.ArgumentParser:
     work_delete.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
     work_delete.add_argument("--watchlist", type=Path, default=Path("watchlist.yaml"))
     work_delete.add_argument("--library-root", type=Path, default=Path("output/Books"))
+    work_delete.add_argument("--history-root", type=Path, help="History ZIP root (default: <library-root>-history)")
     work_delete.add_argument("--status-root", type=Path, default=Path("output/crawl-status"))
     work_delete.add_argument("--trash-root", type=Path, default=Path("output/trash/work-deletion"))
     work_delete.add_argument("--management", dest="management_paths", action="append", type=Path, default=[])
@@ -1395,6 +1396,7 @@ def _run_work(args: argparse.Namespace) -> None:
             watchlist_path=watchlist,
             management_paths=management,
             library_root=library_root,
+            history_root=Path(args.history_root).resolve(strict=False) if args.history_root is not None else None,
             status_root=status_root,
             trash_root=trash_root,
         )

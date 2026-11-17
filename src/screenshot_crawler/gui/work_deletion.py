@@ -90,6 +90,7 @@ class WorkDeletionWorker(QRunnable):
         plan: WorkDeletionPlan | None = None,
         apply: bool = False,
         cancel_token: WorkDeletionCancelToken | None = None,
+        history_root: Path | None = None,
     ) -> None:
         super().__init__()
         self.service = service
@@ -97,6 +98,7 @@ class WorkDeletionWorker(QRunnable):
         self.catalog_path = catalog_path.resolve(strict=False)
         self.watchlist_path = watchlist_path.resolve(strict=False)
         self.library_root = library_root.resolve(strict=False)
+        self.history_root = (history_root if history_root is not None else library_root.with_name(library_root.name + "-history")).resolve(strict=False)
         self.status_root = status_root.resolve(strict=False)
         self.trash_root = trash_root.resolve(strict=False)
         self.management_paths = tuple(path.resolve(strict=False) for path in management_paths)
@@ -137,6 +139,7 @@ class WorkDeletionWorker(QRunnable):
                     watchlist_path=self.watchlist_path,
                     management_paths=self.management_paths,
                     library_root=self.library_root,
+                    history_root=self.history_root,
                     status_root=self.status_root,
                     trash_root=self.trash_root,
                     progress=self._progress,
@@ -168,6 +171,7 @@ class WorkDeletionDialog(QDialog):
         library_root: str | Path = "output/Books",
         status_root: str | Path = "output/crawl-status",
         trash_root: str | Path = "output/trash/work-deletion",
+        history_root: str | Path | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -175,6 +179,7 @@ class WorkDeletionDialog(QDialog):
         self.catalog_path = Path(catalog_path).resolve(strict=False)
         self.watchlist_path = Path(watchlist_path).resolve(strict=False)
         self.library_root = Path(library_root).resolve(strict=False)
+        self.history_root = (Path(history_root) if history_root is not None else Path(library_root).with_name(Path(library_root).name + "-history")).resolve(strict=False)
         self.status_root = Path(status_root).resolve(strict=False)
         self.trash_root = Path(trash_root).resolve(strict=False)
         self.management_paths = tuple(Path(path).resolve(strict=False) for path in management_paths)
@@ -230,6 +235,7 @@ class WorkDeletionDialog(QDialog):
             catalog_path=self.catalog_path,
             watchlist_path=self.watchlist_path,
             library_root=self.library_root,
+            history_root=self.history_root,
             status_root=self.status_root,
             trash_root=self.trash_root,
             management_paths=self.management_paths,

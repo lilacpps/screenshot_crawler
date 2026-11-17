@@ -350,6 +350,10 @@ def test_controller_runs_real_worker_subprocess_and_imports_failure_events(tmp_p
     identity = json.loads((store.job_dir(job_id) / "worker.identity").read_text(encoding="utf-8"))
     assert identity["token"].startswith("worker-")
     assert identity["start_identity"]
+    launcher = json.loads((store.job_dir(job_id) / "launcher.identity").read_text(encoding="utf-8"))
+    assert launcher["token"] == identity["token"]
+    assert isinstance(launcher["pid"], int)
+    assert launcher["start_identity"]
     heartbeat = json.loads(
         (store.job_dir(job_id) / "worker.heartbeat.json").read_text(encoding="utf-8")
     )
@@ -463,8 +467,9 @@ def test_finished_worker_with_undrained_log_reader_is_unverified(tmp_path: Path)
     controller.close()
 
 
+@pytest.mark.parametrize("failure", ["gate", "launcher_identity"])
 def test_start_gate_failure_kills_child_and_marks_interrupted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     store = JobStore(tmp_path / "management.sqlite")
     controller = JobController(store, python_executable=sys.executable)
@@ -504,8 +509,18 @@ def test_start_gate_failure_kills_child_and_marks_interrupted(
         "screenshot_crawler.management.job_controller.subprocess.Popen",
         fake_popen,
     )
-    monkeypatch.setattr(controller, "_write_gate", fail_go)
-    with pytest.raises(OSError, match="gate failure"):
+    if failure == "gate":
+        monkeypatch.setattr(controller, "_write_gate", fail_go)
+    else:
+        original_replace = os.replace
+
+        def fail_identity(source, destination):
+            if Path(destination).name == "launcher.identity":
+                raise OSError("synthetic launcher identity failure")
+            return original_replace(source, destination)
+
+        monkeypatch.setattr(os, "replace", fail_identity)
+    with pytest.raises(OSError, match="gate failure|launcher identity failure"):
         controller.start_job(job_id)
     assert fake.returncode == -9
     command = popen_args[0]

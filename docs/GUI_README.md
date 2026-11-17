@@ -29,6 +29,13 @@ worker PID・識別token・開始日時が全て未登録のqueued予約は、�
 実workerの終了を確認できれば履歴として扱い、動作中または終了確認不能なら停止します。
 管理DBや過去ログを削除して回避する必要はありません。
 
+履歴ZIP（既定`output/Books-history`）も検証して退避します。退避先の操作ID配下では
+`Books/…`と`Books-history/…`に分け、履歴ZIPの元の相対配置を維持します。
+履歴分離時に残された古いstatus JSONは推測して移動しません。
+中断jobの起動側PIDは作成識別情報も照合し、別processに再利用された番号だけで停止しません。
+同じCatalogの実行中job、実workerの生存、識別情報が確認不能な場合は引き続き停止します。
+コード更新を反映するには、実行中jobの終了後にGUIを起動し直してください。
+
 status JSONは全件を読みません。`Books/<相対path>.zip`に対する
 `crawl-status/<同じ相対path>.json`だけを直接確認します。候補がなければ従来どおりZIPのみを
 退避でき、候補があれば本文のarchive_path・hash・所有とfile identityを検証して一緒に退避します。

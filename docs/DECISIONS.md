@@ -876,8 +876,13 @@ Work行のコンテキストメニューから隔離QRunnableダイアログを�
 Batch・Captureの意味は変更せず、preview/applyはCatalog identity、Watchlist revision、
 管理DB binding、全依存ID、Artifactの強いfile identity、manifestを再検証する。
 
-既定の削除rootは既存packagingと同じ `output/Books` / `output/crawl-status` と、両者の
-外側の `output/trash/work-deletion`。実データへのfallbackは禁止し、テストでは全pathを
+既定の削除rootは `output/Books` / `output/Books-history` / `output/crawl-status` と、これらの
+外側の `output/trash/work-deletion`。履歴ZIPは同じ所有・file検証を通し、退避先でも
+`Books-history`を維持する（2026-11-18ユーザー承認）。履歴rootはLibrary名に`-history`を
+付けた兄弟が既定で、明示override可能。履歴分離で残した旧statusを推測移動しない。
+interruptedの起動側PIDもcreation identityで照合し、旧jobはchildより後に作られた
+起動側PIDの再利用を証明できる場合だけ除外する。UNKNOWNは引き続き停止する。
+実データへのfallbackは禁止し、テストでは全pathを
 tmpへ固定する。previewは無書込、confirmationなしのApplyは禁止、未知状態や途中失敗は
 BLOCKED/RECOVERY_REQUIREDとして非成功終了にする。実サイト・実Catalog・実Watchlist・
 実ZIPの検証はこのStageの受入条件に含めない。

@@ -106,12 +106,14 @@ def test_work_delete_cli_json_dry_run_isolated(tmp_path: Path, monkeypatch, caps
         "screenshot-crawler", "work", "delete", "--work-key", "cli-work",
         "--catalog", str(catalog_path), "--watchlist", str(watchlist_path),
         "--management", str(management_path), "--dry-run", "--json",
+        "--history-root", str(tmp_path / "historical-zips"),
     ])
     cli.main()
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "DRY_RUN"
     assert payload["work_key"] == "cli-work"
     assert payload["counts"]["items"] == 0
+    assert next(row[1] for row in payload["root_identities"] if row[0] == "history") == str(tmp_path / "historical-zips")
     assert not (tmp_path / "output" / "trash").exists()
 
 

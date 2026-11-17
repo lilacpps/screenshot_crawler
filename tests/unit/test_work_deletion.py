@@ -112,8 +112,121 @@ def _preview(paths, key="work-a", service=None):
     return service.preview(
         key, catalog_path=paths["catalog_path"], watchlist_path=paths["watchlist"],
         management_paths=[paths["management"]], library_root=paths["library"],
+        history_root=paths.get("history"),
         status_root=paths["status"], trash_root=paths["trash"],
     )
+
+
+def _move_fixture_to_history(paths):
+    artifact, archive = paths["target_a"][4:6]
+    history = paths.get("history") or paths["library"].with_name(paths["library"].name + "-history")
+    relocated = history / "site-a" / "work-a" / f"artifact-{artifact.id}" / archive.name
+    relocated.parent.mkdir(parents=True)
+    archive.rename(relocated)
+    paths["catalog"].update_artifact_storage(artifact.id, state="present", locator=str(relocated))
+    return relocated
+
+
+def test_history_root_override_is_bound_into_apply(tmp_path: Path) -> None:
+    paths = _setup(tmp_path)
+    paths["history"] = tmp_path / "archives" / "old-zips"
+    archive = _move_fixture_to_history(paths)
+    service = WorkDeletionPreviewService()
+    plan = _preview(paths, service=service)
+    assert plan.ready
+    assert next(value for label, value, _device in plan.root_identities if label == "history") == str(paths["history"])
+    paths.pop("history")
+    assert not _preview(paths).ready  # No fallback to unrelated roots.
+    assert service.apply(plan).status == "DONE"
+    assert not archive.exists()
+    assert (paths["trash"] / plan.plan_token / "old-zips" / "site-a" / "work-a" / f"artifact-{paths['target_a'][4].id}" / archive.name).exists()
+
+
+@pytest.mark.parametrize("problem", ["overlap", "name_collision"])
+def test_history_roots_cannot_alias_destinations(tmp_path: Path, problem: str) -> None:
+    paths = _setup(tmp_path)
+    paths["history"] = paths["library"] / "old" if problem == "overlap" else tmp_path / "elsewhere" / "Books"
+    plan = _preview(paths)
+    assert ("overlapping_source_roots" if problem == "overlap" else "duplicate_root_name") in plan.blockers
+    assert not plan.ready
+
+
+@pytest.mark.parametrize("outcome", ["done", "rollback", "recover"])
+def test_history_zip_move_and_recovery(tmp_path: Path, outcome: str) -> None:
+    paths = _setup(tmp_path)
+    archive = _move_fixture_to_history(paths)
+    before = archive.read_bytes()
+    old_status = paths["target_a"][6]
+    old_status_bytes = old_status.read_bytes()
+    service = WorkDeletionPreviewService()
+    plan = _preview(paths, service=service)
+    assert plan.ready, plan.blockers
+    assert plan.zip_count == 2
+    artifact = next(row for row in plan.artifacts if row.artifact_id == paths["target_a"][4].id)
+    destination = paths["trash"] / plan.plan_token / "Books-history" / archive.relative_to(paths["library"].with_name("Books-history"))
+    assert artifact.destination_path == str(destination)
+    assert artifact.status_paths == ()  # Historical snapshots have no derived status location.
+    assert not paths["trash"].exists() and archive.read_bytes() == before
+
+    def fail(checkpoint):
+        if checkpoint == ("after_catalog_commit" if outcome == "recover" else "after_files_moved"):
+            raise RuntimeError("isolated history failure")
+
+    if outcome == "done":
+        assert service.apply(plan).status == "DONE"
+    else:
+        with pytest.raises(WorkDeletionApplyError):
+            service.apply(plan, failure_hook=fail)
+        if outcome == "recover":
+            assert service.recover(paths["catalog_path"], paths["watchlist"], paths["trash"]).status == "DONE"
+    if outcome == "rollback":
+        assert archive.read_bytes() == before
+        assert not destination.exists()
+        assert paths["catalog"].find_work("work-a") is not None
+    else:
+        assert not archive.exists() and destination.read_bytes() == before
+        manifest = json.loads((destination.parents[4] / "manifest.json").read_text(encoding="utf-8"))
+        assert any(intent["destination"] == str(destination) for intent in manifest["intents"])
+        assert paths["catalog"].find_work("work-a") is None
+    assert old_status.read_bytes() == old_status_bytes
+    assert paths["target_b"][5].exists()
+
+
+@pytest.mark.parametrize("problem", ["hash", "shared", "traversal", "hardlink", "present_missing", "missing_present", "outside", "trash_overlap"])
+def test_history_zip_safety(tmp_path: Path, problem: str) -> None:
+    paths = _setup(tmp_path)
+    archive = _move_fixture_to_history(paths)
+    artifact = paths["target_a"][4]
+    if problem == "hash":
+        archive.write_bytes(b"corrupt history")
+    elif problem == "shared":
+        other = paths["target_b"]
+        paths["catalog"].create_artifact(ArtifactInput(
+            kind="archive", format="zip", sha256=artifact.sha256, byte_size=artifact.byte_size,
+            storage_backend="filesystem", locator=str(archive), state="present",
+        ), item_id=other[0].id, crawl_run_id=other[3].id)
+    elif problem == "traversal":
+        paths["catalog"].update_artifact_storage(artifact.id, state="present", locator=str(archive.parent / ".." / archive.parent.name / archive.name))
+    elif problem == "hardlink":
+        os.link(archive, archive.with_suffix(".alias"))
+    elif problem == "present_missing":
+        archive.unlink()
+    elif problem == "missing_present":
+        paths["catalog"].update_artifact_storage(artifact.id, state="missing", locator=str(archive))
+    elif problem == "outside":
+        outside = paths["library"].parent / "Books-history-other" / archive.name
+        outside.parent.mkdir()
+        archive.rename(outside)
+        paths["catalog"].update_artifact_storage(artifact.id, state="present", locator=str(outside))
+    elif problem == "trash_overlap":
+        paths["trash"] = archive.parent / "trash"
+    plan = _preview(paths)
+    assert not plan.ready
+    expected = {"hash": "artifact_hash_mismatch", "shared": "artifact_shared_path", "traversal": "unsafe_artifact_path",
+                "present_missing": "artifact_present_missing", "missing_present": "artifact_missing_but_present",
+                "outside": "unsafe_artifact_path", "trash_overlap": "unsafe_trash_root", "hardlink": "artifact_alias"}[problem]
+    assert any(reason.startswith(expected) for reason in plan.blockers), plan.blockers
+    assert paths["catalog"].find_work("work-a") is not None
 
 
 def test_preview_is_immutable_and_lists_full_work_graph(tmp_path: Path) -> None:
@@ -233,7 +346,7 @@ def test_preview_reuses_one_library_status_index_and_per_file_hash(tmp_path: Pat
     monkeypatch.setattr(work_deletion_module, "_sha256_file", file_hash)
     plan = _preview(paths)
     assert plan.ready
-    assert counts["library"] == 1
+    assert counts["library"] == 2  # Once each for the library and history root.
     assert counts["status"] == 1
     # One stable read per ZIP and matching status, independent of the number
     # of Artifact/Run joins that refer to those files.
@@ -241,7 +354,7 @@ def test_preview_reuses_one_library_status_index_and_per_file_hash(tmp_path: Pat
     assert counts["hash"] == 4
     again = _preview(paths)
     assert again.plan_token == plan.plan_token
-    assert counts == {"library": 2, "status": 2, "hash": 8}
+    assert counts == {"library": 4, "status": 2, "hash": 8}
 
 
 def test_large_synthetic_preview_has_bounded_index_and_hash_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -925,12 +1038,16 @@ else:
     ("live", "live"), ("unknown_start", "unverified"),
     ("missing_identity", "unverified"), ("wrong_token", "unverified"),
     ("launcher_alive", "unverified"),
+    ("launcher_reused", None), ("launcher_unknown", "unverified"),
+    ("launcher_same", "unverified"), ("launcher_wrong_pid", "unverified"),
+    ("launcher_legacy_reused", None), ("launcher_legacy_older", "unverified"),
+    ("launcher_malformed", "unverified"), ("launcher_wrong_token", "unverified"),
 ])
 def test_interrupted_job_requires_worker_exit_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str, expected: str | None
 ) -> None:
     paths = _setup(tmp_path)
-    launcher = 4321 if scenario in {"split_dead", "launcher_alive"} else 4242
+    launcher = 4321 if scenario.startswith("launcher_") or scenario == "split_dead" else 4242
     with sqlite3.connect(paths["management"]) as connection:
         for name, kind in (("request_json", "TEXT"), ("worker_pid", "INTEGER"), ("worker_start_token", "TEXT")):
             connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
@@ -944,13 +1061,24 @@ def test_interrupted_job_requires_worker_exit_proof(
     if scenario != "missing_identity":
         (job_dir / "worker.identity").write_text(json.dumps({
             "pid": 4242, "token": "wrong" if scenario == "wrong_token" else "test-token",
-            "start_identity": "original-start",
+            "start_identity": "200",
         }), encoding="utf-8")
+    if scenario in {"launcher_reused", "launcher_unknown", "launcher_same", "launcher_wrong_pid", "launcher_wrong_token", "launcher_malformed"}:
+        (job_dir / "launcher.identity").write_text(
+            "{bad" if scenario == "launcher_malformed" else json.dumps({
+                "pid": launcher + 1 if scenario == "launcher_wrong_pid" else launcher,
+                "token": "wrong" if scenario == "launcher_wrong_token" else "test-token",
+                "start_identity": "100",
+            }), encoding="utf-8",
+        )
     current = {"alive": scenario in {"live", "reused", "unknown_start"}}
     monkeypatch.setattr(work_deletion_module, "process_is_alive",
-                        lambda pid: current["alive"] if pid == 4242 else scenario == "launcher_alive")
-    monkeypatch.setattr(work_deletion_module, "process_start_identity", lambda _pid:
-                        None if scenario == "unknown_start" else "new-start" if scenario == "reused" else "original-start")
+                        lambda pid: current["alive"] if pid == 4242 else scenario.startswith("launcher_"))
+    monkeypatch.setattr(work_deletion_module, "process_start_identity", lambda pid:
+                        None if scenario in {"unknown_start", "launcher_unknown"}
+                        else "300" if scenario == "reused" or pid == 4321 and scenario in {
+                            "launcher_reused", "launcher_legacy_reused", "launcher_wrong_token", "launcher_wrong_pid", "launcher_malformed"}
+                        else "100" if pid == 4321 else "200")
     service = WorkDeletionPreviewService()
     plan = _preview(paths, service=service)
     if expected is None:

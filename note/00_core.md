@@ -141,7 +141,7 @@ absolute values when the owner/worker is constructed, so a later CWD change
 cannot redirect the operation. GUI reload/close/edit/job actions remain busy-
 guarded, and a successful DONE result reloads Inventory so the Work row
 disappears. Defaults match the existing isolated packaging roots
-(`output/Books`, `output/crawl-status`, `output/trash/work-deletion`); custom
+(`output/Books`, `output/Books-history`, `output/crawl-status`, `output/trash/work-deletion`); custom
  roots are explicit. Stage04 verification uses only temporary Catalog,
  Watchlist, management DB, ZIP/status and Qt fixtures; independent Stage04
  review is BLOCKING-0 approved. No real deletion was performed.
@@ -3691,7 +3691,7 @@ Artifact locatorの履歴先登録は15 ZIP。今回の表示修正ではCatalog
 
 Previewの性能改善: 全Catalog fingerprintと全Artifact/他Work参照の検査を維持し、
 Work/Item/Source/Target/RunのID辞書を一回構築して所属と冗長FKを照合する。
-重複ID/work_keyはfail-closed。library列挙は各previewで一回、status JSONはLibrary相対pathに
+重複ID/work_keyはfail-closed。Library/履歴rootの列挙は各previewで各一回、status JSONは通常Library相対pathに
 対応する候補だけを一回読む。全JSON走査・規定外の歴史alias探索は廃止し、別配置JSONは残す。
 ZIP/statusのhashは安定した同一pathごとに共有する。cacheは呼出内限定で、各Artifactの
 size/SHA/owner検査を維持し、identity/size/mtimeの読取前後・再利用時変化をblockする。
@@ -3713,7 +3713,46 @@ Applyにはcancelを伝播せず、実行中のcloseを拒否する。完了済�
 
 Work単位の完全削除は `WorkDeletionPreviewService` と共通CLI/Windows GUI surfaceとして実装済みである。`work_key → work_id` をauthorityにCatalog v7の全依存（Items/Sources/Targets/CrawlRuns/全Artifacts/quota/scope/Discovery evidence）を検証し、Watchlist targets/archived、status、ZIP locator、全bound management store、active markerを同じcanonical Plan/tokenへ束ねる。CLIは `work delete --work-key KEY --dry-run|--apply --json` と明示的な `recover` / `bind` を提供し、GUIはWork行だけのコンテキストメニューからQRunnable preview/confirmation/applyを行う。title、全site key、Item/Run/Artifact、ZIP/byte数、root、blockerを表示し、未知状態や途中不明はBLOCKED/RECOVERY_REQUIREDで停止する。
 
-既定rootは既存packagingに合わせた `output/Books`、`output/crawl-status`、外側の `output/trash/work-deletion`。previewはCatalog/Watchlist/management/ZIP/statusを変更せず、Applyはadmission→Catalog→Watchlist lock、fresh preview、verified backup、per-file intent/strong identity、Catalog transaction内non-target fingerprint、Watchlist CAS、durable manifestを再検証する。commit前は検証済みrollback、commit後やunknown/tamperはroll-forward/RECOVERY_REQUIRED。物理電断耐性と非Windows no-replace renameは保証しない。実サイト・本番Catalog・本番Watchlist・実ZIPの検証は未実施で、全受入は隔離fixtureのみである。
+既定rootは `output/Books`、その兄弟の `output/Books-history`、`output/crawl-status`、外側の `output/trash/work-deletion`。previewはCatalog/Watchlist/management/ZIP/statusを変更せず、Applyはadmission→Catalog→Watchlist lock、fresh preview、verified backup、per-file intent/strong identity、Catalog transaction内non-target fingerprint、Watchlist CAS、durable manifestを再検証する。commit前は検証済みrollback、commit後やunknown/tamperはroll-forward/RECOVERY_REQUIRED。物理電断耐性と非Windows no-replace renameは保証しない。削除Apply/復旧の受入は隔離fixtureのみ。本番Catalog/Watchlist/ZIPはread-only previewまで確認し、実データの削除・移動、実サイトアクセスは未実施。
+
+履歴ZIP対応（2026-11-18）: `preview(history_root=...)` / CLI `--history-root`を追加。
+省略時は固定済みLibrary名に`-history`を付けた兄弟を使用し、custom Libraryから実データへfallbackしない。
+GUIも構築時に履歴rootを絶対pathへ固定し、previewに渡す。4 rootのidentityをtokenへ含め、
+Applyは同じ履歴rootでfresh previewする。source root同士/trashとの重複と同basenameを拒否。
+全Catalog Artifact参照、所有・size/SHA・strong identity・raw path/reparse/hardlink検証を履歴ZIPにも適用。
+退避先は`<trash>/<operation-id>/Books-history/<履歴相対path>`、通常ZIPは`Books/<通常相対path>`。
+custom rootの場合も元root名を保持する。共通のmove intent/backup/rollback/roll-forward/recoverを使う。
+履歴分離で残された旧status/manifestの位置は推測せず、履歴ZIPはZIP-onlyで退避する。
+通常ZIPの規定status候補検証と全Artifact他Work共有の停止は維持する。
+
+起動側PID再利用対応（2026-11-18）: Controllerは開始gateのgoより前にtoken/PID/OS creation identityを
+`launcher.identity`へfsync+atomic replaceする。保存失敗は既存startup barrier失敗と同じ中断処理。
+中断jobはchildの終了/再利用証明に加え、別PIDのlauncherも識別情報を照合する。
+同じcreation identityなら停止、異なれば再利用とし、情報欠落/読取不能/token不一致は停止する。
+旧jobでfileがない場合だけ、現在launcherの数値creation identityが記録済みchildより厳密に後なら
+再利用と証明する。process名やjobの古さでは除外しない。管理DB/job state/historyは変更しない。
+WindowsはGetProcessTimesを優先し、OpenProcess拒否等では有界NtQuerySystemInformationへfallback。
+buffer offset/sizeを検証し、同じsnapshot内の自process作成値が独立したGetProcessTimes値と一致する
+場合だけ内部layoutを採用する。最大4回/16MiB、API非対応/不明はNoneで停止を維持する。
+
+今回の実装ファイル: `maintenance/work_deletion.py`、`management/process_identity.py`、
+`management/job_controller.py`、`gui/work_deletion.py`、`cli.py`（すべて`src/screenshot_crawler/`配下）。
+テストは`tests/unit/test_{work_deletion,process_identity,management_jobs,gui_work_deletion,cli}.py`。
+仕様/運用同期は`docs/{SPEC,ARCHITECTURE,DECISIONS,GUI_README}.md`と本note/`note/10_hanayume.md`。
+
+2026-11-18の実データread-only preview: 高嶺の花は全51 ZIP（通常30/履歴21）がmove eligible。
+履歴21件のunsafe_artifact_pathは解消。旧Discover job `29684096-3794-4358-a4bd-98e0a1ac24ab`は
+child終了とlauncher再利用を証明し除外。旧child作成値134389438135946060より後の
+launcher作成値134394196266556194をOSから取得。残ったblockerは当時の別running job
+`f6bfe285-e6b9-4551-ba8b-afc869637e8f`のみ。job state/history、実ZIP、Catalog/Watchlistは変更していない。
+関連8ファイルsuiteは292 PASS/1 FAIL/skip 0（157.25秒）。FAILは既存CLIの
+`test_batch_policy_registry_contains_supported_sites`がyanmaga resourcesを空と期待する不整合。
+HEADのCLI/testをメモリ上で読み込んでも同じ失敗を再現（実装側はwork_ticket）。今回の修正対象外。
+追加のsnapshot API失敗/resize/unknownを含むPID testsは13 PASS/skip 0、削除CLIは3 PASS。
+中断jobのchild/launcher終了・再利用・未知・token/PID不一致の最終subsetは16 PASS/skip 0。
+削除/GUI E2E・実worker subprocess・process-kill recoveryの隔離検証を含む。ruff全src/tests PASS。
+full suite/実browser/Research/live siteは未実行（Viewer/Capture/Adapter変更なし、該当するローカル契約を検証）。
+実WorkへのApplyや既存管理履歴の書換えは行っていない。GUIは実行中jobの終了後に再起動して反映する。
 
 WatchlistはCatalog+Watchlist、Catalog-only、Watchlist-only、Not Foundを明示的に分け、target全keyと`archived_work_keys`を既存のlock/CAS/atomic replaceで同時除去する。ZIP/statusはCatalogが証明したfilesystem Artifactだけを対象にし、全Workの全Artifactでpath aliasを照合する。root外、`..`、case-insensitive衝突、symlink/reparse、hardlink、size/SHA不一致、別Work共有は停止条件。status JSONが欠落していても、Catalog present Artifactのlocator/size/SHAが完全一致する場合だけZIP-only退避を許可し、warningを残す。
 
@@ -3722,7 +3761,7 @@ management DBはCatalogと独立しているため、同じCatalogの起動情�
 未開始予約がpreview後にclaimされた場合はfresh Applyで止める。fresh Apply後のclaim raceも、
 実workerがadmission/start gateまたはCatalog lockを通れないことをsubprocess fixtureで確認した。Catalog lock後の
 gate再確認と全所有検査・commit/復旧は維持する。statusは候補の本文/strong identity/SHAと
-raw path/権限/reparse/hardlink/非regular fileを検査し、missing/deletedのLibrary外locatorも拒否。
+raw path/権限/reparse/hardlink/非regular fileを検査し、missing/deletedのLibrary/履歴root外locatorも拒否。
 status root未作成は従来のstatusなし扱い、非directory/権限不足は明示block。別配置JSONの全alias
 検知は保証しない。metadata上のarchive_pathは従来どおりCWD基準で正規化する。
 

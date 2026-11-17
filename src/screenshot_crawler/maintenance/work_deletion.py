@@ -271,6 +271,7 @@ class WorkDeletionPreviewService:
         watchlist_path: str | Path = "watchlist.yaml",
         management_paths: Iterable[str | Path] = (),
         library_root: str | Path | None = None,
+        history_root: str | Path | None = None,
         status_root: str | Path | None = None,
         trash_root: str | Path | None = None,
         progress: Any | None = None,
@@ -295,9 +296,10 @@ class WorkDeletionPreviewService:
         # paths, so an asynchronous caller cannot re-resolve them under a
         # different CWD.
         library_input = Path(library_root) if library_root is not None else Path("output/Books")
+        history_input = Path(history_root) if history_root is not None else library_input.with_name(library_input.name + "-history")
         status_input = Path(status_root) if status_root is not None else Path("output/crawl-status")
         trash_input = Path(trash_root) if trash_root is not None else Path("output/trash/work-deletion")
-        for label, root in (("library", library_input), ("status", status_input), ("trash", trash_input)):
+        for label, root in (("library", library_input), ("history", history_input), ("status", status_input), ("trash", trash_input)):
             if _raw_path_unsafe(str(root), catalog_resolved.parent):
                 blockers.append(f"unsafe_{label}_root")
         management = tuple(sorted({str(Path(path).resolve(strict=False)) for path in management_paths}))
@@ -316,9 +318,10 @@ class WorkDeletionPreviewService:
         blockers.extend(management_blockers)
         _preview_checkpoint(progress, cancel, "management", 1, 1, started)
         library_resolved = library_input.resolve(strict=False)
+        history_resolved = history_input.resolve(strict=False)
         status_resolved = status_input.resolve(strict=False)
         trash_resolved = trash_input.resolve(strict=False)
-        root_identities = _root_identities(library_resolved, status_resolved, trash_resolved)
+        root_identities = _root_identities(library_resolved, status_resolved, trash_resolved, history_resolved)
         if catalog.exists():
             _preview_checkpoint(progress, cancel, "catalog", 0, 1, started)
             graph = self._read_catalog(catalog, work_key)
@@ -344,6 +347,9 @@ class WorkDeletionPreviewService:
             library_index, library_scan_failed = _build_library_index(
                 library_resolved, progress=progress, cancel=cancel, started=started
             )
+            history_index, history_scan_failed = _build_library_index(
+                history_resolved, progress=progress, cancel=cancel, started=started
+            )
             status_index = _build_status_index(
                 status_resolved, trash_resolved,
                 library_root=library_resolved,
@@ -365,8 +371,9 @@ class WorkDeletionPreviewService:
                 status_resolved,
                 trash_resolved,
                 blockers, warnings, int(work_id) if work_id is not None else None,
-                library_index=library_index,
-                library_scan_failed=library_scan_failed,
+                library_index=(*library_index, *history_index),
+                library_scan_failed=library_scan_failed or history_scan_failed,
+                history_root=history_resolved,
                 status_index=status_index,
                 progress=progress,
                 cancel=cancel,
@@ -497,6 +504,7 @@ class WorkDeletionPreviewService:
         catalog = Path(plan.catalog_path)
         watchlist = Path(plan.watchlist_path)
         library = Path(next(value for label, value, _device in plan.root_identities if label == "library"))
+        history_root = Path(next(value for label, value, _device in plan.root_identities if label == "history"))
         status_root = Path(next(value for label, value, _device in plan.root_identities if label == "status"))
         trash_root = Path(next(value for label, value, _device in plan.root_identities if label == "trash"))
         namespace = _namespace(catalog)
@@ -521,6 +529,7 @@ class WorkDeletionPreviewService:
                 watchlist_path=watchlist,
                 management_paths=plan.management_paths,
                 library_root=library,
+                history_root=history_root,
                 status_root=status_root,
                 trash_root=trash_root,
             )
@@ -1350,6 +1359,7 @@ class WorkDeletionPreviewService:
         warnings,
         target_work_id,
         *,
+        history_root,
         library_index=(),
         library_scan_failed=False,
         status_index=None,
@@ -1358,12 +1368,17 @@ class WorkDeletionPreviewService:
         cancel=None,
         started=None,
     ):
-        for label, root in (("library", library_root), ("status", status_root), ("trash", trash_root)):
+        roots = (library_root, history_root, status_root)
+        for label, root in (("library", library_root), ("history", history_root), ("status", status_root), ("trash", trash_root)):
             if _raw_path_unsafe(str(root), catalog_parent):
                 blockers.append(f"unsafe_{label}_root")
-        if _paths_overlap(library_root, trash_root) or _paths_overlap(status_root, trash_root):
+        if any(_paths_overlap(root, trash_root) for root in roots):
             blockers.append("unsafe_trash_root")
-        if not _same_volume(library_root, trash_root) or not _same_volume(status_root, trash_root):
+        if any(_paths_overlap(first, second) for index, first in enumerate(roots) for second in roots[index + 1:]):
+            blockers.append("overlapping_source_roots")
+        if len({os.path.normcase(root.name) for root in roots}) != len(roots):
+            blockers.append("duplicate_root_name")
+        if any(not _same_volume(root, trash_root) for root in roots):
             blockers.append("cross_volume_root")
         if status_scan_failed:
             blockers.append("status_scan_failed")
@@ -1409,6 +1424,10 @@ class WorkDeletionPreviewService:
             source_device: int | None = None
             source_inode: int | None = None
             duplicate_reference = False
+            source_root = None
+            if locator:
+                candidate_path = cls._canonical_path(str(locator), catalog_parent)
+                source_root = next((root for root in (library_root, history_root) if _is_within(candidate_path, root)), None)
             if state == "present":
                 if not locator or str(row["storage_backend"]).casefold() != "filesystem" or fmt.casefold() != "zip" or kind.casefold() != "archive":
                     row_blockers.append(f"unsupported_present_artifact:{artifact_id}")
@@ -1431,7 +1450,7 @@ class WorkDeletionPreviewService:
                             blockers.append(f"artifact_duplicate_conflict:{artifact_id}:primary:{previous_id}")
                     else:
                         seen_target_paths[path_key] = (int(row["byte_size"]), str(row["sha256"]), target_work_id or -1, artifact_id)
-                    if not _is_within(source_path, library_root) or source_path.is_symlink():
+                    if source_root is None or source_path.is_symlink():
                         row_blockers.append(f"unsafe_artifact_path:{artifact_id}")
                     if not source_path.is_file():
                         row_blockers.append(f"artifact_present_missing:{artifact_id}")
@@ -1460,14 +1479,17 @@ class WorkDeletionPreviewService:
                             row_blockers.append(f"artifact_alias:{artifact_id}")
                         if artifact_paths.get(os.path.normcase(str(source_path)), []) and any(owner != target_work_id for _aid, owner in artifact_paths[os.path.normcase(str(source_path))]):
                             row_blockers.append(f"artifact_shared_path:{artifact_id}")
-                        statuses, status_facts = cls._status_paths(
-                            source_path, status_root, trash_root, artifact_id, row_blockers, warnings,
-                            status_index=status_index, archive_hash=actual_hash, fact_cache=status_facts_cache,
-                            cancel=cancel, library_root=library_root,
-                        )
+                        # History separation deliberately preserves old status
+                        # snapshots. Do not derive a new sidecar from a history
+                        # locator or claim a normal archive's old sidecar.
+                        if source_root == library_root:
+                            statuses, status_facts = cls._status_paths(
+                                source_path, status_root, trash_root, artifact_id, row_blockers, warnings,
+                                status_index=status_index, archive_hash=actual_hash, fact_cache=status_facts_cache,
+                                cancel=cancel, library_root=library_root,
+                            )
                     if (_paths_overlap(source_path, trash_root)
-                            or _paths_overlap(library_root, trash_root)
-                            or _paths_overlap(status_root, trash_root)):
+                            or any(_paths_overlap(root, trash_root) for root in roots)):
                         row_blockers.append(f"unsafe_trash_root:{artifact_id}")
                     if not _same_volume(source_path, trash_root):
                         row_blockers.append(f"cross_volume_artifact:{artifact_id}")
@@ -1479,8 +1501,8 @@ class WorkDeletionPreviewService:
                             row_blockers.append(f"insufficient_trash_space:{artifact_id}")
                     except OSError:
                         row_blockers.append(f"trash_space_unavailable:{artifact_id}")
-                    if not row_blockers and not duplicate_reference:
-                        destination = trash_root / "<operation-id>" / library_root.name / source_path.relative_to(library_root)
+                    if not row_blockers and not duplicate_reference and source_root is not None:
+                        destination = trash_root / "<operation-id>" / source_root.name / source_path.relative_to(source_root)
             elif state in {"missing", "deleted"}:
                 # A Catalog state is not authority to ignore a physical
                 # locator.  An interrupted/manual cleanup can leave the ZIP
@@ -1493,11 +1515,11 @@ class WorkDeletionPreviewService:
                         row_blockers.append(f"unsafe_artifact_path:{artifact_id}")
                     else:
                         source_path = cls._canonical_path(str(locator), catalog_parent)
-                        if not _is_within(source_path, library_root):
+                        if source_root is None:
                             row_blockers.append(f"unsafe_artifact_path:{artifact_id}")
                         elif source_path.exists():
                             row_blockers.append(f"artifact_{state}_but_present:{artifact_id}")
-                        else:
+                        elif source_root == library_root:
                             statuses, status_facts = cls._status_paths(
                                 source_path, status_root, trash_root, artifact_id, row_blockers, warnings,
                                 status_index=status_index, fact_cache=status_facts_cache, cancel=cancel,
@@ -1683,7 +1705,34 @@ def _interrupted_worker_state(job_dir: Path, data: dict[str, Any]) -> tuple[str,
         # On Windows the Popen launcher and child PID may differ. A dead
         # launcher alone never proves child exit; both observations are used.
         if launcher_pid != child_pid and process_is_alive(launcher_pid):
-            return "unverified", proof
+            observed_launcher = process_start_identity(launcher_pid)
+            proof["launcher_pid"] = launcher_pid
+            proof["launcher_start_identity"] = observed_launcher
+            launcher_path = job_dir / "launcher.identity"
+            try:
+                raw_launcher = launcher_path.read_bytes()
+            except FileNotFoundError:
+                # Legacy jobs did not persist the launcher's exact identity.
+                # Its creation MUST precede its child's creation. A strictly
+                # later numeric OS creation identity proves PID reuse. No
+                # name, job age, summary, or stale PID alone is exit proof.
+                child_start = identity.get("start_identity")
+                if not (isinstance(observed_launcher, str) and observed_launcher.isascii()
+                        and observed_launcher.isdecimal() and isinstance(child_start, str)
+                        and child_start.isascii() and child_start.isdecimal()
+                        and int(observed_launcher) > int(child_start) > 0):
+                    return "unverified", proof
+                proof["launcher_reused"] = True
+            else:
+                proof["launcher_identity_sha256"] = hashlib.sha256(raw_launcher).hexdigest()
+                launcher = json.loads(raw_launcher)
+                if (not isinstance(launcher, dict) or launcher.get("token") != token
+                        or type(launcher.get("pid")) is not int or launcher.get("pid") != launcher_pid
+                        or not isinstance(launcher.get("start_identity"), str)
+                        or not launcher["start_identity"] or not observed_launcher
+                        or launcher["start_identity"] == observed_launcher):
+                    return "unverified", proof
+                proof["launcher_reused"] = True
         return "exited", proof
     except (OSError, ValueError, TypeError, OverflowError):
         return "unverified", proof
@@ -1698,7 +1747,7 @@ def _path_identity(path: Path) -> str:
 
 
 def _root_identities(*roots: Path) -> tuple[tuple[str, str, int | None], ...]:
-    labels = ("library", "status", "trash")
+    labels = ("library", "status", "trash", "history")
     result: list[tuple[str, str, int | None]] = []
     for label, root in zip(labels, roots, strict=True):
         device: int | None = None

@@ -335,6 +335,16 @@ class JobController:
         for thread in self._log_threads:
             thread.start()
         try:
+            # Persist launcher identity before opening the worker start gate.
+            # The Windows launcher PID can differ from the actual worker PID.
+            launcher_identity = job_dir / "launcher.identity"
+            temporary_identity = job_dir / "launcher.identity.tmp"
+            with temporary_identity.open("w", encoding="utf-8") as stream:
+                json.dump({"pid": process.pid, "token": token,
+                           "start_identity": process_start_identity(process.pid)}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_identity, launcher_identity)
             self.store.set_worker_identity(job_id, pid=process.pid, token=token)
             self.store.append_event(JobEvent(
                 job_id, "task_planning", event_id=f"{job_id}:controller:planning", sequence=-2
