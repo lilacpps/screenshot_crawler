@@ -447,6 +447,38 @@ def preview_and_save(dialog):
     wait_for(lambda: dialog.task is None)
 
 
+@pytest.mark.parametrize("metadata", [False, True])
+def test_yanmaga_work_url_paste_confirm_preview_and_save(gui, metadata):
+    from screenshot_crawler.watchlist.service import WatchlistService
+
+    dialog, _app = gui
+    url = "https://yanmaga.jp/comics/双星のアポクリファ"
+    before = dialog.path.read_bytes(), dialog.catalog.read_bytes()
+    full = []
+    dialog.fullRequested.connect(full.append)
+    dialog.metadata.setChecked(metadata)
+    populate(dialog, url)
+    row = dialog.draft.candidates["1"]
+    assert row.resolution.site == "yanmaga" and row.resolution.status == "valid"
+    assert dialog.confirm_button.isEnabled()
+    assert dialog.draft.readiness("1").status != "ready"
+    confirm(dialog, label="双星のアポクリファ", work="sousei-no-apocrypha")
+    assert dialog.draft.readiness("1").status == "ready"
+    dialog.preview_edit()
+    wait_for(lambda: dialog.task is None)
+    assert dialog.preview is not None, dialog.status.text()
+    assert url in dialog.preview.summary
+    assert before == (dialog.path.read_bytes(), dialog.catalog.read_bytes())
+    dialog.save_edit()
+    wait_for(lambda: dialog.task is None)
+    target = WatchlistService(dialog.path).get("sousei-no-apocrypha-yanmaga")
+    assert (target.site, target.url, target.work_key, target.label) == (
+        "yanmaga", url, "sousei-no-apocrypha", "双星のアポクリファ")
+    assert target.enabled and target.discovery_scope is None
+    assert dialog.catalog.read_bytes() == before[1]
+    assert len(full) == 1 and full[0][0] == frozenset({target.key})
+
+
 @pytest.mark.parametrize("outcome", ["no", "yes", "failure"])
 @pytest.mark.parametrize("separator", ["-", "_"])
 def test_url_to_atomic_save_main_reload_and_single_full_confirmation(gui, tmp_path, monkeypatch, outcome, separator):

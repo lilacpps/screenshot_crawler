@@ -20,6 +20,7 @@ from screenshot_crawler.discovery.models import (
     DiscoverySourceSnapshot,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
+from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
     MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
     RentalCountdown,
@@ -45,7 +46,8 @@ STABILITY_POLL_MS = 100
 STABLE_READS_REQUIRED = 2
 MAX_EXPANSIONS = 100
 MAX_ROWS = 5_000
-MAX_PAGE_SIZE = 100
+# Native More without data-limit requests the site's 150-row default page.
+MAX_PAGE_SIZE = 150
 LOGIN_TELEMETRY_TIMEOUT_MS = 3_000
 LOGIN_TELEMETRY_QUIET_MS = 300
 MAX_LOGIN_TELEMETRY_EVENTS = 64
@@ -607,8 +609,20 @@ class _LoginTelemetryObserver:
 class YanmagaDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate the complete currently served Yanmaga public listing."""
 
+    registration_hosts = (SITE_HOST,)
     supports_bounded_discovery = False
     allow_inferred_display_positions = False
+
+    def resolve_registration_url(self, url: str) -> UrlResolution:
+        work = parse_yanmaga_work_url(url)
+        if work is None:
+            return UrlResolution(
+                input_url=url,
+                blockers=("ヤンマガWebは https://yanmaga.jp/comics/作品名 の作品URLを指定してください",),
+            )
+        return resolved_url(
+            url, f"https://{SITE_HOST}/comics/{work.slug}", f"yanmaga-work:{work.slug}"
+        )
 
     def __init__(self) -> None:
         self.last_snapshot: YanmagaListingSnapshot | None = None
@@ -1454,7 +1468,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         if not isinstance(raw, Mapping):
             raise DiscoveryIncompleteError("Yanmaga continuation control is malformed")
         try:
-            limit_text = str(raw.get("limit"))
+            limit_text = str(MAX_PAGE_SIZE) if raw.get("limit") is None else str(raw["limit"])
             offset_text = str(raw.get("offset"))
             limit = int(limit_text)
             offset = int(offset_text)
@@ -1491,6 +1505,10 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             or after_ids[: continuation.offset] != before_ids[: continuation.offset]
             or after_ids[continuation.offset : continuation.offset + len(added)] != added
             or after_ids[continuation.offset + len(added) :] != before_ids[continuation.offset :]
+            or (
+                after.continuation is not None
+                and after.continuation.offset != continuation.offset + len(added)
+            )
         ):
             raise DiscoveryIncompleteError("Yanmaga continuation did not preserve native row order")
 

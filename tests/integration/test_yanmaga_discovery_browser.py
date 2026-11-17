@@ -84,7 +84,7 @@ def _listing_html(
     og_href_override: str | None = None,
     duplicate_canonical: bool = False,
     duplicate_og_url: bool = False,
-    continuation: tuple[int, int, str] | None = None,
+    continuation: tuple[int | None, int, str] | None = None,
     insert_row: str | None = None,
     continuation_sort: str = "older",
     continuation_fetch: bool = False,
@@ -104,7 +104,8 @@ def _listing_html(
         limit, offset, path = continuation
         continuation_html = (
             '<button class="mod-episode-more-button" '
-            f'data-limit="{limit}" data-offset="{offset}" data-sort="{continuation_sort}" '
+            + (f'data-limit="{limit}" ' if limit is not None else '')
+            + f'data-offset="{offset}" data-sort="{continuation_sort}" '
             f'data-path="{path}">もっと見る</button>'
         )
         if insert_row is not None:
@@ -317,6 +318,72 @@ async def _run_discovery(
     finally:
         browser_page.remove_listener("request", record_request)
     return catalog, result, service, state
+
+
+@pytest.mark.parametrize("failure", [None, "oversize", "offset_drift", "no_progress"])
+async def test_yanmaga_missing_limit_continuation_pages_before_catalog_emit(
+    browser_page, tmp_path: Path, failure: str | None,
+) -> None:
+    catalog, first, service, state = await _run_discovery(
+        browser_page, tmp_path, _listing_html([(_episode_id(999), "existing", "red")]))
+    assert first.complete is True
+    original = catalog.list_sources(site="yanmaga")
+    path = f"/comics/{quote(SLUG, safe='')}/episodes"
+    html = _listing_html(
+        [(_episode_id(i), f"第{i}話", "red") for i in [*range(1, 6), *range(344, 349)]],
+        continuation=(None, 5, path), sort_state="older",
+    )
+    pages = [
+        {"rows": "".join(_row(_episode_id(i), f"第{i}話") for i in range(start, end)),
+         "offset": offset, "limit": limit}
+        for start, end, offset, limit in [(6, 156, 155, None), (156, 306, 305, 38),
+                                          (306, 344, None, None)]
+    ]
+    if failure == "oversize":
+        pages[0]["rows"] += _row(_episode_id(500), "extra")
+    elif failure == "offset_drift":
+        pages[0]["offset"] = 156
+    elif failure == "no_progress":
+        pages = [{"rows": "", "offset": None, "limit": None}]
+    script = '''<script>
+      const pages = PAGES;
+      document.querySelector('.mod-episode-more-button').addEventListener('click', async event => {
+        const button = event.currentTarget;
+        const offset = Number(button.dataset.offset);
+        const query = new URLSearchParams({offset, sort:button.dataset.sort});
+        if (button.hasAttribute('data-limit')) query.set('limit', button.dataset.limit);
+        const response = await fetch(button.dataset.path + '?' + query);
+        if (!response.ok) return;
+        const next = pages.shift();
+        document.querySelectorAll('.mod-episode-item')[offset].insertAdjacentHTML('beforebegin', next.rows);
+        if (next.offset === null) { button.remove(); return; }
+        button.dataset.offset = next.offset;
+        if (next.limit === null) button.removeAttribute('data-limit');
+        else button.dataset.limit = next.limit;
+      });
+    </script>'''.replace("PAGES", json.dumps(pages, ensure_ascii=False))
+    state["html"] = html.replace("</body>", script + "</body>")
+    queries = []
+    def record(request):
+        parsed = urlsplit(request.url)
+        if parsed.path.endswith('/episodes'):
+            queries.append(parsed.query)
+    browser_page.on("request", record)
+    try:
+        result, clean = await _discover_with_listener_check(browser_page, service, _target(), "full")
+    finally:
+        browser_page.remove_listener("request", record)
+    assert clean is True
+    if failure is not None:
+        assert result.complete is False and result.observed_count == 0
+        assert catalog.list_sources(site="yanmaga") == original
+    else:
+        assert result.complete is True and result.observed_count == 348
+        sources = [s for s in catalog.list_sources(site="yanmaga") if s.available]
+        assert [s.display_position for s in sources] == list(range(348, 0, -1))
+        assert [s.external_id for s in sources] == [f"{SLUG}:{_episode_id(i)}" for i in range(348, 0, -1)]
+        assert queries == [
+            "offset=5&sort=older", "offset=155&sort=older", "offset=305&sort=older&limit=38"]
 
 
 async def test_yanmaga_full_expands_complete_oldest_list_and_repeat_refreshes_catalog(

@@ -52,6 +52,9 @@ _VALUE_CLASSES = frozenset(
         "tw:xl:text-body-3xs-bold",
     }
 )
+_EXPIRED_VALUE_CLASSES = (_VALUE_CLASSES - {"tw:bg-red-crimson", "tw:text-white"}) | {
+    "tw:bg-gray-gallery", "tw:text-black",
+}
 _PAIR_PARENT_CLASSES = frozenset(
     {"tw:flex", "tw:items-center", "tw:justify-center", "tw:w-fit"}
 )
@@ -126,8 +129,18 @@ _RENTAL_COLLECTION_CLASSES = frozenset(
         "tw:md:py-xs",
     }
 )
+_HISTORY_MORE_CLASSES = frozenset({"tw:flex", "tw:justify-center", "tw:pt-4xs"})
+_HISTORY_MORE_BUTTON_CLASSES = frozenset({
+    "tw:rounded-full", "tw:inline-flex", "tw:items-center", "tw:justify-center",
+    "tw:border", "tw:hover:opacity-60", "tw:disabled:opacity-40",
+    "tw:disabled:pointer-events-none", "tw:border-black", "tw:text-black",
+    "tw:pl-2xs", "tw:pr-4xs", "tw:gap-9xs", "tw:text-button-xs", "tw:w-[162px]",
+})
 _HIDE_CLASS = r"(?:^|[-_:])(?:hidden|hide|invisible|sr-only)(?:$|[-_:])"
 _MAX_HISTORY_BYTES = 4 * 1024 * 1024
+_MAX_HISTORY_PAGES = 50
+_MAX_HISTORY_ROWS = 1_000
+_HISTORY_PAGE_SIZE = 20
 _MAX_COUNTDOWN_HOURS = 23
 MAX_WAIT_RENTAL_COUNTDOWN_HOURS = 72
 _MAX_DATE_SKEW_SECONDS = 5
@@ -150,7 +163,7 @@ class RentalCountdown:
 
 @dataclass(frozen=True, slots=True)
 class RentalHistoryObservation:
-    """Verified status for one target in the observed complete rental list."""
+    """Active countdown, or no active rental proved by absence/explicit expiry."""
 
     external_id: str
     countdown: RentalCountdown | None
@@ -171,6 +184,7 @@ def rental_history_snapshot_js() -> str:
       const target = new URL(args.targetUrl);
       const labelClasses = new Set(args.labelClasses);
       const valueClasses = new Set(args.valueClasses);
+      const expiredValueClasses = new Set(args.expiredValueClasses);
       const parentClasses = new Set(args.parentClasses);
       const anchorClasses = new Set(args.anchorClasses);
       const ancestorClasses = args.ancestorClasses.map(value => new Set(value));
@@ -240,6 +254,10 @@ def rental_history_snapshot_js() -> str:
         const values = leaves.filter(node => sameSet([...node.classList], valueClasses) &&
           (/^\s*\u6b8b\u308a\s*[0-9]+\s*\u6642\u9593\s*$/.test(node.textContent || '') ||
            (args.allowDays && /^\s*\u6b8b\u308a\s*[0-9]+\s*\u65e5\s*$/.test(node.textContent || ''))));
+        const expiredValues = leaves.filter(node =>
+          sameSet([...node.classList], expiredValueClasses) &&
+          (node.textContent || '').trim() === '\u671f\u9650\u5207\u308c');
+        values.push(...expiredValues);
         const pairs = [];
         for (const label of labels) for (const value of values) {
           const parent = label.parentElement;
@@ -263,6 +281,7 @@ def rental_history_snapshot_js() -> str:
             const daysMatch = args.allowDays
               ? /^\s*\u6b8b\u308a\s*([0-9]+)\s*\u65e5\s*$/.exec(value.textContent || '') : null;
             pairs.push({label, value, parent,
+              expired: expiredValues.includes(value),
               hours: hoursMatch ? Number(hoursMatch[1]) : null,
               days: daysMatch ? Number(daysMatch[1]) : null});
           }
@@ -281,6 +300,8 @@ def rental_history_snapshot_js() -> str:
           pairCount: pairs.length,
           hidden: targetAnchors.length !== 1 || (pairs.length === 1 &&
             (unsafeHidden(anchor) || unsafeHidden(pairs[0].label) || unsafeHidden(pairs[0].value))),
+          expired: pairs.length === 1 && pairs[0].expired && !unsafeHidden(anchor) &&
+            !unsafeHidden(pairs[0].label) && !unsafeHidden(pairs[0].value),
           hours: valid && hoursValid ? hours : null,
           days: valid && daysValid ? days : null
         };
@@ -323,6 +344,7 @@ async def parse_rental_history_html(
                 "label": "\u30ec\u30f3\u30bf\u30eb\u671f\u9593",
                 "labelClasses": sorted(_LABEL_CLASSES),
                 "valueClasses": sorted(_VALUE_CLASSES),
+                "expiredValueClasses": sorted(_EXPIRED_VALUE_CLASSES),
                 "parentClasses": sorted(_PAIR_PARENT_CLASSES),
                 "ancestorClasses": [sorted(classes) for classes in _ANCESTOR_CLASSES],
                 "anchorClasses": sorted(_ANCHOR_CLASSES),
@@ -380,7 +402,7 @@ async def _fetch_rental_history_observations(
     require_complete_collection: bool,
     max_countdown_hours: int,
 ) -> tuple[RentalHistoryObservation, ...] | None:
-    """Fetch the observed history page and distinguish no target from unknown."""
+    """Observe active vs proved-inactive history without executing page content."""
 
     if (
         isinstance(max_countdown_hours, bool)
@@ -448,9 +470,12 @@ async def _fetch_rental_history_observations(
             !url.username && !url.password && !url.hash ? url : null;
         }} catch {{ return null; }}
       }};
-      const readDocument = async href => {{
+      let totalBytes = 0;
+      const readDocument = async (href, stream = false) => {{
         const requested = new URL(href);
-        if (requested.origin !== origin || requested.pathname !== '/mypage') return null;
+        const expectedPath = stream ? '/api/mypage/rentals' : '/mypage';
+        const expectedType = stream ? 'text/vnd.turbo-stream.html' : 'text/html';
+        if (requested.origin !== origin || requested.pathname !== expectedPath) return null;
         const requestStartedAt = Date.now();
         const response = await fetch(href, {{method:'GET',cache:'no-store',redirect:'error',
           credentials:'same-origin',signal:AbortSignal.timeout(15000)}});
@@ -465,8 +490,8 @@ async def _fetch_rental_history_observations(
         const cacheControlExact = cacheControl.length === 3 && new Set(cacheControl).size === 3 &&
           cacheControl.includes('private') && cacheControl.includes('max-age=0') &&
           cacheControl.includes('must-revalidate');
-        if (response.status !== 200 || !type.includes('text/html') || response.url !== href ||
-            mimeType !== 'text/html' || response.redirected || !response.body ||
+        if (response.status !== 200 || response.url !== href ||
+            mimeType !== expectedType || response.redirected || !response.body ||
             age !== null || !standardDate ||
             Math.abs(date - requestStartedAt) > args.maxDateSkewMs ||
             !cacheControlExact)
@@ -478,7 +503,8 @@ async def _fetch_rental_history_observations(
           const part = await reader.read();
           if (part.done) break;
           size += part.value.byteLength;
-          if (size > args.maxBytes) {{ await reader.cancel(); return null; }}
+          totalBytes += part.value.byteLength;
+          if (totalBytes > args.maxBytes) {{ await reader.cancel(); return null; }}
           chunks.push(part.value);
         }}
         const joined = new Uint8Array(size);
@@ -525,14 +551,94 @@ async def _fetch_rental_history_observations(
       if (links.length !== 1 || uniqueLinks.length !== 1) return {{ok:false}};
       const historyHref = safeUrl(uniqueLinks[0], '/mypage');
       if (!historyHref) return {{ok:false}};
-      const historyHtml = await readDocument(historyHref.href);
+      let historyHtml = await readDocument(historyHref.href);
       if (!historyHtml) return {{ok:false}};
+      if (args.requireCompleteCollection) {{
+        // Expand only the observed native GET/Turbo shape, entirely in detached
+        // DOM. No script execution, live DOM replacement or episode entry.
+        const doc = new DOMParser().parseFromString(historyHtml, 'text/html');
+        const exactAttrs = (node, names) => node &&
+          sameSet(node.getAttributeNames(), new Set(names));
+        const exactClasses = (node, names) => node &&
+          sameSet([...node.classList], new Set(names));
+        const collections = [...doc.querySelectorAll('#content_card_list')];
+        if (collections.length !== 1) return {{ok:false}};
+        const collection = collections[0];
+        if (collection.tagName !== 'UL' || !exactAttrs(collection, ['id','class']) ||
+            !exactClasses(collection, args.collectionClasses)) return {{ok:false}};
+        const validRows = () => {{
+          const rows = [...collection.children];
+          const hrefs = [];
+          if (rows.length > args.maxRows) return false;
+          for (const [index, row] of rows.entries()) {{
+            if (row.tagName !== 'LI' || !exactAttrs(row, ['data-index']) ||
+                row.getAttribute('data-index') !== String(index)) return false;
+            const anchors = row.querySelectorAll('a[href]');
+            if (anchors.length !== 1) return false;
+            let url;
+            try {{ url = new URL(anchors[0].getAttribute('href'), origin); }} catch {{ return false; }}
+            if (url.origin !== origin || !/^\/comics\/[^/]+\/[0-9a-f]{{32}}$/.test(url.pathname) ||
+                url.username || url.password || url.search || url.hash) return false;
+            hrefs.push(url.href);
+          }}
+          return new Set(hrefs).size === hrefs.length;
+        }};
+        for (let pageIndex = 0; ; pageIndex++) {{
+          if (!validRows()) return {{ok:false}};
+          const controls = [...doc.querySelectorAll('#content_more_button')];
+          if (controls.length === 0) break;
+          if (controls.length !== 1 || pageIndex >= args.maxPages) return {{ok:false}};
+          const more = controls[0];
+          const anchor = more.firstElementChild;
+          const button = anchor?.firstElementChild;
+          if (more.tagName !== 'DIV' || more.parentElement !== collection.parentElement ||
+              !exactAttrs(more, ['id','class']) || !exactClasses(more, args.moreClasses) ||
+              hidden(more) || more.children.length !== 1 || anchor?.tagName !== 'A' ||
+              !exactAttrs(anchor, ['href','data-turbo','data-turbo-stream']) ||
+              anchor.getAttribute('data-turbo') !== 'true' ||
+              anchor.getAttribute('data-turbo-stream') !== 'true' ||
+              anchor.children.length !== 1 || button?.tagName !== 'BUTTON' ||
+              !exactAttrs(button, ['class']) || !exactClasses(button, args.moreButtonClasses) ||
+              hidden(button) ||
+              button.textContent.trim() !== '\u3082\u3063\u3068\u898b\u308b') return {{ok:false}};
+          const offset = collection.children.length;
+          const nextHref = safeUrl(anchor.getAttribute('href'), '/api/mypage/rentals');
+          if (!nextHref || offset === 0 || offset >= args.maxRows ||
+              nextHref.search !== '?offset=' + offset) return {{ok:false}};
+          const streamHtml = await readDocument(nextHref.href, true);
+          if (!streamHtml) return {{ok:false}};
+          const streamDoc = new DOMParser().parseFromString(streamHtml, 'text/html');
+          const streams = [...streamDoc.body.children];
+          if (streams.length !== 2 || streamDoc.querySelectorAll('turbo-stream').length !== 2)
+            return {{ok:false}};
+          for (const [index, stream] of streams.entries()) {{
+            if (stream.tagName !== 'TURBO-STREAM' || !exactAttrs(stream, ['action','target']) ||
+                stream.getAttribute('action') !== (index === 0 ? 'append' : 'replace') ||
+                stream.getAttribute('target') !== (index === 0 ? 'content_card_list' : 'content_more_button') ||
+                stream.children.length !== 1 || stream.firstElementChild.tagName !== 'TEMPLATE' ||
+                stream.firstElementChild.attributes.length !== 0) return {{ok:false}};
+          }}
+          const added = [...streams[0].firstElementChild.content.children];
+          const replacement = streams[1].firstElementChild.content;
+          if (added.length === 0 || added.length > args.pageSize ||
+              replacement.children.length > 1 ||
+              (replacement.children.length === 1 &&
+               (replacement.firstElementChild.tagName !== 'DIV' ||
+                replacement.firstElementChild.id !== 'content_more_button')) ||
+              (replacement.children.length === 0 && replacement.textContent.trim() !== ''))
+            return {{ok:false}};
+          for (const row of added) collection.appendChild(doc.importNode(row, true));
+          more.replaceWith(doc.importNode(replacement, true));
+        }}
+        historyHtml = doc.documentElement.outerHTML;
+      }}
       const parse = {parser};
       const proofs = [];
       const observations = [];
       for (const target of args.targets) {{
         const snapshot = parse({{html:historyHtml,targetUrl:target.targetUrl,
           label:args.label,labelClasses:args.labelClasses,valueClasses:args.valueClasses,
+          expiredValueClasses:args.expiredValueClasses,
           parentClasses:args.parentClasses,ancestorClasses:args.ancestorClasses,
           anchorClasses:args.anchorClasses,hideClass:args.hideClass,
           maxHours:args.maxHours,allowDays:args.allowDays,
@@ -552,6 +658,9 @@ async def _fetch_rental_history_observations(
         const daysValid = args.allowDays && Number.isSafeInteger(card.days) && card.days > 0 &&
           card.days * 24 <= args.maxHours;
         if (card.labelCount === 1 && card.valueCount === 1 && card.pairCount === 1 &&
+            card.hidden === false && card.expired === true && !hoursValid && !daysValid) {{
+          observations.push({{externalId:target.externalId,status:'expired'}});
+        }} else if (card.labelCount === 1 && card.valueCount === 1 && card.pairCount === 1 &&
             card.hidden === false && hoursValid !== daysValid) {{
           const hours = hoursValid ? card.hours : null;
           const days = daysValid ? card.days : null;
@@ -574,12 +683,18 @@ async def _fetch_rental_history_observations(
                     else None
                 ),
                 "maxBytes": _MAX_HISTORY_BYTES,
+                "maxPages": _MAX_HISTORY_PAGES,
+                "maxRows": _MAX_HISTORY_ROWS,
+                "pageSize": _HISTORY_PAGE_SIZE,
+                "moreClasses": sorted(_HISTORY_MORE_CLASSES),
+                "moreButtonClasses": sorted(_HISTORY_MORE_BUTTON_CLASSES),
                 "maxHours": max_countdown_hours,
                 "allowDays": max_countdown_hours > _MAX_COUNTDOWN_HOURS,
                 "maxDateSkewMs": _MAX_DATE_SKEW_SECONDS * 1000,
                 "label": "\u30ec\u30f3\u30bf\u30eb\u671f\u9593",
                 "labelClasses": sorted(_LABEL_CLASSES),
                 "valueClasses": sorted(_VALUE_CLASSES),
+                "expiredValueClasses": sorted(_EXPIRED_VALUE_CLASSES),
                 "parentClasses": sorted(_PAIR_PARENT_CLASSES),
                 "ancestorClasses": [sorted(classes) for classes in _ANCESTOR_CLASSES],
                 "anchorClasses": sorted(_ANCHOR_CLASSES),
@@ -608,7 +723,7 @@ async def _fetch_rental_history_observations(
         if not isinstance(external_id, str) or external_id in seen:
             return None
         seen.add(external_id)
-        if status == "absent":
+        if status in {"absent", "expired"}:
             observations.append(RentalHistoryObservation(external_id, None))
             continue
         valid_hours = (
@@ -672,7 +787,7 @@ async def fetch_rental_history_observations(
     targets: tuple[YanmagaEpisodeParts, ...],
     max_countdown_hours: int = _MAX_COUNTDOWN_HOURS,
 ) -> tuple[RentalHistoryObservation, ...] | None:
-    """Return active or verified-absent targets, or ``None`` when unknown."""
+    """Return active or verified-inactive targets, or ``None`` when unknown."""
 
     return await _fetch_rental_history_observations(
         page,

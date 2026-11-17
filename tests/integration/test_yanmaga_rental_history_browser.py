@@ -38,6 +38,9 @@ TEST_VALUE_CLASSES = frozenset(
         "tw:xl:w-18", "tw:xl:h-4.5", "tw:xl:text-body-3xs-bold",
     }
 )
+TEST_EXPIRED_VALUE_CLASSES = (TEST_VALUE_CLASSES - {"tw:bg-red-crimson", "tw:text-white"}) | {
+    "tw:bg-gray-gallery", "tw:text-black",
+}
 TEST_PAIR_PARENT_CLASSES = frozenset(
     {"tw:flex", "tw:items-center", "tw:justify-center", "tw:w-fit"}
 )
@@ -184,6 +187,9 @@ async def _run_runtime_history_observation_probe(
     outside_cards: str = "",
     pagination: str = "",
     max_countdown_hours: int = 23,
+    stream_pages: dict[int, str] | None = None,
+    stale_stream: bool = False,
+    stream_content_type: str = "text/vnd.turbo-stream.html; charset=utf-8",
 ):
     requests: list[str] = []
 
@@ -199,6 +205,14 @@ async def _run_runtime_history_observation_probe(
             body = "<html><body>work fixture</body></html>"
         elif parsed.path == "/mypage" and not parsed.query:
             body = "<html><body>" + _history_link() + "</body></html>"
+        elif parsed.path == "/api/mypage/rentals" and stream_pages is not None:
+            if parsed.query not in {f"offset={offset}" for offset in stream_pages}:
+                await route.abort()
+                return
+            headers["content-type"] = stream_content_type
+            if stale_stream:
+                headers["age"] = "0"
+            body = stream_pages[int(parsed.query.split('=')[1])]
         elif parsed.path == "/mypage" and parsed.query == "tab=rental":
             body = (
                 "<html><body><ul id=\"content_card_list\" class=\""
@@ -224,6 +238,103 @@ async def _run_runtime_history_observation_probe(
         max_countdown_hours=max_countdown_hours,
     )
     return observations, requests
+
+
+def _history_more(offset: int) -> str:
+    return (
+        '<div id="content_more_button" class="tw:flex tw:justify-center tw:pt-4xs">'
+        f'<a data-turbo="true" data-turbo-stream="true" href="/api/mypage/rentals?offset={offset}">'
+        '<button class="tw:rounded-full tw:inline-flex tw:items-center tw:justify-center tw:border '
+        'tw:hover:opacity-60 tw:disabled:opacity-40 tw:disabled:pointer-events-none '
+        'tw:border-black tw:text-black tw:pl-2xs tw:pr-4xs tw:gap-9xs tw:text-button-xs tw:w-[162px]">'
+        '<span>もっと見る</span><span><svg></svg></span></button></a></div>'
+    )
+
+
+def _history_stream(rows: str, more: str = "") -> str:
+    return (
+        f'<turbo-stream action="append" target="content_card_list"><template>{rows}</template></turbo-stream>'
+        f'<turbo-stream action="replace" target="content_more_button"><template>{more}</template></turbo-stream>'
+    )
+
+
+@pytest.mark.parametrize("status", ["absent", "expired", "active", "multiple_pages"])
+async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target(browser_page, status):
+    initial = ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(20))
+    value_options = {"value": "期限切れ", "value_classes": TEST_EXPIRED_VALUE_CLASSES} if status == "expired" else {}
+    card = _card(episode_id=f'{100:032x}') if status == "absent" else _card(**value_options)
+    rows = f'<li data-index="20">{card}</li>'
+    pages = {20: _history_stream(rows)}
+    if status == "multiple_pages":
+        middle = ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(20, 40))
+        pages = {20: _history_stream(middle, _history_more(40)),
+                 40: _history_stream(f'<li data-index="40">{_card()}</li>')}
+    observations, requests = await _run_runtime_history_observation_probe(
+        browser_page, history_cards=initial, pagination=_history_more(20), stream_pages=pages)
+    assert observations is not None and len(observations) == 1
+    assert observations[0].external_id == f"{TARGET.slug}:{TARGET.episode_id}"
+    if status in {"absent", "expired"}:
+        assert observations[0].countdown is None
+    else:
+        assert observations[0].countdown is not None and observations[0].countdown.active
+    assert requests[1:] == ["/mypage", "/mypagetab=rental", "/api/mypage/rentalsoffset=20"] + (
+        ["/api/mypage/rentalsoffset=40"] if status == "multiple_pages" else [])
+
+
+@pytest.mark.parametrize("failure", [
+    "stale", "no_progress", "offset_gap", "repeated_offset", "duplicate_target", "oversize",
+    "foreign_more", "wrong_stream_target", "extra_stream", "bad_expiry", "hidden_expiry",
+    "unknown_expiry_classes", "page_bound", "row_bound", "byte_bound", "mixed_active_expired",
+    "wrong_more_replacement", "bad_mime", "failed_fetch",
+])
+async def test_yanmaga_history_pagination_unknown_never_proves_inactive(browser_page, monkeypatch, failure):
+    from screenshot_crawler.site_adapters.yanmaga import rental_history as history_module
+
+    initial = ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(20))
+    more = _history_more(20)
+    expired = _card(value="期限切れ", value_classes=TEST_EXPIRED_VALUE_CLASSES)
+    rows, next_more = f'<li data-index="20">{expired}</li>', ""
+    if failure == "no_progress":
+        rows = ""
+    elif failure == "wrong_more_replacement":
+        next_more = '<div id="unrecognized"></div>'
+    elif failure == "offset_gap":
+        rows = rows.replace('data-index="20"', 'data-index="21"')
+    elif failure == "repeated_offset":
+        next_more = more
+    elif failure == "duplicate_target":
+        rows += f'<li data-index="21">{_card()}</li>'
+    elif failure == "oversize":
+        rows += ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(21, 41))
+    elif failure == "foreign_more":
+        more = more.replace('/api/mypage/rentals', 'https://evil.test/api/mypage/rentals')
+    elif failure == "bad_expiry":
+        rows = rows.replace('期限切れ', 'expired')
+    elif failure == "hidden_expiry":
+        rows = f'<li data-index="20">{_card(value="期限切れ", value_classes=TEST_EXPIRED_VALUE_CLASSES, hidden="hidden")}</li>'
+    elif failure == "unknown_expiry_classes":
+        rows = rows.replace('tw:bg-gray-gallery', 'tw:bg-gray-other')
+    elif failure == "mixed_active_expired":
+        rows = f'<li data-index="20">{expired}{_card()}</li>'
+    elif failure == "page_bound":
+        monkeypatch.setattr(history_module, '_MAX_HISTORY_PAGES', 0)
+    elif failure == "row_bound":
+        monkeypatch.setattr(history_module, '_MAX_HISTORY_ROWS', 20)
+    elif failure == "byte_bound":
+        monkeypatch.setattr(history_module, '_MAX_HISTORY_BYTES', 64)
+    stream = _history_stream(rows, next_more)
+    if failure == "wrong_stream_target":
+        stream = stream.replace('target="content_card_list"', 'target="other"')
+    elif failure == "extra_stream":
+        stream += '<turbo-stream action="remove" target="other"><template></template></turbo-stream>'
+    observations, requests = await _run_runtime_history_observation_probe(browser_page,
+        history_cards=initial, pagination=more,
+        stream_pages={} if failure == "failed_fetch" else {20: stream}, stale_stream=failure == "stale",
+        stream_content_type="text/html" if failure == "bad_mime" else "text/vnd.turbo-stream.html")
+    assert observations is None
+    assert not any('evil.test' in request for request in requests)
+    if failure in {"foreign_more", "page_bound", "row_bound", "byte_bound"}:
+        assert not any(request.startswith('/api/') for request in requests)
 
 
 async def test_yanmaga_rental_history_observations_distinguish_active_and_verified_absent(

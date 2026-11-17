@@ -8,6 +8,32 @@ Discovery, manual Crawl/Runner, Batch adapter, and Batch policy. Existing
 Planner, Executor, packager, Artifact, and Completed services are reused.
 Shared Core exposes only site-neutral access-grant and entry-only hooks.
 
+## Rental History pagination and expired-ticket preflight (2026-11-17)
+
+Complete-history observation follows only the observed same-origin native
+`/api/mypage/rentals?offset=N` GET link under `#content_more_button`. It validates
+the exact known control shape, offset equal to cumulative row count, fresh
+response headers and Turbo-stream MIME, then composes exactly the native list
+append / More-control replacement streams in detached DOM. No scripts or live
+DOM changes run. Sequential indices, unique episode URLs, 20 rows per response,
+50 extra pages, 1,000 rows and 4 MiB total fetched bytes are bounded. Unknown
+controls/responses, duplicate rows and unfinished paging remain unknown.
+
+An exact native `レンタル期間` / `期限切れ` pair with the observed gray/black
+value classes and existing ancestry/visibility checks proves no active rental,
+as does target absence in the completed collection. Neither proves a grant.
+Active, hidden, conflicting or malformed cards cannot authorize a new ticket.
+The charged wait-row, modal, cooldown and consumption/persistence checks remain.
+The positive-only countdown API keeps its existing single-document scope.
+
+The normal アポクリファ chapter-28 attempt selected work_ticket but stopped
+before entry because its 31-card history exceeded the first 20 cards. The target
+expired card was in the final 11-card Turbo page. Shared-CDP read-only validation
+now proves it inactive and the ordinary Adapter preflight reaches Source entry;
+a diagnostic hook stopped before that navigation. No Source/Viewer request,
+ticket POST, resource consumption or normal Catalog mutation occurred. Actual
+ticket re-consumption/capture/ZIP was not rerun for this fix.
+
 ## Stage 02 current state (2026-11-16; C8 verified, Stage 02 PASS with independent BLOCKING 0)
 
 The C sort and canonical/og corrections and the BODY pre-live review passed
@@ -148,7 +174,8 @@ The adapter reads the rendered `.detailv2-episodes` listing and its
 identity and every row, expands the native `.mod-episode-more-button` by normal
 Playwright click until the control disappears, and requires the rows to be
 stable across repeated reads. The continuation must declare the observed
-`もっと見る`, positive `data-limit`, `data-offset`, `data-sort="older"`, and
+`もっと見る`, optional `data-limit` (1..150; absent means the observed 150-row
+page), `data-offset`, `data-sort="older"`, and
 the matching work's `/episodes` path. Each expansion must add new, unique rows
 at the declared native insertion position while preserving existing row order.
 Expansion/row bounds and unsupported controls stop the run as incomplete.
@@ -240,10 +267,16 @@ During Stage 01, the capture adapter remained anonymous-only. Stage 02 adds
 the bounded authenticated first-free entry path described above. C8 verified
 the existing-grant production capture flow for the selected target; a complete
 fresh-first-free capture remains unverified. Missing/contradictory evidence, unknown markers, and unsupported
-row identity remain fail-closed. The list expansion contract remains strict:
-positive `data-limit`, native offset/sort/path, unique inserted rows, and stable
-ordering are required. The sample wife listing's missing-limit pagination
-shape is deliberately unsupported in this stage. Discovery never opens
+row identity remain fail-closed. List expansion accepts the observed native
+150-row page when `data-limit` is absent, or an explicit canonical integer
+limit in 1..150. Empty/malformed limits, unknown offset/sort/path, duplicate
+rows, insertion-order drift, and a next offset other than old offset plus
+added rows fail closed. The 100-expansion/5,000-row bounds remain. A shared-CDP
+read-only check on 2026-11-17 reproduced the former missing-limit error for
+サタノファニ, then observed 10→160→310→348 rows, final limit=38 and control
+exhaustion. The corrected ordinary DiscoveryService with an isolated Catalog
+completed 348 Sources and positions 1..348. Synthetic browser tests cover this
+three-page shape and failed-full Catalog preservation. Discovery never opens
 an episode to classify access. Row attributes such as `data-is-free` and
 `data-modal` are not authoritative: the sampled first-free rows had
 `data-is-free="false"` and `data-modal="registration"` without `.js-modal`.
@@ -318,7 +351,8 @@ import and trusted-Catalog-grant path; automatic Adapter recovery uses the
 existing observer's hourly-countdown evidence contract. All other unknown,
 conflicting, expired, or unsupported access states fail closed. For wait-free
 rows, the adapter also requires the exact image marker, charged signal, and
-verified target absence from Rental History; it validates the observed
+verified absence of an active target rental (absent or exact expired card) from
+complete Rental History; it validates the observed
 same-episode modal and POST form before one normal click. Its exact completion
 notice is `レンタルが完了しました`; it does not accept the first-free notice
 as a substitute. Novel chapter 10 grant-only verified the exact post-click
@@ -548,7 +582,8 @@ The normal Batch Executor creates a fresh Yanmaga adapter and validates the
 exact target before opening its public episode URL. Public-free, first-free,
 and trusted-grant checks remain in place. The wait-ticket path requires an
 authenticated exact row, one observed wait image marker, visible charged state,
-verified target absence from the complete Rental History collection, and the
+verified absence of an active target rental (absent or exact expired card) from
+the complete Rental History collection, and the
 observed exact modal form. The POST is initiated only by one normal click; no
 resource fallback is used. The source modal and pre-click history shapes were
 observed read-only on `work-dual` chapter 29 and `work-novel` chapter 10. The

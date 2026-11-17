@@ -273,7 +273,18 @@ https://pypi.org/project/pykakasi/2.3.0/ (checked 2026-11-02).
 ## Watchlist URL registration (Stage 01, 2026-11-02)
 
 Read-only registration/resolver.py injects the existing Discovery registry;
-site-owned optional hooks accept the eleven current Discovery entry forms.
+site-owned optional hooks accept the supported Discovery entry forms, including
+ebookjapan's full-list URL and Yanmaga's literal work URL. Yanmaga accepts
+`https://yanmaga.jp/comics/<work-slug>` using the existing site parser, publishes
+`yanmaga-work:<decoded-slug>` identity and saves the literal work URL. The GUI's
+normal paste, human title/Work/ID confirmation, final preview and atomic save
+path applies; the optional metadata checkbox triggers no network for this site.
+No title observation or complete-list detail capability is added. The common
+escape guard continues to reject percent-encoded input; paste Japanese names
+literally as in Watchlist. Episode/viewer, continuation, query and trailing-slash
+forms remain blocked. Artificial Qt tests cover both metadata-checkbox states
+through saved isolated YAML and the existing Full-request signal, leaving the
+Catalog unchanged. No live verification was needed for this pure URL hook.
 Common strict HTTPS/authority/length/escape guards precede the existing parsers.
 Unsupported query/fragment/paths remain blocked. URL validity does not imply a
 ready registration. Unknown native work identity/title remain unknown.

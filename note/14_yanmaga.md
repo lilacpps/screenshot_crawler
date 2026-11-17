@@ -1,5 +1,56 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Work Ticket前のレンタル履歴ページ送り・期限切れ（2026-11-17）
+
+通常Catalogのアポクリファ第28話（Item 49616 / Source 49923）は、11月17日の
+実行ログで `quota/work_ticket` まで選択されていたが、消費前の
+`Yanmaga wait target history status is unknown` で停止していた。
+原因はレンタル履歴31件の先頭20件に「もっと見る」があり、旧parserが
+paginationを未対応扱いしていたこと。後続11件には同じ話の `期限切れ` cardも
+存在し、この終了表示も旧parserのactive countdown契約ではunknownになっていた。
+
+`rental_history.py` のcomplete-collection観測は、native linkで実在確認した
+same-origin `GET /api/mypage/rentals?offset=N` だけを追跡する。
+`#content_more_button` の既知DIV/A/BUTTON構造、Turbo属性・label/class、offset＝
+累積行数を要求する。応答はfreshな200、exact URL、Turbo-stream MIME、既存の
+Date/Age/private cache条件を満たし、`content_card_list` へのappendと
+`content_more_button` のreplaceという2 streamだけをdetached DOMへ合成する。
+実DOM・scriptは実行せず、重複話URL、連続data-index、1応答20行、最大50追加page／
+1,000行／全fetch合計4MiB、native More消失までを検証する。不明・partialはunknown。
+positive-only countdown取得は従来の単一履歴documentの範囲を維持する。
+
+完全履歴内のexact targetが不在、またはnative `レンタル期間` と `期限切れ` の
+既知class（gray背景・black文字）／pair・ancestry・非hiddenを満たす1 cardだけが
+ある場合は「現在のactive rentalなし」として `RentalHistoryObservation.countdown=None`。
+activeとexpiredの重複、未知class/text、hidden、取得失敗は消費許可にしない。
+チケット候補には従来どおりfreshなwait row、認証、チャージ完了、exact modalが必要。
+Policyの順序・cooldown・消費確認／persist条件は変更しない。
+
+shared-CDPのread-only確認で31件を完了し、第28話の期限切れを検証した。
+通常Adapterのquota/work_ticket初期化も実行し、履歴とcharged preflightを通過して
+Source遷移直前へ到達したことを確認して診断hookで停止。Source／Viewerへのrequest、
+チケットPOST・権利消費、通常Catalogへの書込みは0。実際の再消費とcapture/ZIPは
+今回未実施。人工browserは複数page、active／expired／absent、異常応答・boundを検証する。
+
+## GUIのURLから一括登録（2026-11-17）
+
+`YanmagaDiscoveryAdapter.registration_hosts` と `resolve_registration_url()` により、
+GUIの「Watchlist：URLから一括登録」で `https://yanmaga.jp/comics/作品名` を受理する。
+Watchlistの `https://yanmaga.jp/comics/双星のアポクリファ` と同じ形式を使い、
+既存 `parse_yanmaga_work_url()` が受理したslugを `yanmaga-work:<slug>` の同一site
+作品identityとする。保存URLは日本語を含むliteralの作品URL。作品名はURLから推測せず、
+既存GUIでlabel・所属Work・IDを人が確認してからpreview・一括保存する。
+登録解析はnetwork、Discovery、話/viewerへのアクセスを行わず、metadata取得checkboxを
+有効にしてもこのsiteではブラウザを開かない。通常のDiscovery・Capture・Batchは変更しない。
+
+共通URL guardは従来どおりpercent escapeを拒否するため、日本語は `%E3...` 形式ではなく
+Watchlist同様にそのまま貼り付ける。話URL、viewer、`/episodes`、末尾slash、query、
+fragmentは登録対象外。完全一覧previewや複数keyの詳細編集能力は追加していない。
+テストは `test_registration_resolver.py` と `test_gui_url_registration.py` で、公式URL・
+不正URL拒否、保存前の再検証、metadata checkbox両状態のGUI解析→確認→preview→保存、
+Catalog非変更・Full要求signalを隔離Watchlist/Catalogで検証する。今回の変更の実サイト
+確認は未実施（URL解析のみの追加で、DOMや実サイトアクセス挙動は変更しない）。
+
 ## Odd-page terminal-only reader position (2026-11-17)
 
 Chapter 15 (Item 49631 / Source 49938) failed in normal Runs 25364 and 25427
@@ -688,8 +739,19 @@ suite status are recorded in `runbooks/yanmaga-access/PROGRESS.md`.
 `.mod-episode-more-button` だけを通常clickで展開する。limit/offset/sort/path
 とrow挿入位置を検証し、追加IDが既存IDと重複せず既存順序が保たれること、
 一覧が安定すること、他の有効なpaginationがないことを確認する。
+`data-limit` がない場合は実サイトで確認した150行pageを上限とする。
+明示limitは1〜150の正規整数のみとし、空文字・不正値は欠落扱いにしない。
+継続buttonが残る場合、次offsetは前offset＋追加行数と一致しなければならない。
 最大100回/5,000行までで、未知のcontrol・重複・partial・driftは
 `DiscoveryIncompleteError`。全レコードをbufferしてからyieldする。
+
+2026-11-17のサタノファニで、欠落limitを整数化していた旧実装の
+`Yanmaga continuation range is invalid` を再現。native clickで
+10→160→310→348行、offset 5→155→305、最後は明示limit=38、button消失を確認した。
+修正後の通常DiscoveryService＋専用Catalogでもfull complete=true、348 Sources、
+display positions 1〜348を確認。作品一覧のみを操作し、話/viewerや権利消費は行っていない。
+人工browser回帰は同じ3段階展開と、過大追加・offset drift・進捗なしの
+0件yield／既存Catalog維持を検証する。
 
 Work pages are not assumed to be oldest-first by default DOM order. When the
 observed sort controls are present, Discovery validates and selects the exact
@@ -864,8 +926,9 @@ Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated
 shared-profile page had five visible exact `/mypage` links, no sign-in/out
 labels, current work identity, and consistent true telemetry. The temporary
 empty-context comparison had no `/mypage` link, two sign-in links, and false
-telemetry. The wife-list continuation had no `data-limit`; the single authorized
-listing GET remains unsupported by the strict pagination contract. Refer to
+telemetry. The wife-list continuation had no `data-limit`; this was unsupported
+at the Stage 01 checkpoint. The current 150-row pagination contract is described
+in Listing・順序 above. Refer to
 `runbooks/yanmaga-access/PROGRESS.md` and its isolated stage01 evidence files.
 
 ## 実サイト確認・テスト・既知の制約
@@ -937,8 +1000,9 @@ The capture adapter preserves three direct-entry cases: the public red-free
 row, the fresh authenticated first-free row with one bounded source entry
 and finite grant proof, and a trusted stored grant revalidated by fresh
 same-target active Rental History evidence. A work-ticket candidate requires
-the exact authenticated wait row and charged signal, a verified absent target
-in the supported Rental History collection, and the observed same-episode
+the exact authenticated wait row and charged signal, verified absence of an
+active rental (target absent or exact expired card) in the complete supported
+Rental History collection, and the observed same-episode
 modal with its exact native POST form. Only its visible enabled `読む` button
 may be clicked, once. The source modal and pre-click history shapes were
 observed read-only. Run 10 made one normal click and emitted one native POST,

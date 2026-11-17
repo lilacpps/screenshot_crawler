@@ -2751,7 +2751,15 @@ The Adapter reports `AccessConsumption` only after the requested ticket control 
 without invoking Discovery, opening a reader, or writing Watchlist/Catalog/ZIP.
 The new entry validates HTTPS/exact official host, authority, query and path
 strictly; existing Discovery parsers and saved targets retain their contracts.
-All eleven current entry forms are recognized. Kadocomi's proven same-work
+The supported site entry forms are recognized, including ebookjapan's full-list
+URL and Yanmaga's `https://yanmaga.jp/comics/<work-slug>` work URL.
+Yanmaga uses its existing work parser and the decoded slug as same-site work
+identity, saving the literal work URL in the same form as Watchlist. Its title
+remains unknown until human confirmation; registration makes no browser request.
+The common escape guard still rejects percent-encoded input, so Japanese work
+names must be pasted literally. Episode/viewer, continuation, query and trailing-
+slash forms remain unsupported. This adds no complete-list detail capability.
+Kadocomi's proven same-work
 episode form converts to detail without opening the episode. Native identity
 and title evidence are independent of URL eligibility; missing metadata requires
 explicit human confirmation in the registration dialog.

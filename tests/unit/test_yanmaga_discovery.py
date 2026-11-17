@@ -7,6 +7,7 @@ import pytest
 
 from screenshot_crawler.cli import _discovery_registry
 from screenshot_crawler.discovery import DiscoverySourceSnapshot
+from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.yanmaga import (
     YanmagaDiscoveryAdapter,
     YanmagaEpisodeParts,
@@ -27,6 +28,27 @@ BASE = "https://yanmaga.jp"
 WORK_URL = f"{BASE}/comics/%E3%83%86%E3%82%B9%E3%83%88%E4%BD%9C"
 SLUG = "テスト作"
 EPISODE_ID = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.mark.parametrize("limit,expected", [(None, 150), ("1", 1), ("38", 38), ("150", 150)])
+def test_yanmaga_continuation_accepts_native_default_and_explicit_limit(limit, expected):
+    continuation = YanmagaDiscoveryAdapter._parse_continuation(
+        {"limit": limit, "offset": "5", "sort": "older", "text": "もっと見る",
+         "path": f"/comics/{SLUG}/episodes"}, YanmagaWorkParts(SLUG))
+    assert continuation.limit == expected and continuation.offset == 5
+
+
+@pytest.mark.parametrize("change", [
+    {"limit": ""}, {"limit": "None"}, {"limit": "0"}, {"limit": "151"},
+    {"limit": "-1"}, {"limit": "1.5"}, {"limit": "0150"},
+    {"offset": None}, {"offset": "-1"}, {"offset": "05"},
+    {"sort": None}, {"sort": "newer"}, {"path": "/comics/foreign/episodes"},
+])
+def test_yanmaga_continuation_default_does_not_rescue_malformed_fields(change):
+    raw = {"limit": None, "offset": "5", "sort": "older", "text": "もっと見る",
+           "path": f"/comics/{SLUG}/episodes"}
+    with pytest.raises(DiscoveryIncompleteError):
+        YanmagaDiscoveryAdapter._parse_continuation(raw | change, YanmagaWorkParts(SLUG))
 
 
 def test_yanmaga_discovery_adapter_is_registered() -> None:
