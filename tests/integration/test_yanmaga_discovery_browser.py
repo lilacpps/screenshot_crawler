@@ -320,6 +320,103 @@ async def _run_discovery(
     return catalog, result, service, state
 
 
+@pytest.mark.parametrize(
+    "popup_mode", ["absent", "hidden", "initial", "sorted", "more", "delayed",
+                   "broken", "duplicate", "repeat_limit", "no_actions"]
+)
+async def test_yanmaga_discovery_dismisses_optional_native_popup(
+    browser_page, tmp_path, monkeypatch, popup_mode,
+) -> None:
+    monkeypatch.setattr(yanmaga_discovery, "WAIT_TIMEOUT_MS", 1_000)
+    if popup_mode == "repeat_limit":
+        monkeypatch.setattr(yanmaga_discovery, "MAX_POPUP_DISMISSALS", 1)
+    path = f"/comics/{quote(SLUG, safe='')}/episodes"
+    rows = [(_episode_id(1), "first", "red"), (_episode_id(3), "last", "red")]
+    html = _listing_html(rows, sort_state="newer")
+    if popup_mode == "no_actions":
+        html = _listing_html(rows)
+    sorted_html = _listing_html(
+        rows, sort_state="older", canonical_query="?sort=older",
+        continuation=(1, 1, path), insert_row=_row(_episode_id(2), "middle"),
+    )
+    popup_html = '''
+      <div class="js-popup-close" id="promo-backdrop"
+           style="display:none;position:fixed;inset:0;z-index:5000;background:white">
+        <div class="js-popup-content" data-modalcontent="popup">
+          <div class="js-popup-close" id="promo-close" style="width:40px;height:40px">×</div>
+          DUPLICATE
+          <a href="/comics/another-synthetic-work">Synthetic work introduction</a>
+        </div>
+      </div>
+      <script>
+        window.showPromo = () => {
+          document.querySelector('#promo-backdrop').style.display = 'block';
+          document.body.classList.add('is-open-popup');
+        };
+        document.querySelector('#promo-close').addEventListener('click', event => {
+          event.stopPropagation();
+          window.promoCloseClicks = (window.promoCloseClicks || 0) + 1;
+          if (BROKEN) return;
+          document.body.classList.remove('is-open-popup');
+          document.querySelector('#promo-backdrop').style.display = 'none';
+        });
+        SHOW
+      </script>
+    '''.replace("BROKEN", json.dumps(popup_mode == "broken")).replace(
+        "DUPLICATE",
+        '<div class="js-popup-close" style="width:40px;height:40px">×</div>'
+        if popup_mode == "duplicate" else "",
+    )
+
+    def with_popup(document, show=False):
+        if popup_mode == "absent":
+            return document
+        return document.replace(
+            "</body>", popup_html.replace("SHOW", "showPromo();" if show else "") + "</body>"
+        )
+
+    # Reveal immediately before More, or after its actionability wait starts.
+    # The latter proves that an eager one-time check would miss the popup.
+    if popup_mode in {"more", "delayed"}:
+        original = YanmagaDiscoveryAdapter._wait_for_stable_snapshot
+
+        async def snapshot_then_popup(self, page, *args):
+            snapshot = await original(self, page, *args)
+            if snapshot.continuation is not None:
+                if popup_mode == "delayed":
+                    await page.evaluate('''() => {
+                      const more = document.querySelector('.mod-episode-more-button');
+                      more.disabled = true;
+                      setTimeout(() => { showPromo(); more.disabled = false; }, 100);
+                    }''')
+                else:
+                    await page.evaluate("showPromo()")
+            return snapshot
+
+        monkeypatch.setattr(YanmagaDiscoveryAdapter, "_wait_for_stable_snapshot", snapshot_then_popup)
+
+    catalog, result, _, state = await _run_discovery(
+        browser_page, tmp_path,
+        with_popup(html, popup_mode in {
+            "initial", "broken", "duplicate", "repeat_limit", "no_actions"
+        }),
+        sorted_html=with_popup(sorted_html, popup_mode in {"sorted", "repeat_limit"}),
+    )
+    expected_complete = popup_mode not in {"broken", "duplicate", "repeat_limit"}
+    assert result.complete is expected_complete
+    expected_count = 2 if popup_mode == "no_actions" else 3
+    assert len(catalog.list_sources(site="yanmaga")) == (expected_count if expected_complete else 0)
+    if popup_mode in {"sorted", "more", "delayed", "broken", "no_actions"}:
+        assert await browser_page.evaluate("window.promoCloseClicks || 0") == 1
+    assert state["listeners_clean"] is True
+    assert all(request["method"] == "GET" for request in state["requests"])
+    assert not any("another-synthetic-work" in request["path"] for request in state["requests"])
+    # The handler must not survive success or failure on a reused Page.
+    await browser_page.set_content('''<body class="is-open-popup">
+      <button class="js-popup-close">×</button><button id="probe">Probe</button></body>''')
+    await browser_page.locator("#probe").click(timeout=500)
+
+
 @pytest.mark.parametrize("failure", [None, "oversize", "offset_drift", "no_progress"])
 async def test_yanmaga_missing_limit_continuation_pages_before_catalog_emit(
     browser_page, tmp_path: Path, failure: str | None,

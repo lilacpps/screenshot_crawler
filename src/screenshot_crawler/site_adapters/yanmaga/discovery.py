@@ -51,6 +51,7 @@ MAX_PAGE_SIZE = 150
 LOGIN_TELEMETRY_TIMEOUT_MS = 3_000
 LOGIN_TELEMETRY_QUIET_MS = 300
 MAX_LOGIN_TELEMETRY_EVENTS = 64
+MAX_POPUP_DISMISSALS = 3
 
 _EPISODE_ID = re.compile(r"^[0-9a-f]{32}$")
 _WORK_PATH = re.compile(r"^/comics/(?P<slug>[^/]+)$")
@@ -702,18 +703,70 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
 
         telemetry = _LoginTelemetryObserver(work)
         telemetry.attach(page)
+        # The site's popup uses a separate open state and close controls from
+        # registration/rental modals. A handler also catches a popup appearing
+        # while Playwright is waiting to click Sort or More.
+        popup = page.locator("body.is-open-popup:has(.js-popup-close:visible)")
+        popup_dismissals = 0
+        popup_error: Exception | None = None
+
+        async def dismiss_popup() -> None:
+            nonlocal popup_dismissals
+            if popup_dismissals >= MAX_POPUP_DISMISSALS:
+                raise DiscoveryIncompleteError("Yanmaga promotional popup repeatedly reappeared")
+            if not (
+                parse_yanmaga_work_url(page.url) == work
+                or _parse_yanmaga_sorted_work_url(page.url, work)
+            ):
+                raise DiscoveryIncompleteError("Yanmaga popup is outside the expected work")
+            # The backdrop may share js-popup-close. Select the innermost
+            # visible close control, never the backdrop or a promotional link.
+            close = page.locator(
+                "body.is-open-popup .js-popup-close:not(:has(.js-popup-close)):visible"
+            )
+            if await close.count() != 1:
+                raise DiscoveryIncompleteError("Yanmaga popup close control is ambiguous")
+            popup_dismissals += 1
+            before_url = page.url
+            close_timeout = min(2_000, WAIT_TIMEOUT_MS // 2)
+            await close.click(timeout=close_timeout)
+            await popup.wait_for(state="hidden", timeout=close_timeout)
+            if page.url != before_url:
+                raise DiscoveryIncompleteError("Yanmaga popup close navigated away from the work")
+
+        async def handle_popup() -> None:
+            nonlocal popup_error
+            if popup_error is not None or not await popup.is_visible():
+                return
+            try:
+                await dismiss_popup()
+            except (DiscoveryIncompleteError, PlaywrightError, TimeoutError) as exc:
+                # Locator callbacks run in an event task. Propagate their failure
+                # through Discovery instead of leaking it into the next Page API.
+                popup_error = exc
+
+        async def clear_popup() -> None:
+            await handle_popup()
+            if popup_error is not None:
+                raise DiscoveryIncompleteError("Yanmaga promotional popup did not close") from popup_error
+
+        popup_handler_installed = False
         try:
+            await page.add_locator_handler(popup, handle_popup, no_wait_after=True)
+            popup_handler_installed = True
             await page.goto(target.url, wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS)
             await page.locator(f"{LIST_SELECTOR} {ROW_SELECTOR}").first.wait_for(
                 state="visible", timeout=WAIT_TIMEOUT_MS
             )
             await telemetry.wait_for_state(page)
+            await clear_popup()
             sort_selected = await self._select_oldest_sort(page, work, telemetry)
             if sort_selected:
                 await page.locator(f"{LIST_SELECTOR} {ROW_SELECTOR}").first.wait_for(
                     state="visible", timeout=WAIT_TIMEOUT_MS
                 )
                 await telemetry.wait_for_state(page)
+                await clear_popup()
             snapshot = await self._wait_for_stable_snapshot(page, work, telemetry)
             expansions = 0
             while snapshot.continuation is not None:
@@ -736,6 +789,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 snapshot = stable
                 expansions += 1
 
+            await clear_popup()
             final_snapshot = await self._snapshot(page, work, telemetry)
             if final_snapshot != snapshot:
                 raise DiscoveryIncompleteError(
@@ -758,6 +812,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                         "Yanmaga identity, access evidence or listing changed during grant verification"
                     )
                 final_snapshot = post_history_snapshot
+            if popup_error is not None:
+                raise DiscoveryIncompleteError("Yanmaga promotional popup did not close") from popup_error
             self.last_snapshot = final_snapshot
             records = self._records_from_snapshot(
                 final_snapshot, target, work, self._fresh_history_grants
@@ -768,9 +824,13 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         except DiscoveryIncompleteError:
             raise
         except (PlaywrightError, TimeoutError, ValueError, TypeError) as exc:
+            if popup_error is not None:
+                raise DiscoveryIncompleteError("Yanmaga promotional popup did not close") from popup_error
             raise DiscoveryIncompleteError("Yanmaga public episode listing did not validate") from exc
         finally:
             telemetry.detach()
+            if popup_handler_installed:
+                await page.remove_locator_handler(popup)
 
         for record in records:
             yield record

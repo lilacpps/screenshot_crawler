@@ -143,7 +143,20 @@ install the Source/Viewer request observer; those request counts are unknown.
 The Catalog retained Source 27 as the only enabled source, Source 28 disabled,
 Item 27 completed, the existing Artifact and grant unchanged, and quota state
 zero. The post-full plan contained zero candidates because Item 27 was already
-completed. The bounded work-intro popup observation found a visible
+completed. Current Discovery installs a temporary locator handler for the native
+`body.is-open-popup` / `.js-popup-close` path, including popups appearing during
+Sort/More actionability waits. It clicks one innermost visible close control,
+confirms dismissal without navigation, and permits at most three dismissals.
+Ambiguous or unsuccessful dismissal makes Discovery incomplete before emission;
+the handler is removed on success and failure. Registration/rental modal controls
+are excluded. Synthetic browser tests cover optional and delayed appearance and
+failure cleanup. The site's delivered JavaScript confirms this popup path, but
+the intermittent introduction was absent during the current live work-page check,
+so real-popup dismissal remains unverified.
+The modified adapter enumerated all 57 rows of the dual work through shared CDP
+without Catalog writes, episode/viewer/non-GET requests, or remaining handlers.
+
+The earlier bounded work-intro popup observation found a visible
 `DIV.mod-modal-close.js-modal-close`, but its one click did not confirm popup
 disappearance; the listing remained at 57 rows with no More control, so no
 further popup action was attempted. The ignored QA popup helper, including this

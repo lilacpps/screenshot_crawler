@@ -1,5 +1,34 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Discovery中の作品紹介ポップアップ（2026-11-18）
+
+`YanmagaDiscoveryAdapter.iter_records()` は専用Pageへ一時的なPlaywright
+`add_locator_handler()` を登録する。サイトの `body.is-open-popup` と表示中の
+`.js-popup-close` が揃った場合だけ、同じclassを持つ背景を除いた最内側の
+close controlを通常clickする。並び替え・「もっと見る」のactionability待機中に
+遅れて表示された場合も対象。非表示時は追加の表示待ちをしない。
+通常の登録・レンタルmodalの `is-open-modal` / `.js-modal-close` は対象外。
+
+click前に現在URLが対象作品のcanonical/検証済みsort URLであること、closeが
+一意であることを確認する。閉じた状態への遷移とURL非変更を確認し、最大3回まで。
+close click・消失待ちはそれぞれ最大2秒（短いaction timeout時はその半分）。
+曖昧、閉じない、再表示上限等の失敗はDiscovery incompleteとし、行をemitしない。
+callback内の失敗は保持してDiscovery側から伝播し、Pageの後続操作へ漏らさない。
+操作不要の短い一覧でも閉じるため、初期表示後・sort後・最終snapshot前にも即時確認する。
+成功・失敗ともhandlerとtelemetry listenerを解除する。access分類・Catalog同期・
+expansion/row上限は従来どおり。CLI/設定追加なし。
+
+shared-CDPで作品一覧DOMとサイトが配信したJavaScriptを確認した。popup用の
+`is-open-popup` / `.js-popup-close` と通常modalの別系統を確認できたが、
+間欠的な作品紹介そのものは今回の作品ページ確認では再現せず、実ポップアップの
+close成功は未確認。変更後Adapterで双星のアポクリファの全57件を列挙でき、
+終了後のhandler残留0、話/Viewer/non-GET request各0を確認した。Catalog書込みなし。
+旧QAで見えた `DIV.mod-modal-close.js-modal-close` は、閉じた
+親modal（opacity=0）にも存在し得るため、ボタンの存在だけを開状態としない。
+人工browserのDiscoveryで表示なし・hidden・開始時・sort遷移後・More直前・
+click待機中の遅延表示・操作不要の一覧・閉じない・close重複・再表示上限と
+handler後処理を検証する。
+
 ## Work Ticket前のレンタル履歴ページ送り・期限切れ（2026-11-17）
 
 通常Catalogのアポクリファ第28話（Item 49616 / Source 49923）は、11月17日の
