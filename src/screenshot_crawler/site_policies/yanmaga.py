@@ -114,7 +114,8 @@ class YanmagaSitePolicy(SitePolicy):
                 )
             if grant_until is not None:
                 return PolicyDecision(False, None, "expired_access_grant")
-            return PolicyDecision(False, None, "access_grant_not_observed")
+            # Inventory uses this reason to count point-only rows as paid.
+            return PolicyDecision(False, None, "paid")
         if source.access_mode != "free":
             reason = {
                 "owned": "owned_not_verified",

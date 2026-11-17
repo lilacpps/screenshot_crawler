@@ -457,13 +457,13 @@ start capture, reset rights, or change the site's live access semantics.
 
 ## Existing-unknown Rental History recovery (2026-11-16)
 
-Authenticated full Discovery now joins raw-unknown listing rows and same-work
+Authenticated full Discovery now joins unknown/point-only listing rows and same-work
 trusted-grant targets to one bounded native Rental History observation. An
-exact active card with a fresh finite countdown promotes a raw-unknown row to
+exact active card with a fresh finite countdown promotes an unknown/point-only row to
 `quota` and stores the conservative observed expiry; it does not infer
 `quota_started_at` or a cooldown. Active history without a finite bound,
 missing/duplicate evidence, and identity mismatches do not promote a row, and
-`owned` rows are excluded. A still-valid trusted grant preserves its existing
+`owned` rows are excluded. For otherwise unknown rows, a still-valid trusted grant preserves its existing
 mode and expiry when active; the new history bound never extends it. The join
 does not enter a Source or Viewer or consume a right.
 
@@ -927,16 +927,47 @@ A first-free row requires authenticated proof, exactly one total
 `{mod-episode-point--free, by_first_time}`. Wait/modal markers, a red-public
 marker, or another conflicting native free badge leaves the row unknown. A
 numeric normal point badge may coexist. Only these observed public-free and
-first-free states map to `access_mode=free`; other access states remain
-`unknown` and every row remains `available=True`.
+first-free states map to `access_mode=free`. A verified wait row maps to `quota`.
+Point-only rows map to `paid` under the rule below; unsupported access states
+remain `unknown` and every row remains `available=True`.
+
+ポイントのみの行は、検証済みanonymous/authenticated作品一覧で、
+`data-is-free="false"`、最内側のpoint badgeが一つだけあり、可視・exact class
+`mod-episode-point--normal` または `mod-episode-point`・正のASCII整数価格である場合に
+`paid` とする。価格を包むnative icon wrapperは重複価格に数えない。無料・初回無料・
+wait markerや矛盾する無料表示があればこの判定を適用しない。0、不正値、hidden、
+重複、未知class、未検証login状態は `unknown`。無料・wait・有効な有限Rental History
+grantの判定を優先し、point表示からgrant消失を推測しない。既存Sourceへの反映には
+通常のFull Discoveryを使い、Item status等は変更しない。既存free/quota行がpoint-onlyの
+観測で `paid` に変わる場合も保存済みgrant期限は維持し、既存の有効grant Policyを使う。
+CLI/設定追加はない。
+有効grantのない `paid` はSite PolicyによりBatch対象外となる。保存grantなしの場合の
+skip reasonを `paid` に揃え、Inventoryでは有償件数として集計する。
+不正/期限切れgrantの既存reasonと、有効grantによるdirect判定は維持する。
+
+2026-11-18のshared-CDP一覧確認では、妹は知っている第96/97話に70ポイント、
+パラレルパラダイス第345/346/347話に90ポイントの上記native badgeと
+`data-is-free="false"` を確認した。話/Viewerやポイント操作には入っていない。
+変更後の通常DiscoveryServiceを隔離Catalog backupへ実行し、Fullを98行
+（free 6 / quota 90 / paid 2）と348行（free 7 / quota 338 / paid 3）で完走、
+既存5 Sourceが `unknown → paid`、unknown 0であることを確認した。
+Source identity、Item状態、保存grant、Artifact、Run、Work resource stateは維持され、
+話/Viewer/non-GET request各0。通常Catalogへの書込みはない。証拠は
+`.tmp/yanmaga-point-paid-live-20261118/report.json`。
+Discovery/Policy/Adapter UnitとDiscovery browser Integrationは2回の実行で計179件成功、
+skip 0。Policyのreason変更後、Policy/Inventory/GUI modelの95件も成功、skip 0。
+隔離live CatalogをInventoryServiceとGUI status projectionで検証し、両作品の
+paid件数2/3、unknown 0、status「候補あり」を確認した。
+`ruff check src tests --no-cache` と変更対象の `git diff --check` は成功。
+site-local分類変更のためViewer/capture Integration、Research、full pytestは未実施。
 
 Yanmaga sends `free_until=None` on each refresh because no free-expiry value was
 observed; under the existing Catalog refresh contract this clears a stale
 free-expiry value. A public listing does not assert a new grant expiry, so
 `access_granted_until_observed=False` and Catalog preserves an existing grant.
-Fresh exact-target Rental History evidence retains a previous mode only while
+For otherwise unknown rows, fresh exact-target Rental History evidence retains a previous mode only while
 its trusted stored expiry remains future; it does not extend that expiry. For
-raw-unknown rows, a fresh exact active card with a finite countdown imports a
+unknown/point-only rows, a fresh exact active card with a finite countdown imports a
 new `quota` classification and observed expiry. Missing, duplicate, mismatched,
 or active-without-finite-expiry evidence leaves the raw classification
 unchanged; `owned` is excluded. The general Catalog contract still treats an
@@ -947,8 +978,8 @@ The Stage 01 authenticated sample had no wait marker classification and kept
 those rows unknown at that checkpoint. Stage 03 added the observed image marker
 and charged-state requirement for ticket use; the later authenticated Rental
 History join above recovers exact active rentals with finite bounds. Discovery
-still opens no episode or access CTA. Paid-only classification and daily-limit
-scope remain unverified.
+still opens no episode or access CTA. Point-only paid classification is supported
+as described above; daily-limit scope remains unverified.
 
 Live evidence on 2026-11-15 JST: `work-dual` returned 57 rows after the
 Discovery change: 27 first-free, 8 public-free, 22 unknown. The authenticated

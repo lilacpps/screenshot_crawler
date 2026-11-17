@@ -83,6 +83,7 @@ class YanmagaListingRow:
     known_restricted: bool
     first_free_marker: bool = False
     wait_free_marker: bool = False
+    paid_marker: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1176,6 +1177,15 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 const waitImages = waitBadge ? [...waitBadge.querySelectorAll('img')] : [];
                 const waitImage = waitImages.length === 1 ? waitImages[0] : null;
                 const href = anchors.length === 1 ? new URL(anchors[0].href, location.href) : null;
+                const pointBadges = [...row.querySelectorAll(
+                  '.mod-episode-point,[class*="mod-episode-point--"]')];
+                // The native icon wrapper repeats its child price's text.
+                const priceBadges = pointBadges.filter(element =>
+                  !pointBadges.some(other => other !== element && element.contains(other)));
+                const price = priceBadges.length === 1 ? priceBadges[0] : null;
+                const paidPointMarker = visible(price)
+                  && ['mod-episode-point', 'mod-episode-point--normal'].includes(price.className)
+                  && /^[1-9][0-9]*$/.test((price.innerText || '').trim());
                 let originalURL = null;
                 try {
                   const rawOriginal = row.getAttribute('data-original-url');
@@ -1204,6 +1214,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   waitImageVisible: visible(waitImage),
                   waitImageUrl: waitImage ? waitImage.src : null,
                   dataIsFree: row.getAttribute('data-is-free'),
+                  paidPointMarker,
                   originalUrl: originalURL,
                   anchorUrl: href?.href || null,
                   conflictingFreeBadge: [...row.querySelectorAll(
@@ -1484,6 +1495,13 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                     free_marker=free_marker,
                     first_free_marker=first_free_marker,
                     wait_free_marker=wait_free_marker,
+                    paid_marker=(anonymous or authenticated)
+                    and raw_row.get("paidPointMarker") is True
+                    and raw_row.get("dataIsFree") == "false"
+                    and marker_count == 0
+                    and not wait_marker
+                    and not restricted_marker
+                    and not conflicting_free_badge,
                     red_marker_present=red_marker_present,
                     known_restricted=anonymous
                     and not red_marker_present
@@ -1578,7 +1596,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         work: YanmagaWorkParts,
         previous_grants: Mapping[str, DiscoverySourceSnapshot] | None = None,
     ) -> tuple[YanmagaEpisodeParts, ...]:
-        """Select raw-unknown rows plus previously trusted grant targets."""
+        """Select unknown/point-only rows plus previously trusted grant targets."""
 
         episode_ids: list[str] = []
         seen: set[str] = set()
@@ -1650,6 +1668,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 if row.free_marker or row.first_free_marker
                 else "quota"
                 if row.wait_free_marker or history_grant is not None
+                else "paid"
+                if row.paid_marker
                 else "unknown"
             )
             records.append(

@@ -630,11 +630,11 @@ async def test_yanmaga_incremental_yields_latest_first_and_uses_shared_known_str
     assert len(by_id) == 7
 
 
-async def test_yanmaga_unverified_anonymous_state_never_marks_red_row_free(
+async def test_yanmaga_unverified_anonymous_state_keeps_access_unknown(
     browser_page,
     tmp_path: Path,
 ) -> None:
-    rows = [(_episode_id(1), "第1話", "red")]
+    rows = [(_episode_id(1), "第1話", "red"), (_episode_id(2), "第2話", "point")]
     catalog, result, _service, _state = await _run_discovery(
         browser_page,
         tmp_path,
@@ -645,18 +645,51 @@ async def test_yanmaga_unverified_anonymous_state_never_marks_red_row_free(
     assert result.complete is True
     assert source is not None
     assert source.access_mode == "unknown"
+    assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(2)}").access_mode == "unknown"
 
 
-async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
+@pytest.mark.parametrize(
+    ("point_badge", "expected"),
+    [
+        ('<span class="mod-episode-point">70</span>', "paid"),
+        ('<span class="mod-episode-point--normal">90</span>', "paid"),
+        (('<span class="mod-icon-point mod-episode-point">'
+          '<span class="mod-episode-point--normal">70</span></span>'), "paid"),
+        ('<span class="mod-episode-point--normal">0</span>', "unknown"),
+        ('<span class="mod-episode-point--normal">-70</span>', "unknown"),
+        ('<span class="mod-episode-point--normal">70P</span>', "unknown"),
+        ('<span class="mod-episode-point--normal" hidden>70</span>', "unknown"),
+        (('<span class="mod-episode-point--normal">70</span>'
+          '<span class="mod-episode-point--normal">90</span>'), "unknown"),
+        ('<span class="mod-episode-point--other">70</span>', "unknown"),
+        (('<span class="mod-episode-point--normal">70</span>'
+          '<span class="mod-episode-point--free by_first_time">初回無料</span>'), "free"),
+        (('<span class="mod-episode-point--normal">70</span>'
+          '<span class="mod-episode-point--free by_wait">無料</span>'), "unknown"),
+        (('<span class="mod-episode-point--normal">70</span>'
+          '<span class="mod-episode-free_browse">'
+          '<img src="/assets/logo_free_browse-96b8e1d8.svg"></span>'), "unknown"),
+    ],
+)
+async def test_yanmaga_authenticated_listing_classifies_observed_access_rows(
     browser_page,
     tmp_path: Path,
+    point_badge: str,
+    expected: str,
 ) -> None:
     rows = [
         (_episode_id(1), "初回無料", "first"),
         (_episode_id(2), "通常無料", "red"),
         (_episode_id(3), "ポイントのみ", "point"),
     ]
-    html = _listing_html(rows, anonymous=False, signin=False, mypage=True)
+    html = _listing_html(
+        rows, anonymous=False, signin=False, mypage=True,
+        raw_row_html=(
+            _row(_episode_id(1), "初回無料", "first")
+            + _row(_episode_id(2), "通常無料", "red")
+            + _row(_episode_id(3), "ポイントのみ", "none", extra_badge=point_badge)
+        ),
+    )
     html = html.replace(
         "</body>",
         '<script>window.accessClicks=0</script>'
@@ -690,9 +723,28 @@ async def test_yanmaga_authenticated_listing_classifies_only_observed_free_rows(
     assert result.complete is True
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}").access_mode == "free"
     assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(2)}").access_mode == "free"
-    assert catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(3)}").access_mode == "unknown"
+    source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(3)}")
+    assert source.access_mode == expected
+    assert source.access_granted_until is None
+    assert catalog.get_item(source.item_id).status == "pending"
     assert await browser_page.evaluate("window.accessClicks || 0") == 0
     assert forbidden_requests == []
+
+
+@pytest.mark.parametrize("data_is_free", [None, "true", "false"])
+async def test_yanmaga_point_price_requires_explicit_nonfree_row(
+    browser_page, tmp_path: Path, data_is_free: str | None,
+) -> None:
+    row = _row(_episode_id(1), "ポイント話", "point")
+    attribute = "" if data_is_free is None else f' data-is-free="{data_is_free}"'
+    row = row.replace(' data-is-free="false"', attribute)
+    catalog, result, _service, state = await _run_discovery(
+        browser_page, tmp_path, _listing_html([], raw_row_html=row),
+    )
+    assert result.complete is True
+    assert state["listeners_clean"] is True
+    source = catalog.find_source("yanmaga", f"{SLUG}:{_episode_id(1)}")
+    assert source.access_mode == ("paid" if data_is_free == "false" else "unknown")
 
 
 async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
@@ -1597,3 +1649,5 @@ async def test_yanmaga_keeps_ephemeral_reason_for_stale_free_preflight(
     assert rows[_episode_id(2)].known_restricted is True
     assert rows[_episode_id(3)].known_restricted is True
     assert rows[_episode_id(4)].known_restricted is True
+    assert next(record.source.access_mode for record in records
+                if record.source.external_id == f"{SLUG}:{_episode_id(3)}") == "paid"

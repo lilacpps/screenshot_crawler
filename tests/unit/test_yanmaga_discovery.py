@@ -245,7 +245,10 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
         ),
     )
 
-    def row(number: int, *, free: bool = False, first: bool = False, wait: bool = False):
+    def row(
+        number: int, *, free: bool = False, first: bool = False,
+        wait: bool = False, paid: bool = False,
+    ):
         episode_id = f"{number:032x}"
         return yanmaga_discovery.YanmagaListingRow(
             episode_id=episode_id,
@@ -256,19 +259,20 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
             known_restricted=False,
             first_free_marker=first,
             wait_free_marker=wait,
+            paid_marker=paid,
         )
 
     snapshot = yanmaga_discovery.YanmagaListingSnapshot(
         title="test work",
         anonymous=False,
         rows=(
-            row(1),
+            row(1, paid=True),
             row(2),
             row(3),
             row(4),
             row(5),
             row(6),
-            row(7),
+            row(7, paid=True),
             row(8, wait=True),
             row(9, free=True),
             row(10, first=True),
@@ -316,7 +320,7 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
     assert records[owned].access_mode == "unknown"
     assert records[external_id(6)].access_mode == "unknown"
     assert records[external_id(6)].access_granted_until is None
-    assert records[external_id(7)].access_mode == "unknown"
+    assert records[external_id(7)].access_mode == "paid"
     assert records[external_id(8)].access_mode == "quota"
     assert records[external_id(8)].access_granted_until is None
     assert records[external_id(9)].access_mode == "free"

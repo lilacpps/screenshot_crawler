@@ -109,7 +109,7 @@ def test_yanmaga_policy_rejects_expired_or_unverifiable_expiry(
         (_source(available=False), "unavailable"),
         (_source(site="comicdays"), "wrong_site"),
         (_source("unknown"), "unknown"),
-        (_source("paid"), "access_grant_not_observed"),
+        (_source("paid"), "paid"),
         (_source("owned"), "owned_not_verified"),
         (_source("grant"), "grant_not_supported"),
         (_source("rental"), "rental_not_supported"),
@@ -183,7 +183,7 @@ def test_yanmaga_quota_uses_work_ticket_after_observed_consumption() -> None:
 @pytest.mark.parametrize(
     ("value", "reason"),
     [
-        (None, "access_grant_not_observed"),
+        (None, "paid"),
         (NOW, "expired_access_grant"),
         (NOW - timedelta(seconds=1), "expired_access_grant"),
         ("2026-10-20T13:00:00", "invalid_access_grant_until"),
@@ -273,7 +273,7 @@ def test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions(
     assert [candidate.consumes_quota for candidate in plan.candidates] == [False, False, True]
     assert {entry.reason for entry in plan.skipped} >= {
         "unknown",
-        "access_grant_not_observed",
+        "paid",
         "owned_not_verified",
         "unavailable",
     }

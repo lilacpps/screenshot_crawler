@@ -206,17 +206,18 @@ The current listing classification recognizes verified public-free and
 first-free rows as `access_mode="free"`, and recognizes the wait marker as
 `access_mode="quota"` when authenticated exact-row proof is present. Before
 ticket use, the Adapter additionally requires a fresh work-level charged
-state. Rows remain `available=True`; other or unverified states start as
-`unknown`.
+state. Point-only rows with the verified positive numeric price described below
+map to `paid`. Rows remain `available=True`; other or unverified states start
+as `unknown`.
 
 On an authenticated complete listing, Discovery also makes one bounded
-same-work Rental History lookup for raw-unknown rows and same-work sources with
+same-work Rental History lookup for unknown/point-only rows and same-work sources with
 trusted grants. An exact active Rental History card with a fresh finite native
-countdown can promote a raw-unknown row to `quota` and set the observed grant
+countdown can promote an unknown/point-only row to `quota` and set the observed grant
 expiry. This recovers previously absent or unknown Catalog sources without
 inferring a consumption time or cooldown. Active evidence without a finite
 bound, missing or duplicate cards, and identity mismatches do not promote a
-row; `owned` rows are never imported. A previously trusted future grant keeps
+row; `owned` rows are never imported. For otherwise unknown rows, a previously trusted future grant keeps
 its existing mode and expiry when active history confirms it; Discovery does
 not extend that expiry. The lookup is metadata-only and does not open an
 episode or invoke an access control.
@@ -246,6 +247,42 @@ marker, or another conflicting native free badge leave it `unknown`. A numeric
 normal point badge may coexist, as observed in the sample. The classifier also
 requires the total free-marker count to be exactly one, so any extra or unknown
 free badge fails closed.
+
+A point-only row requires a verified anonymous or authenticated work document,
+`data-is-free="false"`, and exactly one visible innermost point badge with the
+exact class `mod-episode-point--normal` or `mod-episode-point` and a positive
+ASCII integer price. The native icon wrapper is not counted again as a second
+price. Free/first-free/wait markers or conflicting labels prevent this paid
+classification. Zero, malformed, hidden, duplicate, and unknown price badges
+stay `unknown`. Free, wait, and confirmed finite Rental History grants retain
+precedence; a price alone observes no grant and does not clear a stored grant.
+The existing Policy excludes paid rows without a future grant from Batch.
+For a paid row with no stored grant, its skip reason is `paid`, so Inventory
+counts it as paid rather than unknown. Invalid/expired-grant diagnostics retain
+their existing reasons and active-grant direct access remains unchanged.
+Full Discovery refreshes existing Sources through the ordinary Catalog upsert.
+When a point-only observation replaces a previous free/quota mode with `paid`,
+the stored grant expiry is preserved, so the existing active-grant Policy path
+still applies.
+
+On 2026-11-18, shared-CDP listing inspection confirmed point-only rows for
+妹は知っている chapters 96/97 (70 points) and パラレルパラダイス chapters
+345/346/347 (90 points), with `data-is-free="false"` and the native numeric
+normal badge. No episode or paid control was opened during that inspection.
+Post-change Full Discovery through the ordinary service completed against an
+isolated Catalog backup: 98 rows (free 6 / quota 90 / paid 2) and 348 rows
+(free 7 / quota 338 / paid 3), with no unknown rows. The five existing Sources
+retained their identities; Item states, grants, Artifacts, Runs and work-resource
+states were unchanged. Episode/Viewer/non-GET requests were zero. The normal
+Catalog was not written. Evidence: `.tmp/yanmaga-point-paid-live-20261118/report.json`.
+The affected Discovery/Policy/Adapter unit and Discovery browser tests passed
+179 cases in two runs, with zero skipped. After the Policy skip-reason change,
+the Policy/Inventory/GUI model group passed 95 tests, with zero skipped.
+InventoryService and the GUI status projection on the isolated live Catalog
+confirmed paid counts 2/3, unknown 0, and `候補あり` for both works.
+`ruff check src tests --no-cache` passed.
+Viewer/capture Integration, Research and the full repository suite were not
+rerun for this site-local classification change.
 
 Anonymous proof still requires a visible sign-in link, no sign-out or visible
 `/mypage` link, current work-document identity, and explicit consistent

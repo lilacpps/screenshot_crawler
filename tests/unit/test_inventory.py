@@ -249,6 +249,12 @@ def test_expiry_paid_rental_multiple_resources_and_site_slots(inventory_inputs):
     classified = _access(registry.create("magapoke"), candidate, NOW)
     assert classified.category == "quota"
     assert classified.resources == ("work_ticket", "premium_ticket")
+    candidate = replace(candidate, site="yanmaga", access_mode="paid",
+                        external_id="test-work:0123456789abcdef0123456789abcdef",
+                        access_granted_until=None)
+    classified = _access(registry.create("yanmaga"), candidate, NOW)
+    assert (classified.category, classified.reason) == ("paid", "paid")
+    assert classified.resources == ()
     db, _ = inventory_inputs
     with sqlite3.connect(db) as connection:
         connection.execute("UPDATE sources SET quota_started_at=? WHERE site='mangaone'", (NOW.isoformat(),))
