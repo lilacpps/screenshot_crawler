@@ -12,7 +12,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from screenshot_crawler.gui.main_window import MainWindow
-from screenshot_crawler.management.execution import JobExecutionRequest
+from screenshot_crawler.management.execution import ExecutionPlanService, JobExecutionRequest
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.job_controller import JobController
 from screenshot_crawler.management.jobs import JobStore
@@ -178,6 +178,141 @@ def test_normal_actions_queue_without_preview_or_confirmation(
     assert request.fingerprint_kind == "inputs-v1"
     assert request.plan_fingerprint.startswith("inputs-v1:")
     assert request.sites == ("magapoke", "mangaone")
+    window.close()
+
+
+def test_gui_piccoma_batch_uses_v2_consent_without_checkbox_or_extra_prompt(
+    tmp_path, qt_app, monkeypatch
+):
+    window = _window(tmp_path, qt_app)
+    original = window.model.snapshot
+    assert original is not None
+    WatchlistService(original.watchlist_path).add(
+        key="piccoma-example",
+        work_key="piccoma-example",
+        site="piccoma",
+        url="https://piccoma.com/web/product/23222/episodes",
+        label="Piccoma example",
+    )
+    snapshot = InventoryService().load(
+        original.catalog_path,
+        original.watchlist_path,
+        runtime_path=window.runtime_path,
+    )
+    window.set_snapshot(snapshot)
+    window.model.set_checked_keys({"piccoma-example"})
+    assert not hasattr(window, "piccoma_auto_tickets_checkbox")
+    captured = []
+    monkeypatch.setattr(window, "_start_execution", captured.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("normal Batch has no extra ticket prompt"),
+    )
+    window._show_execution_preview("batch")
+
+    assert len(captured) == 1
+    assert captured[0].action == "batch"
+    assert captured[0].sites == ("piccoma",)
+    assert captured[0].allow_quota_access is True
+    assert captured[0].fingerprint_kind == "inputs-v2"
+    assert captured[0].plan_fingerprint.startswith("inputs-v2:")
+    assert captured[0].plan_fingerprint == ExecutionPlanService().input_fingerprint_v2(
+        captured[0]
+    )
+    window.close()
+
+
+def test_gui_mixed_batch_signs_piccoma_consent_for_piccoma_only(
+    tmp_path, qt_app, monkeypatch
+):
+    window = _window(tmp_path, qt_app)
+    original = window.model.snapshot
+    assert original is not None
+    WatchlistService(original.watchlist_path).add(
+        key="piccoma-example",
+        work_key="piccoma-example",
+        site="piccoma",
+        url="https://piccoma.com/web/product/23222/episodes",
+        label="Piccoma example",
+    )
+    snapshot = InventoryService().load(
+        original.catalog_path,
+        original.watchlist_path,
+        runtime_path=window.runtime_path,
+    )
+    window.set_snapshot(snapshot)
+    window.model.set_checked_keys({"piccoma-example", "sample-0000"})
+    captured = []
+    monkeypatch.setattr(window, "_start_execution", captured.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("normal Batch has no extra ticket prompt"),
+    )
+    window._show_execution_preview("batch")
+    assert len(captured) == 1
+    assert captured[0].sites == ("mangaone", "piccoma")
+    assert captured[0].allow_quota_access is True
+    assert captured[0].fingerprint_kind == "inputs-v2"
+    assert captured[0].plan_fingerprint == ExecutionPlanService().input_fingerprint_v2(
+        captured[0]
+    )
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("resource", "consent_required"),
+    [("all", True), ("work_ticket", False), ("binge_ticket", True)],
+)
+def test_gui_piccoma_grant_resources_queue_matching_signed_consent(
+    tmp_path, qt_app, monkeypatch, resource, consent_required
+):
+    window = _window(tmp_path, qt_app)
+    original = window.model.snapshot
+    assert original is not None
+    WatchlistService(original.watchlist_path).add(
+        key="piccoma-example",
+        work_key="piccoma-example",
+        site="piccoma",
+        url="https://piccoma.com/web/product/23222/episodes",
+        label="Piccoma example",
+    )
+    snapshot = InventoryService().load(
+        original.catalog_path,
+        original.watchlist_path,
+        runtime_path=window.runtime_path,
+    )
+    window.set_snapshot(snapshot)
+    window.model.set_checked_keys({"piccoma-example"})
+    combo = window._site_grant_resource_combos["piccoma"]
+    index = combo.findData(resource)
+    assert index >= 0
+    combo.setCurrentIndex(index)
+
+    captured = []
+    monkeypatch.setattr(window, "_start_execution", captured.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("grant-only does not add a Piccoma prompt"),
+    )
+    window._show_execution_preview("grant_only")
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.action == "grant_only"
+    assert request.resources_by_site == (("piccoma", resource),)
+    assert request.allow_quota_access is consent_required
+    expected_kind = "inputs-v2" if consent_required else "inputs-v1"
+    assert request.fingerprint_kind == expected_kind
+    service = ExecutionPlanService()
+    fingerprint = (
+        service.input_fingerprint_v2(request)
+        if consent_required
+        else service.input_fingerprint(request)
+    )
+    assert request.plan_fingerprint == fingerprint
     window.close()
 
 

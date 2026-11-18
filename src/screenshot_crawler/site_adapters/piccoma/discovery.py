@@ -49,7 +49,7 @@ BINGE_FREE_MARKER = "PCM-epList_status_bingefree"
 ZERO_PLUS_MARKER = "PCM-epList_status_zeroPlus"
 POINT_MARKER = "PCM-epList_status_point"
 GRANTED_MARKER = "PCM-epList_status_waitfreeRead"
-_GRANTED_HOURS = re.compile(r"閲覧期限 残り([1-9][0-9]{0,2})時間")
+_GRANTED_HOURS = re.compile(r"閲覧期限\s*残り([1-9][0-9]{0,2})時間")
 QUOTA_MARKER_SETS = (
     {WAIT_FREE_MARKER},
     {WAIT_FREE_MARKER, BINGE_FREE_MARKER},

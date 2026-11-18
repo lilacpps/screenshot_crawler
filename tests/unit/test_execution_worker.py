@@ -37,6 +37,173 @@ def _fake_discovery_registry() -> SimpleNamespace:
     return SimpleNamespace(create=lambda _site: adapter)
 
 
+def _piccoma_grant_request(
+    tmp_path: Path,
+    resource: str,
+    *,
+    consent: bool,
+) -> dict[str, object]:
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    WatchlistService(watchlist_path).add(
+        key="piccoma-key",
+        work_key="piccoma-work",
+        site="piccoma",
+        url="https://piccoma.com/web/product/900/episodes",
+        label="Piccoma fixture",
+    )
+    runtime_path = tmp_path / "runtime.yaml"
+    runtime_path.write_text("sites: {}\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    request: dict[str, object] = {
+        "action": "grant_only",
+        "selected_keys": ["piccoma-key"],
+        "sites": ["piccoma"],
+        "keys_by_site": {"piccoma": ["piccoma-key"]},
+        "resources_by_site": {"piccoma": resource},
+        "catalog_path": str(catalog_path),
+        "watchlist_path": str(watchlist_path),
+        "runtime_path": str(runtime_path),
+        "env_file": str(env_file),
+        "output_root": str(tmp_path / "output"),
+        "library_dir": str(tmp_path / "Books"),
+        "metrics_root": str(tmp_path / "metrics"),
+        "fingerprint_kind": "inputs-v2" if consent else "inputs-v1",
+        "allow_quota_access": consent,
+    }
+    service = ExecutionPlanService()
+    request["plan_fingerprint"] = (
+        service.input_fingerprint_v2(request)
+        if consent
+        else service.input_fingerprint(request)
+    )
+    return request
+
+
+@pytest.mark.parametrize(
+    ("resource", "consent", "fingerprint_kind"),
+    [
+        ("all", True, "inputs-v2"),
+        ("binge_ticket", True, "inputs-v2"),
+        ("work_ticket", False, "inputs-v1"),
+    ],
+)
+def test_worker_piccoma_grant_resources_require_only_their_queued_consent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    consent: bool,
+    fingerprint_kind: str,
+) -> None:
+    request = _piccoma_grant_request(tmp_path, resource, consent=consent)
+    assert request["fingerprint_kind"] == fingerprint_kind
+    calls: list[tuple[str, str | None, bool]] = []
+
+    async def fake_batch(args, _catalog) -> None:
+        calls.append((args.site, args.grant_only, args.allow_quota_access))
+        args.event_sink("batch_finished", result="succeeded", payload={})
+
+    monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", fake_batch)
+    asyncio.run(_run(request))
+
+    assert calls == [("piccoma", resource, False)]
+
+
+@pytest.mark.parametrize(
+    ("resource", "fingerprint_kind", "consent"),
+    [
+        ("all", "inputs-v1", False),
+        ("piccoma_ticket_grant", "inputs-v1", False),
+    ],
+    ids=["old-all-queue-needs-reconfirmation", "obsolete-resource-alias"],
+)
+def test_worker_rejects_old_or_unsupported_piccoma_grant_queue_before_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    fingerprint_kind: str,
+    consent: bool,
+) -> None:
+    request = _piccoma_grant_request(tmp_path, resource, consent=consent)
+    request["fingerprint_kind"] = fingerprint_kind
+    request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint(request)
+    entered: list[str] = []
+
+    async def forbidden_batch(args, _catalog) -> None:
+        entered.append(args.site)
+
+    monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", forbidden_batch)
+    with pytest.raises(RuntimeError):
+        asyncio.run(_run(request))
+    assert entered == []
+
+
+@pytest.mark.parametrize(
+    ("piccoma_resource", "consent"),
+    [("binge_ticket", True), ("work_ticket", False)],
+    ids=["piccoma-binge-consent", "piccoma-work-no-new-consent"],
+)
+def test_worker_mixed_grant_consent_is_piccoma_only_and_not_cli_quota_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    piccoma_resource: str,
+    consent: bool,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    watchlist.add(
+        key="piccoma-key", work_key="piccoma-work", site="piccoma",
+        url="https://piccoma.com/web/product/900/episodes", label="Piccoma",
+    )
+    watchlist.add(
+        key="other-key", work_key="other-work", site="magapoke",
+        url="https://example.invalid/magapoke/work", label="Other grant site",
+    )
+    runtime_path = tmp_path / "runtime.yaml"
+    runtime_path.write_text("sites: {}\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    request: dict[str, object] = {
+        "action": "grant_only",
+        "selected_keys": ["piccoma-key", "other-key"],
+        "sites": ["magapoke", "piccoma"],
+        "keys_by_site": {
+            "magapoke": ["other-key"],
+            "piccoma": ["piccoma-key"],
+        },
+        "resources_by_site": {"magapoke": "all", "piccoma": piccoma_resource},
+        "catalog_path": str(catalog_path),
+        "watchlist_path": str(watchlist_path),
+        "runtime_path": str(runtime_path),
+        "env_file": str(env_file),
+        "fingerprint_kind": "inputs-v2" if consent else "inputs-v1",
+        "allow_quota_access": consent,
+    }
+    service = ExecutionPlanService()
+    request["plan_fingerprint"] = (
+        service.input_fingerprint_v2(request)
+        if consent
+        else service.input_fingerprint(request)
+    )
+    calls: list[tuple[str, str | None, bool]] = []
+
+    async def fake_batch(args, _catalog) -> None:
+        calls.append((args.site, args.grant_only, args.allow_quota_access))
+        args.event_sink("batch_finished", result="succeeded", payload={})
+
+    monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", fake_batch)
+    asyncio.run(_run(request))
+
+    assert calls == [
+        ("magapoke", "all", False),
+        ("piccoma", piccoma_resource, False),
+    ]
+
+
 def test_worker_endpoint_resolution_uses_explicit_then_transient_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -126,6 +293,101 @@ def test_worker_runs_multi_site_request_with_per_site_resources(
     }
     asyncio.run(_run(request))
     assert calls == [("magapoke", ("a",), "work_ticket"), ("mangaone", ("b",), "all")]
+
+
+@pytest.mark.parametrize(
+    ("limit", "first_outcome", "expected_sites", "expected_limits", "fails"),
+    [
+        (1, "started", ["mangaone"], [1], False),
+        (2, "started", ["mangaone", "piccoma"], [2, 1], False),
+        (1, "local_skip", ["mangaone", "piccoma"], [1, 1], False),
+        (1, "empty", ["mangaone", "piccoma"], [1, 1], False),
+        (2, "failure", ["mangaone"], [2], True),
+    ],
+    ids=[
+        "limit-exhausted", "remaining-shared-limit", "local-skip-not-counted",
+        "empty-not-counted", "failure-stops-later-site",
+    ],
+)
+def test_worker_mixed_batch_shares_limit_by_started_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: int,
+    first_outcome: str,
+    expected_sites: list[str],
+    expected_limits: list[int],
+    fails: bool,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    watchlist.add(
+        key="manga-key", work_key="manga-work", site="mangaone",
+        url="https://manga-one.com/manga/1/chapter/2", label="Manga",
+    )
+    watchlist.add(
+        key="piccoma-key", work_key="piccoma-work", site="piccoma",
+        url="https://piccoma.com/web/product/23222", label="Piccoma",
+    )
+    calls: list[tuple[str, int | None, bool]] = []
+
+    async def fake_batch(args, _catalog) -> None:
+        calls.append((args.site, args.limit, args.allow_quota_access))
+        if args.site == "mangaone":
+            if first_outcome == "started":
+                args.event_sink("candidate_started", item_id=1)
+            elif first_outcome == "local_skip":
+                args.event_sink("candidate_finished", result="skipped", reason="local_skip")
+            elif first_outcome == "failure":
+                args.event_sink("candidate_started", item_id=1)
+                raise RuntimeError("site attempt failed")
+        elif args.limit:
+            for item_id in range(args.limit):
+                args.event_sink("candidate_started", item_id=item_id + 10)
+        args.event_sink("batch_finished", result="succeeded", payload={})
+
+    monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", fake_batch)
+    request: dict[str, object] = {
+        "action": "batch",
+        "selected_keys": ["manga-key", "piccoma-key"],
+        "sites": ["mangaone", "piccoma"],
+        "keys_by_site": {"mangaone": ["manga-key"], "piccoma": ["piccoma-key"]},
+        "resources_by_site": {},
+        "catalog_path": str(catalog_path),
+        "watchlist_path": str(watchlist_path),
+        "runtime_path": str(tmp_path / "runtime.yaml"),
+        "env_file": str(tmp_path / ".env"),
+        "output_root": str(tmp_path / "output"),
+        "library_dir": str(tmp_path / "Books"),
+        "metrics_root": str(tmp_path / "metrics"),
+        "cdp_endpoint": "http://127.0.0.1:9222",
+        "limit": limit,
+        "fingerprint_kind": "inputs-v2",
+        "allow_quota_access": True,
+    }
+    (tmp_path / "runtime.yaml").write_text("sites: {}\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint_v2(request)
+    events: list[tuple[str, dict[str, object]]] = []
+    def run_worker() -> None:
+        asyncio.run(
+            _run(
+                request,
+                event_sink=lambda event_type, **fields: events.append((event_type, fields)),
+            )
+        )
+    if fails:
+        with pytest.raises(RuntimeError, match="site attempt failed"):
+            run_worker()
+    else:
+        run_worker()
+
+    assert [site for site, _limit, _consent in calls] == expected_sites
+    assert [site_limit for _site, site_limit, _consent in calls] == expected_limits
+    assert calls[0][2] is False
+    if len(calls) == 2:
+        assert calls[1][0] == "piccoma" and calls[1][2] is True
 
 
 def test_worker_does_not_treat_incomplete_discovery_as_success(

@@ -1995,19 +1995,34 @@ async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
 
 
 async def _run_batch_run(args: argparse.Namespace) -> None:
+    _validate_piccoma_auto_ticket_request(args)
     catalog = CatalogService(args.catalog)
     with catalog.job_lock():
         await _run_batch_run_locked(args, catalog)
 
 
+def _validate_piccoma_auto_ticket_request(args: argparse.Namespace) -> bool:
+    """Validate the retained signed worker consent bit; no CLI switch exists."""
+
+    value = getattr(args, "allow_quota_access", False)
+    if type(value) is not bool:
+        raise BatchPlanningError("legacy Piccoma ticket consent must be a boolean")
+    if value and getattr(args, "site", None) != "piccoma":
+        raise BatchPlanningError("Piccoma ticket consent is valid only for Piccoma")
+    if value and getattr(args, "grant_only", None) is not None:
+        raise BatchPlanningError("Piccoma Batch consent cannot authorize grant-only")
+    return value
+
+
 async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogService) -> None:
+    allow_quota_access = _validate_piccoma_auto_ticket_request(args)
+    grant_only = getattr(args, "grant_only", None)
     watchlist = WatchlistService(args.watchlist)
     policies = _batch_policy_registry()
     planner = BatchPlanner(
         catalog, policies, watchlist=watchlist, library_dir=args.library_dir
     )
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
-    grant_only = getattr(args, "grant_only", None)
     grant_only_all = grant_only == "all"
     limit = getattr(args, "limit", None)
     policy = policies.create(args.site)
@@ -2056,7 +2071,11 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             )
         metrics_mode = "grant-only"
     else:
-        plan = _planner_plan(planner, args)
+        plan = _planner_plan(
+            planner,
+            args,
+            **({"allow_quota_access": True} if allow_quota_access else {}),
+        )
         if defer_quota:
             direct_candidates, deferred_candidates, deferred_resource = (
                 _partition_deferred_candidates(plan.candidates, defer_quota=True)
@@ -2169,12 +2188,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             values=values,
         )
         session = await BrowserSession.connect(endpoint)
+        executor_options = {"access_attempt_sink": metrics.record_access_attempt}
         executor = BatchExecutor(
             catalog,
             policies,
             _batch_adapter_registry(values),
             watchlist=watchlist,
             library_dir=args.library_dir,
+            **executor_options,
         )
         # Keep the orchestration input site-neutral and preserve compatibility with
         # lightweight test doubles that implement the pre-Phase-1 constructor.
@@ -2356,6 +2377,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 metrics=metrics,
                 grant_only=False,
                 attempt_limit=None,
+                allow_quota_access=allow_quota_access,
             )
         if (
             not grant_only_all
@@ -2466,26 +2488,25 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
 def _grant_only_resource_passes(policy: object) -> tuple[str, ...]:
     """Resolve and validate the policy-owned resource order for ``all``."""
 
-    ordered_method = getattr(policy, "ordered_access_resource_passes", None)
     supported_method = getattr(policy, "grant_only_supported_access_resources", None)
-    if not callable(ordered_method) or not callable(supported_method):
+    validate_method = getattr(policy, "validate_grant_only_resource", None)
+    if not callable(supported_method) or not callable(validate_method):
         raise BatchPlanningError(
             "Selected site policy does not expose the grant-only resource contract"
         )
-    ordered = tuple(ordered_method())
-    supported = set(supported_method())
-    if not ordered:
+    resources = tuple(supported_method())
+    if not resources:
         raise BatchPlanningError(
             "Selected site policy does not support any grant-only resource"
         )
-    unsupported = tuple(resource for resource in ordered if resource not in supported)
-    if unsupported:
-        raise BatchPlanningError(
-            "Grant-only resource contract mismatch: " + ", ".join(unsupported)
-        )
-    if len(set(ordered)) != len(ordered):
+    if len(set(resources)) != len(resources):
         raise BatchPlanningError("Selected site policy returned duplicate grant-only resources")
-    return ordered
+    try:
+        for resource in resources:
+            validate_method(resource)
+    except SitePolicyError as exc:
+        raise BatchPlanningError(str(exc)) from exc
+    return resources
 
 
 def _execution_event(args: argparse.Namespace, event_type: str, **fields: object) -> None:
@@ -2534,6 +2555,7 @@ async def _execute_batch_candidates(
     grant_report: GrantOnlyReport | None = None,
     prepared_access: PreparedAccessResource | None = None,
     confirmed_grants: list[BatchCandidate] | None = None,
+    allow_quota_access: bool = False,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
@@ -2673,6 +2695,7 @@ async def _execute_batch_candidates(
                     library_dir=args.library_dir,
                     max_pages=args.max_pages,
                     max_same_content=args.max_same_content,
+                    **({"allow_quota_access": True} if allow_quota_access else {}),
                 )
                 print(f"  completed: {result.archive_path}")
             continue_after_candidate = True

@@ -63,6 +63,7 @@ from screenshot_crawler.runtime_settings import (
     SiteRuntimeSettings,
 )
 from screenshot_crawler.site_adapters.base import (
+    AccessAttemptObservation,
     AccessResourceResolution,
     ConfirmedAccessGrant,
     SiteAdapter,
@@ -202,6 +203,7 @@ class BatchExecutor:
         package_function: PackageFunction = package_crawl_output,
         runtime_settings: SiteRuntimeSettings | None = None,
         access_event_sink: Callable[[AccessEvent], None] | None = None,
+        access_attempt_sink: Callable[[AccessAttemptObservation], None] | None = None,
         watchlist: WatchlistService | None = None,
         library_dir: str | Path | None = None,
     ) -> None:
@@ -212,6 +214,7 @@ class BatchExecutor:
         self.package_function = package_function
         self.runtime_settings = runtime_settings
         self.access_event_sink = access_event_sink
+        self.access_attempt_sink = access_attempt_sink
         self.library_dir = Path(library_dir) if library_dir is not None else Path("output/Books")
         self.watchlist = watchlist
         self._reported_archive_warnings: set[str] = set()
@@ -243,6 +246,112 @@ class BatchExecutor:
             return ", ".join(fields)
         return ", ".join(fields)
 
+    def _bind_candidate_access_observers(
+        self,
+        adapter: SiteAdapter,
+        candidate: BatchCandidate,
+        source: Source,
+    ) -> Callable[[], None]:
+        """Bind grant and attempt callbacks to one candidate until cleanup."""
+
+        grant_active = True
+        attempt_active = True
+        set_grant_observer = getattr(
+            adapter, "set_confirmed_access_grant_observer", None
+        )
+        set_attempt_observer = getattr(adapter, "set_access_attempt_observer", None)
+        if callable(set_grant_observer):
+            set_grant_observer(None)
+        if callable(set_attempt_observer):
+            set_attempt_observer(None)
+
+        def persist_confirmed_grant(grant: ConfirmedAccessGrant) -> None:
+            if not grant_active:
+                raise BatchExecutionError(
+                    "confirmed grant observer is outside its candidate execution"
+                )
+            if not isinstance(grant, ConfirmedAccessGrant):
+                raise BatchExecutionError(
+                    "adapter reported an unvalidated confirmed grant value"
+                )
+            if (
+                source.site != candidate.site
+                or grant.site != source.site
+                or grant.external_id != source.external_id
+            ):
+                raise BatchExecutionError(
+                    "adapter reported a confirmed grant for a different candidate"
+                )
+            self.catalog.record_confirmed_access_grant(
+                candidate.source_id,
+                site=source.site,
+                external_id=source.external_id,
+                observed_at=grant.observed_at,
+                access_granted_until=grant.access_granted_until,
+            )
+
+        def persist_access_attempt(observation: AccessAttemptObservation) -> None:
+            if not attempt_active:
+                raise BatchExecutionError(
+                    "access attempt observer is outside its candidate execution"
+                )
+            if not isinstance(observation, AccessAttemptObservation):
+                raise BatchExecutionError(
+                    "adapter reported an invalid access attempt observation"
+                )
+            if (
+                source.site != candidate.site
+                or observation.site != source.site
+                or observation.external_id != source.external_id
+                or observation.resource != candidate.quota_resource
+            ):
+                raise BatchExecutionError(
+                    "adapter reported an access attempt for a different candidate"
+                )
+            if self.access_attempt_sink is None:
+                raise BatchExecutionError(
+                    "durable access attempt evidence is required before quota entry"
+                )
+            self.access_attempt_sink(observation)
+
+        grant_installed = False
+        attempt_installed = False
+        try:
+            if callable(set_grant_observer):
+                set_grant_observer(persist_confirmed_grant)
+                grant_installed = True
+            if callable(set_attempt_observer):
+                set_attempt_observer(persist_access_attempt)
+                attempt_installed = True
+        except BaseException:
+            grant_active = False
+            attempt_active = False
+            if grant_installed:
+                with suppress(Exception):
+                    set_grant_observer(None)
+            if attempt_installed:
+                with suppress(Exception):
+                    set_attempt_observer(None)
+            raise
+
+        cleaned = False
+
+        def cleanup() -> None:
+            nonlocal grant_active, attempt_active, cleaned
+            if cleaned:
+                return
+            cleaned = True
+            grant_active = False
+            attempt_active = False
+            if callable(set_grant_observer):
+                with suppress(Exception):
+                    set_grant_observer(None)
+            if callable(set_attempt_observer):
+                with suppress(Exception):
+                    set_attempt_observer(None)
+
+        return cleanup
+
     @_catalog_job_locked
     async def execute_candidate(
         self,
@@ -254,9 +363,12 @@ class BatchExecutor:
         max_pages: int = 1000,
         max_same_content: int = 3,
         now: datetime | None = None,
+        allow_quota_access: bool = False,
     ) -> BatchExecutionResult:
         """Run, package, and complete one candidate, or raise clearly."""
 
+        if type(allow_quota_access) is not bool:
+            raise BatchExecutionError("allow_quota_access must be a boolean")
         current = _normalize_now(now_jst() if now is None else now)
         effective_library_dir = (
             Path(library_dir) if library_dir is not None else self.library_dir
@@ -266,7 +378,7 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
-        grant_observer_active = False
+        observer_cleanup: Callable[[], None] = lambda: None
         speculative_grant: tuple[str | None, str | None] | None = None
         try:
             if candidate.backend != "web":
@@ -275,22 +387,29 @@ class BatchExecutor:
                 )
             policy = self.policies.create(candidate.site)
             output_preflight = self._validate_candidate(
-                candidate, policy, current, library_dir=effective_library_dir
+                candidate,
+                policy,
+                current,
+                library_dir=effective_library_dir,
+                allow_quota_access=allow_quota_access,
             )
             local_skip_reason = self.resource_state_skip_reason(
                 candidate, policy=policy, now=current
             )
             if local_skip_reason is not None:
                 raise AccessResourceUnavailableError(local_skip_reason)
+            if candidate.consumes_quota and policy.guards_unresolved_quota_attempts():
+                unresolved = policy.unresolved_quota_attempt_source_ids(
+                    self.catalog.list_crawl_runs(source_id=candidate.source_id)
+                )
+                if candidate.source_id in unresolved:
+                    raise AccessResourceUnavailableError(
+                        "prior_quota_attempt_unresolved"
+                    )
             adapter = self.adapters.create(candidate.site)
-            set_grant_observer = getattr(
-                adapter, "set_confirmed_access_grant_observer", None
-            )
             configure_existing_grant = getattr(
                 adapter, "configure_existing_access_grant", None
             )
-            if callable(set_grant_observer):
-                set_grant_observer(None)
             if callable(configure_existing_grant):
                 configure_existing_grant(None)
             source = self.catalog.get_source(candidate.source_id)
@@ -300,31 +419,9 @@ class BatchExecutor:
                 await configure_identity(source.external_id, work.work_key)
             if callable(configure_existing_grant):
                 configure_existing_grant(_parse_access_grant(source.access_granted_until))
-
-            def persist_confirmed_grant(grant: ConfirmedAccessGrant) -> None:
-                if not grant_observer_active:
-                    raise BatchExecutionError(
-                        "confirmed grant observer is outside its candidate execution"
-                    )
-                if not isinstance(grant, ConfirmedAccessGrant):
-                    raise BatchExecutionError(
-                        "adapter reported an unvalidated confirmed grant value"
-                    )
-                if grant.site != source.site or grant.external_id != source.external_id:
-                    raise BatchExecutionError(
-                        "adapter reported a confirmed grant for a different candidate"
-                    )
-                self.catalog.record_confirmed_access_grant(
-                    candidate.source_id,
-                    site=source.site,
-                    external_id=source.external_id,
-                    observed_at=grant.observed_at,
-                    access_granted_until=grant.access_granted_until,
-                )
-
-            if callable(set_grant_observer):
-                set_grant_observer(persist_confirmed_grant)
-                grant_observer_active = True
+            observer_cleanup = self._bind_candidate_access_observers(
+                adapter, candidate, source
+            )
             run = self.catalog.create_crawl_run(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -506,17 +603,11 @@ class BatchExecutor:
                 resource_consumed=resource_consumed,
             ) from exc
         finally:
-            grant_observer_active = False
+            observer_cleanup()
             if adapter is not None:
-                set_grant_observer = getattr(
-                    adapter, "set_confirmed_access_grant_observer", None
-                )
                 configure_existing_grant = getattr(
                     adapter, "configure_existing_access_grant", None
                 )
-                if callable(set_grant_observer):
-                    with suppress(Exception):
-                        set_grant_observer(None)
                 if callable(configure_existing_grant):
                     with suppress(Exception):
                         configure_existing_grant(None)
@@ -808,6 +899,7 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
+        observer_cleanup: Callable[[], None] = lambda: None
         try:
             if candidate.quota_resource is None:
                 raise BatchExecutionError("grant-only candidate has no access resource")
@@ -821,6 +913,14 @@ class BatchExecutor:
             )
             if local_skip_reason is not None:
                 raise AccessResourceUnavailableError(local_skip_reason)
+            if candidate.consumes_quota and policy.guards_unresolved_quota_attempts():
+                unresolved = policy.unresolved_quota_attempt_source_ids(
+                    self.catalog.list_crawl_runs(source_id=candidate.source_id)
+                )
+                if candidate.source_id in unresolved:
+                    raise AccessResourceUnavailableError(
+                        "prior_quota_attempt_unresolved"
+                    )
             if prepared_access is None:
                 adapter = self.adapters.create(candidate.site)
             else:
@@ -828,9 +928,18 @@ class BatchExecutor:
                 adapter = prepared_access.adapter
             source = self.catalog.get_source(candidate.source_id)
             work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
+            configure_existing_grant = getattr(
+                adapter, "configure_existing_access_grant", None
+            )
+            if callable(configure_existing_grant):
+                configure_existing_grant(None)
+                configure_existing_grant(_parse_access_grant(source.access_granted_until))
             configure_identity = getattr(adapter, "configure_target_identity", None)
             if configure_identity is not None:
                 await configure_identity(source.external_id, work.work_key)
+            observer_cleanup = self._bind_candidate_access_observers(
+                adapter, candidate, source
+            )
             run = self.catalog.create_crawl_run(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -962,6 +1071,15 @@ class BatchExecutor:
                 f"Grant-only candidate failed ({self._candidate_error_context(candidate)}): {exc}",
                 resource_consumed=resource_consumed,
             ) from exc
+        finally:
+            observer_cleanup()
+            if adapter is not None:
+                configure_existing_grant = getattr(
+                    adapter, "configure_existing_access_grant", None
+                )
+                if callable(configure_existing_grant):
+                    with suppress(Exception):
+                        configure_existing_grant(None)
 
     def _current_work_naming(
         self, work: Work, items: list[Item], sources: list[Source],
@@ -1160,6 +1278,7 @@ class BatchExecutor:
         *,
         library_dir: Path | None = None,
         output_mode: str = "capture",
+        allow_quota_access: bool = False,
     ) -> CandidateOutputPreflight | None:
         """Reject a plan whose required Catalog identity/state is stale."""
 
@@ -1213,7 +1332,14 @@ class BatchExecutor:
         try:
             site_sources = self.catalog.list_sources(site=candidate.site)
             actual_quota_available = policy.available_quota(site_sources, now)
-            if candidate.consumes_quota and candidate.quota_resource is not None:
+            if allow_quota_access and policy.requires_quota_access_opt_in():
+                decision = policy.evaluate_with_quota_access(
+                    source,
+                    now=now,
+                    quota_available=actual_quota_available,
+                    allow_quota_access=True,
+                )
+            elif candidate.consumes_quota and candidate.quota_resource is not None:
                 decision = policy.evaluate_for_quota_resource(
                     source,
                     now=now,

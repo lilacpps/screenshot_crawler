@@ -4,7 +4,7 @@ import json
 import sqlite3
 import sys
 from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -32,6 +32,7 @@ from screenshot_crawler.discovery.models import (
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.maintenance.work_deletion import WorkDeletionPreviewService
+from screenshot_crawler.site_adapters.base import AccessAttemptObservation
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
@@ -325,6 +326,154 @@ def test_batch_grant_only_accepts_explicit_resource_and_all_shape() -> None:
         ["batch", "run", "--site", "magapoke", "--grant-only", "all"]
     )
     assert all_args.grant_only == "all"
+
+
+def test_piccoma_auto_tickets_cli_option_is_removed_but_worker_consent_remains() -> None:
+    default = _parser().parse_args(["batch", "run", "--site", "piccoma"])
+    assert getattr(default, "allow_quota_access", False) is False
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["batch", "run", "--site", "piccoma", "--piccoma-auto-tickets"]
+        )
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["batch", "plan", "--site", "piccoma", "--piccoma-auto-tickets"]
+        )
+    assert cli._validate_piccoma_auto_ticket_request(
+        SimpleNamespace(site="piccoma", allow_quota_access=True, grant_only=None)
+    ) is True
+    with pytest.raises(cli.BatchPlanningError, match="only for Piccoma"):
+        cli._validate_piccoma_auto_ticket_request(
+            SimpleNamespace(site="mangaone", allow_quota_access=True, grant_only=None)
+        )
+    with pytest.raises(cli.BatchPlanningError, match="cannot authorize grant-only"):
+        cli._validate_piccoma_auto_ticket_request(
+            SimpleNamespace(site="piccoma", allow_quota_access=True, grant_only="all")
+        )
+
+
+async def test_piccoma_batch_run_persists_attempt_through_metrics_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = SimpleNamespace(
+        item_id=1,
+        source_id=2,
+        target_id=3,
+        discovery_key=None,
+        metadata={"order": "episode-1"},
+        access_mode="quota",
+        access_strategy="quota",
+        quota_resource="piccoma_ticket_auto",
+        consumes_quota=True,
+        locator="https://piccoma.com/web/viewer/23222/896199",
+    )
+    plan = SimpleNamespace(
+        candidates=[candidate],
+        skipped=[],
+        warnings=[],
+        direct_count=0,
+        quota_count=1,
+        quota_available=None,
+        quota_remaining=None,
+    )
+    received_options: dict[str, object] = {}
+
+    class FakePolicy:
+        def defer_quota_access_to_grant_phase(self) -> bool:
+            return False
+
+        def additional_access_resource_passes(self) -> tuple[str, ...]:
+            return ()
+
+    class FakePlanner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def plan(self, *, site: str, allow_quota_access: bool = False) -> object:
+            assert site == "piccoma"
+            assert allow_quota_access is False
+            return plan
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    class FakeExecutor:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            received_options.update(kwargs)
+            self.runtime_settings = None
+            self.access_event_sink = None
+
+        async def execute_candidate(
+            self, _page: object, _candidate: object, **kwargs: object
+        ) -> object:
+            assert kwargs.get("allow_quota_access", False) is False
+            sink = received_options["access_attempt_sink"]
+            assert callable(sink)
+            sink(
+                AccessAttemptObservation(
+                    site="piccoma",
+                    external_id="23222:896199",
+                    resource="piccoma_ticket_auto",
+                    resource_kind="zero_plus",
+                    status="attempting",
+                    observed_at=datetime.now(UTC),
+                )
+            )
+            return SimpleNamespace(archive_path=Path("synthetic.zip"))
+
+    monkeypatch.setattr(cli, "WatchlistService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(create=lambda _site: FakePolicy()),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_settings",
+        lambda *_args: SimpleNamespace(
+            for_site=lambda _site: SimpleNamespace(inter_candidate_delay_ms=0)
+        ),
+    )
+    monkeypatch.setattr(cli, "_require_selected_scope_sync", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_batch_adapter_registry", lambda _values: object())
+    monkeypatch.setattr(cli, "read_env_file", lambda _path: {})
+    monkeypatch.setattr(cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://test.invalid:9222")
+
+    metrics_root = tmp_path / "metrics"
+    args = _parser().parse_args(
+        [
+            "batch", "run", "--site", "piccoma",
+            "--catalog", str(tmp_path / "catalog.sqlite"),
+            "--watchlist", str(tmp_path / "watchlist.yaml"),
+        ]
+    )
+    args.metrics_root = metrics_root
+    await cli._run_batch_run_locked(args, object())
+
+    assert callable(received_options["access_attempt_sink"])
+    metric_files = list(metrics_root.glob("*.jsonl"))
+    assert len(metric_files) == 1
+    events = [json.loads(line) for line in metric_files[0].read_text(encoding="utf-8").splitlines()]
+    attempt = next(event for event in events if event["type"] == "access_attempt")
+    assert attempt["event"] == "attempting"
+    assert attempt["item_id"] == 1
+    assert attempt["source_id"] == 2
+    assert attempt["target_id"] == 3
+    assert attempt["resource_kind"] == "zero_plus"
 
 
 def test_deferred_resource_contract_is_candidate_owned() -> None:
@@ -999,6 +1148,15 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     )
     assert grant_only.grant_only == "work_ticket"
     assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
+    piccoma_policy = cli._batch_policy_registry().create("piccoma")
+    assert piccoma_policy.supported_access_resources() == (
+        "piccoma_ticket_auto", "work_ticket", "binge_ticket"
+    )
+    assert piccoma_policy.ordered_access_resource_passes() == ("piccoma_ticket_auto",)
+    assert piccoma_policy.grant_only_supported_access_resources() == (
+        "work_ticket", "binge_ticket",
+    )
+    assert cli._grant_only_resource_passes(piccoma_policy) == ("work_ticket", "binge_ticket")
     ebookjapan_policy = cli._batch_policy_registry().create("ebookjapan")
     assert ebookjapan_policy.supported_access_resources() == ()
     assert ebookjapan_policy.grant_only_supported_access_resources() == ()
@@ -1017,8 +1175,8 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     assert comicfuz_policy.supported_access_resources() == ()
     assert comicfuz_policy.grant_only_supported_access_resources() == ()
     yanmaga_policy = cli._batch_policy_registry().create("yanmaga")
-    assert yanmaga_policy.supported_access_resources() == ()
-    assert yanmaga_policy.grant_only_supported_access_resources() == ()
+    assert yanmaga_policy.supported_access_resources() == ("work_ticket",)
+    assert yanmaga_policy.grant_only_supported_access_resources() == ("work_ticket",)
 
 
 def test_discovery_and_batch_registries_contain_supported_sites() -> None:
@@ -1230,6 +1388,9 @@ def test_batch_run_prints_archive_maintenance_warnings_without_candidates(
 
     class FakeMetrics:
         path = Path("metrics.jsonl")
+
+        def record_access_attempt(self, _observation: object) -> None:
+            return None
 
         def record_planned_skips(self, _skipped: object) -> None:
             return None
@@ -1769,6 +1930,9 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     class FakeMetrics:
         path = tmp_path / "metrics.jsonl"
 
+        def record_access_attempt(self, _observation: object) -> None:
+            pass
+
         def record_planned_skips(self, _skips: object) -> None:
             pass
 
@@ -2005,6 +2169,9 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
     class FakeMetrics:
         path = tmp_path / "metrics.jsonl"
 
+        def record_access_attempt(self, _observation: object) -> None:
+            pass
+
         def record_grant_result(self, **_kwargs: object) -> None:
             pass
 
@@ -2218,9 +2385,20 @@ async def test_explicit_deferred_grant_only_paces_resolver_before_grant(
     ]
 
 
+@pytest.mark.parametrize(
+    ("site_name", "resource_a", "resource_b"),
+    [
+        ("magapoke", "resource_a", "resource_b"),
+        ("piccoma", "work_ticket", "binge_ticket"),
+    ],
+    ids=["generic-resource-order", "piccoma-work-before-binge"],
+)
 def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    site_name: str,
+    resource_a: str,
+    resource_b: str,
 ) -> None:
     monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     plans: list[str | None] = []
@@ -2248,15 +2426,15 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             output_mode: str = "capture",
             selected_keys: tuple[str, ...] | None = None,
         ) -> object:
-            assert site == "magapoke"
+            assert site == site_name
             assert output_mode == "grant_only"
             assert selected_keys == ("selected-key",)
             plans.append(quota_resource)
-            if quota_resource == "resource_a":
-                candidates = [candidate("resource_a", 1), candidate("resource_a", 2)]
+            if quota_resource == resource_a:
+                candidates = [candidate(resource_a, 1), candidate(resource_a, 2)]
             else:
-                assert quota_resource == "resource_b"
-                candidates = [candidate("resource_b", 3), candidate("resource_b", 4)]
+                assert quota_resource == resource_b
+                candidates = [candidate(resource_b, 3), candidate(resource_b, 4)]
             return SimpleNamespace(candidates=candidates, skipped=[])
 
     class FakeSession:
@@ -2291,17 +2469,21 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             )
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
+    def create_policy(_site: str) -> object:
+        if site_name == "piccoma":
+            from screenshot_crawler.site_policies.piccoma import PiccomaSitePolicy
+
+            return PiccomaSitePolicy()
+        return SimpleNamespace(
+            ordered_access_resource_passes=lambda: (resource_a, resource_b),
+            grant_only_supported_access_resources=lambda: (resource_a, resource_b),
+            validate_grant_only_resource=lambda _resource: None,
+        )
+
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
-        lambda: SimpleNamespace(
-            create=lambda _site: SimpleNamespace(
-                ordered_access_resource_passes=lambda: ("resource_a", "resource_b"),
-                grant_only_supported_access_resources=lambda: (
-                    "resource_a", "resource_b"
-                ),
-            )
-        ),
+        lambda: SimpleNamespace(create=create_policy),
     )
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
@@ -2319,7 +2501,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             "batch",
             "run",
             "--site",
-            "magapoke",
+            site_name,
             "--grant-only",
             "all",
             "--key",
@@ -2333,15 +2515,28 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
 
     output = capsys.readouterr()
     # Preflight all resource passes before CDP, then replan each pass at execution.
-    assert plans == ["resource_a", "resource_b", "resource_a", "resource_b"]
-    assert executions == [("resource_a", 1), ("resource_a", 2), ("resource_b", 3)]
+    assert plans == [resource_a, resource_b, resource_a, resource_b]
+    assert executions == [(resource_a, 1), (resource_a, 2), (resource_b, 3)]
     assert "resource=all" in output.out
     assert "item=4" not in output.out
     assert "FAILED" not in output.out
 
 
-def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
+@pytest.mark.parametrize(
+    ("site_name", "resource_a", "resource_b", "outcome"),
+    [
+        ("magapoke", "resource_a", "resource_b", "exhausted"),
+        ("piccoma", "work_ticket", "binge_ticket", "exhausted"),
+        ("piccoma", "work_ticket", "binge_ticket", "unknown"),
+    ],
+    ids=["generic-resources", "piccoma-work-before-binge", "piccoma-unknown-stops"],
+)
+def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
     monkeypatch: pytest.MonkeyPatch,
+    site_name: str,
+    resource_a: str,
+    resource_b: str,
+    outcome: str,
 ) -> None:
     monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     executions: list[int] = []
@@ -2366,13 +2561,13 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
             quota_resource: str | None = None,
             output_mode: str = "capture",
         ) -> object:
-            assert site == "magapoke"
+            assert site == site_name
             assert output_mode == "grant_only"
             return SimpleNamespace(
                 candidates=(
-                    [candidate("resource_a", 1)]
-                    if quota_resource == "resource_a"
-                    else [candidate("resource_b", 2)]
+                    [candidate(resource_a, 1)]
+                    if quota_resource == resource_a
+                    else [candidate(resource_b, 2)]
                 ),
                 skipped=[],
             )
@@ -2403,6 +2598,8 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
         ) -> object:
             executions.append(candidate.item_id)
             if candidate.item_id == 1:
+                if outcome == "unknown":
+                    raise UnknownPageStateError("ambiguous grant result")
                 raise cli.AccessResourceUnavailableError(
                     "resource_a_exhausted", stop_resource_pass=True
                 )
@@ -2413,17 +2610,21 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
             )
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
+    def create_policy(_site: str) -> object:
+        if site_name == "piccoma":
+            from screenshot_crawler.site_policies.piccoma import PiccomaSitePolicy
+
+            return PiccomaSitePolicy()
+        return SimpleNamespace(
+            ordered_access_resource_passes=lambda: (resource_a, resource_b),
+            grant_only_supported_access_resources=lambda: (resource_a, resource_b),
+            validate_grant_only_resource=lambda _resource: None,
+        )
+
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
-        lambda: SimpleNamespace(
-            create=lambda _site: SimpleNamespace(
-                ordered_access_resource_passes=lambda: ("resource_a", "resource_b"),
-                grant_only_supported_access_resources=lambda: (
-                    "resource_a", "resource_b"
-                ),
-            )
-        ),
+        lambda: SimpleNamespace(create=create_policy),
     )
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
@@ -2435,12 +2636,17 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["screenshot-crawler", "batch", "run", "--site", "magapoke", "--grant-only", "all"],
+        ["screenshot-crawler", "batch", "run", "--site", site_name, "--grant-only", "all"],
     )
 
-    cli.main()
+    if outcome == "unknown":
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main()
+        assert exc_info.value.code == 2
+    else:
+        cli.main()
 
-    assert executions == [1, 2]
+    assert executions == ([1] if outcome == "unknown" else [1, 2])
 
 
 @pytest.mark.parametrize("consumed", [False, None])

@@ -2,7 +2,25 @@
 
 ## Implemented scope
 
-Piccoma Discovery and the horizontal viewer/Capture adapter support unconditional free access and already active manual unlocks. Discovery validates complete product episode lists and records observed manual-unlock expiry separately from free access. The viewer adapter rechecks the target's current listing state before entry. The ordinary 1:1 display profiles first attempt the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
+Piccoma Discovery and the horizontal viewer/Capture adapter support exact-free access, active manual unlocks, and the three observed free-ticket kinds. Normal Batch uses available waitfree, ¥0+, and binge-free tickets in the site's row and stock order without a Piccoma-only flag or checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` runs both as explicit ordered passes. Each pass confirms grants without Capture, packaging, or Item completion. See the [ticket runbook progress](../../../../runbooks/piccoma-ticket-auto/PROGRESS.md) for historical Stage 02 live evidence and current synthetic verification. The viewer adapter rechecks the target's current listing state before entry. The ordinary 1:1 display profiles first attempt the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
+
+`piccoma_ticket_auto` is the normal Batch logical resource. Grant-only has
+two explicit resources: `work_ticket` allows waitfree / ¥0+, and `binge_ticket`
+allows binge-free. `--grant-only all` runs Work first, replans, then runs Binge;
+each pass is restricted to its resource's kinds and does not silently fallback.
+Both modes
+bind the full-list row, product-home charge/balance, login indicator,
+target-bound eligibility exchange, exact native modal, and matching one-off
+control. They block unapproved navigation and mutating requests, never follow
+a purchase redirect, and do not retry an uncertain click. The precise ticket
+kind and attempt certainty are written to sanitized Batch metrics; positive
+target grant proof is saved immediately, including when later entry/capture
+fails. Grant-only confirms entry and leaves the Item pending without Capture,
+packaging, or completion. GUI has no Piccoma ticket checkbox or extra opt-in
+prompt; the Run button tooltip explains that free tickets may be used, and
+clicking it queues the job without an execution-confirmation dialog. The
+worker's signed internal consent bit protects queued requests from
+replaying an old non-consuming Piccoma request as a consuming one.
 
 The ordinary 1200px-high native profile admits widths 757..844 within the
 live-measured width envelope, subject to complete 16x24/17x24 tile, source JPEG,
@@ -993,7 +1011,7 @@ Manual unlock evidence requires the sole prefixed marker `PCM-epList_status_wait
 
 Both full and incremental Discovery refresh every row in the requested scope. Manual unlocks can change on old episodes, so Piccoma continues past known rows. The complete listing is already buffered; this adds no listing navigation. Incremental keeps its generic semantics of not marking unseen sources unavailable. Rediscovery preserves completed Items and artifacts.
 
-At viewer initialization, the adapter opens the product listing again and requires the unique target to remain exact-free or to have valid manual-unlock evidence with a future conservative bound. It then requires HTTP 200 and matching product/episode identity; `/web/viewer/s/{product}/{episode}` is accepted only after fresh manual-grant evidence. The accepted final URL must remain unchanged during reader operations/capture. Canonical Catalog and manifest source URLs stay `/web/viewer/{product}/{episode}`. `auto` and `direct` share this route; quota and other unsupported strategies stop without fallback. The caller's work key remains opaque metadata.
+At viewer initialization, the adapter refreshes the full product listing and binds the unique target row. Exact-free access and active manual grants remain non-consuming. Normal Batch handles eligible quota rows by binding product-home charge/balance state, login, the exact target eligibility exchange, returned ticket kind, one matching confirmation modal/control, and one affirmative action. Grant-only applies the same live checks but restricts each resource to its own kinds; an already-free or freshly granted race becomes a durable no-action skip, and a fresh grant is persisted before the skip. After a consuming action, the adapter requires the same target's viewer response, a fresh grant row, and the selected balance or daily-charge change; unknown outcomes are not retried. Product home is fetched with a bounded same-origin GET into a detached document for pre/post state, without navigating the owned Page away from the viewer. This preserves the viewer document and native response provenance. `/web/viewer/s/{product}/{episode}` is accepted only after fresh manual-grant evidence. The accepted final URL must remain unchanged during reader operations/capture. Canonical Catalog and manifest source URLs stay `/web/viewer/{product}/{episode}`. Other unsupported strategies stop without fallback. The caller's work key remains opaque metadata.
 
 ## Batch policy
 
@@ -1006,14 +1024,26 @@ Discovery and reader preflight both extract the price, and Policy returns an
 ineligible `paid` decision for GUI 有償未取得 counts. Rediscover after upgrading;
 no price amount is persisted and no purchase or point-consumption path is added.
 
-Inventory counts available quota sources without active manual grants in
-Quota対象残 via the Policy's display-only `pending_quota` flag. They remain
-ineligible for execution, with no access strategy, consumption or resource.
-Active manual grants count as direct; unavailable and completed/external/skipped
-items retain their own categories. Rerun Discovery to refresh stored ¥0＋
-classifications, then reload the GUI. No database backfill or new option is needed.
+Inventory's `pending_quota` flag is display-only and does not itself authorize
+execution. Piccoma's policy separately admits available quota sources in
+normal Batch through `piccoma_ticket_auto` and grant-only through
+`work_ticket` and `binge_ticket`; active manual grants remain direct. Unavailable and
+completed/external/skipped Items retain their own categories. Rerun Discovery
+to refresh stored ¥0＋ classifications, then reload the GUI. No database
+backfill or new option is needed.
 
-The registered `PiccomaSitePolicy` admits available free sources as `direct` (`free`), and available quota sources with an aware future `access_granted_until` as `direct` (`active_manual_grant`). Neither consumes quota. Missing/expired grants and unsupported modes are excluded; malformed/naive timestamps fail closed. The policy exposes no quota/access resources, grant-only support, or additional passes. The generic Planner retains Catalog ordering, composite identity, display position, and metadata. Standard Batch execution performs stale-candidate validation and fresh free/manual-unlock checks before viewer entry. No automatic ticket, point, coin, waiting, or purchase operation is implemented. Existing `discover` and `batch run` commands need no new flags; rerun Discover after manually unlocking episodes.
+The registered `PiccomaSitePolicy` admits available exact-free sources as
+`direct` (`free`) and active manual grants as `direct` (`active_manual_grant`).
+Normal Batch admits otherwise-eligible quota through `piccoma_ticket_auto`
+with `after_observed_consumption`, selecting among waitfree, ¥0+ and binge-free
+from fresh site state by the preserved candidate sequence. Grant-only uses the
+two resources: `work_ticket` (waitfree / ¥0+) and `binge_ticket` (binge-free). `all` uses these as ordered explicit passes with a replan between them; a pass never falls back to another kind.
+Unknown, paid and unavailable modes remain excluded. Same-Source unresolved
+prior quota CrawlRuns block another consuming attempt; a fresh active grant
+remains direct. The generic Planner and Executor enforce this without
+assigning Piccoma selectors or ticket names to Core, and no Catalog schema
+change was introduced. Standard Batch stale-candidate validation still runs
+before viewer entry.
 
 A local Playwright fixture test exercises the standard Planner, `BatchExecutor`, `CrawlerRunner`, adapter, manifest, packager, and Catalog completion path using a synthetic three-page episode for both free and active manual-grant sources. Failure fixtures cover stale-free/stale-grant state, a wrong composite identity, and a redirected viewer; they assert no ZIP, no completed Item/Artifact, and no resource mutation. Discovery integration verifies an old grant beyond the generic known-row boundary, Batch eligibility, explicit clearing, and completed Item retention. Historical Phase 05 separately verified live Batch for free episodes.
 

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 import time
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from playwright.async_api import Locator, Page, Response
@@ -24,7 +26,12 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessAttemptObservation,
+    AccessConsumption,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.piccoma.access import piccoma_access_profile
 from screenshot_crawler.site_adapters.piccoma.discovery import (
     PiccomaEpisodeIdentity,
@@ -33,6 +40,25 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     parse_piccoma_listing_url,
     parse_piccoma_viewer_url,
     piccoma_manual_grant_until,
+)
+from screenshot_crawler.site_adapters.piccoma.live_access import (
+    PICCOMA_TICKET_NO_ACTION_REASON,
+    TICKET_BUTTON_CLASS,
+    TICKET_BUTTON_LABEL,
+    TICKET_ROW_MARKER,
+    PiccomaTicketKind,
+    PiccomaTicketNoActionError,
+    binge_available_count,
+    binge_modal_balances,
+    is_known_nonfree_offer_status,
+    observed_now,
+    piccoma_access_endpoint_matches,
+    piccoma_access_request_matches,
+    piccoma_ticket_kind_from_status,
+    ticket_modal_matches,
+    waitfree_charge_ready,
+    zero_plus_available_count,
+    zero_plus_modal_balance,
 )
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     OVERSCAN_DISPLAY_SIZE,
@@ -54,12 +80,301 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
     validate_native_capture_still_current,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
+_AUTO_TICKET_RESOURCE = "piccoma_ticket_auto"
+_WORK_TICKET_RESOURCE = "work_ticket"
+_BINGE_TICKET_RESOURCE = "binge_ticket"
+_GRANT_ONLY_TICKET_RESOURCES = frozenset(
+    {_WORK_TICKET_RESOURCE, _BINGE_TICKET_RESOURCE}
+)
+_TICKET_KINDS_BY_RESOURCE: dict[str, frozenset[PiccomaTicketKind]] = {
+    _AUTO_TICKET_RESOURCE: frozenset({"waitfree", "zero_plus", "binge_free"}),
+    _WORK_TICKET_RESOURCE: frozenset({"waitfree", "zero_plus"}),
+    _BINGE_TICKET_RESOURCE: frozenset({"binge_free"}),
+}
+
 LISTING_SELECTOR = "#js_episodeList"
 ROW_SELECTOR = "#js_episodeList a[data-product_id][data-episode_id]"
 NEXT_SELECTOR = "button.PCM-viewer2_pagingBtn_next"
 PREVIOUS_SELECTOR = "button.PCM-viewer2_pagingBtn_prev"
 GUIDE_SELECTOR = "#js_scrollTypeSing"
 RESUME_DIALOG_SELECTOR = ".jconfirm-open.PCM-pcmConfirm"
+TICKET_ELIGIBILITY_TIMEOUT_MS = 12_000
+TICKET_MODAL_TIMEOUT_MS = 7_000
+TICKET_ACTION_TIMEOUT_MS = 15_000
+TICKET_VIEWER_TIMEOUT_MS = 15_000
+TICKET_VIEWER_DOM_TIMEOUT_MS = 10_000
+TICKET_MODAL_EVIDENCE_JS = """dialog => {
+  const visible = node => {
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+      style.visibility === 'visible';
+  };
+  return {
+    text: (dialog.innerText || '').replace(/\\s+/g, ' ').trim(),
+    structure: dialog.classList.contains('PCM-pcmConfirm'),
+    anchors: dialog.querySelectorAll('a[href]').length,
+    buttons: [...dialog.querySelectorAll('button')].map(button => ({
+      text: (button.innerText || '').replace(/\\s+/g, ' ').trim(),
+      classes: [...button.classList], disabled: button.disabled,
+      ariaDisabled: button.getAttribute('aria-disabled'), visible: visible(button)
+    }))
+  };
+}"""
+
+
+class _PiccomaTicketNavigationGuard:
+    """Guard the owned page tree and its sole exact eligibility request."""
+
+    def __init__(self, page: Page, identity: PiccomaEpisodeIdentity) -> None:
+        self.page = page
+        self.context = page.context
+        self.identity = identity
+        self.armed = False
+        self.blocked_navigation_count = 0
+        self.blocked_subframe_count = 0
+        self.blocked_popup_count = 0
+        self.access_request_count = 0
+        self.blocked_access_request_count = 0
+        self.blocked_mutating_request_count = 0
+        self.blocked_external_mutating_request_count = 0
+        self.blocked_external_subframe_navigation_count = 0
+        self.eligibility_pending = False
+        self.eligibility_invalid = False
+        self._page_route_installed = False
+        self._context_route_installed = False
+        self._owned_popups: set[Page] = set()
+        self._popup_block_key = f"__piccomaPopupBlock_{id(self):x}"
+
+    async def install(self) -> None:
+        try:
+            await self.page.route("**/*", self._route_page)
+            self._page_route_installed = True
+            await self.context.route("**/*", self._route_context)
+            self._context_route_installed = True
+            await self.page.evaluate(
+                """key => {
+                  const state = {originalOpen: window.open, attempted: false, clickHandler: null};
+                  state.clickHandler = event => {
+                    const target = event.target instanceof Element ? event.target : null;
+                    const anchor = target?.closest('a[target]');
+                    if (!anchor || !anchor.target || anchor.target.toLowerCase() === '_self') return;
+                    state.attempted = true;
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                  };
+                  window[key] = state;
+                  document.addEventListener('click', state.clickHandler, true);
+                  window.open = function() { state.attempted = true; return null; };
+                }""",
+                self._popup_block_key,
+            )
+        except Exception:
+            await self._remove_routes()
+            raise
+        self.page.on("close", self._on_owner_close)
+
+    def arm_viewer(self) -> None:
+        self.armed = True
+
+    def begin_eligibility(self) -> None:
+        self.eligibility_pending = True
+        self.eligibility_invalid = False
+        self.access_request_count = 0
+        self.blocked_access_request_count = 0
+
+    def end_eligibility(self) -> None:
+        self.eligibility_pending = False
+
+    async def _route_page(self, route: Any) -> None:
+        request = route.request
+        method = request.method.upper()
+        if method not in {"GET", "HEAD", "OPTIONS"}:
+            first_party = self._is_piccoma_first_party_url(request.url)
+            access_endpoint = piccoma_access_endpoint_matches(
+                method=method, url=request.url
+            )
+            exact_access = False
+            if access_endpoint and self.eligibility_pending:
+                try:
+                    exact_access = piccoma_access_request_matches(
+                        method=method,
+                        url=request.url,
+                        post_data=request.post_data,
+                        product_id=self.identity.product_id,
+                        episode_id=self.identity.episode_id,
+                    )
+                except Exception:  # noqa: BLE001 - malformed/binary bodies fail closed
+                    exact_access = False
+            if (
+                method == "POST"
+                and self.eligibility_pending
+                and exact_access
+                and self.access_request_count == 0
+                and not self.eligibility_invalid
+            ):
+                self.access_request_count = 1
+                await route.fallback()
+                return
+            self.blocked_mutating_request_count += 1
+            if first_party:
+                self.eligibility_invalid = True
+                if method == "POST" and (
+                    self.eligibility_pending or exact_access or access_endpoint
+                ):
+                    self.blocked_access_request_count += 1
+            else:
+                self.blocked_external_mutating_request_count += 1
+            await route.abort("blockedbyclient")
+            return
+        try:
+            is_target_navigation = (
+                request.is_navigation_request()
+                and request.resource_type == "document"
+            )
+            is_main_frame = request.frame.parent_frame is None
+        except Exception:  # noqa: BLE001 - detached pages are never safe to navigate
+            is_target_navigation = True
+            is_main_frame = False
+        if not is_target_navigation:
+            await route.fallback()
+            return
+        if not is_main_frame and not self._is_piccoma_first_party_url(request.url):
+            self.blocked_external_subframe_navigation_count += 1
+            await route.abort("blockedbyclient")
+            return
+        allowed = (
+            self.armed
+            and is_main_frame
+            and request.method.upper() == "GET"
+            and PiccomaAdapter._viewer_identity_from_url(request.url) == self.identity
+        )
+        if allowed:
+            await route.fallback()
+            return
+        self.blocked_navigation_count += 1
+        if not is_main_frame:
+            self.blocked_subframe_count += 1
+        await route.abort("blockedbyclient")
+
+    @staticmethod
+    def _is_piccoma_first_party_url(url: str) -> bool:
+        try:
+            hostname = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            return False
+        return hostname in {"piccoma.com", "www.piccoma.com"}
+
+    async def _route_context(self, route: Any) -> None:
+        request = route.request
+        try:
+            owner_page = request.frame.page
+        except Exception:  # noqa: BLE001 - cannot prove ownership; avoid cross-tab effects
+            await route.fallback()
+            return
+        if owner_page == self.page:
+            await route.fallback()
+            return
+        if not await self._is_owned_popup(owner_page):
+            await route.fallback()
+            return
+        self._owned_popups.add(owner_page)
+        if request.is_navigation_request() and request.resource_type == "document":
+            self.blocked_popup_count += 1
+            await route.abort("blockedbyclient")
+            return
+        method = request.method.upper()
+        if method not in {"GET", "HEAD", "OPTIONS"}:
+            self.blocked_mutating_request_count += 1
+            self.eligibility_invalid = True
+            if method == "POST":
+                self.blocked_access_request_count += 1
+            await route.abort("blockedbyclient")
+            return
+        await route.abort("blockedbyclient")
+
+    async def _is_owned_popup(self, page: Page) -> bool:
+        current: Page | None = page
+        for _ in range(8):
+            if current is None or current == self.page:
+                return current == self.page
+            try:
+                current = await current.opener()
+            except Exception:  # noqa: BLE001 - an unprovable popup is not ours
+                return False
+        return False
+
+    @staticmethod
+    def _is_access_endpoint(url: str) -> bool:
+        return piccoma_access_endpoint_matches(method="POST", url=url)
+
+    async def _on_owner_close(self, *_args: object) -> None:
+        await self.remove_after_owner_close()
+
+    async def remove_after_owner_close(self) -> None:
+        await self._remove_routes()
+        await self._restore_popup_blocker()
+        for popup in tuple(self._owned_popups):
+            if not popup.is_closed():
+                try:
+                    await popup.close()
+                except Exception:
+                    _LOGGER.debug("Could not close owned Piccoma popup", exc_info=True)
+        self._owned_popups.clear()
+
+    async def remove_after_verified_entry(self) -> None:
+        await self._remove_routes()
+        await self._restore_popup_blocker()
+        for popup in tuple(self._owned_popups):
+            if not popup.is_closed():
+                try:
+                    await popup.close()
+                except Exception:
+                    _LOGGER.debug("Could not close owned Piccoma popup", exc_info=True)
+        self._owned_popups.clear()
+
+    async def _remove_routes(self) -> None:
+        if self._page_route_installed:
+            try:
+                await self.page.unroute("**/*", self._route_page)
+                self._page_route_installed = False
+            except Exception:  # noqa: BLE001 - leaving the guard installed is fail-closed
+                # A closed Page owns no requests and Playwright may reject
+                # unroute() for it. Still remove our Context handler below so
+                # the shared Context does not accumulate stale callbacks.
+                if self.page.is_closed():
+                    self._page_route_installed = False
+        if self._context_route_installed:
+            try:
+                await self.context.unroute("**/*", self._route_context)
+                self._context_route_installed = False
+            except Exception:  # noqa: BLE001 - leaving the guard installed is fail-closed
+                self._context_route_installed = True
+
+    async def popup_was_attempted(self) -> bool:
+        try:
+            return await self.page.evaluate(
+                "key => window[key]?.attempted === true", self._popup_block_key
+            )
+        except Exception:  # noqa: BLE001 - lost page state is not safe to continue
+            return True
+
+    async def _restore_popup_blocker(self) -> None:
+        try:
+            await self.page.evaluate(
+                """key => {
+                  const state = window[key];
+                  if (!state) return;
+                  document.removeEventListener('click', state.clickHandler, true);
+                  window.open = state.originalOpen;
+                  delete window[key];
+                }""",
+                self._popup_block_key,
+            )
+        except Exception:  # noqa: BLE001 - closed pages no longer own a popup surface
+            return
 
 VIEWPORT_WIDTH = 1904
 VIEWPORT_HEIGHT = 1200
@@ -288,6 +603,11 @@ class PiccomaAdapter(SiteAdapter):
         self._native_bytes_read = 0
         self._body_wait_failure: dict[str, Any] | None = None
         self._scaled_frame_rect: tuple[float, ...] | None = None
+        self._quota_resource: str | None = None
+        self._ticket_kind: PiccomaTicketKind | None = None
+        self._ticket_attempt_started = False
+        self._ticket_navigation_guard: _PiccomaTicketNavigationGuard | None = None
+        self._access_consumption = AccessConsumption()
 
     def get_access_profile(self) -> AccessProfile:
         return piccoma_access_profile()
@@ -371,11 +691,16 @@ class PiccomaAdapter(SiteAdapter):
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
-        if access_strategy not in {"auto", "direct"}:
+        if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
-                "Piccoma supports only auto/direct for freshly verified free or unlocked episodes"
+                "Piccoma supports direct access or a policy-selected ticket attempt"
             )
         self._access_strategy = access_strategy
+        self._quota_resource = None
+        self._ticket_kind = None
+        self._ticket_attempt_started = False
+        self._ticket_navigation_guard = None
+        self._access_consumption = AccessConsumption()
         self._source_identity = None
         self._viewer_url = None
         self._title = None
@@ -392,6 +717,20 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_encoding_fallback_reason = None
         self._capture_output_format = None
         self._capture_output_lossless = None
+
+    async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
+        del page
+        if quota_resource is None:
+            self._quota_resource = None
+            return
+        if quota_resource not in _TICKET_KINDS_BY_RESOURCE or self._access_strategy != "quota":
+            raise UnsupportedAccessStrategyError(
+                "Piccoma ticket entry requires a supported explicit ticket resource"
+            )
+        self._quota_resource = quota_resource
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = re.fullmatch(r"([0-9]+):([0-9]+)", external_id)
@@ -422,13 +761,48 @@ class PiccomaAdapter(SiteAdapter):
         await page.locator(LISTING_SELECTOR).wait_for(state="visible", timeout=15_000)
         access_mode, title, grant_until = await self._current_listing_access(page, identity)
         active_grant = grant_until is not None and grant_until > datetime.now(UTC)
-        if access_mode in {"paid", "quota"} and not active_grant:
+        if access_mode == "paid":
             raise AccessResourceUnavailableError(
-                "Piccoma target has no verified free access or active manual unlock"
+                "Piccoma target is paid and has no verified free access"
             )
+        if access_mode == "quota" and not active_grant:
+            if self._access_strategy != "quota":
+                raise AccessResourceUnavailableError(
+                    "Piccoma target has no verified free access or active manual unlock"
+                )
+            if self._quota_resource not in _TICKET_KINDS_BY_RESOURCE:
+                raise UnsupportedAccessStrategyError(
+                    "Piccoma ticket entry requires an explicit ticket resource"
+                )
+            response, title = await self._redeem_one_ticket(page, identity)
+            self._title = title
+            await self._prepare_reader_after_entry(
+                page, identity, active_grant=True, response=response
+            )
+            return
         if access_mode != "free" and not (access_mode == "quota" and active_grant):
             raise UnknownPageStateError("Piccoma target access state is ambiguous")
         self._title = title
+        if self._access_strategy == "quota" and active_grant and grant_until is not None:
+            # A planned quota candidate may become freshly granted before entry.
+            # Persist this positive observation before direct capture; it does not
+            # represent a new ticket debit or update the daily quota timestamp.
+            self.report_confirmed_access_grant(
+                ConfirmedAccessGrant(
+                    site="piccoma",
+                    external_id=identity.external_id,
+                    observed_at=observed_now(),
+                    access_granted_until=grant_until,
+                    expiry_evidence="site_countdown_lower_bound",
+                )
+            )
+
+        if self._quota_resource in _GRANT_ONLY_TICKET_RESOURCES and (
+            access_mode == "free" or (access_mode == "quota" and active_grant)
+        ):
+            # A stale grant-only plan must not turn an already-accessible target
+            # into a new grant or enter the content reader.
+            raise PiccomaTicketNoActionError()
 
         response = await page.goto(
             canonical_piccoma_viewer_url(
@@ -446,6 +820,29 @@ class PiccomaAdapter(SiteAdapter):
             if parsed.path.startswith("/web/viewer/s/"):
                 final_identity = parse_piccoma_viewer_url(
                     parsed._replace(path=parsed.path.replace("/viewer/s/", "/viewer/", 1)).geturl()
+                )
+        if final_identity != identity:
+            raise UnknownPageStateError("Piccoma viewer redirected outside the target episode")
+        await self._prepare_reader_after_entry(
+            page, identity, active_grant=active_grant, response=response
+        )
+
+    async def _prepare_reader_after_entry(
+        self,
+        page: Page,
+        identity: PiccomaEpisodeIdentity,
+        *,
+        active_grant: bool,
+        response: Response | None,
+    ) -> None:
+        final_identity = parse_piccoma_viewer_url(page.url)
+        if final_identity is None and active_grant:
+            parsed = urlparse(page.url)
+            if parsed.path.startswith("/web/viewer/s/"):
+                final_identity = parse_piccoma_viewer_url(
+                    parsed._replace(
+                        path=parsed.path.replace("/viewer/s/", "/viewer/", 1)
+                    ).geturl()
                 )
         if final_identity != identity:
             raise UnknownPageStateError("Piccoma viewer redirected outside the target episode")
@@ -525,6 +922,698 @@ class PiccomaAdapter(SiteAdapter):
             row.get("markers", []), row.get("label", ""), observed_at
         )
         return access_mode, title, grant_until
+
+    async def _read_ticket_state(
+        self, page: Page, identity: PiccomaEpisodeIdentity
+    ) -> dict[str, Any]:
+        value = await page.evaluate(
+            r"""target => {
+              const text = selector => {
+                const nodes = [...document.querySelectorAll(selector)];
+                return nodes.length === 1
+                  ? (nodes[0].innerText || '').replace(/\s+/g, ' ').trim()
+                  : null;
+              };
+              const rows = [...document.querySelectorAll(
+                '#js_episodeList a[data-product_id][data-episode_id]')]
+                .filter(anchor => anchor.getAttribute('data-product_id') === target.product &&
+                  anchor.getAttribute('data-episode_id') === target.episode);
+              const anchor = rows.length === 1 ? rows[0] : null;
+              const statuses = anchor
+                ? [...anchor.querySelectorAll('.PCM-epList_status')] : [];
+              const status = statuses.length === 1 ? statuses[0] : null;
+              const markers = status
+                ? [status, ...status.querySelectorAll('[class]')]
+                    .flatMap(node => [...node.classList])
+                    .filter(name => name.startsWith('PCM-epList_status_'))
+                : [];
+              const titleNodes = [...document.querySelectorAll(
+                '#js_contentBody .PCM-headTitle_name')];
+              return {
+                productId: anchor?.getAttribute('data-product_id') || null,
+                episodeId: anchor?.getAttribute('data-episode_id') || null,
+                userAccess: anchor?.getAttribute('data-user_access') || null,
+                loggedIn: window._init_?.login === true,
+                rowCount: rows.length,
+                statusCount: statuses.length,
+                markers: [...new Set(markers)],
+                label: (status?.innerText || '').replace(/\s+/g, ' ').trim(),
+                title: titleNodes.length === 1
+                  ? (titleNodes[0].innerText || '').replace(/\s+/g, ' ').trim()
+                  : null,
+                charge: (() => {
+                  const bars = [...document.querySelectorAll('#js_freeChargeBar')];
+                  if (bars.length !== 1) return null;
+                  const bar = bars[0];
+                  return {className: bar.className,
+                    serverTime: bar.dataset.server_time || null,
+                    chargeTime: bar.dataset.charge_time || null,
+                    chargeDuration: bar.dataset.charge_duration || null};
+                })(),
+                zeroPlus: text('.PCM-freeplusStatusBar'),
+                binge: text('.PCM-bingefreeStatusBar')
+              };
+            }""",
+            {"product": identity.product_id, "episode": identity.episode_id},
+        )
+        if not isinstance(value, dict):
+            raise UnknownPageStateError("Piccoma ticket state is malformed")
+        if (
+            value.get("productId") != identity.product_id
+            or value.get("episodeId") != identity.episode_id
+            or value.get("rowCount") != 1
+            or value.get("statusCount") != 1
+            or value.get("loggedIn") is not True
+            or not isinstance(value.get("markers"), list)
+            or not all(isinstance(marker, str) for marker in value["markers"])
+            or not isinstance(value.get("title"), str)
+            or not value["title"].strip()
+        ):
+            raise UnknownPageStateError(
+                "Piccoma target row is absent, duplicated, or incomplete"
+            )
+        return value
+
+    async def _fetch_ticket_state_snapshot(
+        self, page: Page, identity: PiccomaEpisodeIdentity
+    ) -> dict[str, Any]:
+        value = await page.evaluate(
+            r"""async target => {
+              const origin = window.location.origin;
+              if (!['https://piccoma.com', 'https://www.piccoma.com'].includes(origin))
+                return null;
+              const read = async (path, includeEpisodeRow) => {
+                const requested = new URL(path, origin);
+                if (requested.origin !== origin || requested.search || requested.hash)
+                  return null;
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 8000);
+                let html;
+                try {
+                  const response = await fetch(requested.href, {
+                    method: 'GET', credentials: 'same-origin', cache: 'no-store',
+                    redirect: 'error', signal: controller.signal
+                  });
+                  const finalUrl = new URL(response.url);
+                  if (!response.ok || finalUrl.origin !== origin ||
+                      finalUrl.pathname !== requested.pathname || finalUrl.search ||
+                      finalUrl.hash || !/^text\/html(?:;|$)/i.test(
+                        response.headers.get('content-type') || '')) return null;
+                  const length = Number(response.headers.get('content-length'));
+                  if (Number.isFinite(length) && length > 1500000) return null;
+                  const reader = response.body?.getReader();
+                  if (!reader) return null;
+                  const chunks = [];
+                  let size = 0;
+                  while (true) {
+                    const part = await reader.read();
+                    if (part.done) break;
+                    size += part.value.byteLength;
+                    if (size > 1500000) {
+                      await reader.cancel();
+                      return null;
+                    }
+                    chunks.push(part.value);
+                  }
+                  const bytes = new Uint8Array(size);
+                  let offset = 0;
+                  for (const chunk of chunks) {
+                    bytes.set(chunk, offset);
+                    offset += chunk.byteLength;
+                  }
+                  html = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+                } finally {
+                  clearTimeout(timer);
+                }
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const text = selector => {
+                  const nodes = [...doc.querySelectorAll(selector)];
+                  return nodes.length === 1
+                    ? (nodes[0].innerText || '').replace(/\s+/g, ' ').trim()
+                    : null;
+                };
+                const rows = includeEpisodeRow ? [...doc.querySelectorAll(
+                  '#js_episodeList a[data-product_id][data-episode_id]')]
+                  .filter(anchor => anchor.getAttribute('data-product_id') === target.product &&
+                    anchor.getAttribute('data-episode_id') === target.episode) : [];
+                const anchor = rows.length === 1 ? rows[0] : null;
+                const statuses = anchor
+                  ? [...anchor.querySelectorAll('.PCM-epList_status')] : [];
+                const status = statuses.length === 1 ? statuses[0] : null;
+                const markers = status
+                  ? [status, ...status.querySelectorAll('[class]')]
+                      .flatMap(node => [...node.classList])
+                      .filter(name => name.startsWith('PCM-epList_status_'))
+                  : [];
+                const titleNodes = [...doc.querySelectorAll(
+                  '#js_contentBody .PCM-headTitle_name')];
+                const chargeBars = [...doc.querySelectorAll('#js_freeChargeBar')];
+                const chargeBar = chargeBars.length === 1 ? chargeBars[0] : null;
+                return {
+                  productId: includeEpisodeRow
+                    ? (anchor?.getAttribute('data-product_id') || null) : target.product,
+                  episodeId: includeEpisodeRow
+                    ? (anchor?.getAttribute('data-episode_id') || null) : null,
+                  userAccess: anchor?.getAttribute('data-user_access') || null,
+                  rowCount: includeEpisodeRow ? rows.length : 0,
+                  statusCount: statuses.length,
+                  markers: [...new Set(markers)],
+                  label: (status?.innerText || '').replace(/\s+/g, ' ').trim(),
+                  title: titleNodes.length === 1
+                    ? (titleNodes[0].innerText || '').replace(/\s+/g, ' ').trim()
+                    : null,
+                  charge: chargeBar ? {className: chargeBar.className,
+                    serverTime: chargeBar.getAttribute('data-server_time'),
+                    chargeTime: chargeBar.getAttribute('data-charge_time'),
+                    chargeDuration: chargeBar.getAttribute('data-charge_duration')} : null,
+                  zeroPlus: text('.PCM-freeplusStatusBar'),
+                  binge: text('.PCM-bingefreeStatusBar')
+                };
+              };
+              const [listing, home] = await Promise.all([
+                read(`/web/product/${target.product}/episodes`, true),
+                read(`/web/product/${target.product}`, false)
+              ]);
+              return listing && home ? {listing, home} : null;
+            }""",
+            {"product": identity.product_id, "episode": identity.episode_id},
+        )
+        if not isinstance(value, dict):
+            raise UnknownPageStateError("Piccoma fresh post-entry state was unavailable")
+        listing = value.get("listing")
+        home = value.get("home")
+        if not isinstance(listing, dict) or not isinstance(home, dict):
+            raise UnknownPageStateError("Piccoma fresh post-entry state was incomplete")
+        return {"listing": listing, "home": home}
+
+    async def _redeem_one_ticket(
+        self, page: Page, identity: PiccomaEpisodeIdentity
+    ) -> tuple[Response, str]:
+        state = await self._read_ticket_state(page, identity)
+        if state.get("userAccess") != "require":
+            raise UnknownPageStateError("Piccoma ticket target is not freshly locked")
+        observed_markers = set(state["markers"])
+        if classify_piccoma_access(observed_markers, state["label"]) != "quota":
+            raise UnknownPageStateError("Piccoma ticket row has an unsupported access state")
+        before = await self._fetch_ticket_state_snapshot(page, identity)
+        listing_before = before["listing"]
+        home_before = before["home"]
+        if (
+            listing_before.get("productId") != identity.product_id
+            or listing_before.get("episodeId") != identity.episode_id
+            or listing_before.get("rowCount") != 1
+            or listing_before.get("statusCount") != 1
+            or listing_before.get("userAccess") != "require"
+            or listing_before.get("markers") != state.get("markers")
+            or listing_before.get("label") != state.get("label")
+            or listing_before.get("title") != state.get("title")
+        ):
+            raise UnknownPageStateError(
+                "Piccoma freshly fetched product state does not match the target listing"
+            )
+        for key in ("charge", "zeroPlus", "binge"):
+            state[key] = home_before.get(key)
+        daily_ready = waitfree_charge_ready(state.get("charge"))
+        if daily_ready is None:
+            raise UnknownPageStateError(
+                "Piccoma charge attributes are missing or malformed"
+            )
+        zero_before = zero_plus_available_count(state.get("zeroPlus") or "")
+        binge_before = binge_available_count(state.get("binge") or "")
+        allowed_kinds = _TICKET_KINDS_BY_RESOURCE[self._required_ticket_resource()]
+        row_secondary: list[tuple[PiccomaTicketKind, int | None]] = []
+        if TICKET_ROW_MARKER["zero_plus"] in observed_markers:
+            row_secondary.append(("zero_plus", zero_before))
+        if TICKET_ROW_MARKER["binge_free"] in observed_markers:
+            row_secondary.append(("binge_free", binge_before))
+        secondary_availability: list[tuple[PiccomaTicketKind, int | None]] = []
+        if (
+            "zero_plus" in allowed_kinds
+            and TICKET_ROW_MARKER["zero_plus"] in observed_markers
+        ):
+            secondary_availability.append(("zero_plus", zero_before))
+        if (
+            "binge_free" in allowed_kinds
+            and TICKET_ROW_MARKER["binge_free"] in observed_markers
+        ):
+            secondary_availability.append(("binge_free", binge_before))
+        if not daily_ready and (
+            not secondary_availability
+            or all(balance == 0 for _, balance in secondary_availability)
+        ):
+            unavailable = secondary_availability or row_secondary or [("waitfree", None)]
+            for unavailable_kind, _ in unavailable:
+                self._report_ticket_attempt(
+                    unavailable_kind,
+                    "not_attempted",
+                    PICCOMA_TICKET_NO_ACTION_REASON,
+                )
+            raise PiccomaTicketNoActionError()
+
+        row = page.locator(
+            f'{ROW_SELECTOR}[data-product_id="{identity.product_id}"]'
+            f'[data-episode_id="{identity.episode_id}"]'
+        )
+        navigation_guard = _PiccomaTicketNavigationGuard(page, identity)
+        await navigation_guard.install()
+        self._ticket_navigation_guard = navigation_guard
+        navigation_guard.begin_eligibility()
+        try:
+            async with page.expect_response(
+                lambda response: self._is_target_access_response(response, identity),
+                timeout=TICKET_ELIGIBILITY_TIMEOUT_MS,
+            ) as response_info:
+                await row.click(timeout=5_000)
+            eligibility_response = await response_info.value
+        except Exception as exc:
+            raise UnknownPageStateError(
+                "Piccoma ticket eligibility exchange was not bound to the target"
+            ) from exc
+        navigation_guard.end_eligibility()
+        if navigation_guard.eligibility_invalid or navigation_guard.access_request_count != 1:
+            raise UnknownPageStateError(
+                "Piccoma ticket eligibility was not a single exact target request"
+            )
+        try:
+            status_code = await self._access_response_status(eligibility_response)
+        except UnknownPageStateError:
+            if navigation_guard.blocked_navigation_count:
+                for offered_kind, marker in TICKET_ROW_MARKER.items():
+                    if marker in observed_markers:
+                        self._report_ticket_attempt(
+                            offered_kind,
+                            "not_attempted",
+                            "eligibility_navigation_blocked_before_affirmative",
+                        )
+            raise
+        kind = piccoma_ticket_kind_from_status(status_code)
+        if kind is None:
+            if is_known_nonfree_offer_status(status_code):
+                for offered_kind, marker in TICKET_ROW_MARKER.items():
+                    if marker in observed_markers:
+                        self._report_ticket_attempt(
+                            offered_kind,
+                            "not_attempted",
+                            f"{PICCOMA_TICKET_NO_ACTION_REASON}:status_{status_code}",
+                        )
+                raise PiccomaTicketNoActionError()
+            raise UnknownPageStateError("Piccoma ticket eligibility returned an unknown status")
+        self._ticket_kind = kind
+        if TICKET_ROW_MARKER[kind] not in observed_markers:
+            raise UnknownPageStateError(
+                "Piccoma eligibility response does not match the target ticket icon"
+            )
+        if daily_ready and kind != "waitfree":
+            raise UnknownPageStateError(
+                "Piccoma selected a secondary ticket while the daily ticket is charged"
+            )
+        if kind == "waitfree" and not daily_ready:
+            raise UnknownPageStateError(
+                "Piccoma daily ticket status does not confirm a completed charge"
+            )
+        if not self._ticket_kind_allowed(kind):
+            self._report_ticket_attempt(
+                kind, "not_attempted", "ticket_kind_not_allowed_for_resource"
+            )
+            raise PiccomaTicketNoActionError()
+        if kind == "zero_plus" and zero_before is None:
+            raise UnknownPageStateError("Piccoma ¥0+ balance is missing or ambiguous")
+        if kind == "binge_free" and binge_before is None:
+            raise UnknownPageStateError("Piccoma binge balance is missing or ambiguous")
+        if kind == "zero_plus" and zero_before == 0:
+            self._report_ticket_attempt(kind, "not_attempted", PICCOMA_TICKET_NO_ACTION_REASON)
+            raise PiccomaTicketNoActionError()
+        if kind == "binge_free" and binge_before == 0:
+            self._report_ticket_attempt(kind, "not_attempted", PICCOMA_TICKET_NO_ACTION_REASON)
+            raise PiccomaTicketNoActionError()
+
+        modal = page.locator(RESUME_DIALOG_SELECTOR)
+        try:
+            await modal.wait_for(state="visible", timeout=TICKET_MODAL_TIMEOUT_MS)
+        except Exception as exc:
+            raise UnknownPageStateError("Piccoma ticket confirmation modal was not observed") from exc
+        if await modal.count() != 1 or await page.locator(".jconfirm-open").count() != 1:
+            raise UnknownPageStateError("Piccoma ticket confirmation modal is ambiguous")
+        evidence = await modal.evaluate(TICKET_MODAL_EVIDENCE_JS)
+        if not isinstance(evidence, dict):
+            raise UnknownPageStateError("Piccoma ticket modal evidence is malformed")
+        text = evidence.get("text")
+        buttons = evidence.get("buttons")
+        if (
+            evidence.get("structure") is not True
+            or evidence.get("anchors") != 0
+            or not isinstance(text, str)
+            or not isinstance(buttons, list)
+            or len(buttons) != 2
+        ):
+            raise UnknownPageStateError("Piccoma ticket modal structure is not supported")
+        affirmative_matches = [
+            index for index, button in enumerate(buttons)
+            if isinstance(button, dict)
+            and TICKET_BUTTON_CLASS[kind] in button.get("classes", [])
+            and button.get("text") == TICKET_BUTTON_LABEL[kind]
+        ]
+        affirmative_index = affirmative_matches[0] if len(affirmative_matches) == 1 else None
+        cancel_indices = [
+            index for index, button in enumerate(buttons)
+            if isinstance(button, dict) and button.get("text") == "キャンセル"
+        ]
+        if affirmative_index is None or len(cancel_indices) != 1 or affirmative_index == cancel_indices[0]:
+            raise UnknownPageStateError("Piccoma ticket modal buttons are not uniquely identified")
+        affirmative = buttons[affirmative_index]
+        cancel = buttons[cancel_indices[0]]
+        if (
+            affirmative.get("visible") is not True
+            or affirmative.get("disabled") is not False
+            or affirmative.get("ariaDisabled") == "true"
+            or cancel.get("visible") is not True
+            or cancel.get("disabled") is not False
+            or cancel.get("ariaDisabled") == "true"
+            or any(
+                "btn-gift-ticket" in button.get("classes", [])
+                for button in buttons if isinstance(button, dict)
+            )
+        ):
+            raise UnknownPageStateError("Piccoma ticket modal has no safe enabled option")
+
+        zero_modal_balance: int | None = None
+        binge_modal_balance: tuple[int, int] | None = None
+        if kind == "waitfree":
+            if not ticket_modal_matches(kind, text):
+                raise UnknownPageStateError("Piccoma waitfree modal text is not recognized")
+        elif kind == "zero_plus":
+            zero_modal_balance = zero_plus_modal_balance(text)
+            if zero_modal_balance is None or not ticket_modal_matches(kind, text):
+                raise UnknownPageStateError("Piccoma ¥0+ modal balance is missing")
+            if zero_modal_balance <= 0:
+                self._report_ticket_attempt(kind, "not_attempted", PICCOMA_TICKET_NO_ACTION_REASON)
+                raise PiccomaTicketNoActionError()
+            if zero_modal_balance != zero_before:
+                raise UnknownPageStateError(
+                    "Piccoma ¥0+ modal balance does not match fresh product state"
+                )
+        else:
+            binge_modal_balance = binge_modal_balances(text)
+            if binge_modal_balance is None or not ticket_modal_matches(kind, text):
+                raise UnknownPageStateError("Piccoma binge modal balances are missing")
+            if binge_modal_balance[0] <= 0 or binge_modal_balance[1] <= 0:
+                self._report_ticket_attempt(kind, "not_attempted", PICCOMA_TICKET_NO_ACTION_REASON)
+                raise PiccomaTicketNoActionError()
+            if binge_modal_balance[1] != binge_before:
+                raise UnknownPageStateError(
+                    "Piccoma binge work balance does not match fresh product state"
+                )
+
+        if (
+            navigation_guard.eligibility_invalid
+            or navigation_guard.blocked_access_request_count
+            or navigation_guard.blocked_navigation_count
+            or navigation_guard.blocked_popup_count
+        ):
+            raise UnknownPageStateError(
+                "Piccoma ticket entry attempted an unexpected request or navigation"
+            )
+
+        observed_at = observed_now()
+        try:
+            try:
+                async with page.expect_response(
+                    lambda response: (
+                        response.request.resource_type == "document"
+                        and response.request.method.upper() == "GET"
+                        and self._viewer_identity_from_url(response.url) == identity
+                    ),
+                    timeout=TICKET_ACTION_TIMEOUT_MS,
+                ) as viewer_info:
+                    await self._click_verified_ticket_button(
+                        page,
+                        modal,
+                        kind,
+                        evidence,
+                        navigation_guard,
+                        record_attempt=lambda: self.report_access_attempt(
+                            AccessAttemptObservation(
+                                site="piccoma",
+                                external_id=identity.external_id,
+                                resource=self._quota_resource or "piccoma_ticket_auto",
+                                resource_kind=kind,
+                                status="attempting",
+                                observed_at=observed_now(),
+                            )
+                        ),
+                    )
+                viewer_response = await viewer_info.value
+            except Exception as exc:
+                if not self._ticket_attempt_started:
+                    raise
+                self._report_ticket_attempt(kind, "unknown", "viewer_navigation_unconfirmed")
+                raise UnknownPageStateError(
+                    "Piccoma ticket action may have been dispatched; viewer navigation is unknown"
+                ) from exc
+            if viewer_response.status != 200:
+                self._report_ticket_attempt(kind, "unknown", "viewer_response_unconfirmed")
+                raise UnknownPageStateError("Piccoma target viewer document was not HTTP 200")
+
+            try:
+                await page.wait_for_url(
+                    lambda url: self._viewer_identity_from_url(str(url)) == identity,
+                    timeout=TICKET_VIEWER_TIMEOUT_MS,
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_load_state(
+                    "domcontentloaded", timeout=TICKET_VIEWER_DOM_TIMEOUT_MS
+                )
+            except Exception as exc:
+                self._report_ticket_attempt(kind, "unknown", "viewer_navigation_unconfirmed")
+                raise UnknownPageStateError(
+                    "Piccoma ticket action did not reach the target viewer"
+                ) from exc
+            fresh = await self._fetch_ticket_state_snapshot(page, identity)
+            listing = fresh["listing"]
+            home = fresh["home"]
+            post_markers = listing.get("markers")
+            if (
+                listing.get("productId") != identity.product_id
+                or listing.get("episodeId") != identity.episode_id
+                or listing.get("rowCount") != 1
+                or listing.get("statusCount") != 1
+                or not isinstance(post_markers, list)
+                or "PCM-epList_status_waitfreeRead" not in post_markers
+            ):
+                self._report_ticket_attempt(kind, "unknown", "target_grant_unconfirmed")
+                raise UnknownPageStateError("Piccoma ticket target grant was not confirmed")
+            grant_until = piccoma_manual_grant_until(
+                post_markers, str(listing.get("label") or ""), observed_at
+            )
+            if grant_until is None or grant_until <= observed_at:
+                self._report_ticket_attempt(kind, "unknown", "target_grant_expiry_unconfirmed")
+                raise UnknownPageStateError("Piccoma ticket grant expiry was not confirmed")
+
+            grant_observed_at = observed_now()
+            self.report_confirmed_access_grant(
+                ConfirmedAccessGrant(
+                    site="piccoma",
+                    external_id=identity.external_id,
+                    observed_at=grant_observed_at,
+                    access_granted_until=grant_until,
+                    expiry_evidence="site_countdown_lower_bound",
+                )
+            )
+
+            before_charge = state.get("charge")
+            after_charge = home.get("charge")
+            charge_shape_matches = (
+                isinstance(before_charge, dict)
+                and isinstance(after_charge, dict)
+                and before_charge.get("className") == after_charge.get("className")
+                and before_charge.get("chargeDuration") == after_charge.get("chargeDuration")
+            )
+            nonselected_balances_match = (
+                (kind == "zero_plus" or home.get("zeroPlus") == state.get("zeroPlus"))
+                and (kind == "binge_free" or home.get("binge") == state.get("binge"))
+            )
+
+            if kind == "waitfree":
+                changed = (
+                    charge_shape_matches
+                    and waitfree_charge_ready(before_charge) is True
+                    and waitfree_charge_ready(after_charge) is False
+                    and before_charge.get("chargeTime") != after_charge.get("chargeTime")
+                    and nonselected_balances_match
+                )
+            elif kind == "zero_plus":
+                after_balance = zero_plus_available_count(str(home.get("zeroPlus") or ""))
+                changed = (
+                    after_balance == int(zero_before) - 1
+                    and charge_shape_matches
+                    and waitfree_charge_ready(before_charge) is False
+                    and waitfree_charge_ready(after_charge) is False
+                    and before_charge.get("chargeTime") == after_charge.get("chargeTime")
+                    and nonselected_balances_match
+                )
+            else:
+                after_balance = binge_available_count(str(home.get("binge") or ""))
+                changed = (
+                    after_balance == int(binge_before) - 1
+                    and charge_shape_matches
+                    and waitfree_charge_ready(before_charge) is False
+                    and waitfree_charge_ready(after_charge) is False
+                    and before_charge.get("chargeTime") == after_charge.get("chargeTime")
+                    and nonselected_balances_match
+                )
+            if not changed:
+                self._report_ticket_attempt(kind, "unknown", "ticket_balance_change_unconfirmed")
+                raise UnknownPageStateError(
+                    "Piccoma ticket balance change was not confirmed"
+                )
+
+            confirmed_at = observed_now()
+            self._access_consumption = AccessConsumption(
+                consumed=True,
+                resource=self._required_ticket_resource(),
+                consumed_at=confirmed_at,
+                access_granted_until=grant_until,
+            )
+            self._report_ticket_attempt(kind, "confirmed", None)
+            self._ticket_attempt_started = False
+            await navigation_guard.remove_after_verified_entry()
+            self._ticket_navigation_guard = None
+            return viewer_response, str(listing.get("title") or state["title"])
+        except BaseException:
+            if self._ticket_attempt_started:
+                self._report_ticket_attempt(kind, "unknown", "post_action_proof_incomplete")
+            raise
+    async def _click_verified_ticket_button(
+        self,
+        page: Page,
+        modal: Locator,
+        kind: PiccomaTicketKind,
+        original_evidence: dict[str, Any],
+        navigation_guard: _PiccomaTicketNavigationGuard,
+        *,
+        record_attempt: Callable[[], None],
+    ) -> None:
+        if not self._ticket_kind_allowed(kind):
+            raise UnknownPageStateError(
+                "Piccoma ticket kind is not allowed for the selected resource"
+            )
+        button = modal.locator(f"button.{TICKET_BUTTON_CLASS[kind]}").and_(
+            modal.get_by_role("button", name=TICKET_BUTTON_LABEL[kind], exact=True)
+        )
+
+        async def exact_control_is_current() -> bool:
+            if (
+                not self._ticket_kind_allowed(kind)
+                or
+                await modal.count() != 1
+                or await page.locator(".jconfirm-open").count() != 1
+                or navigation_guard.eligibility_invalid
+                or navigation_guard.blocked_access_request_count
+                or navigation_guard.blocked_navigation_count
+                or navigation_guard.blocked_popup_count
+                or await navigation_guard.popup_was_attempted()
+            ):
+                return False
+            return (
+                await modal.evaluate(TICKET_MODAL_EVIDENCE_JS) == original_evidence
+                and await button.count() == 1
+            )
+
+        if not await exact_control_is_current():
+            raise UnknownPageStateError(
+                "Piccoma ticket confirmation changed before the authorized action"
+            )
+        record_attempt()
+        if not await exact_control_is_current():
+            self._report_ticket_attempt(
+                kind, "not_attempted", "confirmation_changed_before_dispatch"
+            )
+            raise UnknownPageStateError(
+                "Piccoma ticket confirmation changed before the authorized action"
+            )
+        self._ticket_attempt_started = True
+        navigation_guard.arm_viewer()
+        await button.click(timeout=3_000)
+
+    @staticmethod
+    def _is_target_access_response(
+        response: Response, identity: PiccomaEpisodeIdentity
+    ) -> bool:
+        request = response.request
+        if not piccoma_access_endpoint_matches(
+            method=request.method, url=request.url
+        ):
+            return False
+        try:
+            post_data = request.post_data
+        except Exception:  # noqa: BLE001 - malformed/binary bodies are not a match
+            return False
+        return piccoma_access_request_matches(
+            method=request.method,
+            url=request.url,
+            post_data=post_data,
+            product_id=identity.product_id,
+            episode_id=identity.episode_id,
+        )
+
+    async def _access_response_status(self, response: Response) -> object:
+        if (
+            response.status != 200
+            or "application/json" not in (response.headers.get("content-type") or "").lower()
+        ):
+            raise UnknownPageStateError("Piccoma ticket eligibility response is not JSON HTTP 200")
+        try:
+            body = await response.json()
+        except Exception as exc:
+            raise UnknownPageStateError("Piccoma ticket eligibility JSON is malformed") from exc
+        if not isinstance(body, dict):
+            raise UnknownPageStateError("Piccoma ticket eligibility payload is malformed")
+        return body.get("status")
+
+    def _report_ticket_attempt(
+        self,
+        kind: PiccomaTicketKind,
+        status: Literal["attempting", "confirmed", "unknown", "not_attempted"],
+        reason: str | None,
+    ) -> None:
+        if status in {"confirmed", "unknown", "not_attempted"}:
+            self._ticket_attempt_started = False
+        identity = self._require_identity()
+        self.report_access_attempt(
+            AccessAttemptObservation(
+                site="piccoma",
+                external_id=identity.external_id,
+                resource=self._required_ticket_resource(),
+                resource_kind=kind,
+                status=status,
+                observed_at=observed_now(),
+                reason=reason,
+            )
+        )
+
+    def _ticket_kind_allowed(self, kind: PiccomaTicketKind) -> bool:
+        resource = self._quota_resource
+        return resource in _TICKET_KINDS_BY_RESOURCE and kind in _TICKET_KINDS_BY_RESOURCE[resource]
+
+    def _required_ticket_resource(self) -> str:
+        resource = self._quota_resource
+        if resource not in _TICKET_KINDS_BY_RESOURCE:
+            raise UnsupportedAccessStrategyError(
+                "Piccoma ticket attempt has no configured logical resource"
+            )
+        return resource
+
+    @staticmethod
+    def _viewer_identity_from_url(url: str) -> PiccomaEpisodeIdentity | None:
+        identity = parse_piccoma_viewer_url(url)
+        if identity is not None:
+            return identity
+        parsed = urlparse(url)
+        if parsed.path.startswith("/web/viewer/s/"):
+            return parse_piccoma_viewer_url(
+                parsed._replace(path=parsed.path.replace("/viewer/s/", "/viewer/", 1)).geturl()
+            )
+        return None
 
     async def _dismiss_exact_resume_prompt(self, page: Page) -> None:
         dialogs = page.locator(RESUME_DIALOG_SELECTOR)
@@ -980,7 +2069,9 @@ class PiccomaAdapter(SiteAdapter):
             await self._wait_for_body(page, int(match.group(1)))
 
     async def initialize_entry_only(self, page: Page) -> None:
-        # No entitlement or resource-grant action exists in this free-only adapter.
+        # Grant-only uses the same exact access checks as Batch. If live state
+        # became free or already granted after planning, initialize records any
+        # fresh grant and returns a no-action skip before opening the viewer.
         await self.initialize(page)
 
     async def detect_state(self, page: Page) -> PageState:

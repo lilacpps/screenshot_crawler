@@ -12,6 +12,7 @@ from typing import Any
 
 from screenshot_crawler.batch.models import BatchCandidate, BatchSkipped
 from screenshot_crawler.core.access_guard import AccessEvent
+from screenshot_crawler.site_adapters.base import AccessAttemptObservation
 
 _SAFE_PART = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -156,6 +157,26 @@ class BatchMetricsWriter:
                 "run_id": self.run_id,
                 "item_id": self._current.get("item_id") if self._current else None,
                 "source_id": self._current.get("source_id") if self._current else None,
+            }
+        )
+
+    def record_access_attempt(self, observation: AccessAttemptObservation) -> None:
+        """Flush concrete resource-kind evidence without request bodies or URLs."""
+
+        current = self._current or {}
+        self._write(
+            {
+                "type": "access_attempt",
+                "event": observation.status,
+                "run_id": self.run_id,
+                "site": observation.site,
+                "item_id": current.get("item_id"),
+                "source_id": current.get("source_id"),
+                "target_id": current.get("target_id"),
+                "resource": observation.resource,
+                "resource_kind": observation.resource_kind,
+                "observed_at": observation.observed_at.isoformat(),
+                "reason": observation.reason,
             }
         )
 

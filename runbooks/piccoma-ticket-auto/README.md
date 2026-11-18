@@ -1,15 +1,16 @@
 # ピッコマ 3種チケット自動消費 — 実装 Runbook
 
-**Status: PLANNED / NOT IMPLEMENTED（2026-11-18）**
+**Status: Stage 02 live implementation and 2026-11-18 default/grant revision are historical. The 2026-11-19 Work/Binge grant-only revision is implemented and synthetic-verified; independent final review is pending. No new live site, CDP, or ticket action was used in this revision.**
 **対象:** 既存 `screenshot_crawler` の Piccoma Adapter に、`待てば¥0` / `¥0+券` / `爆読み¥0券` の利用可能な範囲での自動解放を追加する。
 **進捗:** [PROGRESS.md](PROGRESS.md) に観測・消費・テスト・未確認事項を記録する。
+**現在:** 通常BatchはPiccoma専用flagなしで3券種を利用する。Grant-onlyは `work_ticket`（待てば¥0 / ¥0+）の後に `binge_ticket`（爆読み）を明示的に試し、`all` はこの2 passを順番に再計画する。資源ごとの券種から暗黙fallbackしない。Grant-onlyは複数話を解放でき、Capture / packaging / Item completionは行わない。旧 `piccoma_ticket_grant` は未対応として拒否する。旧CLI flag、GUI checkbox、追加 opt-in prompt はない。worker queueはv2 internal consent bitで古いPiccoma requestの黙った権限拡張を拒否する。今回のrevisionは実サイト接続・追加ticket消費なし。Stage 02の4回のlive proofと以前の9473件full suiteは履歴であり、今回の検証数と混同しない。詳細は [PROGRESS.md](PROGRESS.md) を参照。
 **実装ブランチ:** 実装着手時の最新 `main` から専用 feature branch を作る。履歴のある旧 `feat/piccoma-adapter` / `research/piccoma-performance-20261010` を起点にせず、未コミット変更を破棄しない。`main` への自動マージはしない。
 
 ## 0. Authority と現行実装（確認済み）
 
 `AGENTS.md` の authority order を最優先とし、`docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DISCOVERY_AND_BATCH.md`、`docs/ACCESS_CONTROL_AND_PACING.md`、`docs/TEST_STRATEGY.md`、`docs/CODEX_IMPLEMENTATION_GUIDE.md`、`note/09_piccoma.md` と現行テストを読む。無料・手動解放の既存履歴は `runbooks/piccoma-free/README.md`、実行方式の参考は `runbooks/hanayume-work-ticket/README.md` / `runbooks/younganimal-work-ticket/README.md`。上位仕様と衝突した場合は黙って変更せず、差分と採用判断を記録する。
 
-**実装済み（基準時点）:**
+**Stage 01開始前の基準状態:**
 - `site_adapters/piccoma/discovery.py` は、単独の `waitfree`、`waitfree+zeroPlus`、`waitfree+bingefree` バッジを `access_mode=quota` として識別。無条件 `¥0` は `free`、ポイント価格の確証がある話は `paid`。チケット種別・所持枚数は Catalog に格納していない。
 - 解放済み話は `waitfreeRead` と `閲覧期限 残りN時間` の保守的な期限を記録。`PiccomaSitePolicy` は `free` と有効な手動解放だけ `direct` 許可。quota は `pending_quota` 表示のみ。
 - `PiccomaAdapter.initialize()` は対象の `/web/product/{product}/episodes` 一覧を再確認し、free/active grant なら canonical viewer に移る。現在は `auto/direct` のみ。未解放話を解放する操作はない。
@@ -19,7 +20,9 @@
 
 ## 1. 目的・要求・受け入れ境界
 
-ユーザーが明示的に有効化した `piccoma` の通常 Batch において、既存の **crawl候補順** を保ち、各話を順番に処理する。無条件無料/既に解放済みは券を消費せず取得。未解放のチケット対象話では、ログイン中の実サイトで利用可能な3種のいずれかを確認して、**通常UIで対象1話の権利だけを明示的に1回取得**し、取得できればそのまま既存 Capture → END → ZIP へ進む。使えなければ pending のまま次の候補へ進む。3種の券を利用可能な限り使うが、消費を伴う行為は常に opt-in とする。
+Piccomaの通常 Batch は既存の **crawl候補順** を保ち、各話を順番に処理する。無条件無料/既に解放済みは券を消費せず取得。未解放のチケット対象話では、ログイン中の実サイトで利用可能な3種のいずれかを確認して、通常UIで対象1話の権利だけを1回取得し、正のgrant確認後は既存 Capture → END → ZIP へ進む。使えなければ pending のまま次の候補へ進む。通常Batchは既定でこの動作を行う。
+
+Grant-onlyは `work_ticket`（待てば¥0 / ¥0+）と `binge_ticket`（爆読み）を別々のlogical resourceとして使う。`--grant-only all` は Work pass の後に再計画して Binge pass を行う。各passで指定された券種だけを使い、残数・対象・選択・既存 `--limit` の範囲で複数話を逐次解放する。券種間の暗黙fallbackはしない。各話のgrant確認後に次候補へ進み、Capture / packaging / Item completionを行わない。`piccoma_ticket_grant` は未対応として拒否する。
 
 | 項目 | MVP契約 |
 | --- | --- |
@@ -28,10 +31,10 @@
 | 資源 | 待てば¥0（作品ごと）、¥0+券（アカウント共通）、爆読み¥0券（アカウント共通＋作品ごとの週制限） |
 | 消費 | 画面の正の証拠で対象話・使用する券種・課金0・残数/適格性・操作箇所を束縛。クリック前の read-only 検証後、当該試行は高々1操作 |
 | 消費後 | 対象話の解放と同じ ID の viewer entry を確認し、できる限り同じ Page から Capture。既存 Piccoma source-native / lossless WebP / PNG fallback / END / ZIP 契約を変更しない |
-| 実行許可 | 通常は **OFF**。GUI `無料チケットを自動使用` チェック（既定OFF）またはCLIで明示指定した通常 Batch のみ ON。チェックなしの既存挙動を維持 |
+| 実行許可 | 通常Batchは3券種を利用可能なとき自動使用。GUIにPiccoma専用checkboxや追加opt-in確認はない。Grant-onlyは専用resourceでwaitfree/¥0+だけを使用 |
 | スキップ | 利用不可/不明/paid/課金操作/別の券種へ誘導/ログイン・challenge は安全に拒否。未消費と確認できた不適格は pending で次候補へ。消費不明の試行は自動再クリックしない |
 | 有効期間 | 読める期限と券の次回回復・配布・週上限は**別物**。期限は実サイトで正に観測した値を保守的に記録。機械的な72時間加算だけで direct を許可しない |
-| 実装範囲外 | 有料ポイント/コイン/決済、ギフト券、時短アイテム、動画・広告視聴による解放、アクセス制御/DRM回避、CAPTCHA対処、並列チケット消費。grant-only はMVP対象外 |
+| 実装範囲外 | 有料ポイント/コイン/決済、ギフト券、時短アイテム、動画・広告視聴による解放、アクセス制御/DRM回避、CAPTCHA対処、並列チケット消費。Grant-onlyでの爆読み利用 |
 
 ### 公式仕様として参照するが、実装判定の authority は live state
 
@@ -41,7 +44,7 @@
 - 取得後の閲覧期限は原則72時間だが、キャンペーン終了等で途中から有料へ戻る例がある（https://piccoma.com/web/faq_detail/80）。**キャッシュした72時間だけでアクセス保証しない。**
 - これらの定数を残数・可否の authority にしない。サイトが自動的に券種を決める場合、観測で実際の券種と追加消費がないことを確認できなければ操作しない。券の消費優先順位は仮定で上書きしない。
 
-## 2. 設計選択（Stage 01の証拠で確定）
+## 2. 設計選択（Stage 01の証拠で確定した履歴）
 
 **推奨: 1話ごとの site-owned 自動リソース選択。** 標準 `batch run` の候補列を保ったまま、当該話の一覧・入場UIから実際の残数、対象アイコン、作品制限を読み、候補になる券種を確定して1回解放し、同じ話を取得する。作品Aの全話を完了させてから作品Bに行くような独自のグルーピングはしない（順序は既存のプランに従う）。一括の全作品先読みは行わない。
 
@@ -70,9 +73,11 @@
 
 **Gate S1:** 3種ごとに「適格判定・確定券種・1回操作・成功判定・不明時停止」を説明でき、Planner順序問題の対応方針が確定。独立Reviewerに安全性と変更範囲を確認してもらう。必要な実サイト証拠がなければStage 02 の当該券種を無効のまま保持し、「実装済み」と報告しない。
 
-## 4. Stage 02 — 最小実装・テスト・GUI
+## 4. Stage 02 — 初回の opt-in 実装・ライブ証拠（履歴）
 
-**着手条件:** Gate S1を通過した券種から実装。未確認の券種を推測実装しない。原則Piccoma固有コードを優先し、共有コードの変更はテストで必要性を示した場合だけ。
+**実装状況:** Gate S1の証拠に基づく3券種を実装し、各券種のpositive live post-stateを確認済み。共有変更はPlanner順序保持、Executor attempt persistence、CLI/GUI/Worker opt-in transportに限定し、B1/B2/B3と互換性レビューはBLOCKING 0。全201 test filesは9453 passed / 0 failed / 0 skipped in the 201-file full suite; 3 later sequential synthetic cases also passed (9456 distinct validations; no full rerun)。Final Stage 02 Reviewer Gate: PASS / BLOCKING 0.
+
+この節のdefault-OFF opt-in、`--piccoma-auto-tickets`、GUI checkbox、およびGrant-only非対応は当初のStage 02を記録した履歴であり、現行契約ではない。現行契約は次の節を参照する。
 
 **変更候補:**
 - `src/screenshot_crawler/site_adapters/piccoma/discovery.py`: 既知のrow-scopedバッジ分類は保持。必要なら read-only の種別判定を新設。Catalog の既存 `quota` 表現を維持し、別resource を持つためだけにDB migrationを増やさない。
@@ -106,13 +111,25 @@
 
 テストは **合成 HTML / Playwright browser fixture + 隔離Catalog** を基本とする。外部サイトに依存する恒常的CIは追加しない。実サイトの著作物や秘密をfixtureに入れない。`tests/unit/test_piccoma_*`、`tests/integration/test_piccoma_*` と Batch/CLI/GUI/Worker の影響範囲を拡張し、`docs/TEST_STRATEGY.md` に従い targeted → affected → browser-backed → 必要なら full suite。共有Planner/Executor等を変えた場合は影響を受ける他サイトのBatchテストも必須。`ruff check src tests` を実行する。
 
-**Gate S2:** 3種の各ケースが合成fixtureで PASS、変更の独立ReviewerがBLOCKING=0。ユーザーが個別に許可した有限枚数での実サイト確認（必要最小）が得られない場合は live 未検証と明記し、機能をデフォルトOFFのままとする。既定 direct 実行の回帰なし。消費枚数・消費後grant・ZIP/manifest・Catalog状態を観測した事実のみ `PROGRESS.md` に報告。
+**Gate S2:** 3券種のfixture、live positive proof、default-off direct recovery、全201 test filesの回帰確認は完了。Final Gate S2: PASS / BLOCKING 0. Stage 02 is complete.既知の未確認事項（binge account-wide残数delta、normal packaging後のmanifest/source-native provenance、枯渇・週境界等のlive境界）は成功と見なさず `PROGRESS.md` に記録する。消費枚数・消費後grant・ZIP/manifest・Catalog状態は観測できた範囲だけ報告する。
 
-## 5. 実装時の停止条件と報告形式
+## 5. 現行 default Batch / Grant-only 契約（post-Stage 02 revision）
+
+- 通常 `batch run` はavailableなPiccoma quota話でsite-nativeに利用可能なwaitfree / ¥0+ / binge-freeを使う。専用CLI flag、GUI checkbox、追加opt-in promptはない。候補順序を保ち、各候補のfresh UI stateで種類を選ぶ。
+- Grant-only は `work_ticket`（waitfree / ¥0+）と `binge_ticket`（binge-free）を順番に選択できる。`all` は Work の後に Catalog を再計画して Binge を試す。Binge pass では waitfree / ¥0+ に切り替えず、未知状態なら後続passを停止する。Stock、選択対象、既存 `--limit` を尊重し、Workごとの1話上限を追加しない。旧 `piccoma_ticket_grant` は受け付けない。
+- Grant-onlyはtarget grant確認とdurable Catalog/metrics記録で終了する。Capture、package/ZIP、Artifact作成、Item completionは行わず、Itemはpendingのままにする。
+- Plan後にfree/active grantへ変わったGrant-only候補は、追加ticket操作とviewer entryなしでno-action skipする。fresh grantはskip前にpersistする。
+- GUI queueでは通常Piccoma Batchと Grant-only の `all` / `binge_ticket` にinternal signed consent bitを含む`inputs-v2`を使う。明示的な `work_ticket` は従来どおり `inputs-v1` / falseでよい。旧Piccoma `all` requestや未対応aliasは実行前に拒否し、保存済みjobがupgrade後にbinge券を黙って使うことを防ぐ。mixed-site runではbitをPiccoma namespaceだけに適用し、grant-only子CLIにはquota accessを渡さない。
+- 通常multi-site Batchの `--limit` は全site合計のcrawl slot上限であり、`--grant-only` はselected grant attemptの上限である。Workerは`candidate_started`を使って残数を保守的にsite間へ渡す。deferred siteでは準備grantとcaptureの各phaseがcandidate startを出すため、通常Batchはslot上限を超えない一方、上限まで候補を埋めないことがある。候補開始前のlocal skip/empty planは枠を使わず、開始後のno-action/unavailableもcandidate start済みなら枠を使う。failureは後続siteを開始しない。
+- Same-Source unresolved quota history guard、candidate-bound attempt/grant observer、native row/modal/control/debit proof、AccessGuard、normal Batch Capture → END → ZIP は維持する。未確認/ambiguous状態はfail-closed。今回のrevisionでは追加ticket/CDP/live actionは行わない。
+
+このrevisionの合成browser sequence、targeted/affected results、全repository suiteの最新結果とレビューは `PROGRESS.md` に更新する。Stage 02の旧4 ticket uses、direct-recovery E2E、9456 historical validationは新revisionの証拠に加算しない。
+
+## 6. 実装時の停止条件と報告形式
 
 - **停止:** 身元/対象話/券種/課金0/一意な操作/消費結果を正に証明できないとき、あるいはサイトが別券・課金・ログイン・CAPTCHAへ誘導するとき。UNKNOWNを「残数なし」「無料」と解釈しない。
 - **リソース消費上限:** 実サイト操作は別途許可された対象話と枚数のみ。無許可なら0枚。自動テストのため実券を消費しない。実際に使った券種/件数を試行ごとに記録。
 - **プライバシー:** Cookie、認証ヘッダー、token、署名付きURL、作品画像をレポジトリにコミットしない。ローカル diagnostics でも認証情報は redact する。
 - **完了報告:** 変更ファイル、当初想定との設計差分、確認済み券種/未確認券種、消費実績、順序検証結果、テスト結果と未実施項目、既知の制限、独立ReviewerのBLOCKING数を明示。機能未実装/未検証を PASS と言い換えない。
 
-**Codexへの実行単位:** 最初の依頼は「このRunbookの Stage 01 だけを行い、PROGRESS.md に記録して停止」。Gate S1で判断できたときだけ、別途 Stage 02 の実装指示へ進む。
+**Codexへの実行単位:** 現在のdefault Batch / Grant-only契約に対する変更は、上位authority・この節・`PROGRESS.md` の最新phaseを確認し、Stage 02のhistorical opt-in契約を現行仕様として再導入しない。

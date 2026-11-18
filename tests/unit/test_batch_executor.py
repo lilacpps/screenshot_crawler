@@ -51,6 +51,7 @@ from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
 from screenshot_crawler.site_adapters.base import (
+    AccessAttemptObservation,
     AccessConsumption,
     AccessResourceResolution,
     ConfirmedAccessGrant,
@@ -172,6 +173,7 @@ def make_executor(
     during_run: Callable[[RunConfig], None] | None = None,
     runtime_settings: SiteRuntimeSettings | None = None,
     adapter_factory: Callable[[], SiteAdapter] | None = None,
+    piccoma_adapter_factory: Callable[[], SiteAdapter] | None = None,
     adapter_action: Callable[[SiteAdapter], None] | None = None,
 ) -> BatchExecutor:
     policies = SitePolicyRegistry()
@@ -179,7 +181,7 @@ def make_executor(
     policies.register("piccoma", PiccomaSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("mangaone", adapter_factory or FakeAdapter)
-    adapters.register("piccoma", FakeAdapter)
+    adapters.register("piccoma", piccoma_adapter_factory or FakeAdapter)
 
     def runner_factory(config: RunConfig) -> FakeRunner:
         if configs is not None:
@@ -234,6 +236,39 @@ def make_executor(
         runtime_settings=runtime_settings,
         library_dir=service.path.parent / "Books",
     )
+
+
+async def test_piccoma_executor_rechecks_quota_history_after_planning(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    add_candidate(service, access_mode="quota", site="piccoma")
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    planner = BatchPlanner(
+        service, policies, watchlist=synchronized_legacy_watchlist(service)
+    )
+    candidate = planner.plan(
+        site="piccoma", now=NOW, allow_quota_access=True
+    ).candidates[0]
+    prior = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=candidate.target_id,
+        access_strategy="quota",
+        started_at=NOW,
+    )
+    executor = make_executor(service)
+
+    with pytest.raises(AccessResourceUnavailableError, match="prior_quota_attempt_unresolved"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            now=NOW + timedelta(minutes=1),
+            allow_quota_access=True,
+        )
+
+    assert service.list_crawl_runs(source_id=candidate.source_id) == [prior]
 
 
 def add_candidate(
@@ -508,6 +543,292 @@ async def test_executor_persists_confirmed_grant_before_runner_continues_and_cle
     with pytest.raises(BatchExecutionError, match="outside its candidate execution"):
         captured_observers[0](grant)
     assert service.get_item(candidate.item_id).status == "pending"
+
+
+@pytest.mark.parametrize("failure", ["capture", "identity", "sink"])
+async def test_executor_scopes_and_persists_access_attempt_observer(
+    tmp_path: Path, failure: str
+) -> None:
+    class AttemptAdapter(SiteAdapter):
+        async def configure_run(self, _page, _access_strategy) -> None:
+            return None
+
+        async def configure_quota_resource(self, _page, _quota_resource) -> None:
+            return None
+
+        async def initialize(self, _page):
+            return None
+
+        async def detect_state(self, _page):
+            return PageState.END
+
+        async def get_capture_target(self, _page):
+            return None
+
+        async def get_content_identity(self, _page):
+            return None
+
+        async def get_content_context(self, _page):
+            return None
+
+        async def go_next(self, _page):
+            return None
+
+        async def wait_for_change(self, _page, _previous_identity):
+            return None
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    add_candidate(service, access_mode="quota", site="piccoma")
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    planner = BatchPlanner(
+        service, policies, watchlist=synchronized_legacy_watchlist(service)
+    )
+    candidate = planner.plan(
+        site="piccoma", now=NOW, allow_quota_access=True
+    ).candidates[0]
+    adapter = AttemptAdapter()
+    saved: list[AccessAttemptObservation] = []
+    captured_callbacks: list[Callable[[AccessAttemptObservation], None]] = []
+    action_finished = False
+
+    def persist(observation: AccessAttemptObservation) -> None:
+        saved.append(observation)
+        if failure == "sink":
+            raise OSError("metrics write failed")
+
+    def report_attempt(configured_adapter: SiteAdapter) -> None:
+        nonlocal action_finished
+        callback = configured_adapter._access_attempt_observer  # type: ignore[attr-defined]
+        assert callable(callback)
+        captured_callbacks.append(callback)
+        configured_adapter.report_access_attempt(
+            AccessAttemptObservation(
+                site=candidate.site,
+                external_id=(
+                    "wrong-source" if failure == "identity" else candidate.external_id
+                ),
+                resource=candidate.quota_resource,
+                resource_kind="zero_plus",
+                status="attempting",
+                observed_at=NOW,
+            )
+        )
+        action_finished = True
+
+    executor = make_executor(
+        service,
+        fail_crawl=failure == "capture",
+        piccoma_adapter_factory=lambda: adapter,
+        adapter_action=report_attempt,
+    )
+    executor.access_attempt_sink = persist
+
+    if failure == "identity":
+        with pytest.raises(BatchExecutionError, match="different candidate"):
+            await executor.execute_candidate(
+                object(), candidate, now=NOW, allow_quota_access=True
+            )
+        assert saved == []
+        assert not action_finished
+    else:
+        with pytest.raises(CandidateExecutionError, match="metrics write failed|crawler failed"):
+            await executor.execute_candidate(
+                object(), candidate, now=NOW, allow_quota_access=True
+            )
+        assert len(saved) == 1
+        assert saved[0].external_id == candidate.external_id
+        assert saved[0].resource == candidate.quota_resource
+        assert action_finished is (failure == "capture")
+
+    assert adapter._access_attempt_observer is None
+    assert len(captured_callbacks) == 1
+    with pytest.raises(BatchExecutionError, match="outside its candidate execution"):
+        captured_callbacks[0](
+            AccessAttemptObservation(
+                site=candidate.site,
+                external_id=candidate.external_id,
+                resource=candidate.quota_resource,
+                resource_kind="zero_plus",
+                status="confirmed",
+                observed_at=NOW,
+            )
+        )
+    assert service.get_source(candidate.source_id).quota_started_at is None
+
+
+@pytest.mark.parametrize("failure", ["identity", "sink", "after_grant"])
+async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant(
+    tmp_path: Path, failure: str
+) -> None:
+    class AttemptAdapter(SiteAdapter):
+        def __init__(self) -> None:
+            self.attempted_clicks = 0
+            self.consumption = AccessConsumption()
+
+        async def configure_run(self, _page, _access_strategy) -> None:
+            return None
+
+        async def configure_quota_resource(self, _page, _quota_resource) -> None:
+            return None
+
+        async def initialize(self, _page) -> None:
+            self.report_access_attempt(
+                AccessAttemptObservation(
+                    site="piccoma",
+                    external_id="wrong-source" if failure == "identity" else candidate.external_id,
+                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    resource_kind="zero_plus",
+                    status="attempting",
+                    observed_at=NOW,
+                )
+            )
+            self.attempted_clicks += 1
+            if failure == "after_grant":
+                self.report_access_attempt(
+                    AccessAttemptObservation(
+                        site="piccoma",
+                        external_id=candidate.external_id,
+                        resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                        resource_kind="zero_plus",
+                        status="confirmed",
+                        observed_at=NOW,
+                    )
+                )
+                self.report_confirmed_access_grant(
+                    ConfirmedAccessGrant(
+                        site="piccoma",
+                        external_id=candidate.external_id,
+                        observed_at=NOW,
+                        access_granted_until=NOW + timedelta(hours=2),
+                        expiry_evidence="site_countdown_lower_bound",
+                    )
+                )
+                self.consumption = AccessConsumption(
+                    consumed=True,
+                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    consumed_at=NOW,
+                    access_granted_until=NOW + timedelta(hours=2),
+                )
+                raise RuntimeError("reader setup failed after grant proof")
+
+        async def detect_state(self, _page):
+            return PageState.END
+
+        async def get_capture_target(self, _page):
+            return None
+
+        async def get_content_identity(self, _page):
+            return None
+
+        async def get_content_context(self, _page):
+            return None
+
+        async def go_next(self, _page):
+            return None
+
+        async def wait_for_change(self, _page, _previous_identity):
+            return None
+
+        def get_access_consumption(self) -> AccessConsumption:
+            return self.consumption
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    add_candidate(service, access_mode="quota", site="piccoma")
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    planner = BatchPlanner(
+        service, policies, watchlist=synchronized_legacy_watchlist(service)
+    )
+    candidate = planner.plan(
+        site="piccoma",
+        now=NOW,
+        quota_resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+        output_mode="grant_only",
+    ).candidates[0]
+    adapter = AttemptAdapter()
+    saved: list[AccessAttemptObservation] = []
+    callbacks: list[Callable[[AccessAttemptObservation], None]] = []
+
+    def persist(observation: AccessAttemptObservation) -> None:
+        saved.append(observation)
+        if failure == "sink":
+            raise OSError("attempt journal unavailable")
+
+    def expose_callback(configured_adapter: SiteAdapter) -> None:
+        callback = configured_adapter._access_attempt_observer  # type: ignore[attr-defined]
+        assert callable(callback)
+        callbacks.append(callback)
+
+    class Runner:
+        def __init__(self, _config: RunConfig) -> None:
+            pass
+
+        async def run(self, page: object, configured_adapter: SiteAdapter) -> RunResult:
+            expose_callback(configured_adapter)
+            await configured_adapter.configure_run(page, "quota")
+            await configured_adapter.configure_quota_resource(
+                page, PiccomaSitePolicy.GRANT_ONLY_RESOURCE
+            )
+            await configured_adapter.initialize_entry_only(page)
+            return RunResult(
+                pages=(), stop_state=PageState.END, stop_reason="entry_confirmed",
+                entry_confirmed=True,
+            )
+
+    executor = BatchExecutor(
+        service,
+        policies,
+        AdapterRegistry(),
+        watchlist=synchronized_legacy_watchlist(service),
+        library_dir=tmp_path / "Books",
+        runner_factory=Runner,  # type: ignore[arg-type]
+        access_attempt_sink=persist,
+    )
+    executor.adapters.register("piccoma", lambda: adapter)
+
+    if failure == "after_grant":
+        with pytest.raises(CandidateExecutionError, match="reader setup failed"):
+            await executor.execute_grant_only_candidate(
+                object(), candidate, output_root=tmp_path / "batch", now=NOW
+            )
+        source = service.get_source(candidate.source_id)
+        assert source.quota_started_at == NOW.isoformat()
+        assert source.access_granted_until == (NOW + timedelta(hours=2)).isoformat()
+        assert [value.status for value in saved] == ["attempting", "confirmed"]
+        assert service.list_crawl_runs(source_id=candidate.source_id)[0].status == "failed"
+    elif failure == "identity":
+        with pytest.raises(BatchExecutionError, match="different candidate"):
+            await executor.execute_grant_only_candidate(
+                object(), candidate, output_root=tmp_path / "batch", now=NOW
+            )
+        assert saved == []
+        assert adapter.attempted_clicks == 0
+        assert service.get_source(candidate.source_id).quota_started_at is None
+    else:
+        with pytest.raises(CandidateExecutionError, match="attempt journal unavailable"):
+            await executor.execute_grant_only_candidate(
+                object(), candidate, output_root=tmp_path / "batch", now=NOW
+            )
+        assert adapter.attempted_clicks == 0
+        assert service.get_source(candidate.source_id).quota_started_at is None
+
+    assert adapter._access_attempt_observer is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    assert not list((tmp_path / "Books").glob("*.zip"))
+    if callbacks and failure == "after_grant":
+        with pytest.raises(BatchExecutionError, match="outside its candidate execution"):
+            callbacks[0](
+                AccessAttemptObservation(
+                    site="piccoma",
+                    external_id=candidate.external_id,
+                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    resource_kind="zero_plus",
+                    status="confirmed",
+                    observed_at=NOW,
+                )
+            )
 
 
 async def test_executor_grant_persistence_failure_prevents_capture_action(
@@ -1804,6 +2125,24 @@ def _add_magapoke_candidate(
         quota_commit_mode="after_observed_consumption",
         external_id=source.external_id,
         work_id=work.id,
+    )
+
+
+def test_explicit_quota_resource_remains_authoritative_with_generic_opt_in_true(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(False, None)
+    )
+
+    executor._validate_candidate(
+        candidate,
+        MagapokeSitePolicy(),
+        NOW,
+        library_dir=tmp_path / "Books",
+        allow_quota_access=True,
     )
 
 

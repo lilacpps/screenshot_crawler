@@ -156,14 +156,21 @@ async def test_piccoma_full_discovery_validates_and_syncs_complete_latest_first_
     summary = snapshot.keys[0].summary
     assert (summary.counts.direct, summary.counts.quota,
             summary.counts.paid, summary.counts.unknown) == (1, 1, 1, 1)
-    assert snapshot.resources["piccoma"].supported_resources == ()
+    assert snapshot.resources["piccoma"].supported_resources == (
+        "piccoma_ticket_auto", "work_ticket", "binge_ticket"
+    )
+    assert snapshot.resources["piccoma"].grant_resources == ("work_ticket", "binge_ticket")
     policies = SitePolicyRegistry()
     policies.register("piccoma", PiccomaSitePolicy)
     plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
         site="piccoma", now=datetime.fromisoformat(quota_source.access_checked_at)
     )
-    assert [candidate.external_id for candidate in plan.candidates] == ["900:101"]
-    assert all(candidate.access_strategy == "direct" for candidate in plan.candidates)
+    assert [candidate.external_id for candidate in plan.candidates] == [
+        "900:102", "900:101"
+    ]
+    assert [candidate.access_strategy for candidate in plan.candidates] == [
+        "quota", "direct"
+    ]
 
 
 @pytest.mark.parametrize("mode", ["full", "incremental"])
@@ -317,9 +324,14 @@ async def test_piccoma_incremental_refreshes_old_manual_grants_and_clears_stale_
     plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
         site="piccoma", now=datetime.fromisoformat(source.access_checked_at)
     )
-    assert [candidate.external_id for candidate in plan.candidates] == ["900:101"]
-    assert plan.candidates[0].access_strategy == "direct"
-    assert plan.candidates[0].consumes_quota is False
+    assert [candidate.external_id for candidate in plan.candidates] == [
+        "900:102", "900:101"
+    ]
+    assert [candidate.access_strategy for candidate in plan.candidates] == [
+        "quota", "direct"
+    ]
+    assert plan.candidates[0].consumes_quota is True
+    assert plan.candidates[1].consumes_quota is False
     assert catalog.get_item(source.item_id).status == "pending"
     catalog.mark_item_completed(source.item_id)
     current_html["body"] = _listing_html(

@@ -232,23 +232,55 @@ manual grants can change on old episodes beyond a known-row boundary. The
 existing site-specific incremental stop hook is used; incremental still does
 not reconcile unseen rows as unavailable. Item completion/artifacts are retained.
 
-Normal Piccoma Batch admits available free sources and available quota sources
-with a future observed grant as non-consuming `direct`. The adapter rechecks
-the unique row's current free/manual-grant evidence before entry. Only freshly
-verified manual grants may use the observed `/web/viewer/s/{product}/{episode}`
-redirect; matching composite identity and HTTP 200 are required, and the exact
-accepted URL must remain unchanged. Catalog and manifest source URLs remain
-canonical. Missing/expired grants do not trigger access acquisition. Automatic
-ticket/resource use and grant-only remain unsupported. No shared schema, Core,
-or Batch orchestration change is required.
+Normal Piccoma Batch admits available free sources, active manual grants, and
+otherwise-eligible quota sources. Eligible quota candidates use the logical
+`piccoma_ticket_auto` resource and site-owned live checks to choose one exact
+free ticket kind; the default Batch does not require a Piccoma-only flag or
+checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) and
+`binge_ticket` (binge-free). `--grant-only all` runs these as explicit ordered
+passes with a Catalog replan between them; neither pass falls back to another
+kind. It confirms
+the target grant and leaves the Item pending without capture, packaging, or
+completion. Both flows preserve the selected candidate ID sequence; the
+Planner does not regroup direct and quota candidates. Resource kind and
+availability are revalidated by the Piccoma adapter immediately before use.
+Other policies keep their existing ordering and resource contracts.
 
-For inventory only, an available quota source without an active manual grant
-sets `PolicyDecision.pending_quota=true` while remaining ineligible, with no
-access strategy, resource, or consumption. The GUI counts it in Quota対象残;
-active grants are direct, unavailable sources remain unavailable, and completed,
-external and skipped Item status retains precedence. The flag defaults to false
-for all policies and never authorizes Batch execution. Rediscovery refreshes
-previously unknown ¥0＋ sources; no Catalog backfill is required.
+Before a consuming attempt, the Piccoma adapter binds the fresh full-list row,
+product-home state, login indicator, exact `/web/user/access` request/response,
+one native confirmation modal, one concrete kind-specific affirmative control,
+and one same-target viewer navigation. Product home is read-only. After entry,
+the adapter keeps the owned Page on the viewer and uses a bounded same-origin
+GET to read product-home state into a detached document; it never navigates the
+Page away from the viewer to perform the post-state check. The normal Page preparation and native reader
+readiness/capture gates remain in force. The adapter accepts only known ticket
+statuses and observed zero-price copy; gift, paid, point, coin, ad, time-saving,
+purchase redirects, ambiguous state, or unapproved mutation/navigation are
+blocked or fail closed. An uncertain post-click outcome is not retried. A
+positive target grant is persisted before capture, even if later capture or
+packaging fails; attempt-kind and certainty are written to a sanitized JSONL
+observer, not to Catalog schema.
+
+The Planner and Executor also consult the Piccoma policy's same-Source
+unresolved quota-run guard for both resources. Any prior running, failed,
+malformed or unrecognized quota CrawlRun holds another consuming attempt; only
+conclusive terminal history or a fresh active grant permits progress. A known
+pre-click no-action result is durably distinguishable. This conservative
+write-ahead use of existing CrawlRun history avoids a new table and prevents a
+new Batch invocation from forgetting a possible prior debit. Catalog and
+manifest source URLs remain canonical. Already-free and newly observed active
+grants are non-consuming; a stale grant-only plan records a fresh grant before
+skipping, without opening a viewer or starting a ticket attempt.
+
+`PolicyDecision.pending_quota` is an inventory/display signal; it does not by
+itself authorize execution. Piccoma's policy separately admits available quota
+sources in normal Batch through `piccoma_ticket_auto` and in grant-only through
+`work_ticket` then `binge_ticket`, subject to each pass's site-owned checks and
+allowed ticket kinds. Other policies may leave quota sources ineligible until a grant
+or site-specific access-resource path applies. Active grants are direct,
+unavailable sources remain unavailable, and completed, external and skipped
+Item status retains precedence. Rediscovery refreshes previously unknown ¥0＋
+sources; no Catalog backfill is required.
 
 ## Z6 Zeblack site-native Work Ticket orchestration (2026-09-30)
 
@@ -1874,6 +1906,13 @@ applies only to new quota-consuming candidates. `free`, `owned`, and quota
 sources with `access_granted_until > now` remain `direct` and do not enter
 the quota allocation pool. Items beyond the allocated slots are reported as
 `quota_exhausted`.
+
+An optional site-policy `preserve_candidate_sequence(allow_quota_access)` hook
+can retain the policy-selected candidate ID sequence for a narrowly scoped
+opt-in flow that must interleave direct and consuming candidates in ordinary
+Batch order. Its default is false, and policy approval is required; when true,
+the Planner leaves candidate sequence intact while still applying eligibility,
+quota admission and limits. It does not reorder candidates for unrelated sites.
 
 ### 11.2 Source priority
 

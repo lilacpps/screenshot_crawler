@@ -52,7 +52,7 @@ aggregate totals partial (display —); stored observations remain in details.
 | pending, Policy eligible quota with quota_available=None | quota pool |
 | Policy paid / expired_rental | paid |
 | Policy unavailable / expired_free | unavailable |
-| Policy pending_quota=true, ineligible | quota pool (inventory only) |
+| Policy pending_quota=true | quota pool (inventory classification only) |
 | unsupported, Policy exception, ambiguous | unknown + reason |
 
 The Policy owns expiry/grant semantics, including cases where a free_until field
@@ -60,12 +60,14 @@ is not used by that site's existing policy. The GUI does not invent expiry rules
 An expired paid rental is paid; an active rental is direct only if Policy says so.
 Site quota slots use all Sources of that site once and are separate from the
 quota pool. Named resources are metadata, never additional Item counts.
-`PolicyDecision.pending_quota` defaults to false. A site policy can explicitly
-identify known, non-executable quota inventory with this flag; it changes no
-Batch eligibility, strategy or resource support. Paid/unavailable decisions
-retain precedence. Piccoma uses it for available quota sources awaiting manual
-unlock, including 待てば¥0, ¥0＋ and 爆読み. No site-name or badge rules are
-embedded in the shared inventory projection.
+`PolicyDecision.pending_quota` defaults to false. A site policy can identify
+quota inventory without an active manual grant with this flag; the flag itself
+changes no Batch eligibility, strategy or resource support. Separate
+site-policy access resources may still make a source executable. Paid/unavailable
+decisions retain precedence. Piccoma uses this inventory classification for
+available quota sources awaiting manual unlock, including 待てば¥0, ¥0＋ and
+爆読み. No site-name or badge rules are embedded in the shared inventory
+projection.
 Grant retry timestamps use Policy APIs and runtime configuration only; absent
 API support or absent consumed-state evidence remains unknown.
 
@@ -178,6 +180,20 @@ quota, numbering, cancellation and output-collision guards. Catalog changes by
 earlier queued jobs alone do not invalidate new requests. Legacy persisted
 plan-bound requests keep their original verification path. Configuration changes
 while waiting still stop execution; there is no automatic retry.
+
+Normal Piccoma Batch may use its free waitfree, ¥0+ and binge-free tickets; the
+Run button tooltip describes this possibility, and clicking it queues the job
+without an execution-confirmation dialog. There is no Piccoma-only checkbox or
+extra opt-in prompt. Grant-only uses a separate
+resource selector: Piccoma offers `work_ticket` (waitfree / ¥0+) and
+`binge_ticket` (binge-free). `all` runs both in order; each pass remains
+resource-bound. Items remain pending without Capture or packaging. GUI-created Piccoma normal Batch and grant-only `all` / `binge_ticket`
+requests sign an internal exact-boolean consent bit in `inputs-v2`; explicit
+`work_ticket` can remain v1/false. Old Piccoma `all` requests without consent
+are rejected before execution. Mixed-site consent stays in the Piccoma namespace,
+and grant-only child CLI calls set the retained compatibility field
+`allow_quota_access=False`; the explicitly selected Work or Binge resource
+authorizes that grant pass.
 
 Watchlist-save Full Discovery retains one compact Yes/No confirmation with target
 keys and warnings. It does not compute or display candidate counts or a plan hash.

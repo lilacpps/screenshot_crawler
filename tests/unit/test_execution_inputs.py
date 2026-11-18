@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.execution_worker import _run
 from screenshot_crawler.management.execution import ExecutionPlanService
+from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
@@ -30,9 +32,11 @@ def _watchlist(path: Path, *, key: str = "key-a", site: str = "mangaone") -> Non
     ])
 
 
-def _request(tmp_path: Path, *, action: str = "batch") -> dict[str, object]:
+def _request(
+    tmp_path: Path, *, action: str = "batch", site: str = "mangaone"
+) -> dict[str, object]:
     watchlist = tmp_path / "watchlist.yaml"
-    _watchlist(watchlist)
+    _watchlist(watchlist, site=site)
     runtime = tmp_path / "runtime.yaml"
     runtime.write_text("sites: {}\n", encoding="utf-8")
     env = tmp_path / ".env"
@@ -41,9 +45,9 @@ def _request(tmp_path: Path, *, action: str = "batch") -> dict[str, object]:
         "action": action,
         "mode": "full" if action == "discover" else None,
         "selected_keys": ["key-a"],
-        "sites": ["mangaone"],
-        "keys_by_site": {"mangaone": ["key-a"]},
-        "resources_by_site": {"mangaone": "all"} if action == "grant_only" else {},
+        "sites": [site],
+        "keys_by_site": {site: ["key-a"]},
+        "resources_by_site": {site: "all"} if action == "grant_only" else {},
         "catalog_path": str(tmp_path / "catalog.sqlite"),
         "watchlist_path": str(watchlist),
         "runtime_path": str(runtime),
@@ -103,6 +107,77 @@ def test_inputs_fingerprint_uses_worker_defaults_when_paths_are_omitted(
     )
 
 
+def test_inputs_v2_fingerprint_signs_strict_ticket_boolean(tmp_path: Path) -> None:
+    request = _request(tmp_path, site="piccoma")
+    request["fingerprint_kind"] = "inputs-v2"
+    request["allow_quota_access"] = False
+    service = ExecutionPlanService()
+    disabled = service.input_fingerprint_v2(request)
+    request["allow_quota_access"] = True
+    enabled = service.input_fingerprint_v2(request)
+    assert disabled.startswith("inputs-v2:")
+    assert enabled.startswith("inputs-v2:")
+    assert enabled != disabled
+    request["allow_quota_access"] = 1
+    with pytest.raises(TypeError, match="boolean"):
+        service.input_fingerprint_v2(request)
+
+
+def test_execution_preview_request_transports_piccoma_ticket_consent_by_default(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path, site="piccoma")
+    CatalogService(str(request["catalog_path"])).initialize()
+    snapshot = InventoryService().load(
+        str(request["catalog_path"]),
+        str(request["watchlist_path"]),
+        runtime_path=str(request["runtime_path"]),
+    )
+    service = ExecutionPlanService()
+    default_preview = service.preview(snapshot, {"key-a"}, action="batch")
+    default_request = default_preview.request(snapshot)
+    assert default_request.allow_quota_access is True
+    assert default_request.fingerprint_kind == "inputs-v2"
+    assert default_request.plan_fingerprint == service.input_fingerprint_v2(default_request)
+
+    opted_preview = service.preview(
+        snapshot, {"key-a"}, action="batch", allow_quota_access=True
+    )
+    opted_request = opted_preview.request(snapshot)
+    assert opted_request.allow_quota_access is True
+    assert opted_request.fingerprint_kind == "inputs-v2"
+    assert opted_request.plan_fingerprint == service.input_fingerprint_v2(opted_request)
+
+
+@pytest.mark.parametrize(
+    ("resource", "consent_required"),
+    [("all", True), ("work_ticket", False), ("binge_ticket", True)],
+)
+def test_execution_preview_applies_piccoma_grant_consent_by_resource(
+    tmp_path: Path, resource: str, consent_required: bool
+) -> None:
+    values = _request(tmp_path, site="piccoma")
+    CatalogService(str(values["catalog_path"])).initialize()
+    snapshot = InventoryService().load(
+        str(values["catalog_path"]),
+        str(values["watchlist_path"]),
+        runtime_path=str(values["runtime_path"]),
+    )
+    service = ExecutionPlanService()
+    preview = service.preview(
+        snapshot,
+        {"key-a"},
+        action="grant_only",
+        resource=resource,
+    )
+    assert preview.allow_quota_access is consent_required
+    queued = preview.request(snapshot)
+    assert queued.allow_quota_access is consent_required
+    if consent_required:
+        assert queued.fingerprint_kind == "inputs-v2"
+        assert queued.plan_fingerprint == service.input_fingerprint_v2(queued)
+
+
 @pytest.mark.parametrize("action,enabled,archived", [
     ("batch", True, False), ("batch", False, False), ("discover", True, False),
     ("batch", True, True), ("discover", True, True),
@@ -148,6 +223,56 @@ def test_inputs_worker_skips_inventory_and_legacy_plan_preflight(
         monkeypatch.setattr("screenshot_crawler.cli._discovery_registry", lambda: object())
     asyncio.run(_run(request))
     assert calls == [(action, "mangaone" if action == "batch" else "key-a")]
+
+
+def test_inputs_v2_worker_transports_piccoma_opt_in_as_signed_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(tmp_path, site="piccoma")
+    request["fingerprint_kind"] = "inputs-v2"
+    request["allow_quota_access"] = True
+    request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint_v2(request)
+    captured = []
+
+    async def fake_batch(args, _catalog):
+        captured.append(args)
+
+    monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", fake_batch)
+    asyncio.run(_run(request))
+    assert len(captured) == 1
+    assert captured[0].site == "piccoma"
+    assert captured[0].allow_quota_access is True
+
+
+@pytest.mark.parametrize("mutation", [
+    "inputs-v1-true", "inputs-v1-false", "inputs-v2-false", "integer",
+    "missing-v2-field", "wrong-site", "grant-only"
+])
+def test_inputs_worker_rejects_unsigned_or_misused_piccoma_opt_in(
+    tmp_path: Path, mutation: str
+) -> None:
+    action = "grant_only" if mutation == "grant-only" else "batch"
+    site = "mangaone" if mutation == "wrong-site" else "piccoma"
+    request = _request(tmp_path, action=action, site=site)
+    if mutation == "inputs-v1-true":
+        request["allow_quota_access"] = True
+        request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint(request)
+    elif mutation == "inputs-v1-false":
+        request["allow_quota_access"] = False
+    elif mutation == "inputs-v2-false":
+        request["fingerprint_kind"] = "inputs-v2"
+        request["allow_quota_access"] = False
+        request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint_v2(request)
+    else:
+        request["fingerprint_kind"] = "inputs-v2"
+        request["allow_quota_access"] = True
+        request["plan_fingerprint"] = ExecutionPlanService().input_fingerprint_v2(request)
+        if mutation == "integer":
+            request["allow_quota_access"] = 1
+        elif mutation == "missing-v2-field":
+            del request["allow_quota_access"]
+    with pytest.raises(RuntimeError):
+        asyncio.run(_run(request))
 
 
 def test_inputs_worker_rejects_config_drift_and_key_site_mismatch(

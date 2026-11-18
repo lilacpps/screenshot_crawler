@@ -6,6 +6,17 @@ Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
 Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
 Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PARTIAL**.
 
+Piccoma normal Batch and grant-only ticket execution are implemented as a
+site-specific integration, not as a new generic resource policy phase. Normal
+Batch uses `piccoma_ticket_auto`; grant-only uses `work_ticket` (waitfree/¥0+)
+and `binge_ticket` (binge-free) as distinct ordered passes for `all`. Both use
+existing `quota_resource` /
+`AccessConsumption` contracts plus the site-neutral candidate-sequence and
+durable access-attempt observer hooks. Generic behavior remains unchanged for
+policies that do not use those hooks. The implementation, historical live
+ledger, current synthetic regression status and remaining evidence are tracked in
+[`runbooks/piccoma-ticket-auto/PROGRESS.md`](../runbooks/piccoma-ticket-auto/PROGRESS.md).
+
 ## Bounded resolver prerequisite extension (2026-10-29)
 
 Implemented the optional site-neutral resolver configuration hook supplying
