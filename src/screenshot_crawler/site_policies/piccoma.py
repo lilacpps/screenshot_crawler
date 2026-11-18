@@ -124,6 +124,9 @@ class PiccomaSitePolicy(SitePolicy):
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
         return (self.WORK_TICKET_RESOURCE, self.BINGE_TICKET_RESOURCE)
 
+    def resolve_grant_only_per_work(self) -> bool:
+        return True
+
     def evaluate_for_quota_resource(
         self,
         source: Source,

@@ -1038,6 +1038,17 @@ Normal Batch admits otherwise-eligible quota through `piccoma_ticket_auto`
 with `after_observed_consumption`, selecting among waitfree, ¥0+ and binge-free
 from fresh site state by the preserved candidate sequence. Grant-only uses the
 two resources: `work_ticket` (waitfree / ¥0+) and `binge_ticket` (binge-free). `all` uses these as ordered explicit passes with a replan between them; a pass never falls back to another kind.
+Explicit grant-only first resolves one Work at a time using the full product
+listing and a read-only product-home stock snapshot. It selects no more than
+one charged waitfree use plus matching ¥0+ stock, or matching per-product
+Binge stock. Zero availability skips the Work without per-episode eligibility
+requests. Each selected entry retains the exact live checks; later expected
+unavailability skips the rest of that Work, while unknown outcomes stop the
+run. Balances are refreshed for the next Work/pass and are not persisted.
+Binge account stock is still checked in its native modal. A Work snapshot
+currently requires one unambiguous Piccoma product; mixed-product Works fail
+closed. Snapshot and entry Pages are separately guarded and closed; no viewer
+handoff is inferred from the non-consuming snapshot. No new CLI option is needed.
 Unknown, paid and unavailable modes remain excluded. Same-Source unresolved
 prior quota CrawlRuns block another consuming attempt; a fresh active grant
 remains direct. The generic Planner and Executor enforce this without

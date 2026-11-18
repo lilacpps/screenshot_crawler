@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from zipfile import ZipFile
 
@@ -1954,6 +1955,75 @@ def _ticket_home_html(
       </main></body></html>"""
 
 
+@pytest.mark.parametrize(
+    ("resource", "kind", "daily", "stock", "expected", "malformed"),
+    [
+        ("work_ticket", "waitfree", True, 6, 1, False),
+        ("work_ticket", "waitfree", False, 6, 0, False),
+        ("work_ticket", "zero_plus", True, 2, 3, False),
+        ("work_ticket", "zero_plus", False, 2, 2, False),
+        ("work_ticket", "zero_plus", False, 0, 0, False),
+        ("binge_ticket", "binge_free", False, 2, 2, False),
+        ("binge_ticket", "binge_free", False, 0, 0, False),
+        ("binge_ticket", "binge_free", True, 2, 0, False),
+        ("work_ticket", "binge_free", False, 30, 0, False),
+        ("binge_ticket", "zero_plus", False, 6, 0, False),
+        ("work_ticket", "zero_plus", False, 2, 0, True),
+        ("binge_ticket", "binge_free", False, 2, 0, True),
+    ],
+)
+async def test_piccoma_work_grant_snapshot_bounds_pool_without_episode_attempts(
+    browser_page: Page, resource: str, kind: str, daily: bool, stock: int,
+    expected: int, malformed: bool,
+) -> None:
+    listing = _ticket_listing_html(kind)
+    marker = {
+        "waitfree": "", "zero_plus": "PCM-epList_status_zeroPlus",
+        "binge_free": "PCM-epList_status_bingefree",
+    }[kind]
+    extra_rows = "".join(
+        f'<a data-product_id="{PRODUCT_ID}" data-episode_id="{episode}" data-user_access="require">'
+        f'<span class="PCM-epList_status PCM-epList_status_waitfree {marker}">¥0</span></a>'
+        for episode in ("102", "103", "104")
+    )
+    listing = listing.replace("</div></main>", extra_rows + "</div></main>")
+    home = _ticket_home_html(
+        kind, activated=False, daily_ready=daily, zero_plus_count=stock, binge_count=stock,
+    )
+    if malformed:
+        home = home.replace("PCM-freeplusStatusBar", "unknown-freeplus").replace(
+            "PCM-bingefreeStatusBar", "unknown-binge"
+        )
+    requests: list[tuple[str, str]] = []
+
+    async def route_handler(route) -> None:
+        path = urlsplit(route.request.url).path
+        requests.append((route.request.method, path))
+        body = listing if path.endswith("/episodes") else home
+        assert path in {f"/web/product/{PRODUCT_ID}", f"/web/product/{PRODUCT_ID}/episodes"}
+        await route.fulfill(status=200, body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("**/*", route_handler)
+    candidates = tuple(
+        SimpleNamespace(
+            source_id=index, site="piccoma", work_id=7, quota_resource=resource,
+            locator=f"https://piccoma.com/web/viewer/{PRODUCT_ID}/{episode}",
+            external_id=f"{PRODUCT_ID}:{episode}",
+        )
+        for index, episode in enumerate(("101", "102", "103", "104"), start=1)
+    )
+    adapter = PiccomaAdapter()
+    if malformed:
+        with pytest.raises(UnknownPageStateError, match="balance"):
+            await adapter.resolve_access_resource_candidates(browser_page, candidates, resource)
+    else:
+        result = await adapter.resolve_access_resource_candidates(browser_page, candidates, resource)
+        assert result.selected_source_ids == tuple(range(1, expected + 1))
+        assert len(result.skipped_source_reasons) == 4 - expected
+    assert requests.count(("GET", f"/web/product/{PRODUCT_ID}")) == 1
+    assert all(method == "GET" and "/viewer/" not in path for method, path in requests)
+
+
 async def _route_ticket_batch_fixture(page: Page) -> dict[str, int]:
     counts = {"access_posts": 0, "body_match": 0, "viewer_gets": 0, "jpeg": 0}
     activated = False
@@ -3665,16 +3735,19 @@ async def test_piccoma_unknown_guide_structure_is_not_hidden_or_captured(
     ) != "none"
 
 
-async def test_piccoma_work_key_is_opaque_and_quota_strategy_is_rejected(
+async def test_piccoma_work_key_is_opaque_and_quota_requires_known_resource(
     browser_page: Page,
 ) -> None:
     adapter = PiccomaAdapter()
     await adapter.configure_target_identity("900:101", WORK_KEY)
     assert adapter._work_key == WORK_KEY
-    await adapter.configure_run(browser_page, "quota")
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(browser_page, "work_ticket")
-    await adapter.configure_quota_resource(browser_page, "piccoma_ticket_auto")
+    await adapter.configure_run(browser_page, "quota")
+    for resource in ("piccoma_ticket_auto", "work_ticket", "binge_ticket"):
+        await adapter.configure_quota_resource(browser_page, resource)
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_quota_resource(browser_page, "unknown_ticket")
 
 
 def _piccoma_batch_setup(
@@ -3941,6 +4014,51 @@ async def test_piccoma_quota_batch_blocks_external_tracking_then_captures_one_ep
             assert len(archive.namelist()) == 3
             assert all(name.endswith(".webp") for name in archive.namelist())
         assert catalog.get_item(item.id).status == "completed"
+
+
+async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
+    browser_page: Page, tmp_path: Path,
+) -> None:
+    catalog, _work, item, source, _target, policies, adapters, candidate = (
+        _piccoma_batch_setup(tmp_path, quota_resource="work_ticket")
+    )
+    counts = await _route_ticket_batch_fixture(browser_page)
+    attempts: list[object] = []
+    executor = BatchExecutor(
+        catalog, policies, adapters,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library",
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        access_attempt_sink=attempts.append,
+    )
+    lifecycle: list[str] = []
+
+    class Session:
+        async def new_page(self):
+            lifecycle.append("new")
+            return browser_page
+
+        async def close_page(self, page):
+            assert page is browser_page
+            lifecycle.append("close")
+
+    processed, keep_going = await cli._execute_work_grants(
+        SimpleNamespace(
+            output_root=tmp_path / "batch-output", max_pages=3,
+            max_same_content=3, keep_open=False,
+        ),
+        Session(), executor, [candidate], phase="grant-only:work_ticket",
+        inter_candidate_delay_ms=0,
+    )
+    assert (processed, keep_going) == (1, True)
+    assert lifecycle == ["new", "close", "new", "close"]
+    assert counts["access_posts"] == counts["viewer_gets"] == 1
+    assert [value.status for value in attempts] == ["attempting", "confirmed"]
+    assert catalog.get_source(source.id).quota_started_at is not None
+    assert catalog.get_source(source.id).access_granted_until is not None
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    assert not list((tmp_path / "batch-output").rglob("*.webp"))
 
 
 @pytest.mark.parametrize("live_status", ["free", "granted"])

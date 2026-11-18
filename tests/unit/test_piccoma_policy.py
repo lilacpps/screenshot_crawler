@@ -163,6 +163,7 @@ def test_piccoma_policy_rejects_unavailable_free_and_exposes_distinct_resources(
         policy.WORK_TICKET_RESOURCE,
         policy.BINGE_TICKET_RESOURCE,
     )
+    assert policy.resolve_grant_only_per_work() is True
     assert policy.resource_state_scope(policy.TICKET_RESOURCE) is None
     policy.validate_access_resource(policy.TICKET_RESOURCE)
     policy.validate_access_resource(policy.WORK_TICKET_RESOURCE)

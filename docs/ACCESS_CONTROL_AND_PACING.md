@@ -427,6 +427,21 @@ pre-consumption exhaustion still uses `AccessResourceUnavailableError` with
 
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
+The optional policy hook `resolve_grant_only_per_work()` defaults to false.
+Opted-in explicit grant-only runs group candidates by Work, call the existing
+guarded site resolver once per Work/resource, close the snapshot Page, and
+execute only its selected pool through ordinary fresh entry. This supports
+several grants within an observed stock bound without changing deferred
+single-target prepared entry. An empty pool opens no candidate Page. Expected
+candidate unavailability ends only that Work; pass exhaustion and unknown
+errors retain their pass/run stop semantics. Snapshot access, even with zero
+selected targets, is paced before the next Work/pass. The shared `--limit`
+counts entry attempts, not snapshots. Concrete balances/kinds stay site-local.
+An expected no-action error may explicitly carry `stop_work=False` for an
+already-accessible target: this skips that row without declaring the Work's
+resource unavailable. Piccoma retains its durable no-action error identity and
+fresh-grant persistence on that race.
+
 An adapter that must retain restart-visible evidence around a possible resource
 action may report the optional site-neutral `AccessAttemptObservation`. It
 contains the exact site, external identity, logical candidate resource,

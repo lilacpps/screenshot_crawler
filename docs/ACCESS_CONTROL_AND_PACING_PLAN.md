@@ -17,6 +17,15 @@ policies that do not use those hooks. The implementation, historical live
 ledger, current synthetic regression status and remaining evidence are tracked in
 [`runbooks/piccoma-ticket-auto/PROGRESS.md`](../runbooks/piccoma-ticket-auto/PROGRESS.md).
 
+Explicit Piccoma grant-only now opts into Work-level stock resolution through
+`resolve_grant_only_per_work()`. One guarded non-consuming snapshot bounds a
+Work's selected grant pool; zero stock skips the Work, and later unavailability
+does not probe its other episodes. Normal Batch ordering and the existing
+single-target deferred/prepared flows keep their contracts. Acceptance covers
+waitfree/¥0+/Binge stock bounds, unknown balances, next-Work advancement,
+shared limits, pass exhaustion, failure stops and Page cleanup. This revision's
+stock-selection checks are synthetic; no additional live ticket use is claimed.
+
 ## Bounded resolver prerequisite extension (2026-10-29)
 
 Implemented the optional site-neutral resolver configuration hook supplying

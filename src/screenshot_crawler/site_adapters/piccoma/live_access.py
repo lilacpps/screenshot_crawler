@@ -81,7 +81,8 @@ TICKET_BUTTON_LABEL: Mapping[PiccomaTicketKind, str] = {
 class PiccomaTicketNoActionError(AccessResourceUnavailableError):
     """A recognized ticket option is unavailable before any affirmative click."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, stop_work: bool = True) -> None:
+        self.stop_work = stop_work
         super().__init__(PICCOMA_TICKET_NO_ACTION_REASON)
 
 

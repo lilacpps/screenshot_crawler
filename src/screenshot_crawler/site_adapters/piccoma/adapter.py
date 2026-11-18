@@ -29,6 +29,7 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import (
     AccessAttemptObservation,
     AccessConsumption,
+    AccessResourceResolution,
     ConfirmedAccessGrant,
     SiteAdapter,
 )
@@ -732,6 +733,96 @@ class PiccomaAdapter(SiteAdapter):
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
 
+    async def resolve_access_resource_candidates(
+        self, page: Page, candidates: tuple[object, ...], quota_resource: str,
+        *, timeout_ms: int = 15_000,
+    ) -> AccessResourceResolution:
+        """Read one product's stock before selecting any grant-only episodes."""
+
+        if quota_resource not in _GRANT_ONLY_TICKET_RESOURCES or not candidates:
+            raise UnsupportedAccessStrategyError("Piccoma grant resolver requires an explicit resource")
+        identities = [parse_piccoma_viewer_url(candidate.locator) for candidate in candidates]
+        if (
+            any(identity is None for identity in identities)
+            or len({identity.product_id for identity in identities if identity is not None}) != 1
+            or len({candidate.work_id for candidate in candidates}) != 1
+            or candidates[0].work_id is None
+            or len({candidate.source_id for candidate in candidates}) != len(candidates)
+            or any(
+                candidate.site != "piccoma"
+                or candidate.external_id != identity.external_id
+                or candidate.quota_resource != quota_resource
+                for candidate, identity in zip(candidates, identities, strict=True)
+            )
+        ):
+            raise UnknownPageStateError("Piccoma grant resolver requires one bound product/work")
+        identity = identities[0]
+        response = await page.goto(
+            f"https://piccoma.com/web/product/{identity.product_id}/episodes",
+            wait_until="domcontentloaded", timeout=timeout_ms,
+        )
+        if (
+            response is None or response.status != 200
+            or parse_piccoma_listing_url(page.url) != identity.product_id
+        ):
+            raise UnknownPageStateError("Piccoma grant snapshot redirected outside its product")
+        await page.locator(LISTING_SELECTOR).wait_for(state="visible", timeout=timeout_ms)
+        rows = await self._read_ticket_states(page, identities)
+        snapshot = await self._fetch_ticket_state_snapshot(page, identity)
+        home = snapshot["home"]
+        daily = waitfree_charge_ready(home.get("charge"))
+        if daily is None:
+            raise UnknownPageStateError("Piccoma work charge is missing or malformed")
+        zero = zero_plus_available_count(home.get("zeroPlus") or "")
+        binge = binge_available_count(home.get("binge") or "")
+        daily_left = int(daily)
+        selected: list[int] = []
+        skipped: list[tuple[int, str]] = []
+        for candidate, row in zip(candidates, rows, strict=True):
+            mode = classify_piccoma_access(
+                row["markers"], row["label"], point_prices=row.get("pointPrices")
+            )
+            active_grant = piccoma_manual_grant_until(
+                row["markers"], row["label"], datetime.now(UTC)
+            )
+            # Keep fresh grant/free races on the existing durable no-action path.
+            if mode == "free" or active_grant is not None:
+                selected.append(candidate.source_id)
+                continue
+            if mode == "paid":
+                skipped.append((candidate.source_id, "paid"))
+                continue
+            if mode != "quota" or row.get("userAccess") != "require":
+                raise UnknownPageStateError("Piccoma work grant row has ambiguous access")
+            markers = set(row["markers"])
+            if quota_resource == _WORK_TICKET_RESOURCE:
+                if daily_left:
+                    daily_left -= 1
+                elif TICKET_ROW_MARKER["zero_plus"] in markers:
+                    if zero is None:
+                        raise UnknownPageStateError("Piccoma work ¥0+ balance is missing or ambiguous")
+                    if zero <= 0:
+                        skipped.append((candidate.source_id, "work_ticket_unavailable"))
+                        continue
+                    zero -= 1
+                else:
+                    skipped.append((candidate.source_id, "work_ticket_unavailable"))
+                    continue
+            else:
+                # A charged daily ticket takes precedence in the native UI.
+                # Binge never spends that other resource implicitly.
+                if daily or TICKET_ROW_MARKER["binge_free"] not in markers:
+                    skipped.append((candidate.source_id, "binge_ticket_unavailable"))
+                    continue
+                if binge is None:
+                    raise UnknownPageStateError("Piccoma work binge balance is missing or ambiguous")
+                if binge <= 0:
+                    skipped.append((candidate.source_id, "binge_ticket_unavailable"))
+                    continue
+                binge -= 1
+            selected.append(candidate.source_id)
+        return AccessResourceResolution(tuple(selected), tuple(skipped))
+
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = re.fullmatch(r"([0-9]+):([0-9]+)", external_id)
         if match is None or not isinstance(work_key, str):
@@ -802,7 +893,7 @@ class PiccomaAdapter(SiteAdapter):
         ):
             # A stale grant-only plan must not turn an already-accessible target
             # into a new grant or enter the content reader.
-            raise PiccomaTicketNoActionError()
+            raise PiccomaTicketNoActionError(stop_work=False)
 
         response = await page.goto(
             canonical_piccoma_viewer_url(
@@ -926,16 +1017,23 @@ class PiccomaAdapter(SiteAdapter):
     async def _read_ticket_state(
         self, page: Page, identity: PiccomaEpisodeIdentity
     ) -> dict[str, Any]:
-        value = await page.evaluate(
-            r"""target => {
+        return (await self._read_ticket_states(page, [identity]))[0]
+
+    async def _read_ticket_states(
+        self, page: Page, identities: list[PiccomaEpisodeIdentity]
+    ) -> list[dict[str, Any]]:
+        values = await page.evaluate(
+            r"""targets => {
               const text = selector => {
                 const nodes = [...document.querySelectorAll(selector)];
                 return nodes.length === 1
                   ? (nodes[0].innerText || '').replace(/\s+/g, ' ').trim()
                   : null;
               };
-              const rows = [...document.querySelectorAll(
-                '#js_episodeList a[data-product_id][data-episode_id]')]
+              const allRows = [...document.querySelectorAll(
+                '#js_episodeList a[data-product_id][data-episode_id]')];
+              return targets.map(target => {
+              const rows = allRows
                 .filter(anchor => anchor.getAttribute('data-product_id') === target.product &&
                   anchor.getAttribute('data-episode_id') === target.episode);
               const anchor = rows.length === 1 ? rows[0] : null;
@@ -957,6 +1055,12 @@ class PiccomaAdapter(SiteAdapter):
                 rowCount: rows.length,
                 statusCount: statuses.length,
                 markers: [...new Set(markers)],
+                pointPrices: status ? [
+                  ...(status.matches('.PCM-epList_status_point.js_point') ? [status] : []),
+                  ...status.querySelectorAll(
+                    '.PCM-epList_status_point.js_point, .PCM-epList_status_point .js_point'
+                  ),
+                ].map(node => node.innerText.trim()) : [],
                 label: (status?.innerText || '').replace(/\s+/g, ' ').trim(),
                 title: titleNodes.length === 1
                   ? (titleNodes[0].innerText || '').replace(/\s+/g, ' ').trim()
@@ -973,26 +1077,30 @@ class PiccomaAdapter(SiteAdapter):
                 zeroPlus: text('.PCM-freeplusStatusBar'),
                 binge: text('.PCM-bingefreeStatusBar')
               };
+              });
             }""",
-            {"product": identity.product_id, "episode": identity.episode_id},
+            [{"product": identity.product_id, "episode": identity.episode_id} for identity in identities],
         )
-        if not isinstance(value, dict):
+        if not isinstance(values, list) or len(values) != len(identities):
             raise UnknownPageStateError("Piccoma ticket state is malformed")
-        if (
-            value.get("productId") != identity.product_id
-            or value.get("episodeId") != identity.episode_id
-            or value.get("rowCount") != 1
-            or value.get("statusCount") != 1
-            or value.get("loggedIn") is not True
-            or not isinstance(value.get("markers"), list)
-            or not all(isinstance(marker, str) for marker in value["markers"])
-            or not isinstance(value.get("title"), str)
-            or not value["title"].strip()
-        ):
-            raise UnknownPageStateError(
-                "Piccoma target row is absent, duplicated, or incomplete"
-            )
-        return value
+        for value, identity in zip(values, identities, strict=True):
+            if not isinstance(value, dict):
+                raise UnknownPageStateError("Piccoma ticket state is malformed")
+            if (
+                value.get("productId") != identity.product_id
+                or value.get("episodeId") != identity.episode_id
+                or value.get("rowCount") != 1
+                or value.get("statusCount") != 1
+                or value.get("loggedIn") is not True
+                or not isinstance(value.get("markers"), list)
+                or not all(isinstance(marker, str) for marker in value["markers"])
+                or not isinstance(value.get("title"), str)
+                or not value["title"].strip()
+            ):
+                raise UnknownPageStateError(
+                    "Piccoma target row is absent, duplicated, or incomplete"
+                )
+        return values
 
     async def _fetch_ticket_state_snapshot(
         self, page: Page, identity: PiccomaEpisodeIdentity

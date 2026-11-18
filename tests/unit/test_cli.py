@@ -2408,6 +2408,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
         return SimpleNamespace(
             item_id=item_id,
             source_id=item_id + 100,
+            work_id=1,
             metadata={},
             access_strategy="quota",
             quota_resource=resource,
@@ -2457,6 +2458,12 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
             return None
+
+        async def resolve_access_resource_candidates(self, _page, candidates, _resource):
+            return SimpleNamespace(
+                selected_source_ids=tuple(c.source_id for c in candidates),
+                skipped_source_reasons=(),
+            )
 
         async def execute_grant_only_candidate(
             self, _page: object, candidate: object, **_kwargs: object
@@ -2545,6 +2552,7 @@ def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
         return SimpleNamespace(
             item_id=item_id,
             source_id=item_id + 100,
+            work_id=1,
             metadata={},
             access_strategy="quota",
             quota_resource=resource,
@@ -2592,6 +2600,12 @@ def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
             return None
+
+        async def resolve_access_resource_candidates(self, _page, candidates, _resource):
+            return SimpleNamespace(
+                selected_source_ids=tuple(c.source_id for c in candidates),
+                skipped_source_reasons=(),
+            )
 
         async def execute_grant_only_candidate(
             self, _page: object, candidate: object, **_kwargs: object
@@ -2647,6 +2661,99 @@ def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
         cli.main()
 
     assert executions == ([1] if outcome == "unknown" else [1, 2])
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "unavailable", "already_accessible", "unknown", "pass_exhausted", "limit"]
+)
+def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
+    outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    async def no_wait(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", no_wait)
+    resolved: list[int] = []
+    executed: list[int] = []
+    pages: list[object] = []
+    closed: list[object] = []
+    candidates = [
+        SimpleNamespace(
+            work_id=work, source_id=work * 10 + episode, item_id=work * 10 + episode,
+            quota_resource="resource", access_strategy="quota", metadata={},
+        )
+        for work in (1, 2, 3) for episode in (1, 2, 3, 4)
+    ]
+
+    class Session:
+        async def new_page(self):
+            page = object()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+
+    class Executor:
+        def grant_only_skip_reason(self, _candidate):
+            return None
+
+        async def resolve_access_resource_candidates(self, _page, pool, _resource):
+            work = pool[0].work_id
+            resolved.append(work)
+            return SimpleNamespace(
+                selected_source_ids=tuple(c.source_id for c in pool[:(0 if work == 1 else 2)]),
+                skipped_source_reasons=(),
+            )
+
+        async def execute_grant_only_candidate(self, _page, candidate, **_kwargs):
+            executed.append(candidate.item_id)
+            if candidate.work_id == 2:
+                if outcome == "unknown":
+                    raise UnknownPageStateError("unknown consumption")
+                if outcome in {"unavailable", "pass_exhausted"}:
+                    raise cli.AccessResourceUnavailableError(
+                        "unavailable", stop_resource_pass=outcome == "pass_exhausted"
+                    )
+                if outcome == "already_accessible":
+                    from screenshot_crawler.site_adapters.piccoma.live_access import (
+                        PiccomaTicketNoActionError,
+                    )
+
+                    raise PiccomaTicketNoActionError(stop_work=False)
+            return SimpleNamespace(resource="resource", resource_consumed=True)
+
+    args = SimpleNamespace(
+        output_root=tmp_path / "output", library_dir=tmp_path / "Books",
+        max_pages=2, max_same_content=2, keep_open=False,
+    )
+    async def run():
+        return await cli._execute_work_grants(
+            args, Session(), Executor(), candidates, phase="grant-only:resource",
+            attempt_limit=1 if outcome == "limit" else None,
+        )
+
+    if outcome == "unknown":
+        with pytest.raises(cli.BatchExecutionError, match="unknown consumption"):
+            asyncio.run(run())
+    else:
+        attempts, keep_going = asyncio.run(run())
+        assert attempts == len(executed)
+        assert keep_going == (outcome != "pass_exhausted")
+    assert resolved == ([1, 2] if outcome in {"unknown", "pass_exhausted", "limit"} else [1, 2, 3])
+    assert executed == {
+        "success": [21, 22, 31, 32], "unavailable": [21, 31, 32],
+        "already_accessible": [21, 22, 31, 32],
+        "unknown": [21], "pass_exhausted": [21], "limit": [21],
+    }[outcome]
+    assert pages == closed
+    assert sleeps[:2] == [3.0, 3.0]  # Empty Work snapshot → next snapshot → entry.
+    assert len(sleeps) == {
+        "success": 6, "already_accessible": 6, "unavailable": 5,
+        "unknown": 2, "pass_exhausted": 2, "limit": 2,
+    }[outcome]
 
 
 @pytest.mark.parametrize("consumed", [False, None])

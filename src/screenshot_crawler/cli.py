@@ -1954,6 +1954,52 @@ async def _execute_deferred_grants(
     return attempts, previous_site_access
 
 
+async def _execute_work_grants(
+    args: argparse.Namespace,
+    session: BrowserSession,
+    executor: BatchExecutor,
+    candidates: list[BatchCandidate],
+    *,
+    phase: str,
+    inter_candidate_delay_ms: int = 3000,
+    delay_before_first_ms: int | None = None,
+    metrics: BatchMetricsWriter | None = None,
+    grant_only: bool = True,
+    attempt_limit: int | None = None,
+) -> tuple[int, bool]:
+    """Resolve each Work once, then execute only its live, bounded grant pool."""
+
+    attempts = 0
+    for group in group_grant_candidates(candidates):
+        _execution_checkpoint(args)
+        if attempt_limit is not None and attempts >= attempt_limit:
+            break
+        eligible = _filter_local_grant_candidates(executor, group, metrics=metrics)
+        if not eligible:
+            continue
+        selected = await _resolve_access_resource_candidates(
+            session, executor, eligible, resource=eligible[0].quota_resource,
+            delay_before_first_ms=delay_before_first_ms, metrics=metrics,
+        )
+        # Even an empty snapshot contacted the site. Pace the next Work.
+        delay_before_first_ms = inter_candidate_delay_ms
+        print(f"Batch grant-only work={group[0].work_id}: selected={len(selected)}")
+        if not selected:
+            continue
+        processed, keep_going = await _execute_batch_candidates(
+            args, session, executor, selected, phase=phase,
+            inter_candidate_delay_ms=inter_candidate_delay_ms,
+            delay_before_first_ms=inter_candidate_delay_ms,
+            metrics=metrics, grant_only=grant_only,
+            attempt_limit=None if attempt_limit is None else attempt_limit - attempts,
+            stop_work_on_unavailable=True,
+        )
+        attempts += processed
+        if not keep_going:
+            return attempts, False
+    return attempts, True
+
+
 def _completed_candidate_count(
     catalog: CatalogService, candidates: list[BatchCandidate]
 ) -> int:
@@ -2027,6 +2073,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     limit = getattr(args, "limit", None)
     policy = policies.create(args.site)
     defer_quota = _policy_defers_quota_access(policy)
+    resolve_per_work = getattr(policy, "resolve_grant_only_per_work", lambda: False)()
+    execute_grants = _execute_work_grants if resolve_per_work else _execute_batch_candidates
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
     grant_only_all_preflight: dict[str, BatchPlan] = {}
@@ -2251,7 +2299,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                         f"Batch grant-only resource pass ({resource}); "
                         f"planned={len(resource_candidates)}"
                     )
-                pass_attempts, _pass_continue = await _execute_batch_candidates(
+                pass_attempts, _pass_continue = await execute_grants(
                     args,
                     session,
                     executor,
@@ -2271,6 +2319,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 attempts += pass_attempts
                 previous_phase_had_site_access = (
                     previous_phase_had_site_access or pass_attempts > 0
+                    or (resolve_per_work and bool(resource_candidates))
                 )
             if attempts == 0:
                 metrics.finish(stop_reason="no_candidates")
@@ -2290,7 +2339,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 )
                 grant_attempts = processed
             else:
-                processed, should_continue = await _execute_batch_candidates(
+                processed, should_continue = await execute_grants(
                     args, session, executor, candidates, phase=f"grant-only:{grant_only}",
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     metrics=metrics, grant_only=True, attempt_limit=limit,
@@ -2556,6 +2605,7 @@ async def _execute_batch_candidates(
     prepared_access: PreparedAccessResource | None = None,
     confirmed_grants: list[BatchCandidate] | None = None,
     allow_quota_access: bool = False,
+    stop_work_on_unavailable: bool = False,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
@@ -2796,6 +2846,9 @@ async def _execute_batch_candidates(
             if exc.stop_resource_pass:
                 print("  Stopping this resource pass.")
                 return attempts, False
+            if stop_work_on_unavailable and getattr(exc, "stop_work", True):
+                print("  Skipping remaining candidates in this work.")
+                return attempts, True
             continue_after_candidate = True
         except CandidateExecutionError as exc:
             primary_error = exc

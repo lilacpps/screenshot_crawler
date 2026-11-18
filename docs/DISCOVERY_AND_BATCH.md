@@ -241,8 +241,23 @@ checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) and
 passes with a Catalog replan between them; neither pass falls back to another
 kind. It confirms
 the target grant and leaves the Item pending without capture, packaging, or
-completion. Both flows preserve the selected candidate ID sequence; the
-Planner does not regroup direct and quota candidates. Resource kind and
+completion. Normal Batch preserves the selected candidate ID sequence; the
+Planner does not regroup direct and quota candidates. Explicit grant-only
+groups the planned pool by Work in first-appearance order and resolves each
+Work once before opening any episode entry. Piccoma reads the full product
+listing and product-home stock using non-consuming GETs. Work grants admit at
+most one charged waitfree use plus the observed ¥0+ stock on matching rows;
+Binge grants admit only matching rows up to the observed per-product stock,
+and do not spend a charged waitfree resource. A zero eligible balance skips
+the Work without an eligibility POST or viewer request. Unknown or ambiguous
+state stops closed. Selected rows retain their planned order within the Work.
+Confirmed entry still rechecks live eligibility, the native modal and debit;
+if a selected row becomes unavailable, remaining rows in that Work are skipped
+and execution continues with the next Work. An unknown result stops the run.
+Stock is refreshed for each Work and each explicit resource pass, never stored
+as a Catalog quota estimate. The account-wide Binge balance remains checked
+in the native confirmation modal; product-home stock alone does not prove it.
+Resource kind and
 availability are revalidated by the Piccoma adapter immediately before use.
 Other policies keep their existing ordering and resource contracts.
 

@@ -1,3 +1,26 @@
+## Work-level grant-only stock selection (2026-11-19)
+
+`SitePolicy.resolve_grant_only_per_work()` defaults to false; Piccoma opts in
+for explicit grant-only. CLI groups the planned candidates by Work in first
+appearance order, applies local Catalog gates, and uses the existing guarded
+resolver once per Work/resource. It closes that snapshot Page before executing
+the site's selected pool through fresh ordinary Runner entry. A zero pool
+opens no candidate Page and does not count toward `--limit`. Several targets
+may be selected, bounded by site-owned live stock. The shared limit still
+counts entry attempts across Works and explicit resource passes.
+
+Expected candidate unavailability skips the remaining pool for that Work;
+explicit pass exhaustion still ends the pass, and unknown results still stop
+the run. An explicit `stop_work=False` on an already-accessible no-action error
+allows the rest of the Work's selected pool to proceed. Snapshot-only site access is paced before the next Work/pass even
+when no entry was attempted. Resolver and entry each retain their AccessGuard,
+bounded cleanup, Catalog scope validation and owned-Page lifecycle. Resource
+names/selectors/balance rules stay in the site adapter. There is no new CLI
+option, Catalog state, or normal-Batch/deferred prepared-entry behavior.
+
+Validation and live limits are recorded with the Piccoma change in
+`note/09_piccoma.md`; this revision has no consuming live verification.
+
 ## Unattempted access entry failure (2026-11-17)
 
 Before-run quota reservations still persist the Policy grant immediately before

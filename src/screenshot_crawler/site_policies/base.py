@@ -95,6 +95,11 @@ class SitePolicy(ABC):
 
         return False
 
+    def resolve_grant_only_per_work(self) -> bool:
+        """Select a bounded grant pool from one live snapshot per Work."""
+
+        return False
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int | None:
         """Return local quota slots, or ``None`` for policies without quota."""
 
