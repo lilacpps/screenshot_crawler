@@ -52,6 +52,11 @@ _PAIRED_FIRST_FINAL_PR_LAYOUT = "paired_first_final_pr"
 _PAIRED_FIRST_PR_END_LAYOUT = "paired_first_pr_end"
 _DIRECT_FIRST_FINAL_PR_LAYOUT = "direct_first_final_pr"
 _DIRECT_FIRST_PR_END_LAYOUT = "direct_first_pr_end"
+_DIRECT_FIRST_PR_SECONDARY_END_LAYOUT = "direct_first_pr_secondary_end"
+_PAIRED_FIRST_PR_SECONDARY_END_LAYOUT = "paired_first_pr_secondary_end"
+_PR_SECONDARY_END_LAYOUTS = {
+    _DIRECT_FIRST_PR_SECONDARY_END_LAYOUT, _PAIRED_FIRST_PR_SECONDARY_END_LAYOUT,
+}
 _DIRECT_FIRST_DOUBLE_END_LAYOUT = "direct_first_double_end"
 _DIRECT_FIRST_MIXED_FINAL_LAYOUT = "direct_first_mixed_final"
 _PAIRED_FIRST_MIXED_FINAL_LAYOUT = "paired_first_mixed_final"
@@ -69,8 +74,10 @@ _DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT = "direct_first_pr_pair_double_end"
 _DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT = "direct_first_pr_pair_recommendation"
 _DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT = "direct_first_pr_pair_bridge"
 _PAIRED_FIRST_PR_PAIR_BRIDGE_LAYOUT = "paired_first_pr_pair_bridge"
+_DIRECT_FIRST_FINAL_PR_BRIDGE_SECONDARY_END_LAYOUT = "direct_first_final_pr_bridge_secondary_end"
 _PR_SEQUENCE_FINAL_LAYOUTS = {
     _DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT, _DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT,
+    _DIRECT_FIRST_FINAL_PR_BRIDGE_SECONDARY_END_LAYOUT,
 }
 _PR_SEQUENCE_PAIRED_LAYOUTS = {_DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT, _PAIRED_FIRST_PR_PAIR_BRIDGE_LAYOUT}
 _PR_SEQUENCE_LAYOUTS = {*_PR_SEQUENCE_FINAL_LAYOUTS, *_PR_SEQUENCE_PAIRED_LAYOUTS}
@@ -85,14 +92,18 @@ def _pr_sequence_bridge_indexes(layout: str, end_index: int) -> tuple[int, ...]:
 
 
 _DIRECT_FIRST_LAYOUTS = {
+    _DIRECT_FIRST_PR_SECONDARY_END_LAYOUT,
     _DIRECT_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT, _DIRECT_FIRST_DOUBLE_END_LAYOUT,
     _DIRECT_FIRST_MIXED_FINAL_LAYOUT, _DIRECT_FIRST_PAIRED_END_LAYOUT, _DIRECT_FIRST_SECONDARY_END_LAYOUT,
     *_PR_SEQUENCE_FINAL_LAYOUTS, _DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT,
 }
-_PR_END_LAYOUTS = {_PAIRED_FIRST_PR_END_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT}
+_PR_END_LAYOUTS = {
+    _PAIRED_FIRST_PR_END_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT,
+    *_PR_SECONDARY_END_LAYOUTS,
+}
 _TRACKED_PR_LAYOUTS = {
     _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_DOUBLE_END_LAYOUT,
-    _PAIRED_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_PR_END_LAYOUT,
+    _PAIRED_FIRST_FINAL_PR_LAYOUT, *_PR_END_LAYOUTS,
     *_DIRECT_FIRST_LAYOUTS, *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS,
 }
 _EXTERNAL_ID = re.compile(r"^(?P<work>KC_[0-9]{6}_S):(?P<episode>KC_[0-9]{16}_E)$")
@@ -118,10 +129,12 @@ _READ_EPISODE_METADATA_SCRIPT = r"""() => {
   };
 }"""
 
+# Only the two observed reader builds are selected. Keep union counts strict so
+# a recommendation carousel or duplicate reader cannot become a page-turn target.
 _NAVIGATION_TARGET_SCRIPT = r"""() => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0];
   const slides = [...root.querySelectorAll('.splide__slide')];
@@ -135,12 +148,12 @@ _NAVIGATION_TARGET_SCRIPT = r"""() => {
       wrappers.some(wrapper => {
         const canvases = [...wrapper.querySelectorAll('canvas')];
         return canvases.length !== 1 ||
-          ![...canvases[0].classList].some(name => name.startsWith('_root_bx4cr_'));
+          ![...canvases[0].classList].some(name => (name.startsWith('_root_bx4cr_') || name.startsWith('_root_1ncjq_')));
       }))
     return {ok: false, reason: 'content_wrapper_shape'};
   const rootRect = root.getBoundingClientRect();
   if (rootRect.width <= 0 || rootRect.height <= 0) return {ok: false, reason: 'root_geometry'};
-  const covers = [...active[0].querySelectorAll('._cover_bx4cr_11')]
+  const covers = [...active[0].querySelectorAll('._cover_bx4cr_11, ._cover_1ncjq_33')]
     .filter(node => {
       const rect = node.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 &&
@@ -174,8 +187,8 @@ _NAVIGATION_TARGET_SCRIPT = r"""() => {
 }"""
 
 _PR_SEQUENCE_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
-  const roots = screens.length === 1 ? [...screens[0].querySelectorAll('.splide._root_1542n_1')] : [];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
+  const roots = screens.length === 1 ? [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')] : [];
   if (roots.length !== 1) return {ok: false};
   const root = roots[0], slides = [...root.querySelectorAll('.splide__slide')];
   const active = slides.filter(node => node.classList.contains('is-active'));
@@ -194,9 +207,9 @@ _PR_SEQUENCE_ARROW_SAFE_SCRIPT = r"""args => {
 
 
 _MIXED_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0];
   if (!root.classList.contains('splide--rtl')) return {ok: false, reason: 'rtl_class'};
@@ -222,9 +235,9 @@ _MIXED_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
 }"""
 
 _BEGINNING_PR_ARROW_SAFE_SCRIPT = r"""() => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0];
   if (!root.classList.contains('splide--rtl')) return {ok: false, reason: 'rtl_class'};
@@ -243,7 +256,7 @@ _BEGINNING_PR_ARROW_SAFE_SCRIPT = r"""() => {
   const prs = [...root.querySelectorAll('div[data-type="pr"]')];
   const prefix = (node, value) => [...node.classList].some(name => name.startsWith(value));
   if (begins.length !== 1 || prs.length !== 1 || begins[0].closest('.splide__slide') !== active[0] ||
-      !prefix(begins[0], '_root_1w5tt_') || prs[0].closest('div[data-type="beginning"]') !== begins[0] ||
+      !(prefix(begins[0], '_root_1w5tt_') || prefix(begins[0], '_root_1iarr_')) || prs[0].closest('div[data-type="beginning"]') !== begins[0] ||
       prs[0].closest('.splide__slide') !== active[0] || !prefix(prs[0], '_endOfBook_') ||
       prefix(prs[0], '_endOfBookWrapper_') || prs[0].getAttribute('data-n') !== null ||
       active[0].querySelectorAll('div[data-type="contents"]').length !== 0 || slides.length < 3 ||
@@ -272,9 +285,9 @@ _BEGINNING_PR_ARROW_SAFE_SCRIPT = r"""() => {
 }""";
 
 _BEGINNING_PR_FINAL_PR_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0];
   if (!root.classList.contains('splide--rtl')) return {ok: false, reason: 'rtl_class'};
@@ -303,7 +316,7 @@ _BEGINNING_PR_FINAL_PR_ARROW_SAFE_SCRIPT = r"""args => {
   const begin = begins[0], beginPr = beginPrs[0];
   const finalPr = prs.find(node => !node.closest('div[data-type="beginning"]'));
   if (begins.length !== 1 || prs.length !== 2 || beginPrs.length !== 1 ||
-      begin.closest('.splide__slide') !== active[0] || !prefix(begin, '_root_1w5tt_') ||
+      begin.closest('.splide__slide') !== active[0] || !(prefix(begin, '_root_1w5tt_') || prefix(begin, '_root_1iarr_')) ||
       begin.getAttribute('data-n') !== null || !contained(begin, active[0]) || !visible(begin) ||
       !beginPr || !prefix(beginPr, '_endOfBook_') || prefix(beginPr, '_endOfBookWrapper_') ||
       beginPr.getAttribute('data-n') !== null || beginPr.closest('.splide__slide') !== active[0] ||
@@ -328,9 +341,9 @@ _BEGINNING_PR_FINAL_PR_ARROW_SAFE_SCRIPT = r"""args => {
 }""";
 
 _BEGINNING_PR_FINAL_PR_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0];
   if (!root.classList.contains('splide--rtl')) return {ok: false, reason: 'rtl_class'};
@@ -394,8 +407,8 @@ _BEGINNING_PR_FINAL_PR_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
 
 
 _DIRECT_FIRST_ARROW_SAFE_SCRIPT = r"""() => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
-  const roots = screens.length === 1 ? [...screens[0].querySelectorAll('.splide._root_1542n_1')] : [];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
+  const roots = screens.length === 1 ? [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')] : [];
   if (roots.length !== 1) return {ok: false};
   const root = roots[0], slides = [...root.querySelectorAll('.splide__slide')];
   const active = slides.filter(node => node.classList.contains('is-active'));
@@ -408,7 +421,7 @@ _DIRECT_FIRST_ARROW_SAFE_SCRIPT = r"""() => {
       active[0] !== slides[0] || nodes.length !== 1 || nodes[0].tagName !== 'CANVAS' ||
       beginnings.length !== 1 || beginnings[0].closest('.splide__slide') !== slides[0] ||
       nodes[0].closest('div[data-type="beginning"]') !== beginnings[0] || !visible(beginnings[0]) ||
-      ![...nodes[0].classList].some(name => name.startsWith('_root_bx4cr_')) || !visible(nodes[0]) ||
+      ![...nodes[0].classList].some(name => (name.startsWith('_root_bx4cr_') || name.startsWith('_root_1ncjq_'))) || !visible(nodes[0]) ||
       [...document.querySelectorAll('[role="dialog"], dialog')].some(visible) ||
       (document.activeElement !== document.body && document.activeElement !== document.documentElement))
     return {ok: false};
@@ -416,9 +429,9 @@ _DIRECT_FIRST_ARROW_SAFE_SCRIPT = r"""() => {
 }""";
 
 _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0], slides = [...root.querySelectorAll('.splide__slide')];
   const active = slides.filter(slide => slide.classList.contains('is-active'));
@@ -435,9 +448,12 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
       rect.left >= box.left - 1 && rect.top >= box.top - 1 &&
       rect.right <= box.right + 1 && rect.bottom <= box.bottom + 1;
   };
-  // Only the observed direct-first final-PR profile may end without a recommendation.
+  // Observed direct-first and paired-first final-PR profiles may end here.
   const noRecommendation = args.noRecommendation === true;
-  if (noRecommendation && (!args.directFirst || args.bridge || args.doubleEnd))
+  const secondaryEnd = args.secondaryEnd === true;
+  if (secondaryEnd && (!args.bridge || args.doubleEnd || noRecommendation))
+    return {ok: false, reason: 'unsupported_secondary_end'};
+  if (noRecommendation && (args.bridge || args.doubleEnd))
     return {ok: false, reason: 'unsupported_no_recommendation'};
   if (!root.classList.contains('splide--rtl') || !visible(root) || args.endIndex < 2 ||
       slides.length !== args.endIndex + (args.bridge || noRecommendation ? 1 : 2) || active.length !== 1 ||
@@ -447,7 +463,7 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
   const beginnings = [...root.querySelectorAll('div[data-type="beginning"]')];
   if ((args.directFirst ? (beginnings.length !== 1 ||
       beginnings[0].closest('.splide__slide') !== slides[0] ||
-      !prefix(beginnings[0], '_root_1w5tt_') || !contained(beginnings[0], slides[0]) ||
+      !(prefix(beginnings[0], '_root_1w5tt_') || prefix(beginnings[0], '_root_1iarr_')) || !contained(beginnings[0], slides[0]) ||
       beginnings[0].querySelectorAll('div[data-type="pr"]').length !== 0) : beginnings.length !== 0) || prs.length !== 1)
     return {ok: false, reason: 'pr_inventory'};
   const pr = prs[0];
@@ -459,12 +475,13 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
   const canvases = contents.length === 1 ? [...contents[0].querySelectorAll('canvas')] : [];
   if (args.bridge ? contents.length !== 0 :
       (contents.length !== 1 || !prefix(contents[0], '_pageCanvasWrapper_') ||
-       canvases.length !== 1 || !prefix(canvases[0], '_root_bx4cr_')))
+       canvases.length !== 1 || !(prefix(canvases[0], '_root_bx4cr_') || prefix(canvases[0], '_root_1ncjq_'))))
     return {ok: false, reason: 'final_slot'};
   const ends = [...root.querySelectorAll('div[data-type="end-of-book"]')];
-  if (ends.length !== (args.doubleEnd ? 4 : (noRecommendation ? 2 : 3)))
+  if (ends.length !== (args.doubleEnd ? 4 : (noRecommendation || secondaryEnd ? 2 : 3)))
     return {ok: false, reason: 'end_inventory'};
-  const roles = args.bridge ? [[args.endIndex - 1, '2'], [args.endIndex, '1'], [args.endIndex, '2']] :
+  const roles = secondaryEnd ? [[args.endIndex - 1, '2']] :
+    args.bridge ? [[args.endIndex - 1, '2'], [args.endIndex, '1'], [args.endIndex, '2']] :
     (args.doubleEnd ? [[args.endIndex, '1'], [args.endIndex, '2'], [args.endIndex + 1, '1'], [args.endIndex + 1, '2']] :
       [[args.endIndex, '1'], [args.endIndex, '2']]);
   for (let i = 0; i < roles.length; i++) {
@@ -476,8 +493,8 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
         marker.closest('.splide__slide') !== owner || !contained(marker, owner))
       return {ok: false, reason: 'double_end'};
   }
-  if (!args.bridge && !args.doubleEnd && !noRecommendation) {
-    const marker = ends[2], owner = slides[args.endIndex + 1];
+  if (secondaryEnd || (!args.bridge && !args.doubleEnd && !noRecommendation)) {
+    const marker = ends[secondaryEnd ? 1 : 2], owner = slides[args.endIndex + (secondaryEnd ? 0 : 1)];
     if (!prefix(marker, '_endOfBook_') || prefix(marker, '_endOfBookWrapper_') ||
         marker.getAttribute('data-n') !== null || marker.closest('.splide__slide') !== owner ||
         owner.classList.contains('is-active') || owner.querySelectorAll('div[data-type="contents"]').length ||
@@ -491,9 +508,9 @@ _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT = r"""args => {
 }""";
 
 _CONTENT_FIRST_FINAL_PR_ARROW_SAFE_SCRIPT = r"""args => {
-  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
   if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
-  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
   if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
   const root = roots[0], slides = [...root.querySelectorAll('.splide__slide')];
   const active = slides.filter(slide => slide.classList.contains('is-active'));
@@ -537,7 +554,7 @@ _CONTENT_FIRST_FINAL_PR_ARROW_SAFE_SCRIPT = r"""args => {
       finalPR.getAttribute('data-n') !== '2' || finalPR.closest('div[data-type="beginning"]') !== null ||
       !contained(finalPR, active[0]) || !visible(finalPR))
     return {ok: false, reason: 'pr_role_or_geometry'};
-  if (finalContents.length !== 1 || finalCanvases.length !== 1 || !prefix(finalCanvases[0], '_root_bx4cr_'))
+  if (finalContents.length !== 1 || finalCanvases.length !== 1 || !(prefix(finalCanvases[0], '_root_bx4cr_') || prefix(finalCanvases[0], '_root_1ncjq_')))
     return {ok: false, reason: 'final_slot'};
   if (endSlide.querySelectorAll('div[data-type="contents"]').length !== 0 || mainEnd.length !== 2 ||
       endNumbers[0] !== '1' || endNumbers[1] !== '2' || mainEnd.some(node => !contained(node, endSlide)))
@@ -637,6 +654,38 @@ def _snapshot_signature(
             )
         )
     return tuple(signature)
+
+
+def _inventory_summary(snapshot: dict[str, Any]) -> dict[str, object]:
+    """Bound initial-layout diagnostics without retaining canvas/source data."""
+    rows = snapshot.get("slideRows")
+
+    def position(value: object) -> int | None:
+        return value if type(value) is int and -1 <= value <= MAX_CANVAS_SLOTS else None
+
+    def markers(key: str) -> list[list[object]]:
+        values = snapshot.get(key)
+        if not isinstance(values, list):
+            return []
+        return [
+            [
+                marker.get("dataN") if marker.get("dataN") in (None, "1", "2") else "?",
+                position(marker.get("slideIndex")),
+            ]
+            for marker in values[:8] if isinstance(marker, dict)
+        ]
+
+    return {
+        "slides": len(rows) if isinstance(rows, list) else None,
+        "content_counts": [
+            len(row["contentSlots"])
+            if isinstance(row, dict) and isinstance(row.get("contentSlots"), list) else None
+            for row in (rows[:32] if isinstance(rows, list) else [])
+        ],
+        "pr": markers("prMarkers"),
+        "main_end": markers("mainEndMarkers"),
+        "secondary_end": markers("secondaryEndMarkers"),
+    }
 
 
 def _pr_marker_signature(snapshot: dict[str, Any]) -> tuple[object, ...]:
@@ -1156,7 +1205,31 @@ class KadocomiAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Kadocomi explicit end marker is missing or malformed")
         first_slots_for_profile = rows[0].get("contentSlots") if isinstance(rows[0], dict) else None
-        if len(pr_markers) == 3 and (
+        if (
+            len(pr_markers) == 2 and snapshot.get("directFirstContent") is True
+            and marker_count == 1 and marker_numbers == ["2"]
+            and marker_indexes[0] >= 3
+            and len(rows) == marker_indexes[0] + 2
+            and snapshot.get("secondaryEndMarkerSlideIndexes") == [marker_indexes[0] + 1]
+        ):
+            # Observed final singleton PR n=2, empty PR n=1/main END n=2,
+            # then an empty secondary END. The bridge is never a capture.
+            layout = _DIRECT_FIRST_FINAL_PR_BRIDGE_SECONDARY_END_LAYOUT
+            end_index = marker_indexes[0] + 1
+            expected_main_markers = [("2", end_index - 1)]
+            expected_secondary_indexes = [end_index]
+            for marker, (number, index) in zip(
+                pr_markers, [("2", end_index - 2), ("1", end_index - 1)], strict=True
+            ):
+                if (
+                    not isinstance(marker, dict) or marker.get("tagName") != "DIV"
+                    or marker.get("wrapperClass") is not True or marker.get("secondaryClass") is not False
+                    or marker.get("dataType") != "pr" or marker.get("dataN") != number
+                    or marker.get("slideIndex") != index or marker.get("beginningOwnerIndex") != -1
+                    or not self._marker_geometry_is_valid(marker.get("box"))
+                ):
+                    raise UnknownPageStateError("Kadocomi final-PR bridge marker role or geometry changed")
+        elif len(pr_markers) == 3 and (
             snapshot.get("directFirstContent") is True
             or (isinstance(first_slots_for_profile, list) and len(first_slots_for_profile) == 2)
         ):
@@ -1217,6 +1290,21 @@ class KadocomiAdapter(SiteAdapter):
                 _DIRECT_FIRST_SECONDARY_END_LAYOUT
                 if snapshot.get("directFirstContent") is True else _PAIRED_FIRST_SECONDARY_END_LAYOUT
             )
+            if (
+                len(pr_markers) == 1 and not rows[end_index - 1].get("contentSlots")
+                and (
+                    (snapshot.get("directFirstContent") is True and end_index >= 3)
+                    or (snapshot.get("directFirstContent") is False and end_index >= 2
+                        and isinstance(first_slots_for_profile, list)
+                        and len(first_slots_for_profile) == 2)
+                )
+            ):
+                # Observed empty PR n=1 / main END n=2 bridge, then secondary END.
+                layout = (
+                    _DIRECT_FIRST_PR_SECONDARY_END_LAYOUT
+                    if snapshot.get("directFirstContent") is True
+                    else _PAIRED_FIRST_PR_SECONDARY_END_LAYOUT
+                )
             expected_main_markers = [("2", end_index - 1)]
             expected_secondary_indexes = [end_index]
         elif (
@@ -1261,7 +1349,7 @@ class KadocomiAdapter(SiteAdapter):
                     self._validate_content_first_final_pr_markers(snapshot, end_index)
                     layout = _CONTENT_FIRST_FINAL_PR_LAYOUT
                 elif (
-                    end_index >= 2 and trailing_count == 1 and len(first_slots) == 2
+                    end_index >= 2 and trailing_count in (0, 1) and len(first_slots) == 2
                     and isinstance(final_slots, list) and len(final_slots) == 1
                     and len(pr_markers) == 1
                 ):
@@ -1407,7 +1495,7 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi main END marker count is inconsistent")
         self._validate_main_end_markers(snapshot, expected_main_markers)
         self._validate_secondary_end_markers(snapshot, expected_secondary_indexes)
-        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT} or (layout in {_DIRECT_FIRST_FINAL_PR_LAYOUT, *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS} and expected_secondary_indexes):
+        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT} or (layout in {_PAIRED_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_FINAL_PR_LAYOUT, *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS, *_PR_END_LAYOUTS} and expected_secondary_indexes):
             secondary = snapshot.get("secondaryEndMarkers")
             if (
                 not isinstance(secondary, list)
@@ -1488,7 +1576,7 @@ class KadocomiAdapter(SiteAdapter):
             elif layout in _PR_END_LAYOUTS:
                 if (
                     (index < end_index - 1 and len(slots) != (
-                        1 if index == 0 and layout == _DIRECT_FIRST_PR_END_LAYOUT else 2
+                        1 if index == 0 and layout in _DIRECT_FIRST_LAYOUTS else 2
                     ))
                     or (index >= end_index - 1 and slots)
                 ):
@@ -1625,7 +1713,14 @@ class KadocomiAdapter(SiteAdapter):
                     previous = None
                     await page.wait_for_timeout(VIEWER_POLL_MS)
                     continue
-                slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
+                try:
+                    slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
+                except UnknownPageStateError as exc:
+                    summary = _inventory_summary(snapshot)
+                    self._capture_diagnostics = {
+                        "mode": "initial_inventory_failed", "reason": str(exc), "inventory": summary,
+                    }
+                    raise UnknownPageStateError(f"{exc}; inventory={summary}") from exc
                 if snapshot.get("activeIndex") != 0:
                     raise UnknownPageStateError("Kadocomi episode did not open at its first reader slide")
                 if layout in {
@@ -1747,6 +1842,8 @@ class KadocomiAdapter(SiteAdapter):
                 _PAIRED_FIRST_PR_END_LAYOUT,
                 _DIRECT_FIRST_FINAL_PR_LAYOUT,
                 _DIRECT_FIRST_PR_END_LAYOUT,
+                _DIRECT_FIRST_PR_SECONDARY_END_LAYOUT,
+                _PAIRED_FIRST_PR_SECONDARY_END_LAYOUT,
                 _DIRECT_FIRST_DOUBLE_END_LAYOUT,
                 *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS,
             }
@@ -1761,7 +1858,10 @@ class KadocomiAdapter(SiteAdapter):
         numbers = snapshot.get("markerNumbers")
         if not isinstance(indexes, list) or not isinstance(numbers, list):
             return False
-        if self._reader_layout in _SECONDARY_END_LAYOUTS:
+        if self._reader_layout in {
+            *_SECONDARY_END_LAYOUTS, *_PR_SECONDARY_END_LAYOUTS,
+            _DIRECT_FIRST_FINAL_PR_BRIDGE_SECONDARY_END_LAYOUT,
+        }:
             return (
                 indexes == [end_index - 1] and numbers == ["2"]
                 and snapshot.get("secondaryEndMarkerSlideIndexes") == [end_index]
@@ -2007,7 +2107,7 @@ class KadocomiAdapter(SiteAdapter):
                      "doubleEnd": self._reader_layout == _PAIRED_FIRST_DOUBLE_END_LAYOUT,
                      "directFirst": self._reader_layout == _DIRECT_FIRST_FINAL_PR_LAYOUT,
                      "noRecommendation": (
-                         self._reader_layout == _DIRECT_FIRST_FINAL_PR_LAYOUT
+                         self._reader_layout in {_DIRECT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT}
                          and len(self._slide_slots) == self._end_slide_index + 1
                      )},
                 )
@@ -2129,7 +2229,8 @@ class KadocomiAdapter(SiteAdapter):
                         target = await page.evaluate(
                             _PAIRED_FIRST_PR_ARROW_SAFE_SCRIPT,
                             {"endIndex": end_index, "bridge": True,
-                             "directFirst": layout == _DIRECT_FIRST_PR_END_LAYOUT},
+                             "directFirst": layout in _DIRECT_FIRST_LAYOUTS,
+                             "secondaryEnd": layout in _PR_SECONDARY_END_LAYOUTS},
                         )
                         if (
                             not isinstance(target, dict) or target.get("ok") is not True
