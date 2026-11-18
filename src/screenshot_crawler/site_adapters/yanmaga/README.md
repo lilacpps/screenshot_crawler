@@ -8,6 +8,25 @@ Discovery, manual Crawl/Runner, Batch adapter, and Batch policy. Existing
 Planner, Executor, packager, Artifact, and Completed services are reused.
 Shared Core exposes only site-neutral access-grant and entry-only hooks.
 
+## Final-body favorite / like / share card (2026-11-18)
+
+The observed native engagement card is an additional positive END boundary,
+limited to the final-body layout after all body indices have been captured.
+The adapter requires the known rental hierarchy, loaded note asset, unique
+favorite/like/share controls and labels, native same-origin POST form shapes
+with hidden episode codes matching the current Viewer `cid`, and a Twitter
+share URL for the exact current Source. The whole rental card and final body
+must remain visible and unobstructed, with the menu hidden and no conflicting
+terminal CTA/title or access gate. The controls are only inspected, never used.
+Terminal-only `-/N` does not gain this boundary. Diagnostics expose
+`engagement_card_exact`; Core timeout and capture behavior are unchanged.
+
+This resolves the normal Chapter 10 part 1 failure for Item 49648 / Source
+49955: all 16 pages were saved but the former terminal predicates rejected
+the engagement-only card. A fresh shared-CDP Runner verification with isolated
+output saved 16 images and reached END, with no first-free entry or first-party
+non-GET attempt. The normal Catalog and original failed output were preserved.
+
 ## Rental History pagination and expired-ticket preflight (2026-11-17)
 
 Complete-history observation follows only the observed same-origin native
@@ -520,11 +539,11 @@ out. Diagnostics include the counter, visible/captured indices, and
 `history_grant_recovery_state` (`not_attempted`, `candidate`, `reconfirmed`,
 `persisted`). This observation was recorded on Chapter 17 after grant recovery.
 
-An odd final spread can lead to a separate terminal-only screen: Chapter 15's
+The final spread can lead to a separate terminal-only screen: Chapter 15's
 15 body pages were followed by native `-/15`, with every body offscreen to the
 right and only the rental card visible. Ordinary body-counter parsing remains
-unchanged. The private terminal mode requires exact caption ID/ancestry, odd
-N>=3 within the existing bound, the loaded final N wrapper's geometry, zero
+unchanged. The private terminal mode requires exact caption ID/ancestry,
+N=1 or N>=3 within the existing bound, the loaded final N wrapper's geometry, zero
 visible bodies, and the observed 1272×1800 rental slot in the viewport's right
 half. The whole card must be unobstructed at its center and eight perimeter
 points. All 1..N body pages and a verified terminal branch remain mandatory;
@@ -539,8 +558,36 @@ The Chapter 15 live Batch verification completed all 15 native WebP pages,
 positive END, ZIP and Completed in an isolated copy, with the same stored grant
 and no new resource use. Genuine outputs and independent audit are under
 `output/yanmaga-png-investigation/fixed-odd15-stable/`. Ordinary counter parsing
-and content identity still reject terminal-only positions; even-total or
-one-page dash shapes and other layouts remain unsupported.
+and content identity still reject terminal-only positions. Chapter 2 part 2
+(Item 49662 / Source 49969) also proved this layout with even N=26 and a
+next/read card. The former odd-only restriction caused a change-wait timeout
+after all 26 pages were saved. Both parities now use the same exact layout,
+complete capture sequence and terminal-card proof. A fresh isolated Runner
+check reached END at `-/26` with max_pages=26; all 26 saved image hashes
+matched the original failed run, with no first-party non-GET attempt or new
+first-free use. Evidence is under `.tmp/yanmaga-even-terminal/`.
+Two-page dash states and other layouts remain unsupported.
+
+The single-page member-free illustration (Item 49770 / Source 50077) verified
+the one-body variant: the delivered reader's D menu-toggle key hides the
+known initial overlay without a second body page. The adapter presses it
+once only when the single page is obstructed by that known menu, then waits
+for the same route/counter, hidden zero-size menu and clear stable body.
+An already hidden menu receives no toggle. After saving index 1, one native
+next turn can reach the observed `-/1` terminal-only slot. The existing exact
+layout, complete capture sequence and positive card proof remain mandatory;
+no terminal image or fabricated page 2 is captured. The live isolated Runner
+saved one 1125x1600 native lossless WebP and reached END at max_pages=1, with
+zero first-party non-GET attempts or new first-free entry.
+
+That terminal also verified a ready-wait CTA: exact label `「待つと無料....！」で読む`,
+native `form.ga-viewer-rental-free-wait` with same-origin POST `/viewer/rental`,
+one hidden 20-alphanumeric episode code and `free_rental_if_wait` type, a loaded
+same-code thumbnail and no required point cost. Its unique title must match
+the immediate fresh listing row carrying only the known wait marker. Other
+terminal controls or malformed/conflicting proof stop. The CTA is only read;
+the adapter neither clicks it nor changes ticket/Policy behavior. Diagnostics
+include `ready_wait_rental_exact`. Evidence: `.tmp/yanmaga-single-page/`.
 
 At completion, every body index must have been captured and the stable final
 counter and native wrapper must match the requested episode. A single sibling
@@ -611,6 +658,9 @@ belong to each captured body wrapper. The verified spread wrappers overlap by
 2 CSS px; perimeter samples use a 4 px inset so each sample lies outside that
 measured sibling overlap. A separate overlay within the inset still fails
 before saving the page; no CSS is changed to conceal reader controls.
+For the verified one-page variant, the native D key and strict unchanged-page
+wait above replace the page-2 roundtrip. Multiple-page readers retain the
+existing roundtrip.
 
 ## Batch
 

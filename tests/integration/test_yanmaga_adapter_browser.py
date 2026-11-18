@@ -79,6 +79,10 @@ LATEST_AUTHOR_ARROW_SRC = (
     "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
     "arrow-right-402a9836009e2194d9ea5e0cfe96f36bc4dc1aa721be087f829dc8e19f2a1d11.png"
 )
+ENGAGEMENT_NOTE_SRC = (
+    "https://viewer-assets.yanmaga.jp/viewer/assets/img/"
+    "like_note-4469488c0f4e846b0cc34a2dcb85e4d6b0eb5f68101e4ebfb5a521476d99adf3.png"
+)
 WAIT_MODAL_WORK_TITLE = "Synthetic work"
 WAIT_MODAL_EPISODE_TITLE = "\u7b2c\uff11\u8a71\u3000Synthetic"
 WORK_URL = f"https://yanmaga.jp/comics/{quote(SLUG, safe='')}"
@@ -131,11 +135,15 @@ def _viewer_html(
     native_host_pseudo_issue: str | None = None,
     native_wrapper_transform: str | None = None,
     odd_terminal_only: bool = False,
+    even_terminal_only: bool = False,
+    single_page: bool = False,
 ) -> str:
     wrappers = []
     colors = ("#b32b39", "#22784c", "#345ca8", "#b08228")
     if odd_terminal_only:
         colors = colors[:3]
+    if single_page:
+        colors = colors[:1]
     pseudo_issue_css = {
         None: "",
         "background": "background-color:rgba(255,0,0,.2)",
@@ -223,7 +231,7 @@ def _viewer_html(
         )
     title_label = (
         WAIT_NEXT_ORDER_LABEL
-        if terminal_control.startswith(("wait_countdown", "point_rental"))
+        if terminal_control.startswith(("wait_countdown", "point_rental", "ready_wait"))
         else NEXT_ORDER_LABEL
     )
     title = f'<span class="episode-modal-eptitle">{title_label}</span>'
@@ -272,6 +280,24 @@ def _viewer_html(
         ),
         "point_rental_and_next": point_control + next_control,
     }
+    ready_wait_control = point_control.replace(
+        '<dl class="episode-modal-point--necessary"><dd>'
+        '<span class="mod-episode-point--normal">70</span></dd></dl>', ''
+    ).replace('ga-viewer-rental-point', 'ga-viewer-rental-free-wait').replace(
+        'value="point_rental"', 'value="free_rental_if_wait"'
+    ).replace('レンタルして読む', '「待つと無料....！」で読む')
+    point_controls.update({
+        "ready_wait": ready_wait_control,
+        "ready_wait_missing_marker": ready_wait_control,
+        "ready_wait_wrong_title": ready_wait_control,
+        "ready_wait_wrong_label": ready_wait_control.replace('「待つと無料....！」で読む', '読む'),
+        "ready_wait_wrong_type": ready_wait_control.replace('free_rental_if_wait', 'other'),
+        "ready_wait_foreign_action": ready_wait_control.replace(
+            'action="/viewer/rental"', 'action="https://example.invalid/viewer/rental"'),
+        "ready_wait_wrong_thumbnail": ready_wait_control.replace(
+            f'{point_code}.jpg', '06A0000000001000002B.jpg'),
+        "ready_wait_duplicate": ready_wait_control + ready_wait_control,
+    })
     latest_author_control = (
         '<div id="js-rental-box" class="rental-bg ga-viewer-rental">'
         '<div id="js-modal-content" class="rental-modal">'
@@ -337,6 +363,56 @@ def _viewer_html(
         "latest_author_missing": "",
         "missing": "",
     }
+    engagement_control = (
+        '<div id="js-rental-box" class="rental-bg ga-viewer-rental">'
+        '<div id="js-modal-content" class="rental-modal"><div class="wrapper-rental-button">'
+        f'<div class="like-note"><img src="{ENGAGEMENT_NOTE_SRC}"></div>'
+        '<div id="js-modal-button" class="wrapper-mod-modal background-transparent">'
+        '<div class="mod-modal-button"><div class="spacer"></div>'
+        '<a id="js-btn-favorite" class="circle-button favorite">'
+        '<div class="icon-wrapper"><span>お気に入り</span></div>'
+        '<form id="form-favorite" class="ga-viewer-rental-favorite" '
+        'action="/viewer/favorite" method="post">'
+        '<input type="hidden" name="jdcn" value="AbCd0123456789EfGhIj"></form></a>'
+        '<div class="like-wrapper"><a id="js-btn-like" class="circle-button like">'
+        '<div class="icon-wrapper"><span>いいね</span><span>12</span></div>'
+        '<form id="form-like" class="ga-viewer-rental-like" action="/viewer/like" method="post">'
+        '<input type="hidden" name="jdcn" value="AbCd0123456789EfGhIj"></form></a></div>'
+        '<a id="js-btn-twitter" class="circle-button shared ga-viewer-rental-share" '
+        f'href="https://twitter.com/intent/tweet?url={quote(SOURCE_URL, safe="")}">'
+        '<div class="icon-wrapper"><span>シェア</span></div></a>'
+        '<div class="spacer"></div></div></div>'
+        '<p id="error-favorite-like" class="error-text"></p></div></div></div>'
+    )
+    controls.update({
+        "engagement": engagement_control,
+        "engagement_offscreen": engagement_control,
+        "engagement_obstructed": engagement_control,
+        "engagement_wrong_code": engagement_control.replace('AbCd0123456789EfGhIj', '0' * 20),
+        "engagement_duplicate_code": engagement_control.replace(
+            '</form>', '<input type="hidden" name="jdcn" value="AbCd0123456789EfGhIj"></form>'
+        ),
+        "engagement_visible_code": engagement_control.replace('type="hidden"', 'type="text"'),
+        "engagement_wrong_action": engagement_control.replace('/viewer/like', '/viewer/rental'),
+        "engagement_foreign_action": engagement_control.replace(
+            'action="/viewer/like"', 'action="https://example.invalid/viewer/like"'
+        ),
+        "engagement_wrong_method": engagement_control.replace('method="post"', 'method="get"'),
+        "engagement_wrong_label": engagement_control.replace('お気に入り', '読む'),
+        "engagement_missing_like": engagement_control.replace('id="js-btn-like"', 'id="other"'),
+        "engagement_duplicate_like": engagement_control.replace(
+            '<div class="spacer"></div>', '<a id="js-btn-like">いいね</a>'
+        ),
+        "engagement_wrong_note": engagement_control.replace('like_note-', 'unknown-'),
+        "engagement_hidden": engagement_control.replace(
+            'id="js-btn-favorite"', 'id="js-btn-favorite" style="visibility:hidden"'
+        ),
+        "engagement_wrong_share": engagement_control.replace(
+            quote(SOURCE_URL, safe=''), quote(SOURCE_URL.replace(EPISODE_ID, 'f' * 32), safe='')
+        ),
+        "engagement_with_next": engagement_control + next_control,
+        "engagement_semantic_dialog": engagement_control + '<div role="dialog">ログイン</div>',
+    })
     if terminal_control == "wait_countdown_bad_time":
         controls[terminal_control] = controls["wait_countdown"].replace(
             "あと22:04で無料", "あと22:90で無料"
@@ -353,7 +429,9 @@ def _viewer_html(
     rental_title = title
     if terminal_control == "signup_wrong_title":
         rental_title = title.replace(NEXT_ORDER_LABEL, "\u5225\u306e\u8a71")
-    elif terminal_control in {"wait_countdown_wrong_title", "point_rental_wrong_title"}:
+    elif terminal_control in {
+        "wait_countdown_wrong_title", "point_rental_wrong_title", "ready_wait_wrong_title"
+    }:
         rental_title = title.replace(WAIT_NEXT_ORDER_LABEL, "\u5225\u306e\u8a71")
     rental_card = ""
     if inline_rental_card:
@@ -384,7 +462,7 @@ def _viewer_html(
         ""
         if unsafe_end
         else controls[terminal_control]
-        if terminal_control.startswith("latest_author")
+        if terminal_control.startswith(("latest_author", "engagement"))
         else rental_title + controls[terminal_control] + rental_card
     )
     rental = f'<div id="rental" style="display:none">{rental_content}</div>'
@@ -401,7 +479,7 @@ def _viewer_html(
         else ""
     )
     arrow_visible_at_end = json.dumps(arrow_mode == "visible")
-    initial_page = 1 if first_page_overlay else 4
+    initial_page = 1 if single_page else 5 if even_terminal_only else 1 if first_page_overlay else 4
     menu_initial_display = "block" if first_page_overlay else "none"
     menu_after_roundtrip = "none" if menu_hideable else "block"
     edge_overlay = '<div id="edge-obstruction"></div>' if edge_obstruction else ""
@@ -435,6 +513,8 @@ def _viewer_html(
       #rental .aspect-ratio-2-27.mt-wait{{width:220px;height:32px}}
       #rental .episode-modal-wait.content{{display:flex;align-items:center;gap:6px;width:220px;height:32px}}
       #rental .episode-modal-wait img.icon-clock{{width:16px;height:16px}}
+      #rental .circle-button{{display:inline-block;width:120px;height:90px;vertical-align:top}}
+      #rental .like-wrapper{{display:inline-block}}
       #menu{{position:fixed;inset:0;display:{menu_initial_display};z-index:30;background:rgba(0,0,0,.01)}}
       #menu_transparent{{position:absolute;inset:0;background:rgba(0,0,0,.01)}}
       #menu_header{{position:absolute;top:0;left:0;width:100%;height:100px;background:#ddd}}
@@ -443,11 +523,11 @@ def _viewer_html(
       #ads,#recommend{{position:absolute;width:1px;height:1px;overflow:hidden}}
       {obstruction_css}
     </style></head><body>{first_free_notice}{quota_notice}
-    {'' if odd_terminal_only else f'<span id="counter">{initial_page}/4</span>'}
+    {'' if odd_terminal_only or even_terminal_only or single_page else f'<span id="counter">{initial_page}/4</span>'}
     {arrow}
     <div class="pages" id="content">{''.join(wrappers)}{rental}{auxiliary}</div>
     <div id="menu"><div id="menu_transparent"></div><div id="menu_header"></div><div id="menu_controller"></div>
-      {'<div id="menu_seekbar"><div id="menu_slidercaption_base"><div id="menu_slidercaption">-/3</div></div></div>' if odd_terminal_only else ''}
+      {f'<div id="menu_seekbar"><div id="menu_slidercaption_base"><div id="menu_slidercaption">{"1/1" if single_page else "-/4" if even_terminal_only else "-/3"}</div></div></div>' if odd_terminal_only or even_terminal_only or single_page else ''}
     </div>
     {edge_overlay}
     <script>
@@ -468,8 +548,18 @@ def _viewer_html(
       const nativeTransparent={json.dumps(native_transparent)};
       const nativeAmbiguous={json.dumps(native_ambiguous)};
       const oddTerminalOnly={json.dumps(odd_terminal_only)};
+      const evenTerminalOnly={json.dumps(even_terminal_only)};
+      const singlePage={json.dumps(single_page)};
       function show(value){{
         const previous=current;
+        if(singlePage){{
+          current=value;counter.textContent=value===1?'1/1':'-/1';
+          pages[0].style.display='block';pages[0].style.left=value===1?'0px':'2602px';
+          rental.style.display=value===1?'none':'block';
+          rental.style.left='1280px';rental.style.top='0px';
+          rental.style.width='1272px';rental.style.height='1800px';
+          return;
+        }}
         current=value; counter.textContent=`${{value}}/4`;
         if(oddTerminalOnly) counter.textContent=value===4?'-/3':`${{value}}/3`;
         pages.forEach(node=>node.style.display='none');
@@ -485,6 +575,18 @@ def _viewer_html(
           rental.style.left='1280px';rental.style.top='0px';
           rental.style.width='1272px';rental.style.height='1800px';
         }}
+        if(evenTerminalOnly){{
+          counter.textContent=value===5?'-/4':`${{value}}/4`;
+          pages.forEach((node,index)=>{{
+            node.style.display='block';
+            node.style.left=value===5?(6500-index*1300)+'px':
+              value===1?(index<2?index*1290:-2600)+'px':
+              (index>=2?(index-2)*1290:-2600)+'px';
+          }});
+          rental.style.display=value===5?'block':'none';
+          rental.style.left='1280px';rental.style.top='0px';
+          rental.style.width='1272px';rental.style.height='1800px';
+        }}
         if(value===4 && delayedEnd){{
           rental.innerHTML='';
           setTimeout(()=>{{rental.innerHTML={json.dumps(title + controls[terminal_control])}; }},250);
@@ -495,6 +597,17 @@ def _viewer_html(
           menu.style.display='{menu_after_roundtrip}';
       }}
       document.addEventListener('keydown', event=>{{
+        if(singlePage){{
+          if(event.key==='d' && menuHideable)setTimeout(()=>menu.style.display='none',80);
+          if(event.key==='ArrowRight')show(1);
+          if(event.key==='ArrowLeft')show(2);
+          return;
+        }}
+        if(evenTerminalOnly){{
+          if(event.key==='ArrowRight') show(current===5?3:1);
+          if(event.key==='ArrowLeft') show(current===1?3:5);
+          return;
+        }}
         if(event.key==='ArrowRight') show(current===4?2:1);
         if(event.key==='ArrowLeft') show(current===1?2:4);
       }});
@@ -722,6 +835,8 @@ async def _set_routes(
     native_host_pseudo_issue: str | None = None,
     native_wrapper_transform: str | None = None,
     odd_terminal_only: bool = False,
+    even_terminal_only: bool = False,
+    single_page: bool = False,
     wrong_route: bool = False,
 ) -> list[str]:
     requested: list[str] = []
@@ -889,6 +1004,8 @@ async def _set_routes(
                     native_host_pseudo_issue=native_host_pseudo_issue,
                     native_wrapper_transform=native_wrapper_transform,
                     odd_terminal_only=odd_terminal_only,
+                    even_terminal_only=even_terminal_only,
+                    single_page=single_page,
                 ),
             )
         elif path == unquote(urlsplit(SOURCE_URL).path) and access_mode == "wait_free":
@@ -930,7 +1047,7 @@ async def _set_routes(
         )
 
     await page.route(WAIT_END_CLOCK_SRC, route_wait_clock)
-    if terminal_control.startswith(("latest_author", "point_rental")):
+    if terminal_control.startswith(("latest_author", "point_rental", "engagement", "ready_wait")):
         tiny = io.BytesIO()
         Image.new("RGBA", (2, 2), (255, 255, 255, 255)).save(tiny, format="PNG")
         image_bytes = tiny.getvalue()
@@ -940,6 +1057,11 @@ async def _set_routes(
 
         await page.route(LATEST_AUTHOR_LINK_SRC, route_author_asset)
         await page.route(LATEST_AUTHOR_ARROW_SRC, route_author_asset)
+        await page.route(ENGAGEMENT_NOTE_SRC, route_author_asset)
+        async def route_unknown_note(route):
+            await route.fulfill(status=404, body="not found")
+
+        await page.route(ENGAGEMENT_NOTE_SRC.replace("like_note-", "unknown-"), route_unknown_note)
         await page.route(
             "https://eh96lnrmau.user-space.cdn.idcfcloud.net/thumbnail/episode/*",
             route_author_asset,
@@ -2298,6 +2420,31 @@ async def test_yanmaga_hides_fresh_reader_menu_with_normal_roundtrip_before_capt
         ("point_rental_hidden", False),
         ("point_rental_and_next", False),
         ("point_rental_semantic_dialog", False),
+        ("ready_wait", True),
+        ("ready_wait_missing_marker", False),
+        ("ready_wait_wrong_title", False),
+        ("ready_wait_wrong_label", False),
+        ("ready_wait_wrong_type", False),
+        ("ready_wait_foreign_action", False),
+        ("ready_wait_wrong_thumbnail", False),
+        ("ready_wait_duplicate", False),
+        ("engagement", True),
+        ("engagement_offscreen", False),
+        ("engagement_obstructed", False),
+        ("engagement_wrong_code", False),
+        ("engagement_duplicate_code", False),
+        ("engagement_visible_code", False),
+        ("engagement_wrong_action", False),
+        ("engagement_foreign_action", False),
+        ("engagement_wrong_method", False),
+        ("engagement_wrong_label", False),
+        ("engagement_missing_like", False),
+        ("engagement_duplicate_like", False),
+        ("engagement_wrong_note", False),
+        ("engagement_hidden", False),
+        ("engagement_wrong_share", False),
+        ("engagement_with_next", False),
+        ("engagement_semantic_dialog", False),
         ("missing", False),
     ],
 )
@@ -2306,17 +2453,25 @@ async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
 ) -> None:
     wait_countdown = terminal_control.startswith("wait_countdown")
     point_rental = terminal_control.startswith("point_rental")
+    engagement = terminal_control.startswith("engagement")
+    ready_wait = terminal_control.startswith("ready_wait")
     requested = await _set_routes(
         browser_page,
         monkeypatch,
         terminal_control=terminal_control,
-        inline_rental_card=wait_countdown or point_rental,
+        inline_rental_card=wait_countdown or point_rental or engagement or ready_wait,
+        terminal_geometry=(
+            "offscreen" if terminal_control == "engagement_offscreen" else
+            "obstructed" if terminal_control == "engagement_obstructed" else "valid"
+        ),
         inline_rental_dialog=terminal_control in {
             "wait_countdown_semantic_dialog", "point_rental_semantic_dialog"
         },
-        authenticated_listing=True if wait_countdown or point_rental else None,
+        authenticated_listing=True if wait_countdown or point_rental or ready_wait else None,
         next_wait_free_marker=(
-            (wait_countdown or point_rental) and terminal_control != "wait_countdown_missing_marker"
+            (wait_countdown or point_rental or ready_wait) and terminal_control not in {
+                "wait_countdown_missing_marker", "ready_wait_missing_marker"
+            }
         ),
     )
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 300)
@@ -2328,7 +2483,10 @@ async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
     else:
         expected_error = (
             PageChangeTimeoutError
-            if terminal_control in {"wait_countdown_semantic_dialog", "point_rental_semantic_dialog"}
+            if terminal_control in {
+                "wait_countdown_semantic_dialog", "point_rental_semantic_dialog",
+                "engagement_semantic_dialog",
+            }
             else UnknownPageStateError
         )
         with pytest.raises(expected_error):
@@ -2339,6 +2497,56 @@ async def test_yanmaga_terminal_signup_boundary_is_exact_and_never_activated(
     if terminal_control == "wait_countdown":
         assert await browser_page.locator(".episode-modal-wait.content").is_visible()
         assert await browser_page.locator("#js-btn-valid-next-episode").count() == 0
+    if engagement:
+        assert not any(urlsplit(url).path in {"/viewer/favorite", "/viewer/like"}
+                       or urlsplit(url).hostname == "twitter.com" for url in requested)
+
+
+@pytest.mark.parametrize(
+    ("control", "menu_visible", "hideable", "accepted"),
+    [("valid_next", True, True, True), ("valid_next", False, True, True),
+     ("ready_wait", True, True, True), ("ready_wait_wrong_title", True, True, False),
+     ("ready_wait_wrong_type", True, True, False), ("missing", True, True, False),
+     ("valid_next", True, False, False)],
+)
+async def test_yanmaga_single_page_hides_native_menu_then_requires_terminal_proof(
+    browser_page, tmp_path, monkeypatch, control, menu_visible, hideable, accepted
+) -> None:
+    ready_wait = control.startswith("ready_wait")
+    requested = await _set_routes(
+        browser_page, monkeypatch, single_page=True, first_page_overlay=menu_visible,
+        menu_hideable=hideable, terminal_control=control,
+        authenticated_listing=True if ready_wait else None,
+        next_wait_free_marker=ready_wait,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    keys = []
+    press = browser_page.keyboard.press
+
+    async def record_key(key, **kwargs):
+        keys.append(key)
+        await press(key, **kwargs)
+
+    monkeypatch.setattr(browser_page.keyboard, "press", record_key)
+    config = _config(tmp_path)
+    config.max_pages = 1
+    adapter = YanmagaAdapter()
+    if accepted:
+        result = await CrawlerRunner(config).run(browser_page, adapter)
+        assert result.stop_state is PageState.END and len(result.pages) == 1
+        debug = await adapter.collect_debug_metadata(browser_page)
+        assert debug["native_counter"] == "-/1" and debug["terminal_only"]
+        assert adapter._captured_indices == [1]
+        with pytest.raises(UnknownPageStateError, match="terminal-only.*identity"):
+            await adapter.get_content_identity(browser_page)
+    else:
+        with pytest.raises((UnknownPageStateError, PageChangeTimeoutError)):
+            await CrawlerRunner(config).run(browser_page, adapter)
+    assert keys.count("d") == int(menu_visible)
+    assert keys.count("ArrowLeft") == int(hideable)
+    assert not any(urlsplit(url).path == "/viewer/rental" for url in requested)
+    assert not any(NEXT_EPISODE_ID in urlsplit(url).path for url in requested)
+    assert len(list(config.output_dir.glob("page-*.png"))) == int(hideable)
 
 
 @pytest.mark.parametrize(
@@ -2798,16 +3006,18 @@ async def test_yanmaga_pre_entry_rejects_sorted_document_identity_drift(
     ("scenario", "control"),
     [("valid", "valid_next"), ("valid", "point_rental"), ("counter_ahead", "valid_next"),
      *[(scenario, "valid_next") for scenario in (
-         "bad_caption", "even_total", "unbound_caption", "duplicate_caption", "wrong_title",
+         "bad_caption", "wrong_total", "unbound_caption", "duplicate_caption", "wrong_title",
          "missing_control", "edge_obstruction", "small_card", "missing_last", "visible_body",
          "premature",
      )]],
 )
-async def test_yanmaga_odd_terminal_only_requires_all_body_pages_and_exact_native_shape(
-    browser_page, tmp_path, monkeypatch, scenario, control
+@pytest.mark.parametrize("even_terminal_only", [False, True], ids=["odd", "even"])
+async def test_yanmaga_terminal_only_requires_all_body_pages_and_exact_native_shape(
+    browser_page, tmp_path, monkeypatch, scenario, control, even_terminal_only
 ) -> None:
     requested = await _set_routes(
-        browser_page, monkeypatch, odd_terminal_only=True, terminal_control=control,
+        browser_page, monkeypatch, odd_terminal_only=not even_terminal_only,
+        even_terminal_only=even_terminal_only, terminal_control=control,
         inline_rental_card=control == "point_rental",
         authenticated_listing=True if control == "point_rental" else None,
         next_wait_free_marker=control == "point_rental",
@@ -2818,32 +3028,33 @@ async def test_yanmaga_odd_terminal_only_requires_all_body_pages_and_exact_nativ
 
     async def capture_then_alter_terminal(page):
         result = await capture(page)
-        if adapter._captured_indices == [1]:
+        if adapter._captured_indices == ([1, 2] if even_terminal_only else [1]):
             await page.evaluate(
-                """scenario => {
+                """({scenario, even}) => {
+                  const terminal=even?5:4;
                   const original=show;
                   show=value=>{
                     const previous=[...document.querySelectorAll('.body-page')]
                       .map(node=>[node,node.style.cssText]);
                     original(value);
-                    if(scenario==='premature' && value===2){original(4);return;}
-                    if(value!==4)return;
+                    if(scenario==='premature' && value===(even?3:2)){original(terminal);return;}
+                    if(value!==terminal)return;
                     const caption=document.getElementById('menu_slidercaption');
                     const rental=document.getElementById('rental');
                     if(scenario==='counter_ahead'){
                       for(const [node,css] of previous)node.style.cssText=css;
                       rental.style.left='-1307.625px';
-                      setTimeout(()=>original(4),250);
+                      setTimeout(()=>original(terminal),250);
                     }
                     if(scenario==='bad_caption')caption.textContent='--/3';
-                    if(scenario==='even_total')caption.textContent='-/4';
+                    if(scenario==='wrong_total')caption.textContent=even?'-/5':'-/4';
                     if(scenario==='unbound_caption')caption.id='other-caption';
                     if(scenario==='duplicate_caption')caption.parentElement.append(caption.cloneNode(true));
                     if(scenario==='wrong_title')rental.querySelector('.episode-modal-eptitle').textContent='wrong';
                     if(scenario==='missing_control')rental.querySelector('#js-btn-valid-next-episode').remove();
                     if(scenario==='small_card')rental.style.width='500px';
-                    if(scenario==='missing_last')document.getElementById('content-p3').remove();
-                    if(scenario==='visible_body')document.getElementById('content-p3').style.left='0px';
+                    if(scenario==='missing_last')document.getElementById('content-p'+(even?4:3)).remove();
+                    if(scenario==='visible_body')document.getElementById('content-p'+(even?4:3)).style.left='0px';
                     if(scenario==='edge_obstruction'){
                       const cover=document.createElement('div');
                       cover.style.cssText='position:fixed;left:1280px;top:1788px;width:12px;height:12px;z-index:100;background:red';
@@ -2851,19 +3062,20 @@ async def test_yanmaga_odd_terminal_only_requires_all_body_pages_and_exact_nativ
                     }
                   };
                 }""",
-                scenario,
+                {"scenario": scenario, "even": even_terminal_only},
             )
         return result
 
     monkeypatch.setattr(adapter, "capture_page", capture_then_alter_terminal)
     config = _config(tmp_path)
-    config.max_pages = 3
+    total = 4 if even_terminal_only else 3
+    config.max_pages = total
     if scenario in {"valid", "counter_ahead"}:
         result = await CrawlerRunner(config).run(browser_page, adapter)
-        assert result.stop_state is PageState.END and len(result.pages) == 3
-        assert adapter._captured_indices == [1, 2, 3]
+        assert result.stop_state is PageState.END and len(result.pages) == total
+        assert adapter._captured_indices == list(range(1, total + 1))
         debug = await adapter.collect_debug_metadata(browser_page)
-        assert debug["native_counter"] == "-/3" and debug["terminal_only"] is True
+        assert debug["native_counter"] == f"-/{total}" and debug["terminal_only"] is True
         assert debug["terminal_proof"]["native_counter_complete"] is False
         assert debug["terminal_proof"]["terminal_only_layout_exact"] is True
         with pytest.raises(UnknownPageStateError, match="terminal-only.*identity"):
@@ -2872,7 +3084,7 @@ async def test_yanmaga_odd_terminal_only_requires_all_body_pages_and_exact_nativ
         with pytest.raises((UnknownPageStateError, PageChangeTimeoutError)):
             await CrawlerRunner(config).run(browser_page, adapter)
     pages = list((tmp_path / "isolated-output").glob("page-*.png"))
-    assert len(pages) == (1 if scenario == "premature" else 3)
+    assert len(pages) == ((2 if even_terminal_only else 1) if scenario == "premature" else total)
     assert not any(urlsplit(url).path == "/viewer/rental" for url in requested)
     assert not any(NEXT_EPISODE_ID in urlsplit(url).path for url in requested)
 
