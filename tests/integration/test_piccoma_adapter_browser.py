@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from zipfile import ZipFile
 
 import pytest
@@ -16,6 +17,7 @@ from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.piccoma.adapter as piccoma_adapter_module
 import screenshot_crawler.site_adapters.piccoma.native_capture as piccoma_native_capture_module
+from screenshot_crawler import cli
 from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
@@ -38,10 +40,15 @@ from screenshot_crawler.core.errors import (
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentIdentity
-from screenshot_crawler.core.packaging import package_crawl_output
+from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
+from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings
-from screenshot_crawler.site_adapters.piccoma.adapter import PiccomaAdapter
+from screenshot_crawler.site_adapters.piccoma.adapter import (
+    PiccomaAdapter,
+    _PiccomaTicketNavigationGuard,
+)
+from screenshot_crawler.site_adapters.piccoma.discovery import PiccomaEpisodeIdentity
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     TRACE_INIT_SCRIPT,
     composite_replay_png_on_white,
@@ -1831,6 +1838,1543 @@ async def test_piccoma_stale_nonfree_listing_never_enters_viewer(
     assert browser_page.url == listing_url
 
 
+def _ticket_listing_html(
+    kind: str,
+    *,
+    granted: bool = False,
+    product_id: str = PRODUCT_ID,
+    episode_id: str = EPISODE_ID,
+) -> str:
+    if granted:
+        status_classes = "PCM-epList_status_waitfreeRead"
+        status_label = "\u95b2\u89a7\u671f\u9650 \u6b8b\u308a71\u6642\u9593"
+        user_access = "require"
+    else:
+        marker = {
+            "waitfree": "PCM-epList_status_waitfree",
+            "zero_plus": "PCM-epList_status_waitfree PCM-epList_status_zeroPlus",
+            "binge_free": "PCM-epList_status_waitfree PCM-epList_status_bingefree",
+        }[kind]
+        status_classes = marker
+        status_label = "\u00a50"
+        user_access = "require"
+    return f"""<!doctype html><html><body>
+      <main id="js_contentBody"><h1 class="PCM-headTitle_name">Fixture Work</h1>
+      <div id="js_episodeList" class="PCM-list_asc">
+        <a href="#" data-product_id="{product_id}" data-episode_id="{episode_id}"
+           data-user_access="{user_access}">
+          <span class="PCM-epList_status {status_classes}">{status_label}</span>
+        </a>
+      </div></main>
+      <script>
+        window._init_ = {{login: true}};
+        document.querySelector('#js_episodeList a').addEventListener('click', async event => {{
+          event.preventDefault();
+          if (window.ticketExternalPostBeforeAccess) {{
+            try {{
+              await fetch('https://analytics.tiktok.com/api/v2/pixel/act', {{
+                method:'POST', mode:'no-cors', body:'fixture-event'
+              }});
+            }} catch (_) {{}}
+          }}
+          if (window.ticketExternalIframePostBeforeAccess) {{
+            const tracker = document.createElement('iframe');
+            tracker.name = 'piccoma-external-tracker';
+            document.body.appendChild(tracker);
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'https://p.clarity.ms/collect';
+            form.target = tracker.name;
+            const field = document.createElement('input');
+            field.name = 'event'; field.value = 'fixture';
+            form.appendChild(field); document.body.appendChild(form); form.submit();
+            await new Promise(resolve => setTimeout(resolve, 30));
+          }}
+          const fields = new URLSearchParams({{
+            current_episode_id: window.ticketCurrentEpisodeContext, episode_id: '{episode_id}',
+            product_id: (window.ticketRequestProductId || '{product_id}'),
+            referrer_type: 'episode'
+          }});
+          const response = await fetch('/web/user/access', {{method:'POST', body:fields}});
+          const payload = await response.json();
+          if (window.ticketDuplicateAccessRequest) {{
+            void fetch('/web/user/access', {{method:'POST', body:fields}}).catch(() => {{}});
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }}
+          if (window.ticketIframeNavigationAttempt) {{
+            const frame = document.createElement('iframe');
+            frame.src = '/web/product/{product_id}/point/{episode_id}';
+            document.body.appendChild(frame);
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }}
+          if (window.ticketPopupAttempt) window.open('/web/product/{product_id}/point/{episode_id}');
+          if (window.ticketRedirectOnStatus && payload.status === 21300) {{
+            location.href = '/web/product/{product_id}/point/{episode_id}'; return;
+          }}
+          const modal = document.createElement('div');
+          modal.className = 'jconfirm-open PCM-pcmConfirm';
+          modal.innerHTML = window.ticketModalMarkup;
+          document.body.appendChild(modal);
+        }});
+      </script>
+    </body></html>"""
+
+
+def _ticket_home_html(
+    kind: str,
+    *,
+    activated: bool,
+    daily_ready: bool,
+    zero_plus_count: int = 6,
+    binge_count: int = 30,
+    post_zero_plus_delta: int = 0,
+    post_binge_delta: int = 0,
+) -> str:
+    server = "2026-11-18 06:00:00"
+    charge = "2026-11-17 06:00:00" if daily_ready else "2026-11-18 20:00:00"
+    if activated and kind == "waitfree":
+        charge = "2026-11-19 06:00:00"
+    if activated:
+        zero_plus_count -= post_zero_plus_delta
+        binge_count -= post_binge_delta
+    zero_plus_text = (
+        f"{zero_plus_count}/6\u679a\uff082\u6642\u9593\u6bce\u306b\u56de\u5fa9\uff09 "
+        "0\u679a\uff08\u30d7\u30ec\u30bc\u30f3\u30c8\uff09"
+    )
+    binge_text = (
+        f"{binge_count}/30\u679a\uff081\u4f5c\u54c1\u3067\u4f7f\u7528\u53ef\u80fd\uff09"
+    )
+    return f"""<!doctype html><html><body>
+      <main id="js_contentBody"><h1 class="PCM-headTitle_name">Fixture Work</h1>
+      <div id="js_freeChargeBar" class="PCM-chargeBar_waitfree"
+        data-server_time="{server}" data-charge_time="{charge}"
+        data-charge_duration="82800"></div>
+      <div class="PCM-freeplusStatusBar">{zero_plus_text}</div>
+      <div class="PCM-bingefreeStatusBar">{binge_text}</div>
+      </main></body></html>"""
+
+
+async def _route_ticket_batch_fixture(page: Page) -> dict[str, int]:
+    counts = {"access_posts": 0, "body_match": 0, "viewer_gets": 0, "jpeg": 0}
+    activated = False
+    image_fallback = _synthetic_png()
+    action_handler = (
+        "window.confirmationClicks++; "
+        "sessionStorage.setItem('ticketClicks', window.confirmationClicks); "
+        f"location.href='/web/viewer/{PRODUCT_ID}/{EPISODE_ID}'"
+    )
+    confirmation = (
+        '<p class="ticket-confirmation">「待てば¥0」チャージ中です。 '
+        '¥0+券で読みますか︖ 保有¥０+券： 6枚</p>'
+        '<button class="btn-free-plus-ticket" onclick="'
+        f'{action_handler}">¥0+券で読む</button>'
+        '<button class="ticket-cancel">キャンセル</button>'
+    )
+    await page.add_init_script(
+        "window.ticketModalMarkup = " + json.dumps(confirmation, ensure_ascii=False) + ";"
+        + "window.ticketExternalPostBeforeAccess = true;"
+        + "window.ticketExternalIframePostBeforeAccess = true;"
+        + "window.ticketCurrentEpisodeContext = '12345';"
+        + "window.confirmationClicks = Number(sessionStorage.getItem('ticketClicks') || 0);"
+    )
+
+    async def route_handler(route: object) -> None:
+        nonlocal activated
+        request = route.request  # type: ignore[attr-defined]
+        parsed = urlsplit(request.url)
+        method = request.method.upper()
+        if parsed.hostname == "pcm.kakaocdn.net":
+            if parsed.path.endswith(".jpg"):
+                page_number = int(parsed.path.rsplit("/", 1)[-1][1:-4])
+                counts["jpeg"] += 1
+                await route.fulfill(  # type: ignore[attr-defined]
+                    status=200,
+                    body=_synthetic_tile_jpeg(page_salt=page_number),
+                    content_type="image/jpeg",
+                )
+            else:
+                await route.fulfill(  # type: ignore[attr-defined]
+                    status=200, body=image_fallback, content_type="image/png"
+                )
+            return
+        if parsed.hostname not in {"piccoma.com", "www.piccoma.com"}:
+            if method not in {"GET", "HEAD", "OPTIONS"}:
+                counts["external_mutations_reached"] = (
+                    counts.get("external_mutations_reached", 0) + 1
+                )
+            await route.abort()  # type: ignore[attr-defined]
+            return
+        if parsed.path == "/web/user/access" and method == "POST":
+            counts["access_posts"] += 1
+            fields = parse_qs(request.post_data or "", keep_blank_values=True)
+            if (
+                set(fields)
+                == {"current_episode_id", "episode_id", "product_id", "referrer_type"}
+                and fields.get("product_id") == [PRODUCT_ID]
+                and fields.get("episode_id") == [EPISODE_ID]
+                and len(fields.get("current_episode_id", ())) == 1
+                and fields.get("current_episode_id") != [EPISODE_ID]
+                and len(fields.get("referrer_type", ())) == 1
+            ):
+                counts["body_match"] += 1
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200, body=json.dumps({"status": 24000}), content_type="application/json"
+            )
+        elif parsed.path == f"/web/product/{PRODUCT_ID}/episodes":
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_listing_html("zero_plus", granted=activated),
+                content_type="text/html; charset=utf-8",
+            )
+        elif parsed.path == f"/web/product/{PRODUCT_ID}":
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_home_html(
+                    "zero_plus",
+                    activated=activated,
+                    daily_ready=False,
+                    zero_plus_count=6,
+                    post_zero_plus_delta=1,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+        elif parsed.path == f"/web/viewer/{PRODUCT_ID}/{EPISODE_ID}":
+            counts["viewer_gets"] += 1
+            activated = True
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_native_batch_viewer_html(),
+                content_type="text/html; charset=utf-8",
+            )
+        else:
+            await route.fulfill(status=404, body="missing")  # type: ignore[attr-defined]
+
+    await page.route("**/*", route_handler)
+    return counts
+
+
+async def _prepare_ticket_fixture(
+    page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    kind: str,
+    status_code: int,
+    daily_ready: bool,
+    zero_plus_count: int = 6,
+    binge_count: int = 30,
+    modal_extra: str = "",
+    modal_zero_plus_count: int = 6,
+    modal_binge_work_count: int = 30,
+    action_navigates: bool = True,
+    redirect_on_status: bool = False,
+    request_product_id: str = PRODUCT_ID,
+    current_episode_context: str = EPISODE_ID,
+    external_post_before_access: bool = False,
+    external_iframe_post_before_access: bool = False,
+    login: bool = True,
+    duplicate_access_request: bool = False,
+    iframe_navigation_attempt: bool = False,
+    popup_attempt: bool = False,
+    purchase_post_on_affirmative: bool = False,
+    post_zero_plus_delta: int | None = None,
+    post_binge_delta: int | None = None,
+    quota_resource: str = "piccoma_ticket_auto",
+) -> tuple[PiccomaAdapter, dict[str, int], list[object], list[object], str]:
+    if post_zero_plus_delta is None:
+        post_zero_plus_delta = int(kind == "zero_plus")
+    if post_binge_delta is None:
+        post_binge_delta = int(kind == "binge_free")
+    button_class = {
+        "waitfree": "btn-waitfree",
+        "zero_plus": "btn-free-plus-ticket",
+        "binge_free": "btn-bingefree-ticket",
+    }[kind]
+    button_label = {
+        "waitfree": "\uff62\u5f85\u3066\u3070\u00a50\uff63\u3067\u8aad\u3080",
+        "zero_plus": "\u00a50+\u5238\u3067\u8aad\u3080",
+        "binge_free": "\u7206\u8aad\u307f\u00a50\u5238\u3067\u8aad\u3080",
+    }[kind]
+    modal_text = {
+        "waitfree": "\u300c\u5f85\u3066\u3070\u00a50\u300d\u3067\u8aad\u307f\u307e\u3059\u304b\uff1f",
+        "zero_plus": (
+            "\u300c\u5f85\u3066\u3070\u00a50\u300d\u30c1\u30e3\u30fc\u30b8\u4e2d\u3067\u3059\u3002 "
+            "\u00a50+\u5238\u3067\u8aad\u307f\u307e\u3059\u304b\ufe16 "
+            f"\u4fdd\u6709\u00a5\uff10+\u5238\uff1a {modal_zero_plus_count}\u679a"
+        ),
+        "binge_free": (
+            "\u300c\u5f85\u3066\u3070\u00a50\u300d\u30c1\u30e3\u30fc\u30b8\u4e2d\u3067\u3059\u3002 "
+            "\u7206\u8aad\u307f\u00a50\u5238\u3067\u8aad\u307f\u307e\u3059\u304b\uff1f "
+            "\u4fdd\u6709\u7206\u8aad\u307f\u00a50\u5238\uff1a100\u679a "
+            f"\u3053\u306e\u4f5c\u54c1\u3067\u3042\u3068{modal_binge_work_count}\u679a\u4f7f\u3048\u307e\u3059"
+        ),
+    }[kind]
+    action_handler = (
+        "event.preventDefault(); "
+        f"fetch('/web/product/{PRODUCT_ID}/point/{EPISODE_ID}', {{method:'POST'}})"
+        f".then(() => {{ if(window.ticketActionNavigates) location.href='/web/viewer/{PRODUCT_ID}/{EPISODE_ID}'; }})"
+        ".catch(() => {});"
+        if purchase_post_on_affirmative
+        else f"if(window.ticketActionNavigates) location.href='/web/viewer/{PRODUCT_ID}/{EPISODE_ID}';"
+    )
+    modal_markup = (
+        f'<p class="ticket-confirmation">{modal_text}{modal_extra}</p>'
+        f'<button class="{button_class}" onclick="window.confirmationClicks++; '
+        "sessionStorage.setItem('ticketClicks', window.confirmationClicks); "
+        f'{action_handler}">'
+        f'{button_label}</button>'
+        '<button class="ticket-cancel">\u30ad\u30e3\u30f3\u30bb\u30eb</button>'
+    )
+    counts = {"access_posts": 0, "body_match": 0, "viewer_gets": 0}
+    activated = False
+    attempts: list[object] = []
+    grants: list[object] = []
+    adapter = PiccomaAdapter()
+    await adapter.prepare_page(page)
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, quota_resource)
+    await adapter.configure_target_identity(f"{PRODUCT_ID}:{EPISODE_ID}", WORK_KEY)
+    adapter.resolve_initial_navigation_url(SOURCE_URL)
+    adapter.set_access_attempt_observer(attempts.append)
+    adapter.set_confirmed_access_grant_observer(grants.append)
+
+    async def skip_reader(_page, _identity, *, active_grant, response):
+        assert active_grant is True
+        assert response is not None and response.status == 200
+
+    monkeypatch.setattr(adapter, "_prepare_reader_after_entry", skip_reader)
+
+    await page.add_init_script(
+        "window.ticketModalMarkup = " + json.dumps(modal_markup) + ";"
+        + "window.ticketActionNavigates = " + json.dumps(action_navigates) + ";"
+        + "window.ticketRedirectOnStatus = " + json.dumps(redirect_on_status) + ";"
+        + "window.ticketRequestProductId = " + json.dumps(request_product_id) + ";"
+        + "window.ticketCurrentEpisodeContext = " + json.dumps(current_episode_context) + ";"
+        + "window.ticketExternalPostBeforeAccess = " + json.dumps(external_post_before_access) + ";"
+        + "window.ticketExternalIframePostBeforeAccess = " + json.dumps(external_iframe_post_before_access) + ";"
+        + "window.ticketDuplicateAccessRequest = " + json.dumps(duplicate_access_request) + ";"
+        + "window.ticketIframeNavigationAttempt = " + json.dumps(iframe_navigation_attempt) + ";"
+        + "window.ticketPopupAttempt = " + json.dumps(popup_attempt) + ";"
+        + "window.confirmationClicks = Number(sessionStorage.getItem('ticketClicks') || 0);"
+        + "window._init_ = {login: " + json.dumps(login) + "};"
+    )
+
+    async def route_handler(route: object) -> None:
+        nonlocal activated
+        request = route.request  # type: ignore[attr-defined]
+        parsed = urlsplit(request.url)
+        if parsed.hostname != "piccoma.com":
+            if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+                counts["external_mutations_reached"] = (
+                    counts.get("external_mutations_reached", 0) + 1
+                )
+            await route.abort()  # type: ignore[attr-defined]
+            return
+        if parsed.path == "/web/user/access" and request.method == "POST":
+            counts["access_posts"] += 1
+            body = parse_qs(request.post_data or "")
+            if (
+                body.get("product_id") == [PRODUCT_ID]
+                and body.get("episode_id") == [EPISODE_ID]
+                and len(body.get("current_episode_id", ())) == 1
+                and set(body) == {"product_id", "episode_id", "current_episode_id", "referrer_type"}
+            ):
+                counts["body_match"] += 1
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=json.dumps({"status": status_code}),
+                content_type="application/json",
+            )
+        elif parsed.path == f"/web/product/{PRODUCT_ID}/episodes":
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_listing_html(
+                    kind,
+                    granted=activated,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+        elif parsed.path == f"/web/product/{PRODUCT_ID}":
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_home_html(
+                    kind,
+                    activated=activated,
+                    daily_ready=daily_ready,
+                    zero_plus_count=zero_plus_count,
+                    binge_count=binge_count,
+                    post_zero_plus_delta=post_zero_plus_delta,
+                    post_binge_delta=post_binge_delta,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+        elif parsed.path == f"/web/viewer/{PRODUCT_ID}/{EPISODE_ID}":
+            counts["viewer_gets"] += 1
+            activated = True
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body="<!doctype html><html><body>viewer fixture</body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+        elif parsed.path == f"/web/product/{PRODUCT_ID}/point/{EPISODE_ID}":
+            if request.method == "POST":
+                counts["purchase_posts"] = counts.get("purchase_posts", 0) + 1
+                await route.fulfill(  # type: ignore[attr-defined]
+                    status=200,
+                    body="{}",
+                    content_type="application/json",
+                )
+                return
+            counts["purchase_gets"] = counts.get("purchase_gets", 0) + 1
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body="<!doctype html><html><body>purchase fixture</body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+        else:
+            await route.abort()  # type: ignore[attr-defined]
+
+    await page.route("**/*", route_handler)
+    listing_url = f"https://piccoma.com/web/product/{PRODUCT_ID}/episodes"
+    await page.goto(listing_url, wait_until="domcontentloaded")
+    return adapter, counts, attempts, grants, listing_url
+
+
+@pytest.mark.parametrize(
+    ("kind", "status_code", "daily_ready", "resource"),
+    [
+        ("waitfree", 21000, True, "piccoma_ticket_auto"),
+        ("zero_plus", 24000, False, "piccoma_ticket_auto"),
+        ("binge_free", 25000, False, "piccoma_ticket_auto"),
+        ("waitfree", 21000, True, "work_ticket"),
+        ("zero_plus", 24000, False, "work_ticket"),
+        ("binge_free", 25000, False, "binge_ticket"),
+    ],
+)
+async def test_piccoma_ticket_entry_uses_one_confirmed_native_kind(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    status_code: int,
+    daily_ready: bool,
+    resource: str,
+) -> None:
+    adapter, counts, attempts, grants, _listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind=kind,
+        status_code=status_code,
+        daily_ready=daily_ready,
+        quota_resource=resource,
+    )
+    await adapter.initialize(browser_page)
+
+    assert counts == {"access_posts": 1, "body_match": 1, "viewer_gets": 1}
+    assert await browser_page.evaluate("window.confirmationClicks") == 1
+    assert [value.status for value in attempts] == ["attempting", "confirmed"]
+    assert [value.resource_kind for value in attempts] == [kind, kind]
+    assert len(grants) == 1 and grants[0].external_id == f"{PRODUCT_ID}:{EPISODE_ID}"
+    assert adapter.get_access_consumption().consumed is True
+    assert adapter.get_access_consumption().resource == resource
+
+
+async def test_piccoma_exhausted_secondary_tickets_skip_without_opening_modal(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=24000,
+        daily_ready=False,
+        zero_plus_count=0,
+    )
+    with pytest.raises(AccessResourceUnavailableError, match="before_click"):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+    assert [(value.resource_kind, value.status) for value in attempts] == [
+        ("zero_plus", "not_attempted")
+    ]
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "daily_ready", "status_code", "resource", "expected_error", "expected_posts"),
+    [
+        ("binge_free", False, 25000, "work_ticket", AccessResourceUnavailableError, 0),
+        ("zero_plus", False, 25000, "work_ticket", UnknownPageStateError, 1),
+        ("binge_free", True, 25000, "work_ticket", UnknownPageStateError, 1),
+        ("zero_plus", False, 24000, "binge_ticket", AccessResourceUnavailableError, 0),
+    ],
+    ids=[
+        "work-resource-binge-no-action",
+        "row-marker-mismatch",
+        "daily-status-mismatch",
+        "binge-resource-zero-plus-no-action",
+    ],
+)
+async def test_piccoma_grant_resource_rejects_unselected_kind_after_coherence_checks(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    daily_ready: bool,
+    status_code: int,
+    resource: str,
+    expected_error: type[Exception],
+    expected_posts: int,
+) -> None:
+    adapter, counts, attempts, grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind=kind,
+        status_code=status_code,
+        daily_ready=daily_ready,
+        quota_resource=resource,
+    )
+    with pytest.raises(expected_error):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == expected_posts
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+    assert grants == []
+    assert adapter.get_access_consumption().consumed is False
+    if not expected_posts:
+        assert [(value.resource_kind, value.status) for value in attempts] == [
+            (kind, "not_attempted")
+        ]
+    else:
+        assert attempts == []
+
+
+async def test_piccoma_ticket_modal_with_paid_copy_never_consumes(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=24000,
+        daily_ready=False,
+        modal_extra=" \u30b3\u30a4\u30f3\u3067\u8cfc\u5165\u3057\u307e\u3059\u304b\uff1f",
+    )
+    with pytest.raises(UnknownPageStateError, match="modal balance"):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == 1
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+@pytest.mark.parametrize("status_code", [29999, 21260, 21270])
+async def test_piccoma_unknown_ticket_status_never_consumes(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=status_code,
+        daily_ready=False,
+    )
+    with pytest.raises(UnknownPageStateError, match="unknown status"):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == 1
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_known_unapproved_offer_status_skips_without_consumption(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=21220,
+        daily_ready=False,
+    )
+    with pytest.raises(AccessResourceUnavailableError, match="before_click"):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == 1
+    assert counts["body_match"] == 1
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert {value.status for value in attempts} == {"not_attempted"}
+    assert {value.resource_kind for value in attempts} == {"waitfree", "zero_plus"}
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_direct_purchase_redirect_is_blocked_before_document_request(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, attempts, _grants, _listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=21300,
+        daily_ready=False,
+        redirect_on_status=True,
+    )
+    with pytest.raises(UnknownPageStateError, match="JSON is malformed"):
+        await adapter.initialize(browser_page)
+
+    guard = adapter._ticket_navigation_guard
+    assert guard is not None and guard.blocked_navigation_count == 1
+    assert counts.get("purchase_gets", 0) == 0
+    assert counts["viewer_gets"] == 0
+    assert browser_page.url != f"https://piccoma.com/web/product/{PRODUCT_ID}/point/{EPISODE_ID}"
+    assert attempts and {value.status for value in attempts} == {"not_attempted"}
+    assert {value.reason for value in attempts} == {
+        "eligibility_navigation_blocked_before_affirmative"
+    }
+
+
+async def test_piccoma_unbound_access_request_never_reaches_ticket_modal(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(piccoma_adapter_module, "TICKET_ELIGIBILITY_TIMEOUT_MS", 100)
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        request_product_id="901",
+    )
+    with pytest.raises(UnknownPageStateError, match="eligibility exchange"):
+        await adapter.initialize(browser_page)
+
+    guard = adapter._ticket_navigation_guard
+    assert counts["access_posts"] == 0
+    assert counts["body_match"] == 0
+    assert counts["viewer_gets"] == 0
+    assert guard is not None and guard.blocked_access_request_count == 1
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_unrelated_binary_post_is_blocked_without_body_decoding(
+    browser_page: Page,
+) -> None:
+    fixture_mutations = 0
+
+    async def local_fixture(route: object) -> None:
+        nonlocal fixture_mutations
+        request = route.request  # type: ignore[attr-defined]
+        parsed = urlsplit(request.url)
+        if request.method.upper() == "POST":
+            fixture_mutations += 1
+            await route.fulfill(status=200, body="{}")  # type: ignore[attr-defined]
+        elif parsed.path == f"/web/product/{PRODUCT_ID}/episodes":
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body="<!doctype html><html><body>local listing fixture</body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+        else:
+            await route.abort()  # type: ignore[attr-defined]
+
+    await browser_page.route("**/*", local_fixture)
+    await browser_page.goto(
+        f"https://piccoma.com/web/product/{PRODUCT_ID}/episodes",
+        wait_until="domcontentloaded",
+    )
+    guard = _PiccomaTicketNavigationGuard(
+        browser_page,
+        PiccomaEpisodeIdentity(product_id=PRODUCT_ID, episode_id=EPISODE_ID),
+    )
+    await guard.install()
+    guard.begin_eligibility()
+    try:
+        fetch_result = await browser_page.evaluate(
+            """async () => {
+              const body = new Blob([
+                new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00])
+              ], {type: 'application/octet-stream'});
+              try {
+                await fetch('/web/product/900/point/101', {method: 'POST', body});
+                return 'unexpected-response';
+              } catch (_) {
+                return 'blocked';
+              }
+            }"""
+        )
+        assert fetch_result == "blocked"
+        assert fixture_mutations == 0
+        assert guard.blocked_mutating_request_count == 1
+        assert guard.eligibility_invalid is True
+
+        class BinaryRequest:
+            method = "POST"
+            url = f"https://piccoma.com/web/product/{PRODUCT_ID}/point/{EPISODE_ID}"
+
+            @property
+            def post_data(self) -> str:
+                raise UnicodeDecodeError(
+                    "utf-8", b"\x1f\x8b", 1, 2, "invalid continuation byte"
+                )
+
+        class BinaryResponse:
+            request = BinaryRequest()
+
+        assert not PiccomaAdapter._is_target_access_response(
+            BinaryResponse(),
+            PiccomaEpisodeIdentity(product_id=PRODUCT_ID, episode_id=EPISODE_ID),
+        )
+    finally:
+        await guard.remove_after_verified_entry()
+
+
+async def test_piccoma_duplicate_eligibility_post_is_blocked_before_second_request(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        duplicate_access_request=True,
+    )
+    with pytest.raises(UnknownPageStateError, match="unexpected request or navigation"):
+        await adapter.initialize(browser_page)
+
+    guard = adapter._ticket_navigation_guard
+    assert counts["access_posts"] == 1
+    assert guard is not None and guard.blocked_access_request_count == 1
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+@pytest.mark.parametrize("attempt", ["iframe", "popup"])
+async def test_piccoma_rejects_unapproved_frame_or_popup_before_ticket_click(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    attempt: str,
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        iframe_navigation_attempt=attempt == "iframe",
+        popup_attempt=attempt == "popup",
+    )
+    with pytest.raises(UnknownPageStateError):
+        await adapter.initialize(browser_page)
+
+    guard = adapter._ticket_navigation_guard
+    assert guard is not None
+    if attempt == "iframe":
+        assert guard.blocked_subframe_count == 1
+    else:
+        assert await guard.popup_was_attempted() is True
+    assert counts.get("purchase_gets", 0) == 0
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_zero_plus_requires_exactly_one_ticket_debit(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, attempts, grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=24000,
+        daily_ready=False,
+        post_zero_plus_delta=2,
+    )
+    with pytest.raises(UnknownPageStateError, match="balance change"):
+        await adapter.initialize(browser_page)
+
+    assert counts["viewer_gets"] == 1
+    assert len(grants) == 1
+    assert [value.status for value in attempts] == ["attempting", "unknown"]
+    assert adapter.get_access_consumption().consumed is False
+    assert browser_page.url == f"https://piccoma.com/web/viewer/{PRODUCT_ID}/{EPISODE_ID}"
+    assert listing_url.endswith("/episodes")
+
+
+async def test_piccoma_daily_ticket_rejects_a_concurrent_zero_plus_debit(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, grants, _listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        post_zero_plus_delta=1,
+    )
+    with pytest.raises(UnknownPageStateError, match="balance change"):
+        await adapter.initialize(browser_page)
+
+    assert counts["viewer_gets"] == 1
+    assert len(grants) == 1
+    assert adapter.get_access_consumption().consumed is False
+
+
+async def test_piccoma_modal_ticket_balance_must_match_fresh_product_state(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="zero_plus",
+        status_code=24000,
+        daily_ready=False,
+        modal_zero_plus_count=5,
+    )
+    with pytest.raises(UnknownPageStateError, match="modal balance"):
+        await adapter.initialize(browser_page)
+
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_ticket_kind_is_rechecked_before_click_after_dom_replacement(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+    )
+    original = adapter._click_verified_ticket_button
+
+    async def replace_button_before_click(page, modal, kind, evidence, guard, *, record_attempt):
+        await modal.locator("button.btn-waitfree").evaluate(
+            "button => { button.className = 'btn-gift-ticket'; button.textContent = 'ギフト券で読む'; }"
+        )
+        await original(
+            page, modal, kind, evidence, guard, record_attempt=record_attempt
+        )
+
+    monkeypatch.setattr(adapter, "_click_verified_ticket_button", replace_button_before_click)
+    with pytest.raises(UnknownPageStateError, match="confirmation changed"):
+        await adapter.initialize(browser_page)
+
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_uncertain_viewer_navigation_is_recorded_once_and_not_retried(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(piccoma_adapter_module, "TICKET_ACTION_TIMEOUT_MS", 100)
+    adapter, counts, attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        action_navigates=False,
+    )
+    with pytest.raises(UnknownPageStateError, match="outcome is unknown|viewer navigation is unknown"):
+        await adapter.initialize(browser_page)
+
+    assert counts["access_posts"] == 1
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 1
+    assert [value.status for value in attempts] == ["attempting", "unknown"]
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_attempt_sink_failure_prevents_affirmative_click(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, counts, _attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+    )
+    def fail_before_action(_observation):
+        raise RuntimeError("durable sink unavailable")
+    adapter.set_access_attempt_observer(fail_before_action)
+    with pytest.raises(RuntimeError, match="durable sink unavailable"):
+        await adapter.initialize(browser_page)
+
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 0
+    assert browser_page.url == listing_url
+
+
+@pytest.mark.parametrize(
+    ("family", "grant_only"),
+    [
+        ("daily_per_work", True),
+        ("shared_zero_plus_refill", True),
+        ("grant_all_work_then_binge", True),
+        ("binge_reset_and_account_empty", False),
+    ],
+)
+async def test_piccoma_batch_rechecks_ticket_state_for_sequential_candidates(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    family: str,
+    grant_only: bool,
+) -> None:
+    """Exercise normal/grant-only stock through Planner, CLI loop and native entry."""
+    monkeypatch.setattr(piccoma_adapter_module, "TICKET_ACTION_TIMEOUT_MS", 1_500)
+
+    def target(
+        product: str,
+        episode: str,
+        work: str,
+        position: int,
+        kind: str,
+        status: int,
+        *,
+        daily_ready: bool,
+        binge_work: int = 30,
+        binge_account_before: int | None = None,
+    ) -> dict[str, object]:
+        return {
+            "product": product,
+            "episode": episode,
+            "work": work,
+            "position": position,
+            "kind": kind,
+            "status": status,
+            "daily_ready": daily_ready,
+            "binge_work": binge_work,
+            "binge_account_before": binge_account_before,
+        }
+
+    if family == "daily_per_work":
+        steps = [
+            target("910", "101", "work-a", 1, "waitfree", 21000, daily_ready=True),
+            target("910", "102", "work-a", 2, "zero_plus", 24000, daily_ready=True),
+            target("911", "201", "work-b", 1, "waitfree", 21000, daily_ready=True),
+        ]
+        initial_zero_plus = 1
+        initial_binge_account = 100
+        replay: list[dict[str, object]] = []
+        expected_clicks = [1, 1, 1]
+    elif family == "shared_zero_plus_refill":
+        steps = [
+            target("920", "301", "work-a", 1, "zero_plus", 24000, daily_ready=False),
+            target("921", "401", "work-b", 1, "zero_plus", 24000, daily_ready=False),
+        ]
+        initial_zero_plus = 1
+        initial_binge_account = 100
+        replay = [dict(steps[1])]
+        expected_clicks = [1, 0, 1]
+    elif family == "grant_all_work_then_binge":
+        steps = [
+            target("940", "301", "work-a", 1, "waitfree", 21000, daily_ready=True),
+            target("940", "302", "work-a", 2, "zero_plus", 24000, daily_ready=False),
+            target("940", "303", "work-a", 3, "binge_free", 25000,
+                   daily_ready=False, binge_work=30),
+        ]
+        initial_zero_plus = 1
+        initial_binge_account = 100
+        replay = [dict(steps[2])]
+        expected_clicks = [1, 1, 0, 1]
+    else:
+        steps = [
+            target("930", "501", "work-a", 1, "binge_free", 25000,
+                   daily_ready=False, binge_work=1),
+            target("930", "502", "work-a", 2, "binge_free", 25000,
+                   daily_ready=False, binge_work=1),
+            target("931", "601", "work-b", 1, "binge_free", 25000,
+                   daily_ready=False, binge_work=30, binge_account_before=0),
+        ]
+        initial_zero_plus = 6
+        initial_binge_account = 100
+        replay = [dict(steps[1])]
+        expected_clicks = [1, 0, 0, 1]
+
+    all_calls = [*steps, *replay]
+    products = tuple(dict.fromkeys(str(value["product"]) for value in steps))
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    works: dict[str, object] = {}
+    sources: dict[str, object] = {}
+    for spec in steps:
+        product = str(spec["product"])
+        work_key = str(spec["work"])
+        if work_key not in works:
+            work = catalog.create_work(
+                WorkInput(work_key=f"sequence-{family}-{work_key}", title=f"Fixture {work_key}")
+            )
+            works[work_key] = work
+            watchlist.add(
+                key=product,
+                work_key=work.work_key,
+                site="piccoma",
+                url=f"https://piccoma.com/web/product/{product}",
+                label=f"Fixture {work_key}",
+            )
+        work = works[work_key]
+        product_id = str(spec["product"])
+        episode_id = str(spec["episode"])
+        item = catalog.create_item(
+            ItemInput(
+                item_title=f"Episode {episode_id}",
+                order_key=f"{int(spec['position']):02d}",
+                order_label=f"Episode {episode_id}",
+            ),
+            work_id=work.id,
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="piccoma",
+                external_id=f"{product_id}:{episode_id}",
+                discovery_key=product_id,
+                access_mode="quota",
+                available=True,
+                display_position=int(spec["position"]),
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web",
+                locator=f"https://piccoma.com/web/viewer/{product_id}/{episode_id}",
+            ),
+            source_id=source.id,
+        )
+        sources[f"{product_id}:{episode_id}"] = source
+    for work in works.values():
+        preview = ScopeReconciler(watchlist, catalog).preview(work.work_key)
+        assert preview.ready, preview.blockers
+        ScopeReconciler(watchlist, catalog).apply(preview)
+
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("piccoma", PiccomaAdapter)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    selected_plan = planner.plan(
+        site="piccoma",
+        selected_keys=products,
+        now=BATCH_NOW,
+        **(
+            {
+                "quota_resource": PiccomaSitePolicy.WORK_TICKET_RESOURCE,
+                "output_mode": "grant_only",
+            }
+            if grant_only else {}
+        ),
+    )
+    expected_ids = [f"{spec['product']}:{spec['episode']}" for spec in steps]
+    assert [candidate.external_id for candidate in selected_plan.candidates] == expected_ids
+    assert all(candidate.quota_limit is None for candidate in selected_plan.candidates)
+    expected_resource = (
+        PiccomaSitePolicy.WORK_TICKET_RESOURCE if grant_only
+        else PiccomaSitePolicy.TICKET_RESOURCE
+    )
+    assert {candidate.quota_resource for candidate in selected_plan.candidates} == {
+        expected_resource
+    }
+
+    state: dict[str, object] = {
+        "daily_ready": {},
+        "zero_plus": initial_zero_plus,
+        "binge_account": initial_binge_account,
+        "binge_work": {},
+        "grants": set(),
+        "pending_viewer": set(),
+    }
+    daily_by_product = state["daily_ready"]
+    binge_by_product = state["binge_work"]
+    assert isinstance(daily_by_product, dict) and isinstance(binge_by_product, dict)
+    for spec in steps:
+        daily_by_product.setdefault(str(spec["product"]), bool(spec["daily_ready"]))
+        binge_by_product.setdefault(str(spec["product"]), int(spec["binge_work"]))
+
+    modal_clicks: list[tuple[str, int]] = []
+    affirmative_gets: dict[int, int] = {}
+    button_clicks: dict[int, int] = {}
+    attempts_by_index: dict[int, list[object]] = {}
+    source_snapshots: dict[int, tuple[object, object]] = {}
+    listing_reads: dict[int, int] = {}
+    home_reads: dict[int, list[tuple[bool, int, int, int]]] = {}
+    access_requests: list[tuple[str, str, bool, int]] = []
+    viewer_ids: list[str] = []
+    page_step: dict[int, int] = {}
+    current_step = {"index": 0}
+
+    button_class = {
+        "waitfree": "btn-waitfree",
+        "zero_plus": "btn-free-plus-ticket",
+        "binge_free": "btn-bingefree-ticket",
+    }
+    button_label = {
+        "waitfree": "\uff62\u5f85\u3066\u3070\xa50\uff63\u3067\u8aad\u3080",
+        "zero_plus": "¥0+券で読む",
+        "binge_free": "爆読み¥0券で読む",
+    }
+
+    async def sequence_route(route: object) -> None:
+        request = route.request  # type: ignore[attr-defined]
+        parsed = urlsplit(request.url)
+        index = current_step["index"]
+        spec = all_calls[index]
+        product_id = str(spec["product"])
+        episode_id = str(spec["episode"])
+        identity = f"{product_id}:{episode_id}"
+        path_parts = parsed.path.strip("/").split("/")
+        method = request.method.upper()
+        if parsed.hostname not in {"piccoma.com", "www.piccoma.com"}:
+            await route.abort()  # type: ignore[attr-defined]
+        elif parsed.path == "/web/user/access" and method == "POST":
+            fields = parse_qs(request.post_data or "", keep_blank_values=True)
+            exact_target = (
+                set(fields)
+                == {"current_episode_id", "episode_id", "product_id", "referrer_type"}
+                and fields.get("product_id") == [product_id]
+                and fields.get("episode_id") == [episode_id]
+                and len(fields.get("current_episode_id", ())) == 1
+                and len(fields.get("referrer_type", ())) == 1
+            )
+            access_requests.append((identity, str(spec["kind"]), exact_target, index))
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=json.dumps({"status": int(spec["status"])}),
+                content_type="application/json",
+            )
+            if exact_target:
+                pending = state["pending_viewer"]
+                assert isinstance(pending, set)
+                pending.add((identity, index))
+        elif len(path_parts) == 4 and path_parts[:2] == ["web", "product"] and path_parts[3] == "episodes":
+            assert parsed.path == f"/web/product/{spec['product']}/episodes"
+            listing_reads[index] = listing_reads.get(index, 0) + 1
+            grants = state["grants"]
+            assert isinstance(grants, set)
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_listing_html(
+                    str(spec["kind"]),
+                    granted=identity in grants,
+                    product_id=product_id,
+                    episode_id=episode_id,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+        elif len(path_parts) == 3 and path_parts[:2] == ["web", "product"]:
+            assert parsed.path == f"/web/product/{spec['product']}"
+            daily = bool(daily_by_product[product_id])
+            zero_plus = int(state["zero_plus"])
+            binge_work = int(binge_by_product[product_id])
+            account = int(state["binge_account"])
+            home_reads.setdefault(index, []).append((daily, zero_plus, binge_work, account))
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200,
+                body=_ticket_home_html(
+                    str(spec["kind"]),
+                    activated=False,
+                    daily_ready=daily,
+                    zero_plus_count=zero_plus,
+                    binge_count=binge_work,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+        elif len(path_parts) == 4 and path_parts[:2] == ["web", "viewer"]:
+            viewer_identity = f"{path_parts[2]}:{path_parts[3]}"
+            assert viewer_identity == identity
+            pending = state["pending_viewer"]
+            assert isinstance(pending, set)
+            assert (viewer_identity, index) in pending
+            pending.remove((viewer_identity, index))
+            affirmative_gets[index] = affirmative_gets.get(index, 0) + 1
+            state_grants = state["grants"]
+            assert isinstance(state_grants, set)
+            state_grants.add(identity)
+            viewer_ids.append(identity)
+            kind = str(spec["kind"])
+            if kind == "waitfree":
+                daily_by_product[product_id] = False
+            elif kind == "zero_plus":
+                state["zero_plus"] = int(state["zero_plus"]) - 1
+            else:
+                binge_by_product[product_id] = int(binge_by_product[product_id]) - 1
+                state["binge_account"] = int(state["binge_account"]) - 1
+            await route.fulfill(  # type: ignore[attr-defined]
+                status=200, body="<!doctype html><html><body>fixture viewer</body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+        else:
+            await route.fulfill(status=404, body="missing")  # type: ignore[attr-defined]
+
+    class SequenceSession:
+        def __init__(self) -> None:
+            self.next_index = 0
+
+        async def new_page(self) -> Page:
+            index = self.next_index
+            self.next_index += 1
+            current_step["index"] = index
+            spec = all_calls[index]
+            if spec["binge_account_before"] is not None:
+                state["binge_account"] = int(spec["binge_account_before"])
+            page = await browser_page.context.new_page()
+            page_step[id(page)] = index
+            await page.route("**/*", sequence_route)
+            async def record_button_click(_source: object, attempt_index: int = index) -> None:
+                button_clicks[attempt_index] = button_clicks.get(attempt_index, 0) + 1
+
+            await page.expose_binding("record_ticket_button_click", record_button_click)
+            kind = str(spec["kind"])
+            if kind == "waitfree":
+                modal_text = "「待てば¥0」で読みますか？"
+            elif kind == "zero_plus":
+                modal_text = (
+                    "「待てば¥0」チャージ中です。 ¥0+券で読みますか︖ "
+                    f"保有¥０+券： {int(state['zero_plus'])}枚"
+                )
+            else:
+                modal_text = (
+                    "「待てば¥0」チャージ中です。 爆読み¥0券で読みますか？ "
+                    f"保有爆読み¥0券：{int(state['binge_account'])}枚 "
+                    f"この作品であと{int(binge_by_product[str(spec['product'])])}枚使えます"
+                )
+            product_id = str(spec["product"])
+            episode_id = str(spec["episode"])
+            markup = (
+                f'<p class="ticket-confirmation">{modal_text}</p>'
+                f'<button class="{button_class[kind]}">{button_label[kind]}</button>'
+                '<button class="ticket-cancel">\u30ad\u30e3\u30f3\u30bb\u30eb</button>'
+            )
+            await page.add_init_script(
+                "window.ticketModalMarkup = " + json.dumps(markup, ensure_ascii=False) + ";"
+                + "window.ticketCurrentEpisodeContext = " + json.dumps(episode_id) + ";"
+                + "window.ticketRequestProductId = " + json.dumps(product_id) + ";"
+                + "window.confirmationClicks = window.confirmationClicks || 0;"
+            )
+            await page.add_init_script(
+                "document.addEventListener('click', async event => {"
+                f"if (event.target instanceof Element && "
+                f"event.target.closest('button.{button_class[kind]}')) {{"
+                "window.confirmationClicks++; await window.record_ticket_button_click(); "
+                f"window.location.href = '/web/viewer/{product_id}/{episode_id}';"
+                "}});"
+            )
+            return page
+
+        async def close_page(self, page: Page) -> None:
+            index = page_step[id(page)]
+            click_count = button_clicks.get(index, 0)
+            identity = f"{all_calls[index]['product']}:{all_calls[index]['episode']}"
+            modal_clicks.append((identity, click_count))
+            persisted = catalog.get_source(sources[identity].id)
+            source_snapshots[index] = (
+                persisted.access_granted_until,
+                persisted.quota_started_at,
+            )
+            await page.close()
+
+    session = SequenceSession()
+    no_reader_capture: list[str] = []
+
+    async def skip_reader(
+        _adapter: PiccomaAdapter,
+        _page: Page,
+        identity: PiccomaEpisodeIdentity,
+        *,
+        active_grant: bool,
+        response: object,
+    ) -> None:
+        assert active_grant is True
+        assert response is not None
+        no_reader_capture.append(identity.external_id)
+
+    monkeypatch.setattr(PiccomaAdapter, "_prepare_reader_after_entry", skip_reader)
+
+    class SequenceRunner:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def run(self, _page: Page, _adapter: PiccomaAdapter) -> RunResult:
+            config = self.config
+            await _adapter.prepare_page(_page)
+            await _adapter.configure_run(_page, config.access_strategy)
+            await _adapter.configure_quota_resource(_page, config.quota_resource)
+            await _page.goto(
+                _adapter.resolve_initial_navigation_url(config.source_url),
+                wait_until="commit",
+            )
+            await _adapter.initialize(_page)
+            return RunResult(
+                pages=(),
+                stop_state=PageState.END,
+                stop_reason="entry_confirmed" if grant_only else "end",
+                entry_confirmed=grant_only,
+            )
+
+    package_count = 0
+
+    def package_stub(
+        output_dir: Path,
+        metadata: dict[str, str],
+        *,
+        library_dir: str | Path,
+        explicit_metadata: dict[str, str],
+        artifact_prefix: str | None = None,
+        artifact_disambiguator: str | None = None,
+    ) -> PackageResult:
+        nonlocal package_count
+        del artifact_prefix, artifact_disambiguator
+        package_count += 1
+        archive_path = Path(library_dir) / f"sequence-{package_count}.zip"
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(archive_path, "w") as archive:
+            archive.writestr("sequence.txt", "synthetic sequence boundary only")
+        return PackageResult(
+            archive_path=archive_path,
+            title=metadata.get("title") or "Fixture",
+            genre=metadata.get("genre") or "Fixture",
+            volume=explicit_metadata.get("order"),
+            author=metadata.get("author"),
+            status_path=output_dir / "status.json",
+        )
+
+    attempts: list[object] = []
+
+    def record_attempt(observation: object) -> None:
+        attempts.append(observation)
+        attempts_by_index.setdefault(current_step["index"], []).append(observation)
+
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "library",
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        runner_factory=SequenceRunner,  # type: ignore[arg-type]
+        package_function=package_stub,
+        access_attempt_sink=record_attempt,
+    )
+    args = cli._parser().parse_args(["batch", "run", "--site", "piccoma"])
+    args.output_root = tmp_path / "batch-output"
+    args.library_dir = tmp_path / "library"
+    args.max_pages = 1
+    args.max_same_content = 1
+    args.keep_open = False
+
+    attempted, should_continue = await cli._execute_batch_candidates(
+        args,
+        session,  # type: ignore[arg-type]
+        executor,
+        selected_plan.candidates,
+        phase="Piccoma sequence fixture",
+        inter_candidate_delay_ms=0,
+        grant_only=grant_only,
+    )
+    assert attempted == len(steps)
+    assert should_continue is True
+
+    if family == "shared_zero_plus_refill":
+        blocked_id = "921:401"
+        state["zero_plus"] = 1  # a fresh external refill before a later normal Batch
+        selected_key = ("921",)
+    elif family == "binge_reset_and_account_empty":
+        blocked_id = "930:502"
+        binge_by_product["930"] = 30  # the site UI now reports a fresh weekly reset
+        state["binge_account"] = 100
+        selected_key = ("930",)
+    elif family == "grant_all_work_then_binge":
+        blocked_id = "940:303"
+        selected_key = ("940",)
+    else:
+        blocked_id = ""
+        selected_key = ()
+
+    retry_candidates = []
+    if blocked_id:
+        blocked_source = sources[blocked_id]
+        prior_runs = catalog.list_crawl_runs(source_id=blocked_source.id)
+        assert len(prior_runs) == 1
+        no_action_run = prior_runs[0]
+        assert no_action_run.status == "failed", (home_reads, access_requests, attempts, modal_clicks)
+        assert no_action_run.error_type == "PiccomaTicketNoActionError"
+        assert no_action_run.error_message == "piccoma_ticket_unavailable_before_click"
+        assert no_action_run.stop_reason == "piccoma_ticket_unavailable_before_click"
+        assert no_action_run.finished_at is not None
+
+        retry_resource = (
+            PiccomaSitePolicy.BINGE_TICKET_RESOURCE
+            if family == "grant_all_work_then_binge"
+            else PiccomaSitePolicy.WORK_TICKET_RESOURCE
+        )
+        retry_plan = planner.plan(
+            site="piccoma",
+            selected_keys=selected_key,
+            now=BATCH_NOW,
+            **(
+                {
+                    "quota_resource": retry_resource,
+                    "output_mode": "grant_only",
+                }
+                if grant_only else {}
+            ),
+        )
+        retry_candidates = [
+            candidate for candidate in retry_plan.candidates
+            if candidate.external_id == blocked_id
+        ]
+        assert len(retry_candidates) == 1
+        assert retry_candidates[0].access_strategy == "quota"
+        assert retry_candidates[0].consumes_quota is True
+        retried, retry_continue = await cli._execute_batch_candidates(
+            args,
+            session,  # type: ignore[arg-type]
+            executor,
+            retry_candidates,
+            phase="Piccoma fresh-stock retry fixture",
+            inter_candidate_delay_ms=0,
+            grant_only=grant_only,
+        )
+        assert retried == 1 and retry_continue is True
+
+    assert modal_clicks == [
+        (f"{spec['product']}:{spec['episode']}", expected_clicks[index])
+        for index, spec in enumerate(all_calls)
+    ]
+    assert [affirmative_gets.get(index, 0) for index in range(len(all_calls))] == expected_clicks
+    assert no_reader_capture == [
+        identity for identity, clicks in modal_clicks if clicks == 1
+    ]
+    assert len(viewer_ids) == sum(expected_clicks)
+    if grant_only:
+        assert package_count == 0
+        assert not list((tmp_path / "library").glob("*.zip"))
+        assert all(catalog.get_item(source.item_id).status == "pending" for source in sources.values())
+    else:
+        assert package_count == sum(expected_clicks)
+        for identity, source in sources.items():
+            expected_status = "completed" if identity in state["grants"] else "pending"
+            assert catalog.get_item(source.item_id).status == expected_status
+
+    for index, spec in enumerate(all_calls):
+        identity = f"{spec['product']}:{spec['episode']}"
+        assert listing_reads.get(index, 0) >= 2
+        assert len(home_reads.get(index, ())) >= 1
+        events = attempts_by_index.get(index, [])
+        if modal_clicks[index][1] == 1:
+            assert [value.status for value in events] == ["attempting", "confirmed"]
+            assert {value.resource_kind for value in events} == {str(spec["kind"])}
+            source = sources[identity]
+            grant_until, quota_started_at = source_snapshots[index]
+            assert grant_until is not None
+            assert quota_started_at is not None
+        else:
+            assert [value.status for value in events] == ["not_attempted"]
+            source = sources[identity]
+            grant_until, quota_started_at = source_snapshots[index]
+            assert grant_until is None
+            assert quota_started_at is None
+
+    assert len(access_requests) == sum(
+        1 for _, clicks in modal_clicks if clicks == 1
+    ) + (1 if family == "binge_reset_and_account_empty" else 0)
+    assert all(exact_target for _identity, _kind, exact_target, _index in access_requests)
+    if family == "daily_per_work":
+        assert [identity for identity, _kind, _exact, _index in access_requests] == [
+            "910:101", "910:102", "911:201"
+        ]
+        assert home_reads[0][0][0] is True and home_reads[0][-1][0] is False
+        assert home_reads[1][0][0] is False
+        assert home_reads[2][0][0] is True and home_reads[2][-1][0] is False
+    elif family == "shared_zero_plus_refill":
+        assert [identity for identity, _kind, _exact, _index in access_requests] == [
+            "920:301", "921:401"
+        ]
+        assert home_reads[0][0][1] == 1 and home_reads[0][-1][1] == 0
+        assert home_reads[1][0][1] == 0
+        assert home_reads[2][0][1] == 1 and home_reads[2][-1][1] == 0
+    elif family == "grant_all_work_then_binge":
+        assert [identity for identity, _kind, _exact, _index in access_requests] == [
+            "940:301", "940:302", "940:303"
+        ]
+        assert [kind for _identity, kind, _exact, _index in access_requests] == [
+            "waitfree", "zero_plus", "binge_free"
+        ]
+        assert home_reads[0][0][0] is True and home_reads[0][-1][0] is False
+        assert home_reads[1][0][1] == 1 and home_reads[1][-1][1] == 0
+        assert home_reads[2][0][2] == 30
+        assert home_reads[3][0][2] == 30 and home_reads[3][-1][2] == 29
+    else:
+        assert [identity for identity, _kind, _exact, _index in access_requests] == [
+            "930:501", "931:601", "930:502"
+        ]
+        assert home_reads[0][0][2] == 1 and home_reads[0][-1][2] == 0
+        assert home_reads[1][0][2] == 0
+        assert home_reads[2][0][2] == 30 and home_reads[2][-1][2] == 30
+        assert home_reads[3][0][2] == 30 and home_reads[3][-1][2] == 29
+        assert home_reads[2][0][3] == 0
+
+
+async def test_piccoma_affirmative_purchase_post_is_blocked_before_network(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(piccoma_adapter_module, "TICKET_ACTION_TIMEOUT_MS", 100)
+    adapter, counts, attempts, _grants, listing_url = await _prepare_ticket_fixture(
+        browser_page,
+        monkeypatch,
+        kind="waitfree",
+        status_code=21000,
+        daily_ready=True,
+        purchase_post_on_affirmative=True,
+    )
+    with pytest.raises(UnknownPageStateError, match="may have been dispatched"):
+        await adapter.initialize(browser_page)
+
+    guard = adapter._ticket_navigation_guard
+    assert guard is not None and guard.blocked_mutating_request_count == 1
+    assert counts.get("purchase_posts", 0) == 0
+    assert counts["viewer_gets"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks") == 1
+    assert [value.status for value in attempts] == ["attempting", "unknown"]
+    assert browser_page.url == listing_url
+
+
+async def test_piccoma_closed_owner_cleanup_still_removes_context_route(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guard = _PiccomaTicketNavigationGuard(
+        browser_page,
+        PiccomaEpisodeIdentity(product_id=PRODUCT_ID, episode_id=EPISODE_ID),
+    )
+    await guard.install()
+    browser_page.remove_listener("close", guard._on_owner_close)
+    await browser_page.close()
+
+    async def closed_page_unroute_fails(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("closed page")
+
+    monkeypatch.setattr(browser_page, "unroute", closed_page_unroute_fails)
+    await guard._remove_routes()
+
+    assert guard._page_route_installed is False
+    assert guard._context_route_installed is False
+
+
 async def test_piccoma_malformed_grant_never_enters_viewer(browser_page: Page) -> None:
     adapter = PiccomaAdapter()
     counts = await _route_fixture(browser_page, status="malformed_grant")
@@ -2127,11 +3671,20 @@ async def test_piccoma_work_key_is_opaque_and_quota_strategy_is_rejected(
     adapter = PiccomaAdapter()
     await adapter.configure_target_identity("900:101", WORK_KEY)
     assert adapter._work_key == WORK_KEY
+    await adapter.configure_run(browser_page, "quota")
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(browser_page, "quota")
+        await adapter.configure_quota_resource(browser_page, "work_ticket")
+    await adapter.configure_quota_resource(browser_page, "piccoma_ticket_auto")
 
 
-def _piccoma_batch_setup(tmp_path: Path, *, manual_grant: bool = False):
+def _piccoma_batch_setup(
+    tmp_path: Path,
+    *,
+    manual_grant: bool = False,
+    quota_auto: bool = False,
+    quota_resource: str | None = None,
+    adapter: PiccomaAdapter | None = None,
+):
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
         WorkInput(
@@ -2150,7 +3703,11 @@ def _piccoma_batch_setup(tmp_path: Path, *, manual_grant: bool = False):
             site="piccoma",
             external_id=f"{PRODUCT_ID}:{EPISODE_ID}",
             discovery_key=PRODUCT_ID,
-            access_mode="quota" if manual_grant else "free",
+            access_mode=(
+                "quota"
+                if manual_grant or quota_auto or quota_resource is not None
+                else "free"
+            ),
             access_granted_until=(BATCH_NOW + timedelta(hours=70)) if manual_grant else None,
             available=True,
             display_position=3,
@@ -2176,9 +3733,16 @@ def _piccoma_batch_setup(tmp_path: Path, *, manual_grant: bool = False):
     policies = SitePolicyRegistry()
     policies.register("piccoma", PiccomaSitePolicy)
     adapters = AdapterRegistry()
-    adapters.register("piccoma", PiccomaAdapter)
-    candidate = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
-        site="piccoma", now=BATCH_NOW
+    adapters.register("piccoma", (lambda: adapter) if adapter is not None else PiccomaAdapter)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    candidate = planner.plan(
+        site="piccoma",
+        now=BATCH_NOW,
+        allow_quota_access=quota_auto,
+        **(
+            {"quota_resource": quota_resource, "output_mode": "grant_only"}
+            if quota_resource is not None else {}
+        ),
     ).candidates[0]
     return catalog, work, item, source, target, policies, adapters, candidate
 
@@ -2280,6 +3844,171 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     assert catalog.get_quota_resource_state(
         work.id, site="piccoma", resource="work_ticket"
     ) is None
+
+
+@pytest.mark.parametrize(
+    "grant_only", [False, True], ids=["normal-capture", "grant-only-entry"]
+)
+async def test_piccoma_quota_batch_blocks_external_tracking_then_captures_one_episode(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grant_only: bool,
+) -> None:
+    adapter = PiccomaAdapter()
+    catalog, _work, item, source, target, policies, adapters, candidate = (
+        _piccoma_batch_setup(
+            tmp_path,
+            quota_auto=not grant_only,
+            quota_resource=(
+                PiccomaSitePolicy.WORK_TICKET_RESOURCE if grant_only else None
+            ),
+            adapter=adapter,
+        )
+    )
+    counts = await _route_ticket_batch_fixture(browser_page)
+    guards: list[_PiccomaTicketNavigationGuard] = []
+    original_install = _PiccomaTicketNavigationGuard.install
+
+    async def capture_guard(guard: _PiccomaTicketNavigationGuard) -> None:
+        guards.append(guard)
+        await original_install(guard)
+
+    monkeypatch.setattr(_PiccomaTicketNavigationGuard, "install", capture_guard)
+    attempts: list[object] = []
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library",
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        access_attempt_sink=attempts.append,
+    )
+
+    if grant_only:
+        result = await executor.execute_grant_only_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            max_pages=3,
+            now=BATCH_NOW,
+        )
+    else:
+        result = await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=3,
+            now=BATCH_NOW,
+        )
+
+    assert len(guards) == 1
+    assert guards[0].blocked_external_mutating_request_count == 2
+    assert guards[0].eligibility_invalid is False
+    assert guards[0].access_request_count == 1
+    assert counts["access_posts"] == 1
+    assert counts["body_match"] == 1
+    assert counts.get("external_mutations_reached", 0) == 0
+    assert counts["viewer_gets"] == 1
+    assert await browser_page.evaluate("window.confirmationClicks") == 1
+    assert [(value.status, value.resource_kind) for value in attempts] == [
+        ("attempting", "zero_plus"),
+        ("confirmed", "zero_plus"),
+    ]
+    assert browser_page.url == SOURCE_URL
+    assert catalog.get_source(source.id).access_granted_until is not None
+    run = catalog.get_crawl_run(result.crawl_run_id)
+    assert run.status == "succeeded"
+    assert (run.source_id, run.target_id) == (source.id, target.id)
+    if grant_only:
+        assert result.resource == PiccomaSitePolicy.WORK_TICKET_RESOURCE
+        assert result.resource_consumed is True
+        assert result.stop_reason == "entry_confirmed"
+        assert run.stop_reason == "entry_confirmed" and run.page_count == 0
+        assert catalog.get_item(item.id).status == "pending"
+        assert catalog.list_artifacts(item_id=item.id) == []
+        assert list((tmp_path / "library").rglob("*.zip")) == []
+        files = [path for path in (tmp_path / "batch-output").rglob("*") if path.is_file()]
+        assert files and {path.name for path in files} == {"entry_trace.json"}
+    else:
+        assert counts["jpeg"] == 3
+        assert result.stop_reason == "end"
+        assert result.page_count == 3
+        assert result.archive_path.is_file()
+        with ZipFile(result.archive_path) as archive:
+            assert len(archive.namelist()) == 3
+            assert all(name.endswith(".webp") for name in archive.namelist())
+        assert catalog.get_item(item.id).status == "completed"
+
+
+@pytest.mark.parametrize("live_status", ["free", "granted"])
+@pytest.mark.parametrize("resource", ["work_ticket", "binge_ticket"])
+async def test_piccoma_grant_only_skips_if_target_became_free_or_granted(
+    browser_page: Page,
+    tmp_path: Path,
+    live_status: str,
+    resource: str,
+) -> None:
+    catalog, _work, item, source, _target, policies, adapters, candidate = (
+        _piccoma_batch_setup(
+            tmp_path,
+            quota_resource=resource,
+        )
+    )
+    route_counts = await _route_fixture(browser_page, status=live_status)
+    access_attempts: list[object] = []
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library",
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        access_attempt_sink=access_attempts.append,
+    )
+
+    class OnePageSession:
+        async def new_page(self) -> Page:
+            return browser_page
+
+        async def close_page(self, _page: Page) -> None:
+            return None
+
+    args = cli._parser().parse_args(["batch", "run", "--site", "piccoma"])
+    args.output_root = tmp_path / "batch-output"
+    args.library_dir = tmp_path / "library"
+    args.max_pages = 3
+    args.max_same_content = 1
+    args.keep_open = False
+    attempted, should_continue = await cli._execute_batch_candidates(
+        args,
+        OnePageSession(),  # type: ignore[arg-type]
+        executor,
+        [candidate],
+        phase="Piccoma fresh-access race fixture",
+        inter_candidate_delay_ms=0,
+        grant_only=True,
+    )
+
+    assert attempted == 1 and should_continue is True
+    assert route_counts["viewer"] == 0
+    assert await browser_page.evaluate("window.confirmationClicks || 0") == 0
+    assert browser_page.url.endswith(f"/web/product/{PRODUCT_ID}/episodes")
+    assert access_attempts == []
+    persisted = catalog.get_source(source.id)
+    assert persisted.quota_started_at is None
+    if live_status == "granted":
+        assert persisted.access_granted_until is not None
+    else:
+        assert persisted.access_granted_until is None
+    run = catalog.list_crawl_runs(source_id=source.id)[0]
+    assert run.status == "failed"
+    assert run.error_type == "PiccomaTicketNoActionError"
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    assert list((tmp_path / "library").rglob("*.zip")) == []
 
 
 @pytest.mark.parametrize("failure", ["stale_free", "stale_grant", "wrong_id", "redirect"])

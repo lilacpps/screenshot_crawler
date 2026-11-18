@@ -736,6 +736,7 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - Catalog metadataをoptional overrideとしてplan candidateへ入れる
 - quota仮予約はmemory内だけで行い、Catalogへ永続化しない
 - `quota_available` は計画前のlocal枠、`quota_remaining` は仮予約後の残枠を表す
+- Site Policyは必要な場合だけ、quota配分前に選定したcandidate sequenceを保持するopt-in hookを使える。既定の他サイト順序は変えない
 - Phase 5Bではcandidateを順番に実行し、quota candidateはCrawler開始直前にlocal stateを保存する
 - Schema v3では実行開始時にCrawlRun(running)を作り、成功/失敗を履歴として保持する
 - crawl + packaging + Artifact persistence成功後だけItemをcompletedにする
@@ -744,6 +745,7 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
 - 現行Web Executorは`backend=web` targetだけを実行し、`target_id / backend / target_key / locator`を保持する
 - `locator`を既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する
+- Adapterはbody/URLを含めないtyped access-attempt observationを、同期sinkへ消費可能操作前に報告できる。Executorは現在candidateのsite/source/resource identityを検証し、durable sinkが失敗したら操作前に停止する
 - 将来Android対応は上位dispatcherでbackend別Runnerへ振り分け、CrawlerRunner/Pageを無理に共通化しない
 
 ### Site Policy

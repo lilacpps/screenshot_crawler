@@ -613,20 +613,21 @@ resource support, quota consumption or Batch selection. Completed/external/
 skipped Item status and ambiguity handling retain precedence; exceptions remain
 unknown. Site-specific rules stay in SitePolicy; no shared site-name branch,
 Catalog schema, persistence field, CLI/config or runtime access change is added.
-Piccoma opts in only for available quota sources without an active manual grant;
-active manual grants remain non-consuming direct. Other policies retain false.
-See `note/09_piccoma.md` for observed badge sets and live verification. Ordinary
-GUI reload applies the policy projection; newly recognized badges need Discover
-to refresh stored access_mode. No operational Catalog/config/library is changed
-by validation.
+Piccoma admits available quota sources without an active manual grant through
+its site-owned normal Batch and grant-only resources; active manual grants
+remain non-consuming and are freshly revalidated. The inventory flag remains
+display-only and does not itself authorize execution. Other policies retain
+their existing defaults. See `note/09_piccoma.md` for observed badge sets and
+current resource semantics. Ordinary GUI reload applies the policy projection;
+newly recognized badges need Discover to refresh stored `access_mode`. No
+operational Catalog/config/library is changed by validation.
 
 The cross-site Policy classification matrix and synthetic inventory invariants
-pass with the default flag preserving other policies. Piccoma's synthetic
-Discovery-to-Catalog-to-GUI/Planner tests verify quota counts without an
-executable quota candidate or resource. Targeted validation and shared-CDP
-read-only/copy evidence are detailed in `note/09_piccoma.md`.
-An initially over-broad full-suite attempt was stopped before completion; no
-full-suite pass is claimed for this bounded default-false display extension.
+pass with the default flag preserving other policies. The earlier Piccoma
+inventory-only validation was later extended by the site-specific normal and
+grant-only ticket integration; see the current section at the end of this note
+and `note/09_piccoma.md`. The earlier incomplete full-suite attempt belongs to
+the 2026-10-25 display-only change, not the current revision.
 
 ## Watchlist scope editor Stage 01 (2026-10-25)
 
@@ -995,8 +996,12 @@ render checks header placement; no operational job or shared browser was stopped
 Full suite, browser-backed site Integration, Research and live verification were
 not rerun for this UI-only reuse of the unchanged controller termination path.
 
-The new request persists `fingerprint_kind="inputs-v1"` in the existing job JSON
-and an `inputs-v1:` fingerprint; absent kinds retain legacy compatibility.
+Ordinary new GUI requests persist `fingerprint_kind="inputs-v1"` and an
+`inputs-v1:` fingerprint; absent kinds retain legacy compatibility. Piccoma normal Batch and grant-only `all` / `binge_ticket` requests include
+the internal exact consent bit in `inputs-v2`; explicit grant-only
+`work_ticket` requests can retain v1/false. The worker rejects old Piccoma
+`all` requests without that bit before execution. Mixed-site consent is scoped to
+the Piccoma namespace; non-Piccoma request fingerprints remain unchanged.
 Optional path defaults are resolved identically for signing and execution only
 on the new path. Legacy payloads retain their original empty/omitted values for
 old plan validation. New-path input checks run before and after reading targets
@@ -1623,9 +1628,9 @@ during a pending selector operation. A unit regression uses a blocked locator
 count to reproduce and verify prompt cleanup. Access-stop classification,
 relevant-host rules, and response handling are unchanged.
 
-## Piccoma current adapter registration (2026-10-09)
+## Piccoma adapter registration and current access semantics (updated 2026-11-19)
 
-The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. Batch policy admits only available sources classified as free and uses the normal direct path; all other access modes are rejected with no resource or grant-only passes. Viewer/Capture and local Batch integration behavior are summarized in `note/09_piccoma.md`; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped), and Phase 05 live Discovery-to-ZIP E2E passed for one free episode from each product. The earlier Phase 06-B live Batch-to-ZIP and PNG comparisons are historical. Phase 06-D's default native result is lossless WebP only after strict Piccoma-local JPEG tile replay, proven white compositing, single-VP8L validation, and exact full-RGB round-trip. Verified native pixels remain PNG if encoding fails; guarded Core fallback remains PNG. Phase 06-D code review and independent live Tester passed with BLOCKING 0: all 39 pages in the two-product Batch-to-ZIP run used the validated WebP path. Focused Piccoma, packaging, Ruff, and diff checks passed; the full suite was not rerun after the final site-local adjustments. Other layouts/resources and unobserved draw/backdrop variants remain unsupported. Details and limits are in `note/09_piccoma.md` and the Piccoma runbook progress.
+The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access uses the exact-free or active-grant non-consuming path. Normal Batch admits eligible quota candidates through `piccoma_ticket_auto` and, without a Piccoma-only flag, selects among the three native free-ticket kinds using fresh site state. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` runs these as explicit ordered passes with a replan between them, and each pass is bound to its concrete kinds. It leaves Items pending without capture/package/complete. Both modes preserve candidate order, use a candidate-bound durable attempt observer and same-Source unresolved quota history guard, and preserve the existing entry/navigation/capture safety contracts. A plan that becomes fresh-free or freshly granted in grant-only is skipped without a ticket attempt or viewer navigation; a fresh grant is persisted before the skip. Existing source-native lossless WebP/PNG behavior and the earlier live capture evidence remain unchanged. Details and current evidence are in `note/09_piccoma.md` and the Piccoma ticket runbook.
 
 ## Read-only episode-list helper CLI (2026-10-01)
 
@@ -2910,7 +2915,7 @@ remains `auto`/`direct`; quota entry remains rejected.
 
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
-`DiscoveryAdapter.iter_records()` yields site-neutral `DiscoveredRecord` values. Adapters do not access Catalog; the service injects `site` and `discovery_key` from the target. Current real-site adapters include Manga ONE, BookWalker, Magapoke, and Piccoma. Piccoma supports episode-list Discovery, fresh-free viewer/capture, and an available+free-only direct Batch Policy. Synthetic local Batch integration and the two-product live Discovery-to-ZIP route passed. The Phase 06-B PNG E2E is historical; Phase 06-D independently verified the current lossless WebP output through the standard Batch-to-ZIP path for all 39 pages in the two selected episodes, with six current Core RGB comparisons matching exactly. Other layouts/resources and unobserved draw/backdrop variants remain unsupported. BookWalker Discovery accepts Watchlist series-list targets only.
+`DiscoveryAdapter.iter_records()` yields site-neutral `DiscoveredRecord` values. Adapters do not access Catalog; the service injects `site` and `discovery_key` from the target. Current real-site adapters include Manga ONE, BookWalker, Magapoke, and Piccoma. Piccoma supports episode-list Discovery, fresh access verification, normal ticket-backed Batch, and grant-only Work (`work_ticket`) and Binge (`binge_ticket`) entry. Synthetic local Batch coverage and historical two-product live Discovery-to-ZIP/native WebP evidence are summarized in `note/09_piccoma.md`; those older live capture results are not proof of the later grant-only contract. Other layouts/resources and unobserved draw/backdrop variants remain unsupported. BookWalker Discovery accepts Watchlist series-list targets only.
 
 Discovery Serviceは各recordについて、canonical titleをItemへ保存せず、kind/orderをItemへ、title/author/genreをWorkへ反映する。新規recordではItem/Source/web-default targetを一つのtransactionで作成し、既存sourceでは既存Itemを再利用して外部状態と非NULL Item metadataだけを更新する。観測した`DiscoveredSource.url`は`SourceTargetInput(backend="web", target_key="default", locator=...)`として同じsourceへupsertする。URL変更は同じ`(source_id, web, default)` targetのlocator更新になり、既存androidやweb/direct等の別targetは変更しない。sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や自動disableは行わない。既存sourceの`discovery_key` scope不一致、または既存Itemが別Workに属する場合はincompleteとして扱い、reparentや部分的な新規graph作成を行わない。
 
@@ -3256,7 +3261,7 @@ and per-artifact capture fingerprint.
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
 - Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、raw DOM oldest-first index由来のglobal position、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
-- Piccoma bounded Discovery: **IMPLEMENTED**. Strictly parses canonical viewer URL product/episode identity, buffers and validates the complete product listing, then selects an inclusive latest-first range. Assigns whole-work `display_position` from oldest-first native DOM index + 1 before slicing. Free classification requires exactly the `PCM-epList_status_free` marker set across wrapper and descendants plus exact `¥0`. Fresh viewer preflight, horizontal viewer/capture, and the available+free-only direct Site Policy with local Batch integration are implemented. Phase 06-D code review and independent live Tester passed with BLOCKING 0: the standard two-product Batch-to-ZIP route produced 24 and 15 validated lossless WebP pages, explicit END, and completed Catalog artifacts. WebP requires exact JPEG-to-canvas provenance, verified white compositing, VP8L validation, and an exact RGB round-trip; encoding/provenance fallbacks remain PNG. Other layouts/resources and unobserved draw/backdrop variants remain unsupported.
+- Piccoma bounded Discovery: **IMPLEMENTED**. Strictly parses canonical viewer URL product/episode identity, buffers and validates the complete product listing, then selects an inclusive latest-first range. Assigns whole-work `display_position` from oldest-first native DOM index + 1 before slicing. Free classification requires exactly the `PCM-epList_status_free` marker set across wrapper and descendants plus exact `¥0`. Fresh viewer preflight, normal three-kind ticket entry, grant-only `work_ticket` (waitfree/¥0+) and `binge_ticket` entry, and horizontal viewer/capture are implemented. Historical Phase 06-D code review and independent live Tester passed with BLOCKING 0: the standard two-product Batch-to-ZIP route produced 24 and 15 validated lossless WebP pages, explicit END, and completed Catalog artifacts. WebP requires exact JPEG-to-canvas provenance, verified white compositing, VP8L validation, and an exact RGB round-trip; encoding/provenance fallbacks remain PNG. Other layouts/resources and unobserved draw/backdrop variants remain unsupported.
 - Hanayume / Younganimal / ComicFUZ bounded Discovery and listing proof: **IMPLEMENTED**。各Adapterは検証済みfull listingと既存global positionを使い、slice前にinventoryを保持する。Younganimalのaccount-only rowsはpublic inventoryやpositionに追加しない。Fullの正常exhaustion後のみ証拠を公開し、access semanticsを変えない
 - Comic DAYS bounded Discovery and listing proof: **IMPLEMENTED**。検証済みAtom/readable-product series listingからnative series identityとlatest-first positionsを確定し、canonical episode boundaryを同一listing内で検証してからinclusive sliceを返す。Full proofは正常exhaustion後のみ公開する
 - Kadocomi opt-in bounded Discovery and listing proof: **IMPLEMENTED**。`discovery_scope`または`archive_order`指定時のみ、work-bound native arrays、explicit `episodeNo`、UUID/type/active data、exact reverse orderをstrictに検証する。legacy unconfigured pathはpublic rowsのみでposition inferenceを行わない。番号gapはSourcesとして捏造せず、existing Catalog Source absent from proofは過去positionを保持したまま`missing_listing`としてscope syncをblockする
@@ -3746,8 +3751,10 @@ child終了とlauncher再利用を証明し除外。旧child作成値13438943813
 launcher作成値134394196266556194をOSから取得。残ったblockerは当時の別running job
 `f6bfe285-e6b9-4551-ba8b-afc869637e8f`のみ。job state/history、実ZIP、Catalog/Watchlistは変更していない。
 関連8ファイルsuiteは292 PASS/1 FAIL/skip 0（157.25秒）。FAILは既存CLIの
-`test_batch_policy_registry_contains_supported_sites`がyanmaga resourcesを空と期待する不整合。
-HEADのCLI/testをメモリ上で読み込んでも同じ失敗を再現（実装側はwork_ticket）。今回の修正対象外。
+`test_batch_policy_registry_contains_supported_sites`がYanmaga resourcesを空と期待するテスト側の不整合。
+HEADのCLI/testをメモリ上で読み込んでも再現し、実装側は`work_ticket`だった。後続の全suiteでも古い期待値を確認し、
+テストだけをHEADのYanmaga policyへ同期して解消した。別のruntime-settings testも、変更されていない設定の
+BookWalker `page_turn_delay_ms: 0`を200と期待していたため、test expectationだけを修正した。実装/config変更ではない。
 追加のsnapshot API失敗/resize/unknownを含むPID testsは13 PASS/skip 0、削除CLIは3 PASS。
 中断jobのchild/launcher終了・再利用・未知・token/PID不一致の最終subsetは16 PASS/skip 0。
 削除/GUI E2E・実worker subprocess・process-kill recoveryの隔離検証を含む。ruff全src/tests PASS。
@@ -3811,3 +3818,61 @@ site-wide previous-source map across discovery keys. Adapter hooks remain respon
 validation. When an adapter performs an asynchronous proof after a validated
 listing, it must recheck the full listing identity before yielding records so
 that no partial or stale snapshot is reconciled.
+
+## Piccoma resource and attempt hooks (current Work/Binge grant revision, 2026-11-19)
+
+The Piccoma integration extends the generic Planner/Executor without adding
+site names or resource selectors to Core. `SitePolicy` has an optional
+`preserve_candidate_sequence(allow_quota_access)` hook, default false; Piccoma
+uses it for both normal Batch and grant-only so direct and quota candidates
+retain the selected ID sequence. `BatchPlanner.plan()` validates the internal
+boolean and uses policy evaluation at planning time. `BatchExecutor` dispatches
+named-resource validation only for policies that support that resource, so
+other policies retain their prior behavior.
+
+Normal Piccoma Batch uses logical resource `piccoma_ticket_auto` and allows
+site-native waitfree, ¥0+ and binge-free tickets by default. Grant-only uses
+`work_ticket` (waitfree/¥0+) then `binge_ticket` (binge-free) as separate
+ordered resources; `all` replans between passes. No per-Work episode limit is
+added. Its candidate loop confirms a target grant and
+leaves the Item pending; it does not capture, package, create an Artifact or
+complete the Item. A candidate that becomes free or freshly granted after
+planning is a no-action skip; a newly observed grant is persisted before that
+skip without a viewer visit.
+
+`AccessAttemptObservation` remains a site-neutral synchronous callback for
+durable per-attempt evidence. The Executor binds it to the active candidate's
+site, external identity and logical resource, requires a configured sink
+before the adapter can proceed, and deactivates the callback on exit. Batch
+metrics writes kind/status/identity without request body, credentials or raw
+URLs. This is distinct from `AccessConsumption`: an attempt observation does
+not prove a debit, while a confirmed `AccessConsumption` continues to control
+quota persistence. The same observer is installed for normal and grant-only
+execution. Piccoma uses existing `CrawlRun` history as a conservative
+unresolved-attempt guard, so no Catalog schema change was added.
+
+The public Piccoma-specific CLI flag, GUI checkbox and extra opt-in prompt were
+removed. GUI-created normal Piccoma requests and grant-only `all` /
+`binge_ticket` requests sign the exact internal consent bit in `inputs-v2`;
+explicit `work_ticket` requests may remain v1/false. Old Piccoma `all` requests
+without the bit are rejected before execution so an older non-binge request
+cannot silently gain binge-ticket use after upgrade. Mixed-site requests carry
+the bit only in the Piccoma namespace. Across sites, normal Batch `--limit`
+caps crawl slots, while grant-only `--limit` caps selected grant attempts. The worker passes remaining
+capacity using actual `candidate_started` events. Deferred normal sites emit
+candidate starts for both preparation and capture phases; conservative
+accounting keeps the crawl-slot cap but may leave capacity unused, so filling
+the requested limit is not guaranteed. Local skips before candidate start and
+empty plans do not use a slot; a skip after candidate start does. A failure
+stops later sites.
+
+The 2026-11-18 default/grant revision's 9473-case full-suite result remains
+historical. This Work/Binge revision used no real-site/CDP actions and no new
+tickets. Its latest distinct affected selection passed 274 tests (254 site /
+transport affected tests plus 20 Piccoma Discovery browser tests), with no
+failures or skips; Ruff and diff check passed. The grant-all sequence test uses
+the actual Planner, CLI candidate loop, BatchExecutor and Piccoma adapter entry
+with a synthetic SequenceRunner, not the production CrawlerRunner. A separate
+representative grant-only Work case uses the actual CrawlerRunner. No full suite
+was rerun for this Piccoma/transport-local revision. Current validation details
+and remaining live limits are in the [Piccoma runbook progress](../runbooks/piccoma-ticket-auto/PROGRESS.md).

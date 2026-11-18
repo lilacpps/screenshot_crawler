@@ -44,6 +44,52 @@ class SitePolicy(ABC):
 
         return "catalog"
 
+    def preserve_candidate_sequence(
+        self, *, allow_quota_access: bool
+    ) -> bool:
+        """Opt into preserving selected candidate slots for an explicit request.
+
+        The default retains existing ordering, including any quota-specific
+        sort and direct/quota pool arrangement.
+        """
+
+        del allow_quota_access
+        return False
+
+    def evaluate_with_quota_access(
+        self,
+        source: Source,
+        *,
+        now: datetime,
+        quota_available: int | None,
+        allow_quota_access: bool,
+    ) -> PolicyDecision:
+        """Evaluate a source for a request that may explicitly allow quota use.
+
+        Existing policies ignore this opt-in unless they override the hook.
+        """
+
+        del allow_quota_access
+        return self.evaluate(source, now=now, quota_available=quota_available)
+
+    def guards_unresolved_quota_attempts(self) -> bool:
+        """Whether this policy blocks retries after ambiguous quota CrawlRuns."""
+
+        return False
+
+    def requires_quota_access_opt_in(self) -> bool:
+        """Whether normal Batch must explicitly authorize quota use."""
+
+        return False
+
+    def unresolved_quota_attempt_source_ids(
+        self, runs: Collection[object]
+    ) -> frozenset[int]:
+        """Return source IDs with durable quota attempts that remain uncertain."""
+
+        del runs
+        return frozenset()
+
     def defer_quota_access_to_grant_phase(self) -> bool:
         """Opt into a site-owned live resolver before quota entry attempts."""
 

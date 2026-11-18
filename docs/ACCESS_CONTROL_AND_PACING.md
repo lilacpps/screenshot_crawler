@@ -427,6 +427,19 @@ pre-consumption exhaustion still uses `AccessResourceUnavailableError` with
 
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
+An adapter that must retain restart-visible evidence around a possible resource
+action may report the optional site-neutral `AccessAttemptObservation`. It
+contains the exact site, external identity, logical candidate resource,
+site-owned concrete kind, timestamp, one of `attempting` / `confirmed` /
+`unknown` / `not_attempted`, and an optional sanitized reason. The Executor
+binds the synchronous observer to the currently validated candidate and
+requires an installed durable sink; identity/resource mismatch or sink failure
+aborts before the adapter's affirmative action. The observer is deactivated
+when that candidate exits. Metrics sinks must not persist request bodies,
+credentials, raw signed URLs, or site response payloads. This evidence does
+not itself authorize an attempt or prove consumption; only the adapter's live
+site checks and confirmed `AccessConsumption` do that.
+
 The generic adapter also exposes an optional scalar
 `configure_target_identity(external_id, work_key)` hook. Batch calls it after
 Catalog candidate validation and before Runner navigation; site adapters may

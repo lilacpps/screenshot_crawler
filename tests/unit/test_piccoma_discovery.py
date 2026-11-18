@@ -187,6 +187,7 @@ def test_piccoma_full_listing_reverses_traversal_but_keeps_global_positions() ->
     ("markers", "label", "hours"),
     [
         ([GRANTED_MARKER], "閲覧期限\n残り71時間", 70),
+        ([GRANTED_MARKER], "閲覧期限残り70時間", 69),
         ([GRANTED_MARKER], "閲覧期限 残り2時間", 1),
         ([GRANTED_MARKER], "閲覧期限 残り1時間", 0),
         ([GRANTED_MARKER], "閲覧期限 残り0時間", None),

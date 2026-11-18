@@ -12,7 +12,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -27,6 +27,42 @@ from screenshot_crawler.site_policies import SitePolicyRegistry
 from screenshot_crawler.watchlist.service import WatchlistService
 
 ExecutionAction = Literal["discover", "batch", "grant_only"]
+
+
+def _piccoma_ticket_consent_required(
+    action: object,
+    sites: Iterable[object],
+    *,
+    resource: object = None,
+    resources_by_site: Mapping[object, object] | Iterable[tuple[object, object]] | None = None,
+) -> bool:
+    """Whether a queued Piccoma action can newly use binge-free tickets.
+
+    Normal Piccoma Batch retains its existing consent bit. In grant-only,
+    work_ticket is an explicit waitfree/¥0+ selection; `all` and binge_ticket
+    can select binge-free and therefore require the same signed v2 marker.
+    """
+
+    try:
+        site_names = {site for site in sites if isinstance(site, str)}
+    except TypeError:
+        return False
+    if "piccoma" not in site_names:
+        return False
+    if action == "batch":
+        return True
+    if action != "grant_only":
+        return False
+    if isinstance(resources_by_site, Mapping):
+        piccoma_resource = resources_by_site.get("piccoma", resource)
+    elif resources_by_site is not None:
+        try:
+            piccoma_resource = dict(resources_by_site).get("piccoma", resource)
+        except (TypeError, ValueError):
+            return False
+    else:
+        piccoma_resource = resource
+    return piccoma_resource in {"all", "binge_ticket"}
 
 
 def _file_fingerprint(path: str | Path | None) -> tuple[str, str]:
@@ -147,6 +183,7 @@ class JobExecutionRequest:
     # ``None`` identifies requests persisted before the lightweight input
     # fingerprint contract.  It is intentionally optional for legacy jobs.
     fingerprint_kind: str | None = None
+    allow_quota_access: bool = False
 
 
 def execution_request_payload(request: JobExecutionRequest) -> dict[str, object]:
@@ -180,6 +217,7 @@ class ExecutionPlanPreview:
     fingerprint: str
     resources_by_site: tuple[tuple[str, str], ...] = ()
     work_names: tuple[str, ...] = ()
+    allow_quota_access: bool = False
 
     @property
     def can_confirm(self) -> bool:
@@ -188,7 +226,7 @@ class ExecutionPlanPreview:
     def request(self, snapshot: InventorySnapshot) -> JobExecutionRequest:
         if not self.can_confirm:
             raise ValueError("execution preview is blocked")
-        return JobExecutionRequest(
+        request = JobExecutionRequest(
             action=self.action,
             selected_keys=self.selection.selected_keys,
             sites=self.sites,
@@ -204,6 +242,22 @@ class ExecutionPlanPreview:
             catalog_path=snapshot.catalog_path,
             watchlist_path=snapshot.watchlist_path,
             plan_fingerprint=self.fingerprint,
+            allow_quota_access=self.allow_quota_access,
+        )
+        if not self.allow_quota_access:
+            return request
+        if not _piccoma_ticket_consent_required(
+            self.action,
+            self.sites,
+            resource=self.resource,
+            resources_by_site=self.resources_by_site,
+        ):
+            raise ValueError("Piccoma ticket consent does not match a supported request")
+        service = ExecutionPlanService()
+        return replace(
+            request,
+            fingerprint_kind="inputs-v2",
+            plan_fingerprint=service.input_fingerprint_v2(request),
         )
 
 
@@ -211,6 +265,7 @@ class ExecutionPlanService:
     """Build a read-only preview from a loaded InventorySnapshot."""
 
     INPUT_FINGERPRINT_PREFIX = "inputs-v1:"
+    INPUT_FINGERPRINT_V2_PREFIX = "inputs-v2:"
 
     def input_fingerprint(
         self, request: JobExecutionRequest | Mapping[str, object]
@@ -315,6 +370,31 @@ class ExecutionPlanService:
         ).hexdigest()
         return f"{self.INPUT_FINGERPRINT_PREFIX}{digest}"
 
+    def input_fingerprint_v2(
+        self, request: JobExecutionRequest | Mapping[str, object]
+    ) -> str:
+        """Fingerprint the v1 contract plus the signed Piccoma queue-consent bit."""
+
+        if isinstance(request, JobExecutionRequest):
+            values: Mapping[str, object] = asdict(request)
+        elif isinstance(request, Mapping):
+            values = request
+        else:
+            raise TypeError("request must be JobExecutionRequest or a mapping")
+        allow_quota_access = values.get("allow_quota_access", False)
+        if type(allow_quota_access) is not bool:
+            raise TypeError("request allow_quota_access must be a boolean")
+        v1 = self.input_fingerprint(request)
+        payload = {
+            "version": self.INPUT_FINGERPRINT_V2_PREFIX.removesuffix(":"),
+            "inputs_v1": v1.removeprefix(self.INPUT_FINGERPRINT_PREFIX),
+            "allow_quota_access": allow_quota_access,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return f"{self.INPUT_FINGERPRINT_V2_PREFIX}{digest}"
+
     def preview(
         self,
         snapshot: InventorySnapshot,
@@ -330,7 +410,10 @@ class ExecutionPlanService:
         output_root: str | None = None,
         library_dir: str | None = None,
         metrics_root: str | None = None,
+        allow_quota_access: bool = False,
     ) -> ExecutionPlanPreview:
+        if type(allow_quota_access) is not bool:
+            raise TypeError("allow_quota_access must be a boolean")
         selected = (
             selection
             if isinstance(selection, ExecutionSelection)
@@ -366,6 +449,12 @@ class ExecutionPlanService:
                 warnings.extend(f"{identity}: {value}" for value in key.summary.diagnostics)
 
         sites = tuple(sorted({key.site for key in selected_records if key.target is not None}))
+        consent_required = _piccoma_ticket_consent_required(
+            action, sites, resource=resource
+        )
+        if allow_quota_access and not consent_required:
+            blockers.append("Piccoma ticket consent does not match a supported request")
+        allow_quota_access = consent_required
         candidate_count = 0
         for key in selected_records:
             counts = key.summary.counts
@@ -434,6 +523,8 @@ class ExecutionPlanService:
             "skipped": skipped,
             "blockers": blockers,
         }
+        if allow_quota_access:
+            payload["allow_quota_access"] = True
         fingerprint = hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -451,6 +542,7 @@ class ExecutionPlanService:
             warnings=tuple(dict.fromkeys(warnings)),
             fingerprint=fingerprint,
             work_names=tuple(sorted({key.title or key.work_key for key in selected_records})),
+            allow_quota_access=allow_quota_access,
         )
 
     def preview_batch(
@@ -469,8 +561,19 @@ class ExecutionPlanService:
         metrics_root: str | None = None,
         env_file: str | None = None,
         cdp_endpoint: str | None = None,
+        allow_quota_access: bool = False,
     ) -> ExecutionPlanPreview:
         """Build an actual BatchPlanner plan through a read-only Catalog facade."""
+
+        if type(allow_quota_access) is not bool:
+            raise TypeError("allow_quota_access must be a boolean")
+        action = "grant_only" if resource is not None else "batch"
+        consent_required = _piccoma_ticket_consent_required(
+            action, (site,), resource=resource
+        )
+        if allow_quota_access and not consent_required:
+            raise ValueError("Piccoma ticket consent does not match a supported request")
+        allow_quota_access = consent_required
 
         selection = ExecutionSelection.from_keys(selected_keys)
         input_paths = {
@@ -509,12 +612,13 @@ class ExecutionPlanService:
         if resource == "all" and not resources:
             raise ValueError(f"Site {site!r} does not support Grant-only")
         plans = [
-            planner.plan(
-                site=site,
-                selected_keys=selection.selected_keys,
-                quota_resource=current_resource,
-                output_mode="grant_only" if current_resource is not None else "capture",
-            )
+            planner.plan(**{
+                "site": site,
+                "selected_keys": selection.selected_keys,
+                "quota_resource": current_resource,
+                "output_mode": "grant_only" if current_resource is not None else "capture",
+                **({"allow_quota_access": True} if allow_quota_access else {}),
+            })
             for current_resource in resources or (None,)
         ]
         blockers = list(sync_blockers)
@@ -594,6 +698,8 @@ class ExecutionPlanService:
             ],
             "warnings": warnings,
         }
+        if allow_quota_access:
+            payload["allow_quota_access"] = True
         fingerprint = hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -619,6 +725,7 @@ class ExecutionPlanService:
                 sorted({key.title or key.work_key for key in key_map.values()
                         if key.identity in selection.selected_keys})
             ),
+            allow_quota_access=allow_quota_access,
         )
 
 

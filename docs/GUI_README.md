@@ -4,6 +4,10 @@ Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とW
 チェックしたWatchlist keyだけを実行対象に
 Discover / Batch Run / Grant-onlyできます。通常の実行は詳細確認画面を出さずジョブへ登録します。
 Grant-onlyでは操作欄に権利・チケット・Quotaを消費する可能性を明示します。
+通常BatchではPiccomaを含む対象の無料チケットを自動で使う場合があります。
+Runボタンのtooltipにその可能性を表示し、ボタン押下後は追加確認dialogなしでjobを登録します。
+Piccoma専用checkboxや追加opt-in確認は表示しません。
+Grant-onlyではPiccomaのResourceを選択します。`work_ticket`は待てば¥0・¥0+、`binge_ticket`は爆読みです。`all`は順に実行します。
 
 ## インストール・起動
 
@@ -409,8 +413,10 @@ keyを1つ以上チェックすると下部のDiscover、Batch Run、Grant-only�
 検索・表示モード・フォーカスを変えても選択集合はkey単位で保持されます。
 ボタンを押すと詳細確認画面を出さず、選択したkeyでジョブを登録します。
 候補数・Quota・スキップ理由の事前計算と表示は行いません。実行結果はモニターとジョブ履歴で確認します。
-空選択はサイト全件として扱いません。Watchlist保存後だけは、対象keyと警告を示す
-「Full Discoveryを実行しますか？」のYes/No確認を一度表示します。
+空選択はサイト全件として扱いません。Watchlist保存後も、対象keyと警告を示す
+「Full Discoveryを実行しますか？」のYes/No確認を一度表示します。通常BatchではRunボタンの
+tooltipにPiccomaの無料チケットを含む無料アクセスresourceを使う可能性を表示しますが、
+実行時に確認dialogは出さずjobを登録します。Piccoma専用checkboxもありません。
 下部の最大件数は0（無制限）または候補数の上限を指定できます。Grant-onlyのResourceは
 選択中のサイトごとに表示されるセレクタで`all`またはサイト対応Resourceを選びます。
 key追加や再読込でもサイト別の指定値を保持します。以前のResourceが未対応になった場合は

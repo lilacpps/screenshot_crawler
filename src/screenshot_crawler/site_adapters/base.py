@@ -59,6 +59,33 @@ class AccessConsumption:
 
 
 @dataclass(frozen=True, slots=True)
+class AccessAttemptObservation:
+    """Durable, body-free status for one site-selected access attempt."""
+
+    site: str
+    external_id: str
+    resource: str
+    resource_kind: str
+    status: Literal["attempting", "confirmed", "unknown", "not_attempted"]
+    observed_at: datetime
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("site", "external_id", "resource", "resource_kind"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"access attempt {name} must be non-empty")
+        if self.status not in {"attempting", "confirmed", "unknown", "not_attempted"}:
+            raise ValueError("access attempt status is unsupported")
+        if not isinstance(self.observed_at, datetime):
+            raise TypeError("access attempt observed_at must be a datetime")
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("access attempt observed_at must be timezone-aware")
+        if self.reason is not None and not isinstance(self.reason, str):
+            raise TypeError("access attempt reason must be a string or None")
+
+
+@dataclass(frozen=True, slots=True)
 class AccessResourceResolution:
     """Selection result for one site-owned resource resolver."""
 
@@ -136,6 +163,25 @@ class SiteAdapter(ABC):
         if observer is not None and not callable(observer):
             raise TypeError("confirmed grant observer must be callable or None")
         self._confirmed_access_grant_observer = observer
+
+    def set_access_attempt_observer(
+        self, observer: Callable[[AccessAttemptObservation], None] | None
+    ) -> None:
+        """Configure a synchronous sink that flushes attempt evidence before action."""
+
+        if observer is not None and not callable(observer):
+            raise TypeError("access attempt observer must be callable or None")
+        self._access_attempt_observer = observer
+
+    def report_access_attempt(self, observation: AccessAttemptObservation) -> None:
+        """Persist a sanitized attempt stage before returning to site operation."""
+
+        if not isinstance(observation, AccessAttemptObservation):
+            raise TypeError("reported value must be an AccessAttemptObservation")
+        observer = getattr(self, "_access_attempt_observer", None)
+        if observer is None:
+            raise RuntimeError("access attempt observer is not configured")
+        observer(observation)
 
     def report_confirmed_access_grant(self, grant: ConfirmedAccessGrant) -> None:
         """Persist site evidence before execution can proceed to capture."""
