@@ -14,7 +14,7 @@ All existing strict canonical entry forms remain usable with human confirmation.
 | kadocomi | detail/work | same-prefix episode→detail, supported query removal (Stage 01) | canonical + native work queryKey/code/title preferred; known og:title fallback, conflicts block; 2 works live | Stage 07, unsupported |
 | magapoke | title/episode | existing canonical aliases only; work→seed unsupported | exact static episode metadata: canonical + unique Work h1 + present og:title agreement; 3 works live | existing supported |
 | mangaone | manga/chapter | canonical chapter only; work→seed unsupported | canonical + unique og:title/document title agreement and known numeric episode suffix; 3 works live | Stage 07, unsupported |
-| piccoma | web/viewer/product/episode | exact web/product/id/episodes → observed first unconditional-free DOM seed, with 0..300s proof; one-work live | derived product listing, canonical + product/episode binding + unique title; one-work live | Stage 07, unsupported |
+| piccoma | web/viewer/product/episode | exact web/product/id/episodes → observed first unconditional-free DOM seed, proof without time expiry; one-work live | derived product listing, canonical + product/episode binding + unique title; one-work live | Stage 07, unsupported |
 | younganimal | series/work | episode→series unsupported (work ID absent) | canonical + unique og:title/document-title shape; one-work live | Stage 07, unsupported |
 | zeblack | title/chapter/list | numeric title root or title/chapter/viewer→same-title list, pure | fixed public title_detail GET; exact response URL/status/type/size + unique native title ID/name; 3 works live | existing supported |
 

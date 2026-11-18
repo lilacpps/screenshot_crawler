@@ -4,6 +4,29 @@
 > Stage01-06に続きStage07をユーザーが承認。Stage08は未定義・対象外。
 > Runbook: [README.md](README.md)
 
+2026-11-19 current contract: URL conversion evidence and Work editing listings
+have no elapsed-time expiry. Historical 300s TTL results below describe the
+earlier implementation. Current validation retains aware nonfuture timestamps,
+identity/digest/completeness, confirmation, ownership and locked Catalog/Watchlist
+checks; current access is checked by Discovery/reader preflight.
+Regression: 91 targeted plus 514 affected Unit/Qt/local-browser tests passed,
+zero skipped; `ruff check src tests` passed. Tests cover save after 301 seconds,
+one day and 30 days, preserved scope/segments/confirmation, and existing
+URL/ownership/Catalog/Watchlist conflicts. Synthetic isolated stores only; no new
+live/Research verification or full-suite run for this bounded editor validation
+change. Existing real-site observations are not new live evidence for this change.
+
+Changed files for this revision:
+- Production: `src/screenshot_crawler/registration/{resolver,draft}.py`,
+  `src/screenshot_crawler/watchlist/work_edit.py`.
+- Tests: `tests/unit/test_registration_{conversion,detail,service}.py`,
+  `tests/unit/test_work_edit.py`.
+- Specification/user guide: `docs/{DECISIONS,DISCOVERY_AND_BATCH,GUI_README}.md`.
+- Notes: `note/00_core.md`, `note/09_piccoma.md`.
+- Runbook: this `PROGRESS.md`, `00-contract/RESEARCH.md`,
+  `04-work-editor/README.md`, `06-site-coverage/{CAPABILITIES,PROOF_CONTRACT}.md`,
+  `07-listing-preview-coverage/README.md`.
+
 | Stage | Status | Exit evidence / next action |
 |---|---|---|
 | 00 Current contract audit | COMPLETE (static audit) | [設計・証拠](00-contract/RESEARCH.md): 11site URL/title/変換matrix、Resolver hook、Work draft/atomic save/Full境界、Kadocomi pilotとStage 01ファイル/testを確定。Liveは全site未検証 |

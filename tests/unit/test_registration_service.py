@@ -166,7 +166,8 @@ def test_existing_work_addition_preserves_old_fields_and_saves_one_composed_prop
     assert {target.work_key for target in saved.targets} == {"legacy_work", batch.works[b].work_key}
 
 
-def test_multiple_site_group_scope_segments_and_stale_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("age", [301, 86400, 2592000])
+def test_multiple_site_group_scope_segments_save_with_old_listing(tmp_path, age):
     batch, path, catalog = setup_batch(tmp_path)
     a, b = add(batch, "jumpplus", "work"), add(batch, "comicdays", "other")
     batch.assign(b, group_id=a)
@@ -175,6 +176,8 @@ def test_multiple_site_group_scope_segments_and_stale_proof(tmp_path, monkeypatc
     draft.replace_range(draft.members[0].key, "2", "2", draft.members[1].key, "2", "2")
     from screenshot_crawler.watchlist.work_edit import validate_work_snapshot
     result = validate_work_snapshot(draft, batch.catalog_snapshot, batch.revision)
+    result = replace(result, listings=tuple(
+        replace(x, observed_at=datetime.now(UTC) - timedelta(seconds=age)) for x in result.listings))
     accept_detail(batch, request, result, {target.key for target in draft.members})
     service = RegistrationService(path, catalog.path)
     preview = service.preview(batch)
@@ -184,16 +187,13 @@ def test_multiple_site_group_scope_segments_and_stale_proof(tmp_path, monkeypatc
     assert any("discovery_scope" in target for target in planned)
     assert "DiscoveryScope(" not in preview.summary and "ArchiveSegment(" not in preview.summary
     assert WatchlistService(path)._load_content(yaml.safe_dump({"targets": planned})) == list(preview.targets)
-    import screenshot_crawler.registration.draft as module
-    class Later(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime.now(UTC) + timedelta(seconds=301)
-    monkeypatch.setattr(module, "datetime", Later)
-    before = path.read_bytes()
-    with pytest.raises(ValueError, match="needs_scope"):
-        service.save(batch, preview)
-    assert path.read_bytes() == before
+    proof = batch.works[a].detail
+    before_catalog = catalog.path.read_bytes()
+    assert batch.readiness(a).status == "ready"
+    assert service.save(batch, preview).verified
+    assert batch.works[a].detail == proof
+    assert tuple(WatchlistService(path).list_targets()) == preview.targets
+    assert catalog.path.read_bytes() == before_catalog
 
 
 def test_catalog_lock_and_atomic_replace_failure_leave_entire_set_unchanged(tmp_path, monkeypatch):

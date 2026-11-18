@@ -73,7 +73,7 @@ def test_new_tail_inclusion_fixed_ranges_and_draft_rollback_on_invalid_change():
     assert selected_rows(draft.target("b"), draft.listings["b"])[-1].external_id == "10"
 
 
-def test_overlap_missing_boundary_and_stale_proof_fail_without_mutation():
+def test_overlap_missing_boundary_and_invalid_timestamp_fail_without_mutation():
     draft = draft_pair()
     before = draft.targets
     with pytest.raises(ValueError, match="重複"):
@@ -81,9 +81,21 @@ def test_overlap_missing_boundary_and_stale_proof_fail_without_mutation():
     assert draft.targets == before
     with pytest.raises(ValueError, match="境界"):
         draft.set_range("a", "missing", None)
-    draft.listings["a"] = replace(draft.listings["a"], observed_at=datetime.now(UTC) - timedelta(seconds=301))
-    with pytest.raises(ValueError, match="古い"):
+    draft.listings["a"] = replace(draft.listings["a"], observed_at=datetime.now(UTC) + timedelta(days=1))
+    with pytest.raises(ValueError, match="観測日時"):
         draft.validate()
+
+
+@pytest.mark.parametrize("age", [301, 86400, 2592000])
+def test_elapsed_editing_time_preserves_listing_scope_and_order(age):
+    draft = draft_pair()
+    draft.replace_range("a", "5", "6", "b", "5", "6")
+    before = draft.targets
+    listings = dict(draft.listings)
+    later = max(x.observed_at for x in listings.values()) + timedelta(seconds=age)
+    draft.validate(now=later)
+    assert draft.targets == before
+    assert draft.listings == listings
 
 
 def test_full_targets_include_new_and_all_order_affected_siblings_but_not_label():

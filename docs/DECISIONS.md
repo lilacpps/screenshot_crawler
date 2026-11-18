@@ -886,3 +886,17 @@ interruptedの起動側PIDもcreation identityで照合し、旧jobはchildよ�
 tmpへ固定する。previewは無書込、confirmationなしのApplyは禁止、未知状態や途中失敗は
 BLOCKED/RECOVERY_REQUIREDとして非成功終了にする。実サイト・実Catalog・実Watchlist・
 実ZIPの検証はこのStageの受入条件に含めない。
+
+## URL登録・Work編集の時間による失効を廃止（2026-11-19）
+
+複数作品の登録・範囲調整中に先頭の確認結果が300秒で失効し、再解析によって
+詳細設定まで無効になるため、URL変換の証拠とWorkDraftの編集用完全一覧から
+経過時間の上限を廃止する。5分はサイトの制約ではなくアプリ側の観測鮮度上限であり、
+実サイトの最新性を保証する値でもない。編集用snapshotは明示的な更新・入力変更まで
+保持する。通常の作品編集も同じ検証を使用する。
+
+設定の保存と現在の閲覧権利は分ける。保存時もURL・作品/話identity、一覧完全性・digest、
+範囲と完成順の一致、所有関係、確認済み編集版、Catalog/Watchlistの整合性を検証する。
+不正・timezone不明・未来の観測日時は拒否する。URL修正・再解析や設定変更による
+確認の無効化、保存時のlock/CASは維持し、実アクセスはDiscovery/reader preflightで確認する。
+Discoveryのone-shot replay TTL、無料公開・レンタル等の権利期限は本変更の対象外。

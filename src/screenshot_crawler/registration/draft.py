@@ -1,7 +1,6 @@
 """Qt-free, no-write registration drafts. Grouping is an explicit human choice."""
 
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
 
 from screenshot_crawler.registration.models import UrlResolution
 from screenshot_crawler.registration.naming import available_name, slug, suggest_name, valid_slug
@@ -237,9 +236,6 @@ class BatchRegistrationDraft:
             return WorkReadiness("needs_manual_confirmation", tuple(dict.fromkeys(manual)))
         if needs_detail and group.detail is None:
             return WorkReadiness("needs_scope", ("全keyの範囲・担当・完成順を詳細編集で確認してください",))
-        if group.detail is not None and any(not 0 <= (datetime.now(UTC) - listing.observed_at).total_seconds() <= 300
-                for listing in group.detail.listings):
-            return WorkReadiness("needs_scope", ("完全一覧が古いため、このWorkを再取得・再確認してください",))
         return WorkReadiness("ready")
 
     def prepare_ownership(self, data) -> None:

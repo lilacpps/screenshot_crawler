@@ -2402,10 +2402,10 @@ This is an optional JSON-field extension; Catalog remains schema v7 with no new
 table/column. Saved-configuration restoration validates these fields as Watchlist
 input. Ordering-only edits do not invalidate site Full proof.
 
-The Work editor validates fresh complete listings and one Catalog snapshot for
+The Work editor validates complete editing snapshots and one Catalog snapshot for
 all keys together. New Works/keys/episodes need not exist in Catalog to save.
 Unavailable future ZIP names are reported as pending Full, not invented and not
-alone a save blocker. Conflicting ownership, malformed/stale/incomplete listing
+alone a save blocker. Conflicting ownership, malformed/mismatched/incomplete listing
 proof and mismatched selection/placement remain blockers. The legacy single-key
 editor retains its stricter artifact-based preview. Save changes only Watchlist,
 under one revision CAS/atomic replacement; it never performs Catalog registration.
@@ -2834,7 +2834,9 @@ canonical, oldest-first order, declared/exact count and same-product unique
 episode/status rows. The existing site classifier selects the first unconditional
 free DOM row. Immutable ephemeral input/document/seed/native-ID/DOM/access/time
 evidence must pass the fresh pending parser, safe canonical seed parser,
-site-owned default-deny validator and 0..300s age at readiness/preview/save.
+site-owned default-deny validator and a valid timezone-aware, nonfuture observation
+time at readiness/preview/save. Registration evidence has no elapsed-time expiry:
+it binds a saved entry, not current free access or reading entitlement.
 No reader/resource operation or save-time network occurs. Missing Work title may
 be manually confirmed after URL proof; missing conversion proof may not. YAML
 stores the proved seed, with original input separately shown in final preview.
@@ -2887,14 +2889,19 @@ clones one WorkDraft, disables Work switching/add/reload, and never calls
 apply_edit or emits watchlistSaved/fullRequested. Existing WorkEditor normal
 save/Full behavior is retained. Each key requires an explicit scope/assignment
 confirmation after listing retrieval and after changes. Preview validates all
-complete listings (0..300s), exact selection/sequence, same-site overlap and
+complete listings without elapsed-time expiry, exact selection/sequence, same-site overlap and
 existing Source ownership against a single read-only Catalog snapshot.
 The preview also shows explicit scope/order/segments differences; confirm returns
 only an immutable member patch with Watchlist revision, Catalog identity, Work
 version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
-edits remain intact. Cancel discards the child only. Freshness and snapshot
-identity are rechecked both on child confirmation and later bulk preview/save.
+edits remain intact. Cancel discards the child only. Listing completeness/digests,
+valid nonfuture observation timestamps and snapshot identity are rechecked both
+on child confirmation and later bulk preview/save. The same no-expiry rule applies
+to normal Work editing. Elapsed editing time alone never clears confirmation or
+scope/order settings. URL, member, setting or Catalog/Watchlist changes still
+invalidate their bound proof. Explicit listing refresh still requires confirmation;
+normal Discovery and reader entry remain responsible for current access checks.
 Complete-list preview supports magapoke/jumpplus/zeblack/comicdays/piccoma/
 hanayume/younganimal/bookwalker/kadocomi. Kadocomi is boundary-only, without
 individual exclusions/empty assignments. Other sites needing detail are blocked.

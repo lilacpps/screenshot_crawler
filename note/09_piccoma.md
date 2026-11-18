@@ -339,7 +339,9 @@ Discovery output are not used. Quota/personal rental/paid/unknown rows never
 qualify. Missing/ambiguous Work title stays unknown and needs a human label.
 No reader/resource/capture/Discovery runs. In-memory immutable proof binds original
 input, listing, product, seed, DOM position/count, free evidence and timestamp;
-generic preview/save revalidation requires 0..300s age and site-owned consistency.
+generic preview/save revalidation requires a valid aware nonfuture observation
+time and site-owned consistency, with no elapsed-time expiry. This confirms the
+registration entry only; Discovery and reader preflight check current access.
 YAML saves the seed, while preview retains input and saved URL separately. URL
 edit/retry clears proof. No new complete-list scope editing is enabled (Stage07).
 Production observe_conversion on product28600 at 2026-11-03 06:16 JST returned

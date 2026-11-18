@@ -87,9 +87,11 @@ class UrlResolver:
                     resolution.discovery_url, resolution.site_work_identity)
                 or resolution.observation_url != fresh.observation_url):
             return "URL変換の入力・観測先・保存URLの証拠が一致しません"
+        # Registration saves an entry, not a grant to read it; elapsed editing
+        # time does not invalidate the observed URL/identity binding.
         if (not isinstance(proof.observed_at, datetime) or proof.observed_at.utcoffset() is None
-                or not 0 <= (conversion_now() - proof.observed_at).total_seconds() <= 300):
-            return "URL変換の証拠が古いか不正です。URLを再解析してください"
+                or proof.observed_at > conversion_now()):
+            return "URL変換の観測日時が不正です。URLを再解析してください"
         seed = self.resolve(resolution.discovery_url)
         if (seed.status == "blocked" or seed.site != resolution.site or seed.discovery_url != resolution.discovery_url
                 or (seed.site_work_identity and seed.site_work_identity != resolution.site_work_identity)

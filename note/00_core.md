@@ -209,14 +209,25 @@ clones one WorkDraft, disables Work switching/add/reload, and never calls
 apply_edit or emits watchlistSaved/fullRequested. Existing WorkEditor normal
 save/Full behavior is retained. Each key requires an explicit scope/assignment
 confirmation after listing retrieval and after changes. Preview validates all
-complete listings (0..300s), exact selection/sequence, same-site overlap and
+complete listings without elapsed-time expiry, exact selection/sequence, same-site overlap and
 existing Source ownership against a single read-only Catalog snapshot.
 The preview also shows explicit scope/order/segments differences; confirm returns
 only an immutable member patch with Watchlist revision, Catalog identity, Work
 version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
-edits remain intact. Cancel discards the child only. Freshness and snapshot
-identity are rechecked both on child confirmation and later bulk preview/save.
+edits remain intact. Cancel discards the child only. Listing completeness/digests,
+valid nonfuture timestamps and snapshot identity are rechecked both on child
+confirmation and later bulk preview/save. Normal Work editing uses the same
+no-expiry rule. Elapsed time alone preserves confirmation, scope/order/segments
+and the immutable detail proof; input/version/Watchlist/Catalog changes still
+invalidate their bound proof. Explicit refresh still requires confirmation.
+These snapshots do not authorize access; Discovery/reader preflight checks live
+availability. No expiry CLI/config option is needed.
+The 2026-11-19 expiry removal passed 91 targeted and 514 affected Unit/Qt/local
+browser tests with zero skips, plus `ruff check src tests`. Full suite,
+Research/Probe and new live checks were not run for this bounded editor validation
+change; no site DOM/access or browser operation changed. Existing live observations
+below remain prior evidence, not a new live verification of this change.
 Complete-list preview supports magapoke/jumpplus/zeblack/comicdays/piccoma/
 hanayume/younganimal/bookwalker/kadocomi. Kadocomi is boundary-only, without
 individual exclusions/empty assignments. Other sites needing detail are blocked.
@@ -351,8 +362,9 @@ unconditional-free DOM row, never quota/rental/paid/unknown or numeric-ID order.
 No viewer is opened. The immutable in-memory proof binds input/document/seed,
 native identity, selected external ID, DOM position/count, access evidence and
 aware timestamp. Shared pure resolution_error checks these bindings, the current
-safe seed parser, site-owned validation and 0..300s age at readiness/preview/save;
-no network runs under save locks. Expired evidence requires reanalysis. URL edit,
+safe seed parser, site-owned validation and aware nonfuture observation time at
+readiness/preview/save; no network runs under save locks. Conversion proof has
+no elapsed-time expiry and never grants current free access. URL edit,
 retry and blocked() discard evidence. Safe canonical entries without evidence
 retain manual confirmation. A proved conversion may have unknown title.
 Watchlist YAML stores only the canonical seed URL; input URL/proof stay in memory.
@@ -398,11 +410,12 @@ checkpoint commits are recorded in runbooks/watchlist-url-registration/PROGRESS.
 `registration/service.py` composes selected ready Work member patches into one
 Watchlist preview and one `apply_edit`. Revision/target CAS, draft fingerprint,
 fresh read-only Catalog fingerprint, key/Work uniqueness, canonical URLs,
-Source owner and complete-list TTL/confirmation proofs are revalidated under
+Source owner and complete-list integrity/confirmation proofs are revalidated under
 CatalogJobLock immediately before saving. Existing unrelated targets and stable
 fields stay intact. Explicit scope/order/segments proposals alone may change
 those fields. No Catalog, Source ownership, Item, Artifact, ZIP or history writes
-occur. A Catalog conflict or stale listing rejects the entire selected set.
+occur. A Catalog conflict or mismatched/incomplete listing rejects the entire
+selected set; elapsed editing time alone does not reject it.
 
 Source URLs are read from SourceTarget web locators. Unknown/foreign owners and
 unresolvable existing locators block; consistent existing key/native identity
@@ -580,7 +593,7 @@ Formatting regression run: 128 passed, zero skipped; targeted ruff, diff checks
 and independent review passed. Full suite, browser-backed Integration, Research
 and live verification were not rerun for this YAML text-patching-only change.
 
-Work preview validates all fresh complete lists (300 seconds), exact scope and
+Work preview validates all complete editing snapshots without time expiry, exact scope and
 sequence coverage, Watchlist revision and one read-only Catalog snapshot. Same-site
 overlap, unknown/unbound Source ownership and active Sources absent from their
 owner's complete listing fail closed. Missing Catalog Work,
