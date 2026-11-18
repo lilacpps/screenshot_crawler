@@ -188,6 +188,8 @@ class _ReaderSnapshot:
     rental_point_geometry: tuple[float, float, float, float] | None = None
     terminal_only: bool = False
     rental_perimeter_owned: bool = False
+    rental_engagement_exact: bool = False
+    rental_ready_wait_exact: bool = False
 
     @property
     def visible_pages(self) -> tuple[_BodyPage, ...]:
@@ -399,33 +401,101 @@ def _read_snapshot_js() -> str:
         '.episode-modal-thumbnail .episode-modal-image > img.content')] : [];
       const pointCosts = rental ? [...rental.querySelectorAll(
         'dl.episode-modal-point--necessary > dd > span.mod-episode-point--normal')] : [];
-      let pointFormExact = false, pointCode = null;
+      let pointFormExact = false, pointCode = null, readyWaitExact = false;
       if (pointNode && pointForm && pointCodes.length === 1 && pointTypes.length === 1 &&
-          pointLabels.length === 1 && pointImages.length === 1 && pointCosts.length === 1) {
+          pointLabels.length === 1 && pointImages.length === 1) {
         try {
           const action = new URL(pointForm.action, location.href);
           const thumbnail = new URL(pointImages[0].currentSrc || pointImages[0].src, location.href);
           const code = pointCodes[0].value;
-          pointFormExact = pointNode.matches('a.mod-button--orange.rental.content') &&
+          const rentalFormExact = pointNode.matches('a.mod-button--orange.rental.content') &&
             pointNode.getAttribute('href') === null &&
             pointNode.parentElement?.matches('.aspect-ratio-108-17.mt-button') &&
             pointForm.parentElement === pointNode &&
-            pointForm.matches('form.ga-viewer-rental-point') &&
             pointForm.method.toLowerCase() === 'post' &&
             action.origin === 'https://yanmaga.jp' && action.pathname === '/viewer/rental' &&
             !action.username && !action.password && !action.search && !action.hash &&
             pointCodes[0].type === 'hidden' && /^[A-Za-z0-9]{20}$/.test(code) &&
-            pointTypes[0].type === 'hidden' && pointTypes[0].value === 'point_rental' &&
-            (pointLabels[0].innerText || '').trim() === 'レンタルして読む' &&
-            /^[1-9][0-9]{0,5}$/.test((pointCosts[0].innerText || '').trim()) &&
+            pointTypes[0].type === 'hidden' &&
             thumbnail.origin === 'https://eh96lnrmau.user-space.cdn.idcfcloud.net' &&
             thumbnail.pathname === '/thumbnail/episode/'+code+'.jpg' &&
             !thumbnail.username && !thumbnail.password && !thumbnail.search && !thumbnail.hash &&
             pointImages[0].complete && pointImages[0].naturalWidth > 0 && visible(pointImages[0]);
+          pointFormExact = rentalFormExact && pointForm.matches('form.ga-viewer-rental-point') &&
+            pointTypes[0].value === 'point_rental' && pointCosts.length === 1 &&
+            (pointLabels[0].innerText || '').trim() === 'レンタルして読む' &&
+            /^[1-9][0-9]{0,5}$/.test((pointCosts[0].innerText || '').trim());
+          readyWaitExact = rentalFormExact &&
+            pointForm.matches('form.ga-viewer-rental-free-wait') &&
+            pointTypes[0].value === 'free_rental_if_wait' && pointCosts.length === 0 &&
+            (pointLabels[0].innerText || '').trim() === '「待つと無料....！」で読む';
           if (pointFormExact) pointCode = code;
         } catch {}
       }
       const pointPresentation = presented(pointNode);
+      // Observed after the final body: native favorite/like/share card. Read
+      // only; these controls must never be activated to establish END.
+      const engagementWrappers = rental ? [...rental.querySelectorAll(
+        ':scope > #js-rental-box.rental-bg.ga-viewer-rental > ' +
+        '#js-modal-content.rental-modal > .wrapper-rental-button'
+      )] : [];
+      const engagement = engagementWrappers.length === 1 ? engagementWrappers[0] : null;
+      const engagementNote = engagement?.querySelector(':scope > .like-note > img');
+      const engagementButtons = engagement?.querySelector(
+        ':scope > #js-modal-button.wrapper-mod-modal.background-transparent > .mod-modal-button'
+      );
+      const unique = (selector) => {
+        const nodes = rental ? [...rental.querySelectorAll(selector)] : [];
+        return nodes.length === 1 ? nodes[0] : null;
+      };
+      const favorite = unique('#js-btn-favorite');
+      const like = unique('#js-btn-like');
+      const share = unique('#js-btn-twitter');
+      const currentCode = /^\?cid=([A-Za-z0-9]+)$/.exec(location.search)?.[1];
+      const engagementFormExact = (control, name, label) => {
+        if (!control || !control.matches('a.circle-button.'+name) ||
+            control.hasAttribute('href') || !presented(control).presented ||
+            control.querySelector(':scope > .icon-wrapper > span')?.textContent.trim() !== label)
+          return false;
+        const forms = [...control.querySelectorAll('form')];
+        const form = unique('#form-'+name);
+        if (!form || forms.length !== 1 || forms[0] !== form || form.parentElement !== control ||
+            !form.matches('form.ga-viewer-rental-'+name) || form.method.toLowerCase() !== 'post')
+          return false;
+        const action = new URL(form.action, location.href);
+        const codes = [...form.querySelectorAll('input[name="jdcn"]')];
+        return action.origin === location.origin && action.pathname === '/viewer/'+name &&
+          !action.username && !action.password && !action.search && !action.hash &&
+          !!currentCode && codes.length === 1 && codes[0].type === 'hidden' &&
+          codes[0].value === currentCode;
+      };
+      let engagementExact = false;
+      if (engagement && engagementButtons && engagementNote && favorite && like && share) {
+        try {
+          const children = [...engagementButtons.children];
+          const shareUrl = new URL(share.href, location.href);
+          const sharedSource = new URL(shareUrl.searchParams.get('url'));
+          engagementExact = children.length === 5 &&
+            children[0].matches('div.spacer') && children[1] === favorite &&
+            children[2].matches('div.like-wrapper') && children[2].children.length === 1 &&
+            children[2].firstElementChild === like && children[3] === share &&
+            children[4].matches('div.spacer') &&
+            engagement.querySelectorAll('.like-note > img').length === 1 &&
+            engagementNote.complete && engagementNote.naturalWidth > 0 && visible(engagementNote) &&
+            engagementNote.src === 'https://viewer-assets.yanmaga.jp/viewer/assets/img/like_note-4469488c0f4e846b0cc34a2dcb85e4d6b0eb5f68101e4ebfb5a521476d99adf3.png' &&
+            engagementFormExact(favorite, 'favorite', 'お気に入り') &&
+            engagementFormExact(like, 'like', 'いいね') &&
+            share.matches('a.circle-button.shared.ga-viewer-rental-share') &&
+            share.querySelector(':scope > .icon-wrapper > span')?.textContent.trim() === 'シェア' &&
+            presented(share).presented && shareUrl.protocol === 'https:' &&
+            shareUrl.hostname === 'twitter.com' && shareUrl.pathname === '/intent/tweet' &&
+            !shareUrl.username && !shareUrl.password && !shareUrl.port && !shareUrl.hash &&
+            shareUrl.searchParams.getAll('url').length === 1 &&
+            sharedSource.origin === location.origin &&
+            sharedSource.pathname === location.pathname.replace('/viewer/comics/', '/comics/') &&
+            !sharedSource.username && !sharedSource.password && !sharedSource.search && !sharedSource.hash;
+        } catch {}
+      }
       const rentalPresentation = presented(rental);
       const rentalBox = rentalPresentation.box;
       const rentalPerimeterOwned = !!rental && !!rentalBox && [
@@ -493,6 +563,7 @@ def _read_snapshot_js() -> str:
         rentalVisible:!!rental && visible(rental),
         rentalPresented:rentalPresentation.presented,
         rentalPerimeterOwned,
+        rentalEngagementExact:engagementExact,
         rentalGeometry:rentalPresentation.box,
         rentalTitle:title?.innerText?.trim() || null,
         rentalTitleCount:titles.length,
@@ -501,6 +572,7 @@ def _read_snapshot_js() -> str:
         rentalPointCount:pointNodes.length,
         rentalPointPresented:pointPresentation.presented,
         rentalPointExact:pointFormExact,
+        rentalReadyWaitExact:readyWaitExact,
         rentalPointCode:pointCode,
         rentalPointGeometry:pointPresentation.box,
         rentalAuthorFollowCount:authorLinks.length,
@@ -1823,7 +1895,7 @@ class YanmagaAdapter(SiteAdapter):
             terminal_match = re.fullmatch(r"-/([1-9][0-9]*)", str(raw.get("counterText", "")))
             if terminal_match is not None:
                 total = int(terminal_match[1])
-                if 3 <= total <= MAX_BODY_PAGES and total % 2 == 1:
+                if total == 1 or 3 <= total <= MAX_BODY_PAGES:
                     # This is a terminal UI position, never a content-page ID.
                     counter = (total + 1, total)
                     terminal_only = True
@@ -1941,6 +2013,8 @@ class YanmagaAdapter(SiteAdapter):
             rental_visible=raw.get("rentalVisible") is True,
             rental_presented=raw.get("rentalPresented") is True,
             rental_perimeter_owned=raw.get("rentalPerimeterOwned") is True,
+            rental_engagement_exact=raw.get("rentalEngagementExact") is True,
+            rental_ready_wait_exact=raw.get("rentalReadyWaitExact") is True,
             rental_geometry=geometry("rentalGeometry"),
             rental_title=raw.get("rentalTitle") if isinstance(raw.get("rentalTitle"), str) else None,
             rental_title_presented=raw.get("rentalTitlePresented") is True,
@@ -2040,7 +2114,7 @@ class YanmagaAdapter(SiteAdapter):
             raise UnknownPageStateError("Yanmaga reader menu is not proven hidden for capture")
         if snapshot.terminal_only:
             if not self._terminal_only_layout_is_exact(snapshot):
-                raise UnknownPageStateError("Yanmaga terminal-only layout is not the observed odd-page shape")
+                raise UnknownPageStateError("Yanmaga terminal-only layout is not the observed shape")
             return ()
         visible = snapshot.visible_pages
         if not visible or len(visible) > 2:
@@ -2080,7 +2154,7 @@ class YanmagaAdapter(SiteAdapter):
         box = snapshot.rental_geometry
         return (
             snapshot.terminal_only
-            and snapshot.total >= 3 and snapshot.total % 2 == 1
+            and (snapshot.total == 1 or 3 <= snapshot.total <= MAX_BODY_PAGES)
             and snapshot.current == snapshot.total + 1
             and not snapshot.visible_pages
             and len(last) == 1
@@ -2191,6 +2265,8 @@ class YanmagaAdapter(SiteAdapter):
             snapshot.rental_visible,
             snapshot.rental_presented,
             snapshot.rental_geometry,
+            snapshot.rental_engagement_exact,
+            snapshot.rental_ready_wait_exact,
             snapshot.rental_title,
             snapshot.rental_title_count,
             snapshot.rental_title_presented,
@@ -2336,7 +2412,7 @@ class YanmagaAdapter(SiteAdapter):
         )
 
     async def _wait_for_clear_first_page(
-        self, page: Page, *, expected_total: int
+        self, page: Page, *, expected_total: int, allow_known_menu_overlay: bool = False
     ) -> _ReaderSnapshot:
         deadline = monotonic() + PAGE_CHANGE_TIMEOUT_MS / 1000
         last_signature: tuple[object, ...] | None = None
@@ -2349,7 +2425,7 @@ class YanmagaAdapter(SiteAdapter):
                     raise UnknownPageStateError(
                         "Yanmaga UI cleanup changed the current episode page identity"
                     )
-                self._validate_snapshot(snapshot)
+                self._validate_snapshot(snapshot, allow_known_menu_overlay=allow_known_menu_overlay)
                 if self._first_page_capture_is_clear(snapshot):
                     signature = self._snapshot_signature(snapshot)
                     stable_reads = stable_reads + 1 if signature == last_signature else 1
@@ -2378,9 +2454,13 @@ class YanmagaAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "Yanmaga first page is obstructed by an unsupported reader overlay"
             )
-        if first.total <= 1:
-            raise UnknownPageStateError(
-                "Yanmaga first-page reader menu cannot be hidden without a next body page"
+        if first.total == 1:
+            self._validate_viewer_route(page)
+            # The delivered reader binds D to its native menu toggle. A
+            # one-page item cannot use the ordinary page-2 roundtrip.
+            await page.keyboard.press("d")
+            return await self._wait_for_clear_first_page(
+                page, expected_total=1, allow_known_menu_overlay=True
             )
 
         self._validate_viewer_route(page)
@@ -2475,12 +2555,37 @@ class YanmagaAdapter(SiteAdapter):
         point_rental_boundary = title_proof and self._point_rental_matches_immediate_next_row(
             snapshot
         )
+        ready_wait_boundary = (
+            title_proof
+            and snapshot.rental_ready_wait_exact
+            and snapshot.rental_point_count == 1
+            and snapshot.rental_point_presented
+            and snapshot.rental_point_geometry is not None
+            and snapshot.rental_next_count == 0
+            and snapshot.rental_signup_count == 0
+            and snapshot.rental_wait_count == 0
+            and snapshot.rental_author_follow_count == 0
+            and self._rental_title_matches_immediate_next_row(snapshot, require_wait=True)
+        )
+        engagement_boundary = (
+            not snapshot.terminal_only
+            and snapshot.rental_engagement_exact
+            and snapshot.rental_perimeter_owned
+            and snapshot.rental_title_count == 0
+            and snapshot.rental_next_count == 0
+            and snapshot.rental_signup_count == 0
+            and snapshot.rental_wait_count == 0
+            and snapshot.rental_point_count == 0
+            and snapshot.rental_author_follow_count == 0
+        )
         if not (
             valid_next
             or registration_boundary
             or wait_countdown_boundary
             or latest_author_follow_boundary
             or point_rental_boundary
+            or ready_wait_boundary
+            or engagement_boundary
         ):
             return False
         terminal_page = [page for page in snapshot.visible_pages if page.index == snapshot.total]
@@ -2514,7 +2619,9 @@ class YanmagaAdapter(SiteAdapter):
             return False
         return self._rental_title_matches_immediate_next_row(snapshot)
 
-    def _rental_title_matches_immediate_next_row(self, snapshot: _ReaderSnapshot) -> bool:
+    def _rental_title_matches_immediate_next_row(
+        self, snapshot: _ReaderSnapshot, *, require_wait: bool = False
+    ) -> bool:
         if self._listing_rows is None or not snapshot.rental_title:
             return False
         expected = self._require_expected()
@@ -2523,6 +2630,12 @@ class YanmagaAdapter(SiteAdapter):
         if len(indices) != 1 or indices[0] + 1 >= len(rows):
             return False
         following = rows[indices[0] + 1]
+        if require_wait and not (
+            following.wait_free_marker and not following.free_marker
+            and not following.first_free_marker and not following.red_marker_present
+            and not following.known_restricted
+        ):
+            return False
         route = parse_yanmaga_episode_url(following.url)
         title = " ".join(snapshot.rental_title.split())
         return (
@@ -2937,7 +3050,11 @@ class YanmagaAdapter(SiteAdapter):
         if snapshot is None:
             raise PageChangeTimeoutError("Yanmaga reader is not ready for the next turn")
         self._validate_snapshot(snapshot)
-        if snapshot.current >= snapshot.total:
+        single_terminal_turn = (
+            snapshot.total == 1 and snapshot.current == 1
+            and self._captured_indices == [1] and not self._is_positive_terminal(snapshot)
+        )
+        if snapshot.current >= snapshot.total and not single_terminal_turn:
             await self._wait_for_positive_terminal(
                 page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS
             )
@@ -3060,6 +3177,7 @@ class YanmagaAdapter(SiteAdapter):
                 "body_index_sequence_complete": True,
                 "terminal_wrapper_visible": len(terminal_page) == 1,
                 "rental_count_one": snapshot.rental_count == 1,
+                "engagement_card_exact": snapshot.rental_engagement_exact,
                 "rental_visible": snapshot.rental_visible,
                 "rental_presented_in_viewport_unobstructed": snapshot.rental_presented,
                 "rental_title_count": snapshot.rental_title_count,
@@ -3081,6 +3199,7 @@ class YanmagaAdapter(SiteAdapter):
                 "point_rental_count": snapshot.rental_point_count,
                 "point_rental_presented": snapshot.rental_point_presented,
                 "point_rental_exact": snapshot.rental_point_exact,
+                "ready_wait_rental_exact": snapshot.rental_ready_wait_exact,
                 "point_rental_matches_immediate_next_row": (
                     self._point_rental_matches_immediate_next_row(snapshot)
                 ),

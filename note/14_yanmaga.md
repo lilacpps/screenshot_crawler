@@ -1,5 +1,119 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## 1ページ作品のメニュー非表示と終了（2026-11-19）
+
+パラレルパラダイス「【会員限定無料】ヤンマガカバーガール風イラスト」
+（Item 49770 / Source 50077）は本文counter 1/1・既知の初期menu表示中で停止し、
+保存0枚だった。既存のmenu cleanupが「2ページ目へ進めて1ページ目へ戻す」方式で、
+1枚だけの本文を明示拒否していたため。今回のmetricsも403/429/5xxは各0。
+
+配信済みparent/custom_parent JavaScriptのkeyCode 68のmenu toggleと、shared-CDPの
+専用Pageで`d`キー1回→menu非表示・counter 1/1不変を確認した。1ページかつ
+既知のmenu/header/controller/transparent overlayでのみ、このnative keyを1回使う。
+同一Viewer route・current=total=1を保ち、menuがdisplay:none・zero dimensions、
+本文のcenter/perimeter非遮蔽、画像geometry・安定readを満たすまでbounded waitする。
+非表示済みなら押さず、閉じない/identity変更/未知overlayでは停止。CSSや内部関数は
+操作しない。2ページ以上の既存roundtripは維持する。
+
+本文1枚保存後のnative ArrowLeft 1回で`-/1`、本文wrapperが右viewport外、
+右半分1272×1800のrental cardになることも確認した。private terminal modeにN=1を
+追加し、全保存index=[1]の後だけこのterminal turnを許可する。通常counter parser、
+terminal-onlyでのidentity/capture禁止、max_pages・same-content guardは維持する。
+単に1枚保存しただけではENDにせず、既存のstrict layoutとpositive card proofが必要。
+N=2のdash layoutは未確認のため未対応。
+
+今回の終端は「第244話」のready wait cardだった。単一`#js-btn-rental`配下の
+`form.ga-viewer-rental-free-wait`、same-origin POST `/viewer/rental`、一意のhidden
+20英数字`jdcn`/`rental_type=free_rental_if_wait`、exact label
+`「待つと無料....！」で読む`、同じcodeのloaded thumbnail、必要point表示なしを検証する。
+カード全体/title/controlの表示と非遮蔽、freshな同一作品一覧の一意の直後row/titleと
+wait marker（public-free/first-free/red/restrictedとの競合なし）も必須。
+既存point-rentalの共通form/thumbnail検証を保持し、paid/ready-waitの条件を分ける。
+カードをclick/submitせず、チケット利用可否・消費やPolicyの判断は変更しない。
+diagnosticsに`ready_wait_rental_exact`を追加。CLI/設定・Core・capture形式は変更なし。
+
+変更後の同一作品を、通常Catalogのread-only backupに既存grant/observerを隔離し、
+shared-CDPの専用PageでRunner確認。`max_pages=1`のまま1枚保存→positive END、
+counter `-/1`、全保存index=[1]、exact terminal layout/ready-wait proofを確認した。
+1125×1600のnative pre-JPEG lossless WebPをhash検証し、画像の目視でも本文1枚だけで
+reader menu/終端cardが混入しないことを確認。first-party non-GET試行0、first-free
+未試行。通常Catalog/Watchlist・元の失敗出力は変更していない。証拠は
+`.tmp/yanmaga-single-page/probe.json`、`live-result.json`、`live-capture-v2/`。
+人工browserでは1枚・menu表示/非表示/閉じない・不正カードと、ready-wait formの
+label/type/action/thumbnail/重複/次話marker/title不一致を検証する。
+targeted browser 15件、Adapter Unit 10件、既存menu/終端/Runner/既存grant/Batch-ZIP
+連携のaffected browser 108件は全PASS、合計133件、skip 0。
+`ruff check src tests`と本変更4ファイルの`git diff --check`もPASS。
+site-local修正のためfull pytestと独立Research suite、変更していないencoder内部testは
+未実行。実サイト確認は該当1話の隔離Runnerのみで、通常50件Batch全体は未再実行。
+
+## 偶数ページ数のterminal-only終了画面（2026-11-18）
+
+「アカデミー最強のモブヒーラー」第2話②（Item 49662 / Source 49969）の
+22:02 Batchは本文26ページを保存済みだったが、最後の25/26見開きからnative
+`-/26`へ送った後に`Yanmaga reader did not advance within the bounded wait`で停止。
+20:09の同話失敗runにも同じDOMが残っていた。403/429/5xxは各0。
+原因はprivate terminal snapshotとlayout検証に残っていた「Nは奇数」という限定。
+`-/26`をsnapshotにできず、実際には移動済みの終了画面を変化待ちが認識しなかった。
+
+shared-CDPの専用Pageで、native counter 1/26→3/26→…→25/26→-/26と、
+右半分の1272×1800 rental、本文wrapper全てが右viewport外、loadedな最終26 wrapper、
+同一話の評価controlと「第3話①」の次話/read cardを再観測した。
+奇数限定を除き、既知N（現在は1または3以上、上限MAX_BODY_PAGES）、native caption一意性/ancestry、
+同一route/total、本文保存index 1..N、最終wrapperの3画像geometry、本文非表示、
+rentalの全体表示と周辺非遮蔽、menu非表示、access gate不在を維持する。
+次話/read titleとfreshな同一作品一覧の直後rowとの一致も従来どおり必須。
+`-/N`を本文identityや画像にせず、通常counter parserは変更しない。
+評価card単独のENDは従来どおり最終本文併置layoutだけであり、今回のENDは
+既存next/read branchで成立した。追加key操作・timeout延長・権利fallbackはない。
+
+変更後の同一話を、通常Catalogのread-only SQLite backupからidentity/既存grantを
+渡した隔離Runner出力で確認。`max_pages=26`のまま本文26枚→positive END、
+counter `-/26`、`terminal_only_layout_exact=true`、保存index 1..26を検証した。
+全26画像のSHA-256は元の失敗runの26画像と一致。first-party non-GET試行0、
+`first_free_release_state=not_attempted`。grant observerの書込み先は隔離copyのみ。
+通常Catalog/Watchlist・元の失敗出力は変更していない。証拠は
+`.tmp/yanmaga-even-terminal/live-probe.json`、`live-result.json`、`live-capture-v2/`。
+人工browserは既存3ページのtestを4ページにもparameterizeし、rewind/全本文保存/
+exact max-pages/END、counter先行、誤total/不明caption/重複/遮蔽/本文残留/未保存を検証。
+targeted browser 28件、Adapter Unit 10件、既存終端/Runner/ページ送り/menu/
+既存grant/Batch-ZIP連携のaffected browser 78件は全PASS、合計116件、skip 0。
+`ruff check src tests`と本変更4ファイルの`git diff --check`もPASS。
+shared Core/encoder/Research契約の変更がないためfull pytestと独立Research suite、
+変更範囲外のnative-capture内部testは未実行。通常56件Batch全体は再実行していない。
+
+## 最終本文の評価カードによるEND（2026-11-18）
+
+通常Batchの「アカデミー最強のモブヒーラー」第10話①（Item 49648 / Source
+49955）は本文16ページを保存した後、未対応の評価カードで終了判定を満たせず、
+`go_next` の外側timeoutで停止していた。metricsの403/429/5xxは各0。
+保存済み診断DOMとshared-CDPの再観測で、次話title/reader/rental/author CTAを
+持たない「お気に入り・いいね・シェア」のnative cardを確認した。
+
+Adapterは既存の全本文index連続保存・最終counter・同一Viewer route・menu非表示・
+最終本文の可視/周辺非遮蔽に加え、単一`#rental`の全体表示と周辺非遮蔽を要求する。
+既知の`#js-rental-box > #js-modal-content > .wrapper-rental-button`の内部で、
+既知assetのloadedな`like-note`画像、一意の評価3control、spacer/like-wrapper順序、
+exact label/classを検証する。favorite/likeはnative formのsame-origin POST先、
+一意のhidden `jdcn`と現在URLの`cid`一致、shareはTwitter intentと同一話Source URLを
+要求する。他の終端CTA/titleとの混在、欠落・重複・identity不一致・hidden/遮蔽・
+semantic access gateは従来どおり停止。評価controlはclick/submitしない。
+この追加ENDは観測済みの最終本文併置layoutに限定し、`-/N`専用画面には適用しない。
+snapshot安定判定とdiagnosticsにも`engagement_card_exact`の根拠を含める。
+CLI/設定・capture形式・共通Core・Catalog/Batchの契約変更はない。
+
+変更後の同一話をshared-CDPの新規専用Pageと隔離出力でRunner検証し、16画像を保存して
+positive ENDに到達した。`engagement_card_exact=true`、全本文index保存済み、
+`first_free_release_state=not_attempted`、first-party non-GET試行0を確認した。
+16画像すべてのSHA-256は元の失敗runで保存済みの本文画像と一致した。
+通常Catalog/Watchlistと元の失敗出力は変更していない。証拠は
+`.tmp/yanmaga-engagement-fix/live-result.json`と同directoryの`live-capture/`。
+人工browserでは正常カードとform/話ID/label/画像/構造/表示/混在の異常を検証する。
+対応するAdapter Unit＋browser Integrationは216件PASS、skip 0。
+`ruff check src tests`と本変更4ファイルの`git diff --check`もPASS。
+shared Core/Researchの変更がないためfull pytestと独立Research suiteは未実行。
+実サイトは該当1話のRunner確認のみで、通常70件Batch全体とCatalog完了更新は未実行。
+
 ## Discovery中の作品紹介ポップアップ（2026-11-18）
 
 `YanmagaDiscoveryAdapter.iter_records()` は専用Pageへ一時的なPlaywright
@@ -80,7 +194,7 @@ fragmentは登録対象外。完全一覧previewや複数keyの詳細編集能�
 Catalog非変更・Full要求signalを隔離Watchlist/Catalogで検証する。今回の変更の実サイト
 確認は未実施（URL解析のみの追加で、DOMや実サイトアクセス挙動は変更しない）。
 
-## Odd-page terminal-only reader position (2026-11-17)
+## Terminal-only reader position (odd/even; 2026-11-17, updated 2026-11-18)
 
 Chapter 15 (Item 49631 / Source 49938) failed in normal Runs 25364 and 25427
 after all 15 body pages had already been saved as native WebP. After the final
@@ -94,7 +208,7 @@ grant failure nor a missing captured page.
 
 The ordinary public body-counter parser remains unchanged: `-/N` and N+1/N
 are not body counters. A separate private snapshot mode recognizes only the
-unique native caption/ancestry with exact `-/N`, odd N>=3, and the existing
+unique native caption/ancestry with exact `-/N`, N=1 or N>=3 of either parity, and the existing
 page-total bound. It uses an internal terminal position N+1, never a body
 identity or capture target. General total/duplicate/route/viewport/menu/gate
 checks still apply. The layout must have zero visible body wrappers, one loaded
@@ -123,11 +237,11 @@ Diagnostics retain raw `native_counter="-/N"`, expose `terminal_only` and
 mode rather than pretending the UI reports N/N. Existing complete body-count
 and sequence fields remain separate.
 
-The synthetic odd-three-page viewer starts on this terminal position, rewinds,
-captures all three body pages, and tests both next/read and point cards. It
-also covers delayed layout, bad/even/foreign/duplicate caption, wrong title,
+The synthetic three- and four-page viewers start on this terminal position, rewind,
+capture all body pages, and test both next/read and point cards. They
+also cover delayed layout, bad/wrong-total/foreign/duplicate caption, wrong title,
 missing control/final wrapper, edge obstruction, wrong card size, visible body,
-and premature terminal entry. The final targeted group passed 14 tests with 0
+and premature terminal entry. The historical odd-only targeted group passed 14 tests with 0
 skipped, including explicit refusal to supply a body identity at `-/N`.
 The first live implementation exposed the counter-before-animation race and
 failed closed after saving all 15 pages; its isolated evidence is retained
@@ -159,7 +273,7 @@ counters. `ruff check src tests` and changed-files diff checks passed. Full
 repository pytest and unrelated-site/Discovery suites were not rerun for this
 site-local counter/layout/END change; shared Core, Catalog, resource policy,
 capture format, and browser lifecycle code are unchanged. Other terminal
-layouts, even-total dash states, and one-page dash states remain unsupported.
+layouts and two-page dash states remain unsupported.
 
 ## Chapter 17 existing-rental recovery and delayed layout (2026-11-16)
 
@@ -871,7 +985,7 @@ Readerはnative counter `1/36`、direct `#content-pN` wrappers、見開き時の
 
 positive ENDは全body indexのcapture完了、同じepisode route、stable final counter/body wrapperに加え、
 別領域の単一`#rental` cardがviewport内に全体表示され、visibleで他elementに覆われていないことを要求する。
-奇数ページで最後の見開きを送った後のnative `-/N` は、冒頭のterminal-only専用検証で扱う。
+奇数・偶数とも最後の見開きを送った後のnative `-/N` は、冒頭のterminal-only専用検証で扱う。
 通常の本文counterやcapture identityにはせず、全本文保存済み・右側へ退避した最終wrapper・
 既知のslotに安定表示された正しい次話card・全周の遮蔽なしを要求する。
 既存のnext/read・signup・waitと新しいpoint-rental終端では一意のtitleが表示される必要がある。
