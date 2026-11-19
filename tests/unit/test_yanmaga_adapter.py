@@ -81,7 +81,7 @@ async def test_composite_identity_is_configured_and_source_url_is_retained() -> 
 
 
 @pytest.mark.asyncio
-async def test_only_auto_and_direct_strategies_are_supported() -> None:
+async def test_auto_direct_and_work_ticket_strategies_are_supported() -> None:
     adapter = YanmagaAdapter()
 
     await adapter.configure_run(None, "auto")
@@ -89,7 +89,11 @@ async def test_only_auto_and_direct_strategies_are_supported() -> None:
     await adapter.configure_quota_resource(None, None)
 
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(None, "quota")
+        await adapter.configure_run(None, "paid")
+
+    await adapter.configure_target_identity(f"{SLUG}:{EPISODE_ID}", "watchlist-main")
+    await adapter.configure_run(None, "quota")
+    await adapter.configure_quota_resource(None, "work_ticket")
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(None, "ticket")
 
@@ -97,7 +101,8 @@ async def test_only_auto_and_direct_strategies_are_supported() -> None:
 def test_page_counter_is_bounded_and_consistent() -> None:
     assert parse_yanmaga_page_counter(" 1/36 ") == (1, 36)
     assert parse_yanmaga_page_counter("36/36") == (36, 36)
-    for value in (None, "0/36", "37/36", "1/0", "1 / 36", "1/2001", "1/2/3"):
+    for value in (None, "0/36", "37/36", "1/0", "1 / 36", "1/2001", "1/2/3",
+                  "-/15", "16/15", "-/3", "4/3"):
         assert parse_yanmaga_page_counter(value) is None
 
 

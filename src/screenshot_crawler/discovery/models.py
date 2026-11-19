@@ -19,6 +19,7 @@ class DiscoverySourceSnapshot:
     discovery_key: str | None
     access_mode: str
     available: bool
+    access_granted_until: datetime | str | None = None
 
 
 class IncrementalStopDecision(StrEnum):

@@ -79,7 +79,7 @@ def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_oth
     assert settings.for_site("magapoke").page_turn_delay_ms == 1000
     assert settings.for_site("magapoke").inter_candidate_delay_ms == 3000
     assert settings.for_site("mangaone").page_turn_delay_ms == 1000
-    assert settings.for_site("bookwalker").page_turn_delay_ms == 200
+    assert settings.for_site("bookwalker").page_turn_delay_ms == 0
 
 
 @pytest.mark.parametrize("site", ["piccoma", "ebookjapan"])

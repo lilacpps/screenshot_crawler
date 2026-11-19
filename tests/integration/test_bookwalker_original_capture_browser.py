@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from dataclasses import replace
@@ -2645,6 +2646,7 @@ async def test_capture_window_final_join_records_geometry_drift_draw_context(
     assert result["exact"] is False, result
     assert result["reason"] == "capture window common anchor changed", result
     assert result["mismatch"] == "geometryVersion", result
+    assert result.get("redrawAnchor") is None  # A single changed version is insufficient.
     diagnostic = result["diagnostic"]
     assert diagnostic["expected"]["geometryVersion"] == 1, diagnostic
     assert diagnostic["actual"]["geometryVersion"] == 2, diagnostic
@@ -2747,6 +2749,9 @@ async def test_retained_two_part_final_join_is_atomic_per_roi(
         "positive_codec", "positive_png", "native_pixel_mismatch",
         "native_pixel_unavailable", "selectors_false", "mutation",
         "selection_anchor_missing",
+        "redraw", "redraw_twice", "redraw_source_change", "redraw_geometry_change",
+        "redraw_identity_change", "redraw_window_change", "redraw_reset",
+        "redraw_cancel", "redraw_settle_identity_change",
     ]
 )
 async def test_retained_capture_page_final_join_is_atomic(
@@ -2774,6 +2779,7 @@ async def test_retained_capture_page_final_join_is_atomic(
           source.getContext('2d').fillRect(0, 0, 800, 600);
           const bitmap = await createImageBitmap(source);
           context.drawImage(bitmap, 0, 0, 800, 600);
+          window.__retainedTestTarget = tileTarget;
           renderer.getContext('2d').drawImage(
             tileTarget, 0, 0, 800, 600, 100, 0, 800, 600,
           );
@@ -2886,6 +2892,96 @@ async def test_retained_capture_page_final_join_is_atomic(
         monkeypatch.setattr(adapter_module, "_BOOKWALKER_SELECTION_ANCHOR_SCRIPT", "() => null")
         with pytest.raises(UnknownPageStateError):
             await adapter.capture_page(browser_page)
+    elif mode.startswith("redraw"):
+        materialize = adapter._materialize_native_source_crops
+        materializations = []
+        original_attempts = []
+        if mode == "redraw":
+            adapter.enable_original_jpeg_capture = True
+            original_bytes = BytesIO()
+            Image.new("RGB", (800, 600), (42, 63, 84)).save(original_bytes, format="JPEG")
+
+            async def old_original_capture(_page, _native):
+                original_attempts.append(True)
+                return (CaptureResult(original_bytes.getvalue(), 800, 600, "image/jpeg", ".jpg"),)
+
+            monkeypatch.setattr(adapter, "_capture_original_jpegs", old_original_capture)
+
+        async def redraw_after_materialize(page, calls):
+            result = await materialize(page, calls)
+            materializations.append(calls)
+            if len(materializations) == 1 or mode == "redraw_twice":
+                await page.evaluate(
+                    """
+                    async mode => {
+                      const renderer = document.querySelector('#renderer canvas');
+                      let target = window.__retainedTestTarget;
+                      if (mode === 'redraw_source_change') {
+                        target = document.createElement('canvas');
+                        target.width = 800; target.height = 600;
+                      }
+                      if (mode === 'redraw_reset') {
+                        window.__bookwalkerResetTransformTrace('retry_reset');
+                      }
+                      const source = document.createElement('canvas');
+                      source.width = 800; source.height = 600;
+                      source.getContext('2d').fillStyle = 'rgb(11, 22, 33)';
+                      source.getContext('2d').fillRect(0, 0, 800, 600);
+                      const bitmap = await createImageBitmap(source);
+                      const context = target.getContext('2d');
+                      context.clearRect(0, 0, 800, 600);
+                      context.drawImage(bitmap, 0, 0, 800, 600);
+                      renderer.getContext('2d').drawImage(
+                        target, 0, 0, 800, 600,
+                        mode === 'redraw_geometry_change' ? 101 : 100, 0, 800, 600,
+                      );
+                      if (mode === 'redraw_identity_change') {
+                        document.querySelector('#pageSliderCounter').textContent = '3/3';
+                      }
+                      if (mode === 'redraw_window_change') {
+                        window.__bookwalkerCaptureWindowToken = 'new-window';
+                      }
+                    }
+                    """,
+                    mode,
+                )
+            return result
+
+        monkeypatch.setattr(adapter, "_materialize_native_source_crops", redraw_after_materialize)
+        if mode in {"redraw_cancel", "redraw_settle_identity_change"}:
+            wait = browser_page.wait_for_timeout
+
+            async def interrupt_settle(milliseconds):
+                if milliseconds == 100:
+                    if mode == "redraw_cancel":
+                        raise asyncio.CancelledError
+                    await browser_page.locator("#pageSliderCounter").evaluate(
+                        "element => { element.textContent = '3/3'; }"
+                    )
+                await wait(milliseconds)
+
+            monkeypatch.setattr(browser_page, "wait_for_timeout", interrupt_settle)
+        if mode == "redraw":
+            result = await adapter.capture_page(browser_page)
+            assert result is not None and len(result) == 1
+            assert len(materializations) == 2
+            assert len(original_attempts) == 1
+            assert materializations[1][0]["captureWindowRetained"] is False
+            assert materializations[0][0]["traceOperationIndex"] < materializations[1][0]["traceOperationIndex"]
+            decoded = Image.open(BytesIO(result[0].data)).convert("RGB")
+            assert decoded.getpixel((0, 0)) == (11, 22, 33)
+            debug = adapter._capture_debug["bookwalker_capture"]
+            assert debug["retained_redraw_retry"]["output_verified"] is True
+            assert debug["capture_window_final_join"]["exact"] is True
+        else:
+            error_type = asyncio.CancelledError if mode == "redraw_cancel" else UnknownPageStateError
+            with pytest.raises(error_type):
+                await adapter.capture_page(browser_page)
+            assert len(materializations) <= 2
+            if mode == "redraw_twice":
+                assert len(materializations) == 2
+        assert await browser_page.evaluate("window.__bookwalkerNativeDrawCalls.length") == 0
+        assert not adapter._capture_snapshot_handles
     elif mode == "mutation":
         materialize = adapter._materialize_native_source_crops
 

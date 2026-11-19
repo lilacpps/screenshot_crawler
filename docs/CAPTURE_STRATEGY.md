@@ -506,6 +506,22 @@ bounded and cleared after the capture window.
 `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original/native/lossless capture and
 continues to use the rendered-canvas fallback.
 
+For a single-part retained capture whose final renderer join observes a
+same-page redraw, BookWalker may discard the entire failed result and attempt
+one fresh native capture after 100 ms. Eligibility comes from the raw atomic
+join: both geometry/content versions must advance while the authorized CID,
+counter, pinned canvas, geometry generation, trace/reset epochs, dimensions,
+complete observer/safety flags and old selected tuple remain unchanged.
+Diagnostics, pixel similarity and elapsed time never authorize this retry.
+The fresh selection must keep the exact source object and layout, advance
+draw/source/target versions, and use new immutable source/target snapshots.
+It must pass a newly pinned ROI baseline and the complete final atomic join,
+even when the new draw does not use a retained boundary. The retry emits fresh
+native pixels (with the existing lossless WebP encoding) and skips repeated
+JPEG work. Missing evidence, a changed source/layout/identity, a pixel-only
+mismatch, a second race or a previously used redraw retry remains UNKNOWN.
+No old JPEG/PNG is returned; no navigation or quota rule changes.
+
 For mutable purchased-viewer canvas sources, draw-time pixel snapshots are allowed, but PNG encoding occurs only after the selected draw calls are known.
 
 BookWalker also has a narrow direct one-hop original-JPEG path for a single

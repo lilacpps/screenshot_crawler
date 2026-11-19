@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from screenshot_crawler.management.execution import (
     ExecutionPlanService,
     JobExecutionRequest,
+    _piccoma_ticket_consent_required,
     execution_request_payload,
 )
 from screenshot_crawler.management.inventory import InventoryService
@@ -446,7 +447,9 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.discover_button)
         self.batch_run_button = QPushButton("Batch Run")
         self.batch_run_button.setObjectName("batch_run_button")
-        self.batch_run_button.setToolTip("選択keyをBatch実行")
+        self.batch_run_button.setToolTip(
+            "選択keyをBatch実行。ピッコマでは利用可能な無料チケットを使うことがあります。"
+        )
         self.batch_run_button.clicked.connect(lambda: self._show_execution_preview("batch"))
         bottom.addWidget(self.batch_run_button)
         self.grant_only_button = QPushButton("Grant-only")
@@ -1254,6 +1257,14 @@ class MainWindow(QMainWindow):
             if blockers:
                 self.error_label.setText("; ".join(blockers))
                 return
+        # Retained signed field: normal Piccoma Batch and grant-only all/binge
+        # requests need consent because they can use free tickets. Work-only
+        # grant-only explicitly selects waitfree/¥0+ and needs no new marker.
+        allow_quota_access = _piccoma_ticket_consent_required(
+            action,
+            by_site,
+            resources_by_site=dict(resources_by_site),
+        )
         request = JobExecutionRequest(
             action=action,
             selected_keys=selected_identities,
@@ -1271,11 +1282,17 @@ class MainWindow(QMainWindow):
             output_root=str(Path('output/batch').resolve()),
             library_dir=str(Path('output/Books').resolve()),
             metrics_root=str(Path('output/metrics').resolve()),
-            fingerprint_kind='inputs-v1',
+            fingerprint_kind='inputs-v2' if allow_quota_access else 'inputs-v1',
+            allow_quota_access=allow_quota_access,
         )
+        fingerprint_service = ExecutionPlanService()
         request = replace(
             request,
-            plan_fingerprint=ExecutionPlanService().input_fingerprint(request),
+            plan_fingerprint=(
+                fingerprint_service.input_fingerprint_v2(request)
+                if allow_quota_access
+                else fingerprint_service.input_fingerprint(request)
+            ),
         )
         if not after_watchlist_save:
             if self._submit_execution(request):

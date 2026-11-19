@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QThreadPool
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -227,7 +227,7 @@ def test_unavailable_state_rejects_edits_at_the_handler(window, blocker):
 
 def test_pending_save_blocks_duplicate_writes_paths_close_and_job_launch(window, qt_app, monkeypatch):
     workers = []
-    monkeypatch.setattr(window.thread_pool, "start", workers.append)
+    monkeypatch.setattr(QThreadPool, "start", lambda self, task: workers.append(task))
     controller = window._ensure_jobs()
     queued = controller.queue(JobExecutionRequest(
         action="batch", selected_keys=frozenset({"sample-0000"}), sites=("mangaone",),

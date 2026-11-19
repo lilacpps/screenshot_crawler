@@ -58,9 +58,10 @@ Two additional paired-first profiles were verified on `KC_011605_S`:
   empty slide is never captured or treated as completion; no advance, skipped
   slides, missing/changed markers or early END fail closed.
 - `paired_first_final_pr`: pairs from the first slide, a final singleton owning
-  only PR `n=2`, an empty main paired END and one recognized secondary
-  recommendation (第11話-3: 21 pages). All slots must be captured before one
-  guarded ArrowLeft reaches the paired END; the recommendation remains inactive.
+  only PR `n=2`, an empty main paired END and zero or one recognized secondary
+  recommendation (第11話-3: 21 pages with recommendation; Episode 4.2 below: 7 pages without).
+  All slots must be captured before one guarded ArrowLeft reaches the paired
+  END; an existing recommendation remains inactive.
 
 Both profiles require exact marker classes, numbers, ownership and positive
 contained geometry, no content at/after END, complete ordered source inventory,
@@ -113,12 +114,13 @@ recommendation forms. Inventory validation still requires exact beginning
 ownership and geometry, one first singleton, paired middle, one final singleton,
 one final PR and the empty paired END. An existing recommendation must still
 pass all prior marker, owner, number, geometry and empty-slide checks. Absence
-must be exact: no trailing slide or secondary marker. Other final-PR profiles
-retain their established recommendation/double-END requirements.
+must be exact: no trailing slide or secondary marker. Other reader profiles
+retain their established requirements; the paired-first final-PR zero/one
+recommendation forms are documented below.
 
-The final ArrowLeft guard receives a no-recommendation flag only for this
-validated direct-first final-PR layout with exactly END+1 total slides. That
-mode rejects bridge/double-END/non-direct combinations and requires exactly
+The final ArrowLeft guard receives a no-recommendation flag only for the
+validated direct-first or paired-first final-PR layouts with exactly END+1
+total slides. That mode rejects bridge/double-END combinations and requires exactly
 two main END markers, correct ownership/geometry, one final content slot,
 visible reader/PR and safe focus. All ordered sources must be captured before
 the single key attempt reaches the immediately following empty END. Unknown
@@ -486,6 +488,88 @@ browser tests and a fresh bounded live source/CLI/ZIP verification, recorded in
 `runbooks/kadocomi/PROGRESS.md`. Access eligibility and native WebP proof are
 unchanged by this capture extension. Current no-deadline access classification
 is described in the Discovery contract above.
+
+## Reader class compatibility (2026-11-18)
+
+The original reader classes and the observed 2026-11-18 build are supported.
+The latter uses `_mainScreen_1omf6_1`, `.splide._root_uhrbw_1`,
+canvas `_root_1ncjq_21`, overlay `_cover_1ncjq_33`, beginning root
+`_root_1iarr_1`, and secondary END `_endOfBook_1iarr_51`. Observer, native
+capture and every guarded page-turn path recognize these alternatives while
+retaining unique screen/root, exact topology, source/pixel and navigation proof.
+Unknown builds remain unsupported; there is no generic carousel fallback.
+
+The old observer returned `root/screenCount=0` on the rendered reader and timed
+out before capture. The reported `KC_019661_S:KC_0196610000600021_E` target
+uses the existing `direct_first_final_pr` layout. A normal CLI crawl after this
+fix saved all 12 native WebP pages, reached explicit END and created a ZIP;
+all members passed CRC and decoded as 768x1092 WebP. Validation used dedicated
+outputs, without writing the operational Catalog or rerunning the 12-item Batch.
+Current evidence and limits are in `note/12_kadocomi.md`.
+
+## Empty PR bridge to secondary END (2026-11-18)
+
+The paired-first variant `paired_first_pr_secondary_end` is observed on
+`KC_019661_S:KC_0196610000300021_E` (第2話-2), with counts `[2,2,2,2,0,0]`:
+wrapped body pairs, an empty PR n=1 / main END n=2 bridge, then one empty
+secondary END with null data-n. It requires at least one pair, no beginning
+role, exact marker ownership/geometry and no extra content/slides. Normal
+live CLI captured all 8 original WebPs and reached END; its ZIP passed CRC
+and image decoding. Neither empty slide is captured. Source proof, PR async
+tracking, complete ordered capture, two stable bridge snapshots and exactly
+one guarded ArrowLeft are mandatory for both variants. Other candidates
+were not run; exact results and limits are in `note/12_kadocomi.md`.
+
+`direct_first_pr_secondary_end` supports the observed 第4話-3 target
+`KC_019661_S:KC_0196610000500031_E`: first direct canvas, paired body,
+an empty main-wrapper PR n=1 / main END n=2 bridge, then one empty secondary
+END with null data-n. The observed counts are `[1,2,2,2,2,2,0,0]` (11 pages).
+At least one body pair is required; extra slides, content at either empty
+slide, unknown/duplicate/misowned markers and changed geometry fail closed.
+
+After all body slots are captured, the bridge must settle twice before one
+guarded ordinary ArrowLeft. Only exact advancement to the next secondary END
+completes the run. No-PR profiles keep their previous rules. Native Blob/pixel
+proof and PR async stability checks remain mandatory; empty slides are never
+captured. Normal live CLI completed the target and its 11-member ZIP passed
+CRC and WebP decoding. Other candidates were not run. Evidence, regression
+results and limitations are in `note/12_kadocomi.md`.
+
+## Paired-first final PR without recommendation (2026-11-18)
+
+`paired_first_final_pr` now supports zero or one recognized recommendation
+after the empty paired main END. The observed no-recommendation route is
+`KC_019661_S:KC_0196610000500021_E` (第4話-2): `[2,2,2,1,0]`, final singleton
+owning the sole main-wrapper PR n=2, then paired main END n=1,n=2. There is no
+beginning root or directly typed canvas. At least one body pair remains
+required, with exact marker ownership/geometry and no extra content/slides.
+
+After all ordered body slots are captured, one guarded ArrowLeft must reach
+exactly the next empty END. The recommendation form retains its strict
+secondary marker checks. Native source/pixel proof, PR stability and all
+failure guards remain mandatory. Normal live CLI captured the target's
+7 original WebPs and reached END; its ZIP passed CRC and image decoding.
+Other candidates were not run. Detailed evidence and tests are in
+`note/12_kadocomi.md`.
+
+## Final body PR and empty PR bridge to secondary END (2026-11-18)
+
+`direct_first_final_pr_bridge_secondary_end` supports the observed 第1話
+route `KC_019661_S:KC_0196610000200011_E`. Its counts are
+`[1, 2 x 19, 1, 0, 0]` (40 pages): final body PR n=2, then an empty
+PR n=1 / main END n=2 bridge, then the sole empty secondary END. The profile
+requires exact marker roles/ownership/geometry, the validated direct beginning,
+paired middle and final singleton, and no extra slides/content. All sources
+must be captured before the final-body ArrowLeft; a second guarded key is
+allowed only after two stable bridge snapshots and reaches exactly the next
+secondary END. Empty slides are never captured or treated as early completion.
+Source/pixel proof, PR async tracking and all failure guards remain mandatory.
+
+Normal live CLI captured all 40 original WebPs and reached END; all ZIP members
+passed CRC and decoding. Other candidates were not run. Initial unsupported
+inventory errors now include bounded content-count and marker-position summaries
+in the exception and adapter diagnostics, without source/Blob URLs or image data.
+Detailed evidence, test results and limitations are in `note/12_kadocomi.md`.
 
 ## Operational validation
 

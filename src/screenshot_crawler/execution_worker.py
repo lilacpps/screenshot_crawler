@@ -26,7 +26,11 @@ from screenshot_crawler.cli import (
 )
 from screenshot_crawler.discovery.pacing import DiscoveryPacer
 from screenshot_crawler.discovery.validation import discovery_capability_error
-from screenshot_crawler.management.execution import ExecutionPlanService, _effective_request_paths
+from screenshot_crawler.management.execution import (
+    ExecutionPlanService,
+    _effective_request_paths,
+    _piccoma_ticket_consent_required,
+)
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.jobs import sanitize_text
 from screenshot_crawler.runtime_settings import load_runtime_settings
@@ -57,11 +61,39 @@ def _request_namespace(request: dict[str, object], *, site: str, keys: tuple[str
         output_root=Path(request.get("output_root") or root / "output" / "batch"),
         library_dir=Path(request.get("library_dir") or root / "output" / "Books"),
         metrics_root=Path(request.get("metrics_root") or root / "output" / "metrics"),
+        allow_quota_access=_namespace_quota_opt_in(request, site=site),
         grant_only=request.get("resource") if request.get("action") == "grant_only" else None,
         limit=request.get("limit"),
         max_pages=1000,
         max_same_content=3,
         keep_open=False,
+    )
+
+
+def _namespace_quota_opt_in(
+    request: Mapping[str, object], *, site: str
+) -> bool:
+    value = request.get("allow_quota_access", False)
+    if type(value) is not bool:
+        raise RuntimeError("allow_quota_access must be a boolean")
+    sites = request.get("sites")
+    consent_required = _piccoma_ticket_consent_required(
+        request.get("action"),
+        sites if isinstance(sites, (list, tuple)) else (),
+        resource=request.get("resource"),
+        resources_by_site=request.get("resources_by_site")
+        if isinstance(request.get("resources_by_site"), Mapping)
+        else None,
+    )
+    if value and not consent_required:
+        raise RuntimeError("Piccoma ticket consent does not match a supported request")
+    # This field only authorizes the normal Batch path in the CLI namespace.
+    # Grant-only's v2 bit is checked here at the queue boundary and is not a
+    # switch that changes the explicitly selected grant resource.
+    return (
+        value
+        and request.get("action") == "batch"
+        and site == "piccoma"
     )
 
 
@@ -133,24 +165,36 @@ def _fingerprint_kind(request: Mapping[str, object], expected: str) -> str:
 
     kind = request.get("fingerprint_kind")
     if kind is None:
+        if expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_V2_PREFIX):
+            return "inputs-v2"
         return "inputs-v1" if expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX) else "legacy"
-    if not isinstance(kind, str) or kind not in {"inputs-v1", "legacy"}:
+    if not isinstance(kind, str) or kind not in {"inputs-v1", "inputs-v2", "legacy"}:
         raise RuntimeError(f"unsupported execution fingerprint kind: {kind!r}")
     if kind == "inputs-v1" and not expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX):
         raise RuntimeError("inputs-v1 request has an invalid fingerprint")
-    if kind == "legacy" and expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_PREFIX):
-        raise RuntimeError("legacy request has an inputs-v1 fingerprint")
+    if kind == "inputs-v2" and not expected.startswith(ExecutionPlanService.INPUT_FINGERPRINT_V2_PREFIX):
+        raise RuntimeError("inputs-v2 request has an invalid fingerprint")
+    if kind == "legacy" and expected.startswith((
+        ExecutionPlanService.INPUT_FINGERPRINT_PREFIX,
+        ExecutionPlanService.INPUT_FINGERPRINT_V2_PREFIX,
+    )):
+        raise RuntimeError("legacy request has an inputs fingerprint")
     return kind
 
 
-def _input_fingerprint(request: dict[str, object]) -> str:
+def _input_fingerprint(request: dict[str, object], *, kind: str = "inputs-v1") -> str:
     """Recompute the lightweight request fingerprint in the worker process."""
 
     values = dict(request)
     # JobController keeps the transient explicit endpoint out of request.json
     # and transports it through the child environment.
     values["cdp_endpoint"] = _request_cdp_endpoint(request)
-    return ExecutionPlanService().input_fingerprint(values)
+    service = ExecutionPlanService()
+    if kind == "inputs-v2":
+        return service.input_fingerprint_v2(values)
+    if kind != "inputs-v1":
+        raise RuntimeError(f"unsupported inputs fingerprint kind: {kind}")
+    return service.input_fingerprint(values)
 
 
 def _validate_watchlist_targets(
@@ -255,7 +299,26 @@ async def _run(
     original_request = request
     expected = _required_fingerprint(original_request)
     fingerprint_kind = _fingerprint_kind(original_request, expected)
-    if fingerprint_kind == "inputs-v1":
+    allow_quota_access = original_request.get("allow_quota_access", False)
+    if type(allow_quota_access) is not bool:
+        raise RuntimeError("allow_quota_access must be a boolean")
+    if fingerprint_kind == "inputs-v2" and "allow_quota_access" not in original_request:
+        raise RuntimeError("inputs-v2 request is missing allow_quota_access")
+    request_sites = original_request.get("sites")
+    request_resources = original_request.get("resources_by_site")
+    consent_required = _piccoma_ticket_consent_required(
+        action,
+        request_sites if isinstance(request_sites, (list, tuple)) else (),
+        resource=original_request.get("resource"),
+        resources_by_site=request_resources
+        if isinstance(request_resources, Mapping)
+        else None,
+    )
+    if allow_quota_access and (
+        fingerprint_kind != "inputs-v2" or not consent_required
+    ):
+        raise RuntimeError("Piccoma ticket consent does not match a signed supported request")
+    if fingerprint_kind in {"inputs-v1", "inputs-v2"}:
         # Normalize optional paths before signing and before constructing the
         # CLI namespace, keeping defaults identical on both sides.
         paths = _effective_request_paths(original_request)
@@ -273,6 +336,25 @@ async def _run(
     policies = _batch_policy_registry()
     _selected, keys_by_site = _validated_selection(request)
     resources = _validated_resources(request, keys_by_site)
+    piccoma_request_needs_consent = _piccoma_ticket_consent_required(
+        action,
+        keys_by_site,
+        resource=original_request.get("resource"),
+        resources_by_site=resources,
+    )
+    if piccoma_request_needs_consent and (
+        fingerprint_kind != "inputs-v2" or allow_quota_access is not True
+    ):
+        raise RuntimeError(
+            "Piccoma request needs fresh confirmation before ticket use"
+        )
+    if allow_quota_access and not piccoma_request_needs_consent:
+        raise RuntimeError("Piccoma ticket consent does not match selected grant resources")
+    remaining_limit = original_request.get("limit")
+    if action in {"batch", "grant_only"} and remaining_limit is not None and (
+        type(remaining_limit) is not int or remaining_limit < 1
+    ):
+        raise RuntimeError("Batch limit must be a positive integer")
 
     def emit(event_type: str, **fields: object) -> None:
         if event_sink is not None:
@@ -287,11 +369,11 @@ async def _run(
     # site operation runs.  New requests defer Catalog planning to the CLI
     # path; legacy requests retain their historical preflight below.
     with CatalogService(catalog_path).job_lock():
-        if fingerprint_kind == "inputs-v1":
-            if _input_fingerprint(request) != expected:
+        if fingerprint_kind in {"inputs-v1", "inputs-v2"}:
+            if _input_fingerprint(request, kind=fingerprint_kind) != expected:
                 raise RuntimeError("Watchlist/runtime/environment changed after confirmation")
             targets = _validate_watchlist_targets(request, keys_by_site)
-            if _input_fingerprint(request) != expected:
+            if _input_fingerprint(request, kind=fingerprint_kind) != expected:
                 raise RuntimeError("Watchlist/runtime/environment changed after confirmation")
             if action == "discover" and not any(
                 targets[key].enabled for key in _selected
@@ -444,22 +526,33 @@ async def _run(
                 raise RuntimeError("Catalog/Watchlist changed after confirmation")
         catalog = CatalogService(catalog_path)
         for site, keys in sorted(keys_by_site.items()):
+            if remaining_limit == 0:
+                break
             checkpoint()
             emit("task_started", phase="site", payload={"site": site, "keys": list(keys)})
+            site_request = {
+                **request,
+                "resource": resources.get(site),
+                "limit": remaining_limit,
+            }
             args = _request_namespace(
-                {**request, "resource": resources.get(site)},
+                site_request,
                 site=site,
                 keys=tuple(keys),
             )
             batch_summary: dict[str, object] = {}
+            site_attempts = 0
 
             def batch_event(
                 event_type: str,
                 _summary: dict[str, object] = batch_summary,
                 **fields: object,
             ) -> None:
+                nonlocal site_attempts
                 if event_type == "batch_finished":
                     _summary.update(fields)
+                elif event_type == "candidate_started":
+                    site_attempts += 1
                 emit(event_type, **fields)
 
             args.event_sink = batch_event
@@ -484,6 +577,8 @@ async def _run(
                 emit("task_failed", phase="site", result="failed", error_type=type(exc).__name__,
                      reason=str(exc)[:1000], payload={"site": site})
                 raise
+            if remaining_limit is not None:
+                remaining_limit = max(0, remaining_limit - site_attempts)
             summary_payload = {"site": site}
             if isinstance(batch_summary.get("payload"), dict):
                 summary_payload.update(batch_summary["payload"])

@@ -105,15 +105,18 @@ def test_multiple_keys_require_detail_and_work_patch_preserves_other_draft(tmp_p
     assert len(proof.listings) == 2
 
 
-def test_edit_version_catalog_and_stale_listing_reject_without_mutation(tmp_path):
+@pytest.mark.parametrize("age", [301, 86400, 2592000])
+def test_old_listing_remains_ready_but_edit_invalidates_detail_without_write(tmp_path, age):
     batch, path, catalog = setup_batch(tmp_path)
     a = add(batch, "jumpplus", "work")
     request, draft, result = detail(batch, a)
     original = path.read_bytes(), catalog.path.read_bytes()
-    stale = replace(result, listings=tuple(replace(x, observed_at=datetime.now(UTC) - timedelta(seconds=301))
+    older = replace(result, listings=tuple(replace(x, observed_at=datetime.now(UTC) - timedelta(seconds=age))
         for x in result.listings))
-    with pytest.raises(ValueError, match="古い"):
-        accept_detail(batch, request, stale, {t.key for t in draft.members})
+    proof = accept_detail(batch, request, older, {t.key for t in draft.members})
+    assert batch.readiness(a).status == "ready"
+    assert validate_detail(batch, proof, batch.catalog_snapshot).targets == older.targets
+    assert detail_draft(batch, a)[1].listings == {x.target_key: x for x in older.listings}
     batch.edit_candidate(a, label="Changed")
     with pytest.raises(ValueError, match="版"):
         accept_detail(batch, request, result, {t.key for t in draft.members})

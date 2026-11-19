@@ -40,6 +40,10 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # 03. Magapoke
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Read-only complete listing preview (2026-10-25)
 
 MagapokeDiscoveryAdapter now exposes optional preview_complete_listing(page, target). It reuses the existing episode-list navigation, bounded expansion, identity validation, title parsing, and access observation helpers, then returns site-neutral ListingPreview/ListingRow DTOs. Rows carry the site-native episode ID, canonical URL, authoritative latest-first position, display title, access observation, and listing identity. The digest includes listing identity plus ordered IDs and positions.

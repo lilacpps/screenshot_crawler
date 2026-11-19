@@ -74,9 +74,12 @@ class BatchPlanner:
         now: datetime | None = None,
         quota_resource: str | None = None,
         output_mode: Literal["capture", "grant_only"] = "capture",
+        allow_quota_access: bool = False,
     ) -> BatchPlan:
         if output_mode not in {"capture", "grant_only"}:
             raise BatchPlanningError(f"Unsupported output mode: {output_mode!r}")
+        if type(allow_quota_access) is not bool:
+            raise BatchPlanningError("allow_quota_access must be a boolean")
         current = _normalize_now(now_jst() if now is None else now)
         archive_positions_by_source: dict[int, int] = {}
         unmanaged_source_ids: set[int] = set()
@@ -93,6 +96,12 @@ class BatchPlanner:
             # collision checks.  Selection is applied only to the candidate
             # pool below, before any source or quota allocation takes place.
             site_sources = [source for source in all_sources if source.site == site]
+            blocked_quota_sources: frozenset[int] = frozenset()
+            history_guard = getattr(policy, "guards_unresolved_quota_attempts", None)
+            if callable(history_guard) and history_guard():
+                blocked_quota_sources = policy.unresolved_quota_attempt_source_ids(
+                    self.catalog.list_crawl_runs()
+                )
             sources = site_sources
             excluded_source_ids: set[int] = set()
             selected_key_values = (
@@ -280,6 +289,8 @@ class BatchPlanner:
                     targets_by_source=targets_by_source,
                     quota_resource=quota_resource,
                     capture_manager=capture_manager if output_mode == "capture" else None,
+                    allow_quota_access=allow_quota_access,
+                    blocked_quota_source_ids=blocked_quota_sources,
                 )
                 if selected is None:
                     continue
@@ -336,10 +347,14 @@ class BatchPlanner:
                 for selection in capture_selections if selection.resume is not None
             )
             quota_selections = _enforce_work_quota_limits(quota_selections, plan.skipped)
-            group_ranks = _discovery_group_ranks(sources)
-            quota_selections.sort(
-                key=lambda selection: (selection.resume is None, _quota_selection_order_key(selection, group_ranks))
+            preserve_sequence = policy.preserve_candidate_sequence(
+                allow_quota_access=allow_quota_access
             )
+            if not preserve_sequence:
+                group_ranks = _discovery_group_ranks(sources)
+                quota_selections.sort(
+                    key=lambda selection: (selection.resume is None, _quota_selection_order_key(selection, group_ranks))
+                )
             if quota_available is None:
                 accepted_quota = quota_selections
             else:
@@ -351,7 +366,16 @@ class BatchPlanner:
                         BatchSkipped(selection.item.id, selection.source.id, "quota_exhausted")
                     )
 
-            if any(
+            if preserve_sequence:
+                ordered_selections = [
+                    selection
+                    for selection in selections
+                    if (
+                        not selection.decision.consumes_quota
+                        or selection.item.id in accepted_quota_ids
+                    )
+                ]
+            elif any(
                 selection.decision.quota_scope == "work"
                 for selection in selections
                 if selection.decision.consumes_quota
@@ -370,7 +394,9 @@ class BatchPlanner:
                     elif selection.item.id in accepted_ids:
                         ordered_selections.append(next(quota_iter))
             ordering = policy.batch_ordering()
-            if ordering == "published_at":
+            if preserve_sequence:
+                pass
+            elif ordering == "published_at":
                 direct_selections = [
                     selection
                     for selection in ordered_selections
@@ -445,6 +471,8 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]],
         quota_resource: str | None,
         capture_manager=None,
+        allow_quota_access: bool,
+        blocked_quota_source_ids: frozenset[int],
     ) -> tuple | None:
         for source in sorted(sources, key=_source_priority_key):
             web_targets = [target for target in targets_by_source.get(source.id, [])
@@ -453,10 +481,11 @@ class BatchPlanner:
             resume = (capture_manager.load(source, target)
                       if capture_manager is not None and source.available and target is not None else None)
             if quota_resource is None:
-                decision = policy.evaluate(
+                decision = policy.evaluate_with_quota_access(
                     source,
                     now=now,
                     quota_available=quota_remaining,
+                    allow_quota_access=allow_quota_access,
                 )
             else:
                 decision = policy.evaluate_for_quota_resource(
@@ -469,6 +498,11 @@ class BatchPlanner:
                 decision = PolicyDecision(True, "quota", "local_completion")
             if not decision.eligible:
                 skipped.append(BatchSkipped(source.item_id, source.id, decision.reason))
+                continue
+            if decision.consumes_quota and source.id in blocked_quota_source_ids:
+                skipped.append(
+                    BatchSkipped(source.item_id, source.id, "prior_quota_attempt_unresolved")
+                )
                 continue
             if quota_resource is not None and not decision.consumes_quota:
                 continue

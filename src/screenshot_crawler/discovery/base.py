@@ -165,6 +165,15 @@ class DiscoveryAdapter(ABC):
         del previous, target
         return observed_access_mode
 
+    def configure_source_snapshots(
+        self,
+        target: WatchlistTarget,
+        snapshots: tuple[DiscoverySourceSnapshot, ...],
+    ) -> None:
+        """Provide same-site, same-key run-start snapshots to opted-in adapters."""
+
+        del target, snapshots
+
     def incremental_stop_decision(
         self,
         record: DiscoveredRecord,

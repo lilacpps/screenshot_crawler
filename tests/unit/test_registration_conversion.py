@@ -78,8 +78,10 @@ def test_resolution_cannot_be_substituted_under_proof(field, value):
     assert resolver.resolution_error(replace(converted(resolver), **{field: value}))
 
 
-@pytest.mark.parametrize("age,accepted", [(0, True), (300, True), (300.001, False), (-0.001, False)])
-def test_proof_time_is_bounded_and_clock_is_testable(monkeypatch, age, accepted):
+@pytest.mark.parametrize("age,accepted", [
+    (0, True), (300, True), (300.001, True), (86400, True), (2592000, True), (-0.001, False),
+])
+def test_proof_has_no_expiry_but_future_observation_is_rejected(monkeypatch, age, accepted):
     now = datetime(2026, 11, 3, tzinfo=UTC)
     monkeypatch.setattr("screenshot_crawler.registration.models.conversion_now", lambda: now)
     resolver = UrlResolver(_discovery_registry())
@@ -118,7 +120,8 @@ def test_unknown_title_conversion_requires_human_confirmation_and_saves_exact_se
     assert catalog.path.read_bytes() == before[1]
 
 
-def test_expiry_after_preview_blocks_atomic_save_and_retry_discards_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("elapsed", [301, 86400, 2592000])
+def test_elapsed_time_after_preview_preserves_save_and_retry_discards_proof(tmp_path, monkeypatch, elapsed):
     batch, path, catalog = setup_batch(tmp_path)
     now = datetime.now(UTC)
     monkeypatch.setattr("screenshot_crawler.registration.models.conversion_now", lambda: now)
@@ -129,11 +132,14 @@ def test_expiry_after_preview_blocks_atomic_save_and_retry_discards_proof(tmp_pa
     service = RegistrationService(path, catalog.path)
     preview = service.preview(batch)
     before = path.read_bytes(), catalog.path.read_bytes()
-    monkeypatch.setattr("screenshot_crawler.registration.models.conversion_now", lambda: now + timedelta(seconds=301))
-    assert batch.readiness(row).status == "blocked"
-    with pytest.raises(ValueError):
-        service.save(batch, preview)
+    candidate = batch.candidates[row]
+    monkeypatch.setattr("screenshot_crawler.registration.models.conversion_now", lambda: now + timedelta(seconds=elapsed))
+    assert batch.readiness(row).status == "ready"
+    assert service.preview(batch) == preview
     assert before == (path.read_bytes(), catalog.path.read_bytes())
+    assert service.save(batch, preview).verified
+    assert batch.candidates[row] == candidate
+    assert catalog.path.read_bytes() == before[1]
     batch.retry(row, batch.resolver.resolve(SEED))
     assert batch.candidates[row].resolution.conversion_proof is None
     assert batch.candidates[row].label == "人工作品" and not batch.candidates[row].confirmed

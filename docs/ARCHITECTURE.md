@@ -521,6 +521,12 @@ Site Adapterが必要なsite固有button/entry操作だけを担当する。
 
 Manga ONEのquota entryはCSR mount後に現れるため、Adapter内で最大2秒、100ms間隔のbounded waitを行う。候補数1件かつvisibleのbuttonだけをクリックし、曖昧な状態ではfirst要素を選択しない。
 
+入口click前の候補未確認はAdapterが`AccessEntryNotAttemptedError`で報告する。
+明示的な「ログインして読む」があればlogin必須をエラーに含める。
+Batchはこの証拠がある場合だけ開始前に仮定したgrant期限を元へ戻し、
+`quota_started_at`は保持する。開始前に保存した値から変化したgrantは上書きしない。
+click開始後・消費不明・通常のtimeoutは従来どおりquota/grantを保持する。
+
 ## 10. Duplicate handling
 
 The runner deduplicates each captured part using the complete key:
@@ -577,6 +583,7 @@ metadata overrideはmanifest/source URLのauthorityにはならない。
 
 ```python
 prepare_page(page)
+prepare_entry_only_page(page)  # optional; defaults to prepare_page
 configure_run(page, access_strategy)
 initialize(page)
 initialize_entry_only(page)  # optional; used when RunConfig.entry_only=True
@@ -592,6 +599,13 @@ wait_for_change(page, previous_identity)
 ```
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
+
+`entry_only=True` は権利確認と消費確認のみを行う。RunnerはContent capture/save,
+Manifest / Progress更新、packaging、Item completionを行わず、失敗diagnosticはmetadata/errorに
+限定してscreenshotとHTML snapshotを省略する。Adapterがcapture専用の準備（例: pixel observer）を
+避ける必要がある場合は`prepare_entry_only_page(page)`をoverrideできる。Base defaultは通常の
+`prepare_page(page)`へ委譲する。Overrideはtarget validation、Page/AccessGuard ownershipおよびcleanupを
+弱めない。通常capture pathの`prepare_page` behaviorは変更しない。
 
 `capture_page()`は任意の直接capture hookである。非`None`の非空tupleを返した場合、Coreは
 Locator captureを行わない。`None`、`CaptureUnavailableError`、bounded timeoutでは既存の
@@ -729,6 +743,7 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - Catalog metadataをoptional overrideとしてplan candidateへ入れる
 - quota仮予約はmemory内だけで行い、Catalogへ永続化しない
 - `quota_available` は計画前のlocal枠、`quota_remaining` は仮予約後の残枠を表す
+- Site Policyは必要な場合だけ、quota配分前に選定したcandidate sequenceを保持するopt-in hookを使える。既定の他サイト順序は変えない
 - Phase 5Bではcandidateを順番に実行し、quota candidateはCrawler開始直前にlocal stateを保存する
 - Schema v3では実行開始時にCrawlRun(running)を作り、成功/失敗を履歴として保持する
 - crawl + packaging + Artifact persistence成功後だけItemをcompletedにする
@@ -737,6 +752,7 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
 - 現行Web Executorは`backend=web` targetだけを実行し、`target_id / backend / target_key / locator`を保持する
 - `locator`を既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する
+- Adapterはbody/URLを含めないtyped access-attempt observationを、同期sinkへ消費可能操作前に報告できる。Executorは現在candidateのsite/source/resource identityを検証し、durable sinkが失敗したら操作前に停止する
 - 将来Android対応は上位dispatcherでbackend別Runnerへ振り分け、CrawlerRunner/Pageを無理に共通化しない
 
 ### Site Policy
@@ -769,6 +785,21 @@ navigation. This lets a site adapter bind Catalog identity to target-local live
 checks without giving Core Catalog access or site-specific identity rules.
 Work-scoped local resource cooldown checks run before opening a consuming
 candidate page; local skips do not count as site attempts or pacing events.
+
+### Confirmed access grant persistence
+
+`ConfirmedAccessGrant` is an immutable site-neutral event containing the exact
+site/external identity, an aware observation time, a finite aware expiry later
+than that observation, and its evidence kind. `SiteAdapter` exposes optional
+`set_confirmed_access_grant_observer(callback | None)` and
+`configure_existing_access_grant(expiry | None)` hooks. The Batch Executor
+binds the observer to the already validated Catalog source, validates the
+immutable event, and synchronously calls the Catalog grant-only API before
+capture continues. The Catalog update changes only that source grant expiry
+and its update timestamp; quota state, resource state, Items, and Artifacts
+remain untouched. The Executor disables and clears the observer on every run
+exit. Runner remains independent of Catalog. Existing-grant context is reset
+for each run, including a `None` expiry.
 
 ## Hanayume Source identity maintenance
 
@@ -810,4 +841,5 @@ and execution controls retain their existing order and meaning.
 - Work-deletion move portability boundary (2026-11-14): destructive no-clobber rename is enabled only on Windows in this initial implementation, where the tested native rename semantics reject an existing destination. Other platforms fail closed before moving; no POSIX check-then-rename guarantee is claimed.
 - Work-deletion recovery safety (2026-11-14): recovery dry-run treats SQLite WAL/header/sidecars and hot journals as unknown without creating locks or SQLite files; explicit apply may use SQLite's native hot-journal rollback under the Catalog lock. Recovery manifests require canonical Catalog/Watchlist/namespace bindings and verified backup facts. Catalog deletion compares the full non-target logical fingerprint inside the same transaction before COMMIT, and unknown Catalog tables/columns fail closed. These boundaries are covered by the isolated Stage 03 review-approved suite.
 - Work-deletion GUI gate follow-up (2026-11-14): standalone Watchlist editor saves always use an effective Catalog admission/gate identity (`catalog_path` or isolated `catalog.sqlite` default); optional Catalog binding semantics for scope previews remain unchanged. Page, Watchlist, runtime, and worker paths are canonicalized at construction, so delayed workers cannot re-resolve them under a changed CWD. A pending deletion reservation blocks the save, and normal save resumes only after verified gate release. Manifest `active_marker` values are checked against the canonical Catalog namespace. GUI/work-deletion isolated coverage is 95 passing tests; Stage 03 independent review is BLOCKING-0 approved.
-- Work-deletion Stage 04 surface (2026-11-14): direct CLI preview/apply JSON and the archive Work context-menu dialog both invoke the common service. CLI output includes authoritative title/site keys, graph and ZIP/byte counts, operation/manifest identifiers, blockers and warnings; blocked and recovery-required results are nonzero. The Qt dialog previews on a QRunnable, requires explicit confirmation, and applies only the cached canonical Plan; all paths are absolute at owner construction. Defaults are the existing isolated packaging roots (`output/Books`, `output/crawl-status`, `output/trash/work-deletion`). Independent Stage 04 review is BLOCKING-0 approved; real data and live sites remain out of scope. The affected isolated suite is 313 passed with 442 warnings; the full-suite attempt is recorded as incomplete because of a Windows async teardown timeout.
+- Work-deletion Stage 04 surface (2026-11-14, history support 2026-11-18): direct CLI preview/apply JSON and the archive Work context-menu dialog both invoke the common service. CLI output includes authoritative title/site keys, graph and ZIP/byte counts, operation/manifest identifiers, blockers and warnings; blocked and recovery-required results are nonzero. The Qt dialog previews on a QRunnable, requires explicit confirmation, and applies only the cached canonical Plan; all paths are absolute at owner construction. Defaults are `output/Books`, its sibling `output/Books-history`, `output/crawl-status`, and `output/trash/work-deletion`. History root is independently configurable through `--history-root`, bound into the canonical Plan and fresh Apply, and scanned once alongside Library. Root overlap and duplicate destination root names fail closed. Normal/history ZIPs retain separate root-relative destinations and the same file/ownership checks and recovery intents. Historical status snapshots remain outside the derived normal-sidecar rule. Stage 04's original affected isolated suite was 313 passed with 442 warnings; its full-suite attempt was incomplete because of a Windows async teardown timeout.
+- Interrupted-job exit proof (2026-11-18): controller atomically persists `launcher.identity` with token/PID/OS creation identity before opening the start gate. Deletion requires proof for both child and launcher; a live numeric launcher PID with a different verified creation identity is reused, not a writer. Legacy jobs without that file may prove launcher reuse only when its observed numeric creation identity is strictly later than the recorded child's. Unknown identity and malformed/token-mismatched files remain blocked. Windows creation identity uses GetProcessTimes, with a bounded NtQuerySystemInformation fallback for denied process handles; the fallback validates buffer offsets and its internal layout against this process's independent GetProcessTimes identity in the same snapshot. No process name, age, history mutation or termination is used to bypass the gate.

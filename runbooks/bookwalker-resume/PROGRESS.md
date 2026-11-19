@@ -124,6 +124,22 @@
 - 最終 `ruff check src tests`、`git diff --check`、文書の相対リンク52件はPASS。
   独立agent reviewは実施していない。
 
+## main取り込みcheckpoint — 2026-11-20
+
+- 利用者のmainマージ指示に従い、実装を `8e303ef` にコミットしてから、
+  分岐後のmain `da5c74c` の26コミットを取り込んだ。
+- 競合は `batch/executor.py`、`batch/planner.py`、`cli.py`、`core/runner.py`、
+  `site_adapters/base.py`。main側の権利・attempt observer、未確定quota保護、
+  speculative grant撤回、Piccomaの候補順序維持、grant-onlyのmanifest非作成を保持した。
+  resumeの位置照合・優先・timer・offline完了を併存させ、local完了ではobserverを設定しない。
+- マージ後のCore/Batch/Policy/CLI/deferred-grant選択は **515 passed / 0 skipped**（128.52秒）。
+  BookWalker Adapter/native capture/source/reader controls/terminal＋実browser Integrationは
+  **290 passed / 0 skipped**（60.75秒）。合計 **805 passed**。
+- `ruff check src tests` と `git diff --check` はPASS。別worktreeの未commit変更は変更しない。
+- 上の全9052 nodeの分割検証はmain取り込み前の実装時点の記録。
+  今回は競合を解消した契約とその影響範囲を再検証し、full suiteと実サイトprobeは再実行していない。
+  前回の購入済み検証記録は保持し、実quotaは引き続き消費していない。
+
 ## 購入済みlive検証
 
 - すべて上記購入済み商品へのstrict direct。通常Catalog/Watchlist/ZIPを更新しない。

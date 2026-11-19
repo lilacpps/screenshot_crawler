@@ -68,6 +68,10 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 # Hanayume current implementation
 
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Previously read target without a current rental (2026-11-06)
 
 The exact account target classes `mode-current mode-read mode-store-item-blank
@@ -1221,6 +1225,17 @@ backup/snapshot再検証/Catalog lock/BEGIN IMMEDIATEとpersistent recovery jour
 同一filesystemでhardlink可能な保存先に限定し、移動先は排他作成で上書きしない。
 例外時はDB/file復元を確認。不明/復元失敗はRECOVERY_REQUIREDで停止し、未解決journalがあればapplyしない。
 process強制終了はjournal/backup/manifestからの明示復旧が必要。本番ZIPは未移動。
+
+## Work完全削除での履歴ZIP（2026-11-18）
+
+共通削除Service/GUIは`Books-history`配下のCatalog所有ZIPも通常ZIPと同じ検証を通して退避する。
+退避先は`output/trash/work-deletion/<操作ID>/Books-history/hanayume/<work_key>/artifact-<id>/<元名>`。
+通常ZIPの`Books/…`と区別し、manifestのsource/destinationと共通復旧intentへ記録する。
+履歴ZIPを`Books`へ戻す操作やCatalog locatorの事前修正は不要。履歴分離時に残した旧statusは
+推測探索/移動せず残す。所有不明、他Work共有、size/SHA不一致、alias、許可root外は停止する。
+CLI `work delete --history-root`でcustom履歴rootを指定でき、省略時はLibraryの兄弟`<Library名>-history`。
+実サイトAdapter/Discovery/履歴分離そのものは変更しない。今回の確認は隔離退避・復旧と
+実Catalog/ZIPのread-only診断であり、本番Work削除は実行していない。
 
 ## ユーザー適用後の通常GUI表示（2026-11-11）
 

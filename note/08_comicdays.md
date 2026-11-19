@@ -43,6 +43,10 @@ Zeblack's fixed public metadata API does not navigate an HTML Page.
 
 # Comic DAYS
 
+Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
+Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
+The normal capture path and its output are unchanged (see `note/00_core.md`).
+
 ## Odd body count after dummy/front prefix (2026-11-10)
 
 Item/source `22017`, episode `3269632237261316428` (スキップとローファー

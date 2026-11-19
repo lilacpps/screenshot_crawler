@@ -234,9 +234,11 @@ class WorkDraft:
             if listing is None:
                 raise ValueError(f"{target.key}: 完全一覧を取得してください")
             self.set_listing(listing)
-            age = (now - listing.observed_at).total_seconds()
-            if not 0 <= age <= 300:
-                raise ValueError(f"{target.key}: 完全一覧が古いため再取得してください")
+            # Keep the editing snapshot until explicitly replaced or invalidated
+            # by changed inputs; this listing does not authorize live access.
+            if (not isinstance(listing.observed_at, datetime)
+                    or listing.observed_at.utcoffset() is None or listing.observed_at > now):
+                raise ValueError(f"{target.key}: 完全一覧の観測日時が不正です。再取得してください")
         assigned: dict[str, set[str]] = {target.key: set() for target in self.members}
         for block in self.blocks():
             ids = {row.external_id for row in self.rows_for_block(block)}

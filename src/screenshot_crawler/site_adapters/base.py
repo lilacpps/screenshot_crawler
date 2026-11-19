@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
@@ -16,6 +17,38 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfirmedAccessGrant:
+    """Site evidence for one finite, exact-source access grant."""
+
+    site: str
+    external_id: str
+    observed_at: datetime
+    access_granted_until: datetime
+    expiry_evidence: Literal["site_absolute_expiry", "site_countdown_lower_bound"]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.site, str) or not self.site.strip():
+            raise ValueError("confirmed grant site must be non-empty")
+        if not isinstance(self.external_id, str) or not self.external_id.strip():
+            raise ValueError("confirmed grant external_id must be non-empty")
+        for name, value in (
+            ("observed_at", self.observed_at),
+            ("access_granted_until", self.access_granted_until),
+        ):
+            if not isinstance(value, datetime):
+                raise TypeError(f"confirmed grant {name} must be a datetime")
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError(f"confirmed grant {name} must be timezone-aware")
+        if self.access_granted_until <= self.observed_at:
+            raise ValueError("confirmed grant expiry must follow its observation")
+        if self.expiry_evidence not in {
+            "site_absolute_expiry",
+            "site_countdown_lower_bound",
+        }:
+            raise ValueError("confirmed grant expiry evidence is unsupported")
+
+
+@dataclass(frozen=True, slots=True)
 class AccessConsumption:
     consumed: bool = False
     resource: str | None = None
@@ -23,6 +56,33 @@ class AccessConsumption:
     access_granted_until: datetime | None = None
     # Finish the current successful capture/grant before ending this resource pass.
     stop_resource_pass: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AccessAttemptObservation:
+    """Durable, body-free status for one site-selected access attempt."""
+
+    site: str
+    external_id: str
+    resource: str
+    resource_kind: str
+    status: Literal["attempting", "confirmed", "unknown", "not_attempted"]
+    observed_at: datetime
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("site", "external_id", "resource", "resource_kind"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"access attempt {name} must be non-empty")
+        if self.status not in {"attempting", "confirmed", "unknown", "not_attempted"}:
+            raise ValueError("access attempt status is unsupported")
+        if not isinstance(self.observed_at, datetime):
+            raise TypeError("access attempt observed_at must be a datetime")
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("access attempt observed_at must be timezone-aware")
+        if self.reason is not None and not isinstance(self.reason, str):
+            raise TypeError("access attempt reason must be a string or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +103,11 @@ class SiteAdapter(ABC):
         """Optionally install page hooks before the first navigation."""
 
         return
+
+    async def prepare_entry_only_page(self, page: Page) -> None:
+        """Prepare an entry-only page, defaulting to the normal setup."""
+
+        await self.prepare_page(page)
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         """Return the adapter-selected URL used for the first navigation.
@@ -89,6 +154,51 @@ class SiteAdapter(ABC):
 
     async def get_resume_checkpoint(self, page: Page) -> dict[str, Any]:
         raise UnsupportedAccessStrategyError(f"{type(self).__name__} has no resume checkpoint")
+
+    def configure_existing_access_grant(
+        self, access_granted_until: datetime | None
+    ) -> None:
+        """Supply a previously trusted finite grant for the selected source."""
+
+        del access_granted_until
+
+    def set_confirmed_access_grant_observer(
+        self, observer: Callable[[ConfirmedAccessGrant], None] | None
+    ) -> None:
+        """Configure a synchronous, site-neutral persistence observer."""
+
+        if observer is not None and not callable(observer):
+            raise TypeError("confirmed grant observer must be callable or None")
+        self._confirmed_access_grant_observer = observer
+
+    def set_access_attempt_observer(
+        self, observer: Callable[[AccessAttemptObservation], None] | None
+    ) -> None:
+        """Configure a synchronous sink that flushes attempt evidence before action."""
+
+        if observer is not None and not callable(observer):
+            raise TypeError("access attempt observer must be callable or None")
+        self._access_attempt_observer = observer
+
+    def report_access_attempt(self, observation: AccessAttemptObservation) -> None:
+        """Persist a sanitized attempt stage before returning to site operation."""
+
+        if not isinstance(observation, AccessAttemptObservation):
+            raise TypeError("reported value must be an AccessAttemptObservation")
+        observer = getattr(self, "_access_attempt_observer", None)
+        if observer is None:
+            raise RuntimeError("access attempt observer is not configured")
+        observer(observation)
+
+    def report_confirmed_access_grant(self, grant: ConfirmedAccessGrant) -> None:
+        """Persist site evidence before execution can proceed to capture."""
+
+        if not isinstance(grant, ConfirmedAccessGrant):
+            raise TypeError("reported value must be a ConfirmedAccessGrant")
+        observer = getattr(self, "_confirmed_access_grant_observer", None)
+        if observer is None:
+            raise RuntimeError("confirmed access grant observer is not configured")
+        observer(grant)
 
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None

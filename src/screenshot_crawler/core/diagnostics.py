@@ -17,6 +17,7 @@ async def write_diagnostics(
     *,
     metadata: dict[str, Any] | None = None,
     error: BaseException | None = None,
+    include_page_snapshot: bool = True,
 ) -> Path:
     """Write diagnostics without masking the original crawler exception."""
 
@@ -36,18 +37,19 @@ async def write_diagnostics(
     if error is not None:
         details["error_type"] = type(error).__name__
 
-    try:
+    if include_page_snapshot:
+        try:
             await asyncio.wait_for(
                 page.screenshot(path=str(output_dir / "screenshot.png"), full_page=False),
                 timeout=5,
             )
-    except BaseException as exc:  # noqa: BLE001  # diagnostics must not mask original
-        details["screenshot_error"] = str(exc)
-    try:
-        html = await asyncio.wait_for(page.content(), timeout=5)
-        (output_dir / "page.html").write_text(html, encoding="utf-8")
-    except BaseException as exc:  # noqa: BLE001
-        details["html_error"] = str(exc)
+        except BaseException as exc:  # noqa: BLE001  # diagnostics must not mask original
+            details["screenshot_error"] = str(exc)
+        try:
+            html = await asyncio.wait_for(page.content(), timeout=5)
+            (output_dir / "page.html").write_text(html, encoding="utf-8")
+        except BaseException as exc:  # noqa: BLE001
+            details["html_error"] = str(exc)
     try:
         atomic_write_json(output_dir / "metadata.json", details)
     except BaseException as exc:  # noqa: BLE001

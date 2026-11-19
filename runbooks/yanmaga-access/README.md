@@ -1,6 +1,6 @@
 # ヤンマガWeb 初回無料・待つと無料 実装 Runbook
 
-**Status:** PLANNED / NOT IMPLEMENTED（2026-11-15）。
+**Status:** Stage 01 PASS; Stage 02 PASS with independent BLOCKING 0 review; Stage 03 PASS with qualified composite live evidence and independent BLOCKING 0; Stage 04 A6/A7 live runs, affected tests, and Tester audits PASS (261 passed, 0 skipped, 305 deselected). The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and is not a full pass. See [Stage 04](04-e2e/README.md).
 **Scope:** 既存 `yanmaga` の通常無料取得を維持しながら、初回無料（capture-only）と待つと無料（capture / grant-only）を追加する。
 **Base:** `main` の `runbooks/yanmaga-free/README.md` の正常完了版。既存画像取得経路・厳格なEND判定は保持。
 **実装ブランチ:** 作業開始時の最新 `main` から `feat/yanmaga-access` を新規作成する。ユーザーの未コミット変更は保持し、`main` へ自動マージしない。既存ブランチがあれば衝突を確認し、勝手に上書きしない。

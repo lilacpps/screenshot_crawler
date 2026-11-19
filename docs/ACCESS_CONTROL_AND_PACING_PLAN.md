@@ -6,6 +6,36 @@ Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
 Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
 Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PARTIAL**.
 
+Piccoma normal Batch and grant-only ticket execution are implemented as a
+site-specific integration, not as a new generic resource policy phase. Normal
+Batch uses `piccoma_ticket_auto`; grant-only uses `work_ticket` (waitfree/¥0+)
+and `binge_ticket` (binge-free) as distinct ordered passes for `all`. Both use
+existing `quota_resource` /
+`AccessConsumption` contracts plus the site-neutral candidate-sequence and
+durable access-attempt observer hooks. Generic behavior remains unchanged for
+policies that do not use those hooks. The implementation, historical live
+ledger, current synthetic regression status and remaining evidence are tracked in
+[`runbooks/piccoma-ticket-auto/PROGRESS.md`](../runbooks/piccoma-ticket-auto/PROGRESS.md).
+
+Explicit Piccoma grant-only now opts into Work-level stock resolution through
+`resolve_grant_only_per_work()`. One guarded non-consuming snapshot bounds a
+Work's selected grant pool; zero stock skips the Work, and later unavailability
+does not probe its other episodes. Normal Batch ordering and the existing
+single-target deferred/prepared flows keep their contracts. Acceptance covers
+waitfree/¥0+/Binge stock bounds, unknown balances, next-Work advancement,
+shared limits, pass exhaustion, failure stops and Page cleanup. This revision's
+stock-selection checks are synthetic; no additional live ticket use is claimed.
+
+Normal Piccoma Batch now also opts into `resolve_batch_quota_per_work()`.
+The shared orchestration resolves a Work/resource lazily, caches its selected
+quota pool for the phase, and preserves interleaved direct/quota candidate order.
+Zero stock skips the pool before entry; later unavailability skips only its
+remaining quota rows. Acceptance includes daily/secondary stock bounds,
+normal Batch-to-ZIP/Catalog execution, empty and interleaved Works, no-action
+races, pass/unknown stops, metrics/events, pacing and Page cleanup. The hook
+defaults to false for other policies. This extension uses synthetic checks;
+no new real-site ticket use is claimed.
+
 ## Bounded resolver prerequisite extension (2026-10-29)
 
 Implemented the optional site-neutral resolver configuration hook supplying

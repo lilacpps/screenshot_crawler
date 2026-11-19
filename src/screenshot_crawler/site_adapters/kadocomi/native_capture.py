@@ -50,6 +50,8 @@ def capture_kadocomi_webp(
     )
 
 
+# Reader/canvas classes cover the original build and the observed 2026-11-18
+# build. Source attribution, full-frame pixel proof and layout guards are shared.
 NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
   const key = '__kadocomiNativeCaptureV1';
   if (window[key]) return;
@@ -168,16 +170,16 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
   state.contentCanvasRow = (node, firstSlide) => {
     if (node.tagName === 'DIV' && hasClassPrefix(node, '_pageCanvasWrapper_'))
       return [...node.querySelectorAll('canvas')];
-    if (node.tagName === 'CANVAS' && hasClassPrefix(node, '_root_bx4cr_') &&
+    if (node.tagName === 'CANVAS' && (hasClassPrefix(node, '_root_bx4cr_') || hasClassPrefix(node, '_root_1ncjq_')) &&
         node.closest('.splide__slide') === firstSlide &&
         firstSlide.querySelectorAll('[data-type="contents"]').length === 1)
       return [node];
     return null;
   };
   state.snapshot = (includeNodes = false) => {
-    const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+    const screens = [...document.querySelectorAll('._mainScreen_191o7_1, ._mainScreen_1omf6_1')];
     if (screens.length !== 1) return {status: 'root', screenCount: screens.length};
-    const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+    const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1, .splide._root_uhrbw_1')];
     if (roots.length !== 1) return {status: 'root', screenCount: 1, rootCount: roots.length};
     const root = roots[0];
     const rootsNested = [...root.querySelectorAll('.splide')];
@@ -197,7 +199,7 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     if (wrapperCanvasRows.some(row => row === null)) return {status: 'content_wrapper_shape'};
     const wrapperCanvasCount = wrapperCanvasRows.reduce((total, canvases) => total + canvases.length, 0);
     if (wrapperCanvasRows.some(canvases =>
-      canvases.length !== 1 || !hasClassPrefix(canvases[0], '_root_bx4cr_'))) {
+      canvases.length !== 1 || !(hasClassPrefix(canvases[0], '_root_bx4cr_') || hasClassPrefix(canvases[0], '_root_1ncjq_')))) {
       return {status: wrapperCanvasCount === 0 ? 'content_loading' : 'content_wrapper_shape'};
     }
     const allEndNodes = [...root.querySelectorAll('div[data-type="end-of-book"]')];
@@ -276,7 +278,7 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
       const owner = node.closest('.splide__slide');
       return {
         tagName: node.tagName,
-        rootClass: hasClassPrefix(node, '_root_1w5tt_'),
+        rootClass: (hasClassPrefix(node, '_root_1w5tt_') || hasClassPrefix(node, '_root_1iarr_')),
         dataType: node.getAttribute('data-type'),
         dataN: node.getAttribute('data-n'),
         slideIndex: slides.indexOf(owner),
@@ -373,7 +375,7 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
   const typedContent = [...active.querySelectorAll('[data-type="contents"]')];
   const canvasRows = typedContent.map(node => state.contentCanvasRow(node, slides[0]));
   if (canvasRows.some(row => row === null || row.length !== 1 ||
-      ![...row[0].classList].some(name => name.startsWith('_root_bx4cr_'))))
+      ![...row[0].classList].some(name => (name.startsWith('_root_bx4cr_') || name.startsWith('_root_1ncjq_')))))
     return fail('content_wrapper_shape');
   const canvases = canvasRows.map(row => row[0]);
   const currentSlots = canvases.map(canvas => state.idForCanvas(canvas));

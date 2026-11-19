@@ -514,6 +514,7 @@ def _parser() -> argparse.ArgumentParser:
     work_delete.add_argument("--catalog", type=Path, default=Path("catalog.sqlite"))
     work_delete.add_argument("--watchlist", type=Path, default=Path("watchlist.yaml"))
     work_delete.add_argument("--library-root", type=Path, default=Path("output/Books"))
+    work_delete.add_argument("--history-root", type=Path, help="History ZIP root (default: <library-root>-history)")
     work_delete.add_argument("--status-root", type=Path, default=Path("output/crawl-status"))
     work_delete.add_argument("--trash-root", type=Path, default=Path("output/trash/work-deletion"))
     work_delete.add_argument("--management", dest="management_paths", action="append", type=Path, default=[])
@@ -1395,6 +1396,7 @@ def _run_work(args: argparse.Namespace) -> None:
             watchlist_path=watchlist,
             management_paths=management,
             library_root=library_root,
+            history_root=Path(args.history_root).resolve(strict=False) if args.history_root is not None else None,
             status_root=status_root,
             trash_root=trash_root,
         )
@@ -1717,10 +1719,14 @@ async def _resolve_access_resource_candidates(
     metrics: BatchMetricsWriter | None = None,
     grant_report: GrantOnlyReport | None = None,
     selected_keys: frozenset[str] | None = None,
+    grant_only: bool = True,
+    execution_args: argparse.Namespace | None = None,
 ) -> list[BatchCandidate]:
     """Resolve site-native candidates without counting the snapshot as an attempt."""
 
-    candidates = _filter_local_grant_candidates(executor, candidates, metrics=metrics)
+    candidates = _filter_local_grant_candidates(
+        executor, candidates, metrics=metrics, grant_only=grant_only
+    )
     if not candidates:
         return []
     if delay_before_first_ms is not None:
@@ -1758,6 +1764,7 @@ async def _resolve_access_resource_candidates(
         metrics=metrics,
         grant_report=grant_report,
         selected_keys=selected_keys,
+        execution_args=execution_args,
     )
 
 
@@ -1766,14 +1773,22 @@ def _apply_access_resolution(
     metrics: BatchMetricsWriter | None,
     grant_report: GrantOnlyReport | None = None,
     selected_keys: frozenset[str] | None = None,
+    execution_args: argparse.Namespace | None = None,
 ) -> list[BatchCandidate]:
-    if metrics is not None:
+    if metrics is not None or execution_args is not None:
+        by_source = {candidate.source_id: candidate for candidate in candidates}
         for source_id, reason in resolution.skipped_source_reasons:
-            candidate = next(
-                (item for item in candidates if item.source_id == source_id), None
-            )
+            candidate = by_source.get(source_id)
             if candidate is not None:
-                metrics.record_local_skip(candidate, reason=reason)
+                if metrics is not None:
+                    metrics.record_local_skip(candidate, reason=reason)
+                if execution_args is not None:
+                    _execution_event(
+                        execution_args, "candidate_finished", key=candidate.discovery_key,
+                        item_id=candidate.item_id, source_id=candidate.source_id,
+                        resource=candidate.quota_resource, result="skipped",
+                        reason=reason, resource_consumed=False,
+                    )
     selected_ids = set(resolution.selected_source_ids)
     if not selected_ids.issubset(
         {candidate.source_id for candidate in candidates}
@@ -1827,8 +1842,11 @@ def _record_local_grant_skip(
 def _filter_local_grant_candidates(
     executor: BatchExecutor, candidates: list[BatchCandidate], *,
     metrics: BatchMetricsWriter | None,
+    grant_only: bool = True,
 ) -> list[BatchCandidate]:
-    check = getattr(executor, "grant_only_skip_reason", None)
+    check = getattr(
+        executor, "grant_only_skip_reason" if grant_only else "resource_state_skip_reason", None
+    )
     if not callable(check):
         return candidates
     eligible = []
@@ -1952,6 +1970,52 @@ async def _execute_deferred_grants(
     return attempts, previous_site_access
 
 
+async def _execute_work_grants(
+    args: argparse.Namespace,
+    session: BrowserSession,
+    executor: BatchExecutor,
+    candidates: list[BatchCandidate],
+    *,
+    phase: str,
+    inter_candidate_delay_ms: int = 3000,
+    delay_before_first_ms: int | None = None,
+    metrics: BatchMetricsWriter | None = None,
+    grant_only: bool = True,
+    attempt_limit: int | None = None,
+) -> tuple[int, bool]:
+    """Resolve each Work once, then execute only its live, bounded grant pool."""
+
+    attempts = 0
+    for group in group_grant_candidates(candidates):
+        _execution_checkpoint(args)
+        if attempt_limit is not None and attempts >= attempt_limit:
+            break
+        eligible = _filter_local_grant_candidates(executor, group, metrics=metrics)
+        if not eligible:
+            continue
+        selected = await _resolve_access_resource_candidates(
+            session, executor, eligible, resource=eligible[0].quota_resource,
+            delay_before_first_ms=delay_before_first_ms, metrics=metrics,
+        )
+        # Even an empty snapshot contacted the site. Pace the next Work.
+        delay_before_first_ms = inter_candidate_delay_ms
+        print(f"Batch grant-only work={group[0].work_id}: selected={len(selected)}")
+        if not selected:
+            continue
+        processed, keep_going = await _execute_batch_candidates(
+            args, session, executor, selected, phase=phase,
+            inter_candidate_delay_ms=inter_candidate_delay_ms,
+            delay_before_first_ms=inter_candidate_delay_ms,
+            metrics=metrics, grant_only=grant_only,
+            attempt_limit=None if attempt_limit is None else attempt_limit - attempts,
+            stop_work_on_unavailable=True,
+        )
+        attempts += processed
+        if not keep_going:
+            return attempts, False
+    return attempts, True
+
+
 def _completed_candidate_count(
     catalog: CatalogService, candidates: list[BatchCandidate]
 ) -> int:
@@ -1993,23 +2057,41 @@ async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
 
 
 async def _run_batch_run(args: argparse.Namespace) -> None:
+    _validate_piccoma_auto_ticket_request(args)
     catalog = CatalogService(args.catalog)
     with catalog.job_lock():
         await _run_batch_run_locked(args, catalog)
 
 
+def _validate_piccoma_auto_ticket_request(args: argparse.Namespace) -> bool:
+    """Validate the retained signed worker consent bit; no CLI switch exists."""
+
+    value = getattr(args, "allow_quota_access", False)
+    if type(value) is not bool:
+        raise BatchPlanningError("legacy Piccoma ticket consent must be a boolean")
+    if value and getattr(args, "site", None) != "piccoma":
+        raise BatchPlanningError("Piccoma ticket consent is valid only for Piccoma")
+    if value and getattr(args, "grant_only", None) is not None:
+        raise BatchPlanningError("Piccoma Batch consent cannot authorize grant-only")
+    return value
+
+
 async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogService) -> None:
+    allow_quota_access = _validate_piccoma_auto_ticket_request(args)
+    grant_only = getattr(args, "grant_only", None)
     watchlist = WatchlistService(args.watchlist)
     policies = _batch_policy_registry()
     planner = BatchPlanner(
         catalog, policies, watchlist=watchlist, library_dir=args.library_dir
     )
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
-    grant_only = getattr(args, "grant_only", None)
     grant_only_all = grant_only == "all"
     limit = getattr(args, "limit", None)
     policy = policies.create(args.site)
     defer_quota = _policy_defers_quota_access(policy)
+    resolve_per_work = getattr(policy, "resolve_grant_only_per_work", lambda: False)()
+    resolve_batch_quota = getattr(policy, "resolve_batch_quota_per_work", lambda: False)()
+    execute_grants = _execute_work_grants if resolve_per_work else _execute_batch_candidates
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
     grant_only_all_preflight: dict[str, BatchPlan] = {}
@@ -2054,7 +2136,11 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             )
         metrics_mode = "grant-only"
     else:
-        plan = _planner_plan(planner, args)
+        plan = _planner_plan(
+            planner,
+            args,
+            **({"allow_quota_access": True} if allow_quota_access else {}),
+        )
         if defer_quota:
             direct_candidates, deferred_candidates, deferred_resource = (
                 _partition_deferred_candidates(plan.candidates, defer_quota=True)
@@ -2099,10 +2185,13 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         print(deferred_summary)
         print(f"  executing direct: {len(candidates)}")
     else:
-        print(
-            f"  executing: {len(candidates)}"
-            + (f" resource={grant_only}" if grant_only is not None else "")
-        )
+        if resolve_batch_quota and grant_only is None and any(c.consumes_quota for c in candidates):
+            print("  executing: direct + work-stock-selected quota")
+        else:
+            print(
+                f"  executing: {len(candidates)}"
+                + (f" resource={grant_only}" if grant_only is not None else "")
+            )
         if plan is not None:
             print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
             print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
@@ -2172,12 +2261,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         )
         if not local_completion_only:
             session = await BrowserSession.connect(endpoint)
+        executor_options = {"access_attempt_sink": metrics.record_access_attempt}
         executor = BatchExecutor(
             catalog,
             policies,
             _batch_adapter_registry(values),
             watchlist=watchlist,
             library_dir=args.library_dir,
+            **executor_options,
         )
         # Keep the orchestration input site-neutral and preserve compatibility with
         # lightweight test doubles that implement the pre-Phase-1 constructor.
@@ -2233,7 +2324,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                         f"Batch grant-only resource pass ({resource}); "
                         f"planned={len(resource_candidates)}"
                     )
-                pass_attempts, _pass_continue = await _execute_batch_candidates(
+                pass_attempts, _pass_continue = await execute_grants(
                     args,
                     session,
                     executor,
@@ -2253,6 +2344,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 attempts += pass_attempts
                 previous_phase_had_site_access = (
                     previous_phase_had_site_access or pass_attempts > 0
+                    or (resolve_per_work and bool(resource_candidates))
                 )
             if attempts == 0:
                 metrics.finish(stop_reason="no_candidates")
@@ -2272,7 +2364,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 )
                 grant_attempts = processed
             else:
-                processed, should_continue = await _execute_batch_candidates(
+                processed, should_continue = await execute_grants(
                     args, session, executor, candidates, phase=f"grant-only:{grant_only}",
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     metrics=metrics, grant_only=True, attempt_limit=limit,
@@ -2359,6 +2451,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 metrics=metrics,
                 grant_only=False,
                 attempt_limit=None,
+                allow_quota_access=allow_quota_access,
+                resolve_quota_per_work=resolve_batch_quota,
             )
         if (
             not grant_only_all
@@ -2469,26 +2563,25 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
 def _grant_only_resource_passes(policy: object) -> tuple[str, ...]:
     """Resolve and validate the policy-owned resource order for ``all``."""
 
-    ordered_method = getattr(policy, "ordered_access_resource_passes", None)
     supported_method = getattr(policy, "grant_only_supported_access_resources", None)
-    if not callable(ordered_method) or not callable(supported_method):
+    validate_method = getattr(policy, "validate_grant_only_resource", None)
+    if not callable(supported_method) or not callable(validate_method):
         raise BatchPlanningError(
             "Selected site policy does not expose the grant-only resource contract"
         )
-    ordered = tuple(ordered_method())
-    supported = set(supported_method())
-    if not ordered:
+    resources = tuple(supported_method())
+    if not resources:
         raise BatchPlanningError(
             "Selected site policy does not support any grant-only resource"
         )
-    unsupported = tuple(resource for resource in ordered if resource not in supported)
-    if unsupported:
-        raise BatchPlanningError(
-            "Grant-only resource contract mismatch: " + ", ".join(unsupported)
-        )
-    if len(set(ordered)) != len(ordered):
+    if len(set(resources)) != len(resources):
         raise BatchPlanningError("Selected site policy returned duplicate grant-only resources")
-    return ordered
+    try:
+        for resource in resources:
+            validate_method(resource)
+    except SitePolicyError as exc:
+        raise BatchPlanningError(str(exc)) from exc
+    return resources
 
 
 def _execution_event(args: argparse.Namespace, event_type: str, **fields: object) -> None:
@@ -2537,14 +2630,50 @@ async def _execute_batch_candidates(
     grant_report: GrantOnlyReport | None = None,
     prepared_access: PreparedAccessResource | None = None,
     confirmed_grants: list[BatchCandidate] | None = None,
+    allow_quota_access: bool = False,
+    stop_work_on_unavailable: bool = False,
+    resolve_quota_per_work: bool = False,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
     attempts = 0
+    resolved_pools: dict[tuple[str, int, str], set[int]] = {}
+
+    def pool_key(candidate: BatchCandidate) -> tuple[str, int, str] | None:
+        if not resolve_quota_per_work or not candidate.consumes_quota:
+            return None
+        if candidate.work_id is None or not candidate.quota_resource:
+            raise BatchPlanningError("Work stock resolution requires a Work and resource")
+        return candidate.site, candidate.work_id, candidate.quota_resource
+
+    def still_selected(candidate: BatchCandidate) -> bool:
+        key = pool_key(candidate)
+        return key not in resolved_pools or candidate.source_id in resolved_pools[key]
+
     for index, candidate in enumerate(candidates, start=1):
         _execution_checkpoint(args)
         if attempt_limit is not None and attempts >= attempt_limit:
             break
+        key = pool_key(candidate)
+        if key is not None:
+            if key not in resolved_pools:
+                pool = [future for future in candidates[index - 1:] if pool_key(future) == key]
+                selected = await _resolve_access_resource_candidates(
+                    session, executor, pool, resource=candidate.quota_resource,
+                    delay_before_first_ms=delay_before_first_ms if attempts == 0 else None,
+                    metrics=metrics, grant_only=False, execution_args=args,
+                )
+                delay_before_first_ms = None
+                resolved_pools[key] = {item.source_id for item in selected}
+                print(
+                    f"Batch work={candidate.work_id}: quota selected={len(selected)} "
+                    f"skipped={len(pool) - len(selected)}"
+                )
+                if any(still_selected(future) for future in candidates[index - 1:]):
+                    await asyncio.sleep(inter_candidate_delay_ms / 1000)
+                _execution_checkpoint(args)
+            if not still_selected(candidate):
+                continue
         if grant_only:
             local_skip_reason = executor.grant_only_skip_reason(candidate)
             if local_skip_reason is not None:
@@ -2683,6 +2812,7 @@ async def _execute_batch_candidates(
                     library_dir=args.library_dir,
                     max_pages=args.max_pages,
                     max_same_content=args.max_same_content,
+                    **({"allow_quota_access": True} if allow_quota_access else {}),
                 )
                 print(f"  completed: {result.archive_path}")
             continue_after_candidate = True
@@ -2783,6 +2913,28 @@ async def _execute_batch_candidates(
             if exc.stop_resource_pass:
                 print("  Stopping this resource pass.")
                 return attempts, False
+            if stop_work_on_unavailable and getattr(exc, "stop_work", True):
+                print("  Skipping remaining candidates in this work.")
+                return attempts, True
+            if key is not None and getattr(exc, "stop_work", True):
+                remaining = [
+                    future for future in candidates[index:]
+                    if pool_key(future) == key and still_selected(future)
+                ]
+                resolved_pools[key].clear()
+                print(
+                    f"  Skipping remaining quota candidates in work={candidate.work_id}: "
+                    f"{len(remaining)}"
+                )
+                for future in remaining:
+                    if metrics is not None:
+                        metrics.record_local_skip(future, reason=reason)
+                    _execution_event(
+                        args, "candidate_finished", key=getattr(future, "discovery_key", None),
+                        item_id=future.item_id, source_id=future.source_id,
+                        resource=future.quota_resource, result="skipped",
+                        reason=reason, resource_consumed=False,
+                    )
             continue_after_candidate = True
         except CandidateExecutionError as exc:
             primary_error = exc
@@ -2869,7 +3021,9 @@ async def _execute_batch_candidates(
                         if attempt_limit is not None and attempts >= attempt_limit:
                             has_future_access = False
                     else:
-                        has_future_access = index < len(candidates)
+                        has_future_access = any(
+                            still_selected(future) for future in candidates[index:]
+                        )
                     if has_future_access:
                         await asyncio.sleep(inter_candidate_delay_ms / 1000)
             except (KeyboardInterrupt, asyncio.CancelledError) as exc:

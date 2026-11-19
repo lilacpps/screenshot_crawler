@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from screenshot_crawler.core.errors import UnknownPageStateError
-from screenshot_crawler.site_adapters.kadocomi.adapter import KadocomiAdapter
+from screenshot_crawler.site_adapters.kadocomi.adapter import KadocomiAdapter, _inventory_summary
 
 WORK_URL = "https://comic-walker.com/detail/KC_004915_S"
 EPISODE_URL = f"{WORK_URL}/episodes/KC_0049150000400011_E"
 FOREIGN_EPISODE_URL = f"{WORK_URL}/episodes/KC_0049150000400012_E"
+
+
+def test_inventory_summary_is_bounded_and_omits_native_source_data() -> None:
+    summary = _inventory_summary({
+        "slideRows": [{"contentSlots": ["a", "b"], "contentCanvases": [
+            {"last": {"sourceUrl": "blob:private"}}
+        ]}] * 40,
+        "prMarkers": [{"dataN": "private", "slideIndex": "private"}] * 12,
+        "mainEndMarkers": [{"dataN": "2", "slideIndex": 38}],
+        "secondaryEndMarkers": [{"dataN": None, "slideIndex": 39}],
+    })
+    assert summary == {
+        "slides": 40, "content_counts": [2] * 32, "pr": [["?", None]] * 8,
+        "main_end": [["2", 38]], "secondary_end": [[None, 39]],
+    }
+    assert "private" not in json.dumps(summary)
 
 
 @pytest.mark.parametrize(

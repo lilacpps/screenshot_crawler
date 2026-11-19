@@ -1,5 +1,23 @@
 # Design Decisions
 
+## BookWalkerの同一ページ再描画では旧artifactを破棄して一度だけnativeを取り直す（2026-11-17）
+
+retained final joinでraw current anchorが同一CID/counter/canvas/世代/安全flagを保ち、
+geometry/contentの両versionだけが進むsingle-partのraceに限り、新しいdraw/source/target
+snapshotを選び直せる。旧JPEG/PNGの承認条件は緩めない。fresh current ROIのpinとfinal atomic
+joinを全て通過したnative pixelsだけを返し、JPEG解析を繰り返さない。source/layout変更、
+証拠欠落、pixel-only mismatch、2回目のraceはUNKNOWN。quota/nav/既存exact-twoは変更しない。
+詳細authorityは`CAPTURE_STRATEGY.md`、実サイト確認範囲と未確認事項は`note/01_bookwalker.md`。
+
+## 未操作のquota入口失敗では仮の再閲覧grantを取り消す（2026-11-17）
+
+Manga ONEでlogin切れのままquota入口探索に失敗しても、開始時に保存した24時間grantが
+残って次回をdirectへ誤誘導していた。既存の「失敗時もquota stateを保持する」原則には、
+Adapterが入口操作未試行を明示できる場合だけgrant期限を元へ戻す狭い例外を設ける。
+共通Batchはsite名やselectorを解釈せず`AccessEntryNotAttemptedError`だけを扱う。
+quota timestampは保持し、click開始後・消費不明の失敗・後続のgrant更新は保持する。
+Manga ONE以外のAdapterはこの例外を導入しない限り従来どおりである。
+
 ## Work削除の管理ジョブ確認は「将来の書込み競合」に限定（2026-11-15）
 
 終了済みpartialを未知状態と誤判定し、過去の中断/監督エラーだけで永久に削除を止める挙動を
@@ -865,8 +883,27 @@ Work行のコンテキストメニューから隔離QRunnableダイアログを�
 Batch・Captureの意味は変更せず、preview/applyはCatalog identity、Watchlist revision、
 管理DB binding、全依存ID、Artifactの強いfile identity、manifestを再検証する。
 
-既定の削除rootは既存packagingと同じ `output/Books` / `output/crawl-status` と、両者の
-外側の `output/trash/work-deletion`。実データへのfallbackは禁止し、テストでは全pathを
+既定の削除rootは `output/Books` / `output/Books-history` / `output/crawl-status` と、これらの
+外側の `output/trash/work-deletion`。履歴ZIPは同じ所有・file検証を通し、退避先でも
+`Books-history`を維持する（2026-11-18ユーザー承認）。履歴rootはLibrary名に`-history`を
+付けた兄弟が既定で、明示override可能。履歴分離で残した旧statusを推測移動しない。
+interruptedの起動側PIDもcreation identityで照合し、旧jobはchildより後に作られた
+起動側PIDの再利用を証明できる場合だけ除外する。UNKNOWNは引き続き停止する。
+実データへのfallbackは禁止し、テストでは全pathを
 tmpへ固定する。previewは無書込、confirmationなしのApplyは禁止、未知状態や途中失敗は
 BLOCKED/RECOVERY_REQUIREDとして非成功終了にする。実サイト・実Catalog・実Watchlist・
 実ZIPの検証はこのStageの受入条件に含めない。
+
+## URL登録・Work編集の時間による失効を廃止（2026-11-19）
+
+複数作品の登録・範囲調整中に先頭の確認結果が300秒で失効し、再解析によって
+詳細設定まで無効になるため、URL変換の証拠とWorkDraftの編集用完全一覧から
+経過時間の上限を廃止する。5分はサイトの制約ではなくアプリ側の観測鮮度上限であり、
+実サイトの最新性を保証する値でもない。編集用snapshotは明示的な更新・入力変更まで
+保持する。通常の作品編集も同じ検証を使用する。
+
+設定の保存と現在の閲覧権利は分ける。保存時もURL・作品/話identity、一覧完全性・digest、
+範囲と完成順の一致、所有関係、確認済み編集版、Catalog/Watchlistの整合性を検証する。
+不正・timezone不明・未来の観測日時は拒否する。URL修正・再解析や設定変更による
+確認の無効化、保存時のlock/CASは維持し、実アクセスはDiscovery/reader preflightで確認する。
+Discoveryのone-shot replay TTL、無料公開・レンタル等の権利期限は本変更の対象外。

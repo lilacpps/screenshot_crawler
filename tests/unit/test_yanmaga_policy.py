@@ -30,6 +30,7 @@ def _source(
     site: str = "yanmaga",
     external_id: str = EXTERNAL_ID,
     free_until: datetime | str | None = None,
+    access_granted_until: datetime | str | None = None,
 ) -> Source:
     return Source(
         id=1,
@@ -43,7 +44,7 @@ def _source(
         access_checked_at=None,
         last_seen_at=None,
         quota_started_at=None,
-        access_granted_until=None,
+        access_granted_until=access_granted_until,
         published_at=None,
         created_at="2026-10-20T12:00:00+09:00",
         updated_at="2026-10-20T12:00:00+09:00",
@@ -71,9 +72,9 @@ def test_yanmaga_policy_allows_available_free_direct_without_resource(
     )
     assert decision.consumes_quota is False
     assert decision.quota_resource is None
-    assert policy.supported_access_resources() == ()
+    assert policy.supported_access_resources() == ("work_ticket",)
     assert policy.additional_access_resource_passes() == ()
-    assert policy.grant_only_supported_access_resources() == ()
+    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
 
 
 @pytest.mark.parametrize(
@@ -108,7 +109,6 @@ def test_yanmaga_policy_rejects_expired_or_unverifiable_expiry(
         (_source(available=False), "unavailable"),
         (_source(site="comicdays"), "wrong_site"),
         (_source("unknown"), "unknown"),
-        (_source("quota"), "quota_not_supported"),
         (_source("paid"), "paid"),
         (_source("owned"), "owned_not_verified"),
         (_source("grant"), "grant_not_supported"),
@@ -133,7 +133,7 @@ def test_yanmaga_policy_rejects_unsupported_or_malformed_catalog_state(
     assert decision.quota_resource is None
 
 
-def test_yanmaga_policy_rejects_naive_clock_and_has_no_resource_pass() -> None:
+def test_yanmaga_policy_rejects_naive_clock_and_requires_known_resource() -> None:
     policy = YanmagaSitePolicy()
     with pytest.raises(SitePolicyError, match="now must be timezone-aware"):
         policy.evaluate(
@@ -145,6 +145,75 @@ def test_yanmaga_policy_rejects_naive_clock_and_has_no_resource_pass() -> None:
         policy.validate_access_resource("ticket")
     with pytest.raises(SitePolicyError, match="Grant-only access resource is not implemented"):
         policy.validate_grant_only_resource("ticket")
+
+
+def test_yanmaga_quota_uses_work_ticket_after_observed_consumption() -> None:
+    policy = YanmagaSitePolicy()
+    active = policy.evaluate(
+        _source("quota", access_granted_until=NOW + timedelta(hours=1)),
+        now=NOW,
+        quota_available=0,
+    )
+    assert (active.eligible, active.access_strategy, active.reason) == (
+        True,
+        "direct",
+        "active_confirmed_grant",
+    )
+    assert active.consumes_quota is False
+    assert active.quota_resource is None
+
+    for value in (None, NOW, NOW - timedelta(seconds=1)):
+        candidate = policy.evaluate(
+            _source("quota", access_granted_until=value),
+            now=NOW,
+            quota_available=None,
+        )
+        assert (candidate.eligible, candidate.access_strategy, candidate.reason) == (
+            True,
+            "quota",
+            "work_ticket_candidate",
+        )
+        assert candidate.consumes_quota is True
+        assert candidate.quota_resource == "work_ticket"
+        assert candidate.quota_scope == "work"
+        assert candidate.quota_limit == 1
+        assert candidate.quota_commit_mode == "after_observed_consumption"
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        (None, "paid"),
+        (NOW, "expired_access_grant"),
+        (NOW - timedelta(seconds=1), "expired_access_grant"),
+        ("2026-10-20T13:00:00", "invalid_access_grant_until"),
+        ("not-a-timestamp", "invalid_access_grant_until"),
+    ],
+)
+def test_yanmaga_paid_never_enters_quota_without_active_grant(
+    value: datetime | str | None, reason: str
+) -> None:
+    denied = YanmagaSitePolicy().evaluate(
+        _source("paid", access_granted_until=value),
+        now=NOW,
+        quota_available=None,
+    )
+    assert (denied.eligible, denied.access_strategy, denied.reason) == (
+        False,
+        None,
+        reason,
+    )
+
+
+def test_yanmaga_policy_never_imports_an_unknown_or_owned_mode_from_grant() -> None:
+    until = NOW + timedelta(hours=1)
+    for access_mode, reason in (("unknown", "unknown"), ("owned", "owned_not_verified")):
+        decision = YanmagaSitePolicy().evaluate(
+            _source(access_mode, access_granted_until=until),
+            now=NOW,
+            quota_available=None,
+        )
+        assert (decision.eligible, decision.reason) == (False, reason)
 
 
 def test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions(
@@ -193,20 +262,54 @@ def test_yanmaga_planner_keeps_only_free_direct_and_preserves_positions(
     assert [candidate.external_id for candidate in plan.candidates] == [
         "usagi:2de76848d607c9920f18147b763a6aec",
         "usagi:3de76848d607c9920f18147b763a6aed",
+        "usagi:5de76848d607c9920f18147b763a6aef",
     ]
     assert [candidate.access_strategy for candidate in plan.candidates] == [
         "direct",
         "direct",
+        "quota",
     ]
-    assert [candidate.artifact_prefix for candidate in plan.candidates] == ["013", "002"]
-    assert all(not candidate.consumes_quota for candidate in plan.candidates)
+    assert [candidate.artifact_prefix for candidate in plan.candidates] == ["013", "002", "004"]
+    assert [candidate.consumes_quota for candidate in plan.candidates] == [False, False, True]
     assert {entry.reason for entry in plan.skipped} >= {
         "unknown",
-        "quota_not_supported",
         "paid",
         "owned_not_verified",
         "unavailable",
     }
+    grant_only = synchronized_legacy_planner(catalog, policies).plan(
+        site="yanmaga",
+        now=NOW,
+        quota_resource="work_ticket",
+        output_mode="grant_only",
+    )
+    assert [candidate.external_id for candidate in grant_only.candidates] == [
+        "usagi:5de76848d607c9920f18147b763a6aef"
+    ]
+
+
+def test_yanmaga_grant_only_is_work_scoped_with_a_23_hour_cooldown_floor() -> None:
+    policy = YanmagaSitePolicy()
+    consumed_at = NOW - timedelta(hours=22)
+    assert policy.resource_state_scope("work_ticket") == "work"
+    for requested_hours in (1, 23):
+        assert policy.grant_only_skip_reason(
+            resource="work_ticket",
+            last_consumed_at=consumed_at,
+            now=NOW,
+            cooldown_hours=requested_hours,
+        ) == "work_ticket_cooldown"
+        assert policy.grant_only_retry_at(
+            resource="work_ticket",
+            last_consumed_at=consumed_at,
+            cooldown_hours=requested_hours,
+        ) == NOW + timedelta(hours=1)
+    with pytest.raises(SitePolicyError, match="last_consumed_at must be a timezone-aware datetime"):
+        policy.grant_only_retry_at(
+            resource="work_ticket",
+            last_consumed_at=datetime(2026, 10, 19, 14),  # noqa: DTZ001 - naive state is rejected
+            cooldown_hours=None,
+        )
 
 
 def test_yanmaga_planner_fails_closed_on_malformed_free_expiry(tmp_path: Path) -> None:

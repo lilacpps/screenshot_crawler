@@ -71,6 +71,7 @@ def test_work_deletion_dialog_preview_is_unchecked_and_read_only(
     assert dialog.plan is not None and dialog.plan.ready
     assert "GUI title" in dialog.summary.toPlainText()
     assert "gui-work" in dialog.summary.toPlainText()
+    assert str(tmp_path / "Books-history") in dialog.summary.toPlainText()
     assert not dialog.confirm.isChecked()
     assert not dialog.apply_button.isEnabled()
     assert {path.name: path.read_bytes() for path in namespace_dir.iterdir()} == namespace_before

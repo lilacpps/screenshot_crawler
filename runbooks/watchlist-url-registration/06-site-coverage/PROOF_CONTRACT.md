@@ -23,8 +23,10 @@ Independent Reviewer design gate passed subject to the following boundaries.
   evidence, not an externally accepted serialized token or a persistence schema.
 - Shared pure revalidation checks a fresh pending parse, every URL/identity
   binding, the canonical seed parser and a site-owned default-deny validator.
-  Proof age must be 0..300s with an aware timestamp. Preview/readiness/save use
-  the same validation; save performs no browser/network under locks.
+  Proof requires an aware, nonfuture timestamp, with no elapsed-time expiry
+  (revised 2026-11-19). It proves the registration entry, not current free access.
+  Preview/readiness/save use the same validation; save performs no browser/network
+  under locks. Discovery/reader preflight check current availability.
 - URL edits/retry discard proof. blocked() discards old proof. Normal safe
   canonical URLs without proof retain the existing manual confirmation path.
   Titles may remain unknown after a proved conversion; humans confirm label/IDs.
@@ -38,8 +40,8 @@ Independent Reviewer design gate passed subject to the following boundaries.
 - Stage 07 complete-list preview remains unavailable. Reading row attributes to
   bind one seed is not a complete-list proof for WorkEditor/scope editing.
 
-Tests: pure unsafe/pending boundaries; tampered field/foreign work/future/stale
-proof rejection; missing/ambiguous/paid-only/incomplete status/count/order and
+Tests: pure unsafe/pending boundaries; tampered field/foreign work/future/naive
+proof rejection and old-proof save acceptance; missing/ambiguous/paid-only/incomplete status/count/order and
 redirect/error no-write browser fixtures; explicit opt-in GUI path; exact YAML
 save parity; existing metadata/manual registration/owner/CAS/atomic regressions.
 Because model/resolver/save validation is shared, finish with an isolated full

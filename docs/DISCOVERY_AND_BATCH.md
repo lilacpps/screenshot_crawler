@@ -232,23 +232,86 @@ manual grants can change on old episodes beyond a known-row boundary. The
 existing site-specific incremental stop hook is used; incremental still does
 not reconcile unseen rows as unavailable. Item completion/artifacts are retained.
 
-Normal Piccoma Batch admits available free sources and available quota sources
-with a future observed grant as non-consuming `direct`. The adapter rechecks
-the unique row's current free/manual-grant evidence before entry. Only freshly
-verified manual grants may use the observed `/web/viewer/s/{product}/{episode}`
-redirect; matching composite identity and HTTP 200 are required, and the exact
-accepted URL must remain unchanged. Catalog and manifest source URLs remain
-canonical. Missing/expired grants do not trigger access acquisition. Automatic
-ticket/resource use and grant-only remain unsupported. No shared schema, Core,
-or Batch orchestration change is required.
+Normal Piccoma Batch admits available free sources, active manual grants, and
+otherwise-eligible quota sources. Eligible quota candidates use the logical
+`piccoma_ticket_auto` resource and site-owned live checks to choose one exact
+free ticket kind; the default Batch does not require a Piccoma-only flag or
+checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) and
+`binge_ticket` (binge-free). `--grant-only all` runs these as explicit ordered
+passes with a Catalog replan between them; neither pass falls back to another
+kind. It confirms
+the target grant and leaves the Item pending without capture, packaging, or
+completion. Normal Batch preserves the selected candidate ID sequence; the
+Planner does not regroup direct and quota candidates. Explicit grant-only
+groups the planned pool by Work in first-appearance order and resolves each
+Work once before opening any episode entry. Piccoma reads the full product
+listing and product-home stock using non-consuming GETs. Work grants admit at
+most one charged waitfree use plus the observed ¥0+ stock on matching rows;
+Binge grants admit only matching rows up to the observed per-product stock,
+and do not spend a charged waitfree resource. A zero eligible balance skips
+the Work without an eligibility POST or viewer request. Unknown or ambiguous
+state stops closed. Selected rows retain their planned order within the Work.
+Confirmed entry still rechecks live eligibility, the native modal and debit;
+if a selected row becomes unavailable, remaining rows in that Work are skipped
+and execution continues with the next Work. An unknown result stops the run.
+Stock is refreshed for each Work and each explicit resource pass, never stored
+as a Catalog quota estimate. The account-wide Binge balance remains checked
+in the native confirmation modal; product-home stock alone does not prove it.
+Resource kind and
+availability are revalidated by the Piccoma adapter immediately before use.
+Other policies keep their existing ordering and resource contracts.
 
-For inventory only, an available quota source without an active manual grant
-sets `PolicyDecision.pending_quota=true` while remaining ineligible, with no
-access strategy, resource, or consumption. The GUI counts it in Quota対象残;
-active grants are direct, unavailable sources remain unavailable, and completed,
-external and skipped Item status retains precedence. The flag defaults to false
-for all policies and never authorizes Batch execution. Rediscovery refreshes
-previously unknown ¥0＋ sources; no Catalog backfill is required.
+Normal Batch also opts into `resolve_batch_quota_per_work()`: immediately
+before the first quota candidate for a Work/resource, it resolves that Work's
+remaining quota pool once using the same non-consuming listing/home snapshot.
+For `piccoma_ticket_auto`, the pool is bounded by one charged waitfree use
+plus the supported secondary stock (¥0+ or per-product Binge) on the observed
+rows. An empty pool skips all those quota candidates without individual entry
+checks. The selected pool is cached only within the current Batch phase;
+normal candidate order, including interleaved free/active-grant direct rows,
+is preserved. A later unavailable entry skips only that Work/resource's
+remaining selected quota candidates; direct rows continue. Explicit pass-stop
+and unknown-result behavior remain unchanged. Snapshot skips create no
+CrawlRuns, grants, completed Items or Artifacts and do not count as entry
+attempts. Balances are refreshed at the next Work and never persisted as
+quota capacity. Each selected entry still proves current availability and
+actual consumption; the Binge account balance remains modal authority.
+
+Before a consuming attempt, the Piccoma adapter binds the fresh full-list row,
+product-home state, login indicator, exact `/web/user/access` request/response,
+one native confirmation modal, one concrete kind-specific affirmative control,
+and one same-target viewer navigation. Product home is read-only. After entry,
+the adapter keeps the owned Page on the viewer and uses a bounded same-origin
+GET to read product-home state into a detached document; it never navigates the
+Page away from the viewer to perform the post-state check. The normal Page preparation and native reader
+readiness/capture gates remain in force. The adapter accepts only known ticket
+statuses and observed zero-price copy; gift, paid, point, coin, ad, time-saving,
+purchase redirects, ambiguous state, or unapproved mutation/navigation are
+blocked or fail closed. An uncertain post-click outcome is not retried. A
+positive target grant is persisted before capture, even if later capture or
+packaging fails; attempt-kind and certainty are written to a sanitized JSONL
+observer, not to Catalog schema.
+
+The Planner and Executor also consult the Piccoma policy's same-Source
+unresolved quota-run guard for both resources. Any prior running, failed,
+malformed or unrecognized quota CrawlRun holds another consuming attempt; only
+conclusive terminal history or a fresh active grant permits progress. A known
+pre-click no-action result is durably distinguishable. This conservative
+write-ahead use of existing CrawlRun history avoids a new table and prevents a
+new Batch invocation from forgetting a possible prior debit. Catalog and
+manifest source URLs remain canonical. Already-free and newly observed active
+grants are non-consuming; a stale grant-only plan records a fresh grant before
+skipping, without opening a viewer or starting a ticket attempt.
+
+`PolicyDecision.pending_quota` is an inventory/display signal; it does not by
+itself authorize execution. Piccoma's policy separately admits available quota
+sources in normal Batch through `piccoma_ticket_auto` and in grant-only through
+`work_ticket` then `binge_ticket`, subject to each pass's site-owned checks and
+allowed ticket kinds. Other policies may leave quota sources ineligible until a grant
+or site-specific access-resource path applies. Active grants are direct,
+unavailable sources remain unavailable, and completed, external and skipped
+Item status retains precedence. Rediscovery refreshes previously unknown ¥0＋
+sources; no Catalog backfill is required.
 
 ## Z6 Zeblack site-native Work Ticket orchestration (2026-09-30)
 
@@ -1300,6 +1363,21 @@ Discovery Adapterは、Watchlist targetのsite固有listing pageを読み、Disc
 - Screenshot Crawler実行
 - local artifact state更新
 
+### 7.1.1 Existing source snapshot context and async proof
+
+`DiscoveryService` may pass a Discovery adapter an immutable tuple of
+existing `DiscoverySourceSnapshot` values for the exact target through the
+optional `configure_source_snapshots(target, snapshots)` hook. The default
+implementation is a no-op. The service reads existing sources for the target
+site and passes only snapshots whose `discovery_key` equals `target.key`; the
+tuple includes stored `access_granted_until`. Its same-site previous-source map
+across discovery keys remains unchanged for reconciliation. Adapters
+must validate any retained snapshot against the current exact source identity
+and fresh site evidence. If an adapter awaits an additional proof after
+validating a listing, it must take and validate a final full listing
+snapshot before yielding records. Any identity, access, ordering, or content
+drift makes the discovery incomplete and emits no records.
+
 ### 7.2 Mode capability preflight
 
 Discovery adapters expose `supports_incremental_discovery`, which defaults to
@@ -1871,6 +1949,13 @@ sources with `access_granted_until > now` remain `direct` and do not enter
 the quota allocation pool. Items beyond the allocated slots are reported as
 `quota_exhausted`.
 
+An optional site-policy `preserve_candidate_sequence(allow_quota_access)` hook
+can retain the policy-selected candidate ID sequence for a narrowly scoped
+opt-in flow that must interleave direct and consuming candidates in ordinary
+Batch order. Its default is false, and policy approval is required; when true,
+the Planner leaves candidate sequence intact while still applying eligibility,
+quota admission and limits. It does not reorder candidates for unrelated sites.
+
 ### 11.2 Source priority
 
 同一itemに複数sourceが明示的に存在する場合、基本優先順位は:
@@ -1924,7 +2009,13 @@ crawl / viewer / packaging / Artifact persistence等が失敗した場合はCraw
 `finished_at`、`error_type`、短い `error_message` を記録する。Itemはcompletedにしない。
 
 quota stateを保存した後に失敗してもquota stateは消去しない。site上ですでに消費されている可能性が
-あるためである。生成済みarchiveがある状態でCatalog persistenceに失敗してもarchiveを自動削除しない。
+あるためである。ただしAdapterが`AccessEntryNotAttemptedError`で権利を利用する入口操作を
+一度も試行していないことを明示した場合は、`before_run`で仮定したgrant期限だけを開始前の値へ戻す。
+`quota_started_at`は保持し、local枠は自動refundしない。保存したtimestamp/期限から変化した
+後続のgrant証拠は保持する。click開始後や消費不明の失敗はこの例外を使ってはならない。
+Manga ONEは無料ライフ入口の探索timeoutにこの例外を使い、login入口が見える場合は理由も表示する。
+directからquotaへの暗黙fallbackは行わない。
+生成済みarchiveがある状態でCatalog persistenceに失敗してもarchiveを自動削除しない。
 
 Artifactの後日の移動・missing・削除はCrawlRun succeededやItem completedを取り消さない。
 
@@ -2338,10 +2429,10 @@ This is an optional JSON-field extension; Catalog remains schema v7 with no new
 table/column. Saved-configuration restoration validates these fields as Watchlist
 input. Ordering-only edits do not invalidate site Full proof.
 
-The Work editor validates fresh complete listings and one Catalog snapshot for
+The Work editor validates complete editing snapshots and one Catalog snapshot for
 all keys together. New Works/keys/episodes need not exist in Catalog to save.
 Unavailable future ZIP names are reported as pending Full, not invented and not
-alone a save blocker. Conflicting ownership, malformed/stale/incomplete listing
+alone a save blocker. Conflicting ownership, malformed/mismatched/incomplete listing
 proof and mismatched selection/placement remain blockers. The legacy single-key
 editor retains its stricter artifact-based preview. Save changes only Watchlist,
 under one revision CAS/atomic replacement; it never performs Catalog registration.
@@ -2741,7 +2832,15 @@ The Adapter reports `AccessConsumption` only after the requested ticket control 
 without invoking Discovery, opening a reader, or writing Watchlist/Catalog/ZIP.
 The new entry validates HTTPS/exact official host, authority, query and path
 strictly; existing Discovery parsers and saved targets retain their contracts.
-All eleven current entry forms are recognized. Kadocomi's proven same-work
+The supported site entry forms are recognized, including ebookjapan's full-list
+URL and Yanmaga's `https://yanmaga.jp/comics/<work-slug>` work URL.
+Yanmaga uses its existing work parser and the decoded slug as same-site work
+identity, saving the literal work URL in the same form as Watchlist. Its title
+remains unknown until human confirmation; registration makes no browser request.
+The common escape guard still rejects percent-encoded input, so Japanese work
+names must be pasted literally. Episode/viewer, continuation, query and trailing-
+slash forms remain unsupported. This adds no complete-list detail capability.
+Kadocomi's proven same-work
 episode form converts to detail without opening the episode. Native identity
 and title evidence are independent of URL eligibility; missing metadata requires
 explicit human confirmation in the registration dialog.
@@ -2762,7 +2861,9 @@ canonical, oldest-first order, declared/exact count and same-product unique
 episode/status rows. The existing site classifier selects the first unconditional
 free DOM row. Immutable ephemeral input/document/seed/native-ID/DOM/access/time
 evidence must pass the fresh pending parser, safe canonical seed parser,
-site-owned default-deny validator and 0..300s age at readiness/preview/save.
+site-owned default-deny validator and a valid timezone-aware, nonfuture observation
+time at readiness/preview/save. Registration evidence has no elapsed-time expiry:
+it binds a saved entry, not current free access or reading entitlement.
 No reader/resource operation or save-time network occurs. Missing Work title may
 be manually confirmed after URL proof; missing conversion proof may not. YAML
 stores the proved seed, with original input separately shown in final preview.
@@ -2815,14 +2916,19 @@ clones one WorkDraft, disables Work switching/add/reload, and never calls
 apply_edit or emits watchlistSaved/fullRequested. Existing WorkEditor normal
 save/Full behavior is retained. Each key requires an explicit scope/assignment
 confirmation after listing retrieval and after changes. Preview validates all
-complete listings (0..300s), exact selection/sequence, same-site overlap and
+complete listings without elapsed-time expiry, exact selection/sequence, same-site overlap and
 existing Source ownership against a single read-only Catalog snapshot.
 The preview also shows explicit scope/order/segments differences; confirm returns
 only an immutable member patch with Watchlist revision, Catalog identity, Work
 version, listing digests/timestamps and confirmed key set. Parent acceptance
 checks stable fields and key membership and merges only that Work. Other Works'
-edits remain intact. Cancel discards the child only. Freshness and snapshot
-identity are rechecked both on child confirmation and later bulk preview/save.
+edits remain intact. Cancel discards the child only. Listing completeness/digests,
+valid nonfuture observation timestamps and snapshot identity are rechecked both
+on child confirmation and later bulk preview/save. The same no-expiry rule applies
+to normal Work editing. Elapsed editing time alone never clears confirmation or
+scope/order settings. URL, member, setting or Catalog/Watchlist changes still
+invalidate their bound proof. Explicit listing refresh still requires confirmation;
+normal Discovery and reader entry remain responsible for current access checks.
 Complete-list preview supports magapoke/jumpplus/zeblack/comicdays/piccoma/
 hanayume/younganimal/bookwalker/kadocomi. Kadocomi is boundary-only, without
 individual exclusions/empty assignments. Other sites needing detail are blocked.

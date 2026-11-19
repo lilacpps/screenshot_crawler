@@ -1,9 +1,28 @@
 # Stage 04 — 統合E2E・回帰・独立レビュー
 
-**Status:** NOT STARTED
+**Status:** PASS (2026-11-16). A6/A7 live runs, required affected tests, independent Tester artifact audits, and formal final Reviewer gate passed with BLOCKING 0. The full-suite run was controlled-stopped and is not a full pass.
 **前提:** Stage01〜03の独立Reviewer BLOCKING 0。チケット操作の事前観測で正しい作品・話・リソースが証明されていること。既存 `runbooks/yanmaga-free/05-e2e/README.md` の出力監査方法を踏襲。
 
 ## 1. 実行隔離と準備
+
+### Current checkpoint
+
+The existing-grant direct run on `work-novel` Source 26 / chapter 10 succeeded:
+18 WebP pages, positive END, ZIP, and Completed, with the stored grant unchanged.
+The nine-check artifact audit passed. A7 then completed the public-free direct
+run on `work-dual` Source 3 / chapter 51: 16 native WebP pages, positive END,
+ZIP, and Completed; grant/quota state did not change. Its ZIP SHA-256 is
+`e731f5450a3410e65b8f2f0e4c744ff1b35b937171d2cc40ad6bf94736b24231`; Root's
+nine-check audit passed. Both runs' pre/post full/incremental Discovery had
+zero Source, Viewer, or native rental POST activity and preserved Catalog state.
+The independent Tester passed both artifacts, SQL audits, and first/middle/final
+visual checks. Core/local-viewer passed 55 (0 skipped, 8 deselected),
+Batch/CLI/Catalog passed 61 (0 skipped, 297 deselected), and the Yanmaga site
+plus five entry-only representatives passed 145 (0 skipped, 0 deselected).
+Total affected scope: 261 passed, 0 skipped, 305 deselected. The formal final Reviewer gate passed with independent BLOCKING 0. The full-suite run was
+controlled-stopped after 1,013 visible calls; it is incomplete, not a full pass.
+No new first-free, ticket, point, coin, or paid right was used. Source 28 (the
+user-reported manual chapter-26 use) remains excluded.
 
 - 実装コードは `feat/yanmaga-access`。ベースは作業開始時の最新main。旧実装ブランチから進めない。
 - 専用 `output/yanmaga_access_experiment/` のWatchlist/SQLite/output/Booksだけを使う。他サイトの状態、通常Catalog、既存ZIP、共有login profileを改変しない。

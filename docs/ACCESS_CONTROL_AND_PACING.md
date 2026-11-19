@@ -427,6 +427,46 @@ pre-consumption exhaustion still uses `AccessResourceUnavailableError` with
 
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
+The optional policy hook `resolve_grant_only_per_work()` defaults to false.
+Opted-in explicit grant-only runs group candidates by Work, call the existing
+guarded site resolver once per Work/resource, close the snapshot Page, and
+execute only its selected pool through ordinary fresh entry. This supports
+several grants within an observed stock bound without changing deferred
+single-target prepared entry. An empty pool opens no candidate Page. Expected
+candidate unavailability ends only that Work; pass exhaustion and unknown
+errors retain their pass/run stop semantics. Snapshot access, even with zero
+selected targets, is paced before the next Work/pass. The shared `--limit`
+counts entry attempts, not snapshots. Concrete balances/kinds stay site-local.
+An expected no-action error may explicitly carry `stop_work=False` for an
+already-accessible target: this skips that row without declaring the Work's
+resource unavailable. Piccoma retains its durable no-action error identity and
+fresh-grant persistence on that race.
+
+The separate optional `resolve_batch_quota_per_work()` policy hook also
+defaults to false. In normal Batch, it resolves only the remaining consuming
+candidates for a `(site, Work, resource)` when that pool is first encountered.
+The existing guarded resolver bounds the pool; its snapshot Page closes before
+entry. Selected IDs are cached within that phase without regrouping the
+candidate sequence. Empty pools and later expected Work unavailability skip
+only consuming candidates in that pool, leaving direct candidates in place.
+Snapshot/local skips are recorded in metrics and execution events without
+creating entry attempts or CrawlRuns. Snapshot access and later site operations
+retain inter-candidate pacing; there is no trailing sleep after a final empty
+pool. Unknown results and explicit resource-pass stops still stop as before.
+
+An adapter that must retain restart-visible evidence around a possible resource
+action may report the optional site-neutral `AccessAttemptObservation`. It
+contains the exact site, external identity, logical candidate resource,
+site-owned concrete kind, timestamp, one of `attempting` / `confirmed` /
+`unknown` / `not_attempted`, and an optional sanitized reason. The Executor
+binds the synchronous observer to the currently validated candidate and
+requires an installed durable sink; identity/resource mismatch or sink failure
+aborts before the adapter's affirmative action. The observer is deactivated
+when that candidate exits. Metrics sinks must not persist request bodies,
+credentials, raw signed URLs, or site response payloads. This evidence does
+not itself authorize an attempt or prove consumption; only the adapter's live
+site checks and confirmed `AccessConsumption` do that.
+
 The generic adapter also exposes an optional scalar
 `configure_target_identity(external_id, work_key)` hook. Batch calls it after
 Catalog candidate validation and before Runner navigation; site adapters may
@@ -646,7 +686,11 @@ stored in Catalog. `--grant-only all` executes the Policy-ordered passes,
 replans Catalog between passes, shares the total site-attempt `--limit`, and
 keeps local skips out of that limit. A resource-pass exhaustion stops only the
 current pass, while AccessGuard fatal stops end the whole run. Grant-only
-passes never capture, package, create artifacts, or complete Items.
+passes never capture content, update page Manifest/Progress, package, create
+artifacts, or complete Items. Failure diagnostics retain metadata/error only
+and omit screenshots and HTML snapshots. Adapters may override the optional
+`prepare_entry_only_page()` hook to skip capture-only preparation; its default
+delegates to `prepare_page()`, and normal capture preparation is unchanged.
 
 ### Phase 6 - regression and live verification
 

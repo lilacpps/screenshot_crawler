@@ -1,6 +1,6 @@
 # Stage 02 — 初回無料をfree/directで開放して取得
 
-**Status:** NOT STARTED
+**Status:** PASS; live capture and post-capture audit recorded; independent Reviewer BLOCKING 0.
 **前提:** Stage01 のDiscovery分類、匿名無料の回帰テスト、実サイトの初回無料表示とログイン根拠がPASSしていること。**grant-onlyの初回無料対応は作らない**。
 **終了条件:** 1話につき1回だけ安全に無料開放→既存Viewerで全本文取得。失敗しても24h等の正しい閲覧期限内なら再開放せず再取得できる。
 

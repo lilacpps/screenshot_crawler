@@ -58,6 +58,14 @@ class PageChangeTimeoutError(CrawlerError):
     """Raised when a requested page change cannot be confirmed."""
 
 
+class AccessEntryNotAttemptedError(PageChangeTimeoutError):
+    """Adapter proves no access-entry action was attempted in this run.
+
+    Never use after a click, request, or navigation that could consume rights.
+    Batch may discard its speculative grant, but retains the quota reservation.
+    """
+
+
 class AccessConsumptionUnconfirmedError(CrawlerError):
     """Raised when entry-only execution lacks confirmed resource consumption."""
 

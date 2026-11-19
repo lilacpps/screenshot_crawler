@@ -18,6 +18,7 @@ URLS = {
     "younganimal": "https://younganimal.com/series/abcdef1234567",
     "zeblack": "https://zebrack-comic.shueisha.co.jp/title/123/chapter/list",
     "ebookjapan": "https://ebookjapan.yahoo.co.jp/books/all/134336/",
+    "yanmaga": "https://yanmaga.jp/comics/双星のアポクリファ",
 }
 
 
@@ -40,6 +41,33 @@ def test_current_entries_are_read_only_and_title_unknown(resolver, site, url, tm
 
 def test_registry_coverage(resolver):
     assert set(URLS).issubset(set(resolver.registry.sites()))
+
+
+def test_yanmaga_work_url_identity_and_save_validation(resolver):
+    result = resolver.resolve(URLS["yanmaga"])
+    assert result.site_work_identity == "yanmaga-work:双星のアポクリファ"
+    assert resolver.resolution_error(result) is None
+    assert result.observation_url is None and result.conversion_proof is None
+    assert resolver.resolution_error(replace(result,
+        discovery_url="https://yanmaga.jp/comics/別作品")) is not None
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.yanmaga.jp/comics/作品",
+    "https://yanmaga.jp.evil.test/comics/作品",
+    "https://yanmaga.jp/comics/",
+    "https://yanmaga.jp/comics/.",
+    "https://yanmaga.jp/comics/..",
+    "https://yanmaga.jp/comics/作品/",
+    "https://yanmaga.jp/comics/作品?sort=older",
+    "https://yanmaga.jp/comics/作品/episodes",
+    "https://yanmaga.jp/comics/作品/0123456789abcdef0123456789abcdef",
+    "https://yanmaga.jp/viewer/comics/作品/0123456789abcdef0123456789abcdef",
+    "https://yanmaga.jp/comics/%E4%BD%9C%E5%93%81",
+    "https://yanmaga.jp/comics/%2Fother",
+])
+def test_yanmaga_registration_requires_plain_work_entry(resolver, url):
+    assert resolver.resolve(url).status == "blocked"
 
 
 @pytest.mark.parametrize("change", [

@@ -3,6 +3,7 @@
 > 監査日: 2026-11-02 JST。Stage 00 COMPLETE / production implementation NOT STARTED。
 > 根拠: ローカルのcode/tests/docsを静的に照合。pytest・アプリ・CDP・実サイトProbeは実行していない。
 > この文書は後続Stageの設計契約であり、現在の実装済み機能の説明ではない。
+> 2026-11-19改訂: 以下の監査時点の300秒TTL設計は廃止。現行のURL変換・Work編集用一覧は時間だけで失効せず、完全性・digest・identity・編集版・Catalog/Watchlist整合性を保存時にも検証する。現行契約は `docs/DISCOVERY_AND_BATCH.md` とStage04/06Bを参照。Discoveryの短時間one-shot replay期限とは別の規則。
 
 ## 1. Checkpointとauthority
 

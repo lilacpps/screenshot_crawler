@@ -22,7 +22,7 @@
 ## Acceptance / tests
 
 - site-native work identityと入力URL/対象keyが一意に結び付く。complete=trueの証拠なしでは保存可能としない。
-- 既存range/excluded_external_ids、同site所有重複、archive順序、stale TTL、partial/pagination failureにfail-closed。
+- 既存range/excluded_external_ids、同site所有重複、archive順序、不正/未来の観測日時、partial/pagination failureにfail-closed。編集用一覧は経過時間だけで失効させない（2026-11-19改訂）。
 - site別Unit＋人工DOM/response Browser Integration＋既存Discovery/WorkEditor/Batch取得担当回帰。必要なら限定Live観測、サイト著作物をテストに保存しない。
 - 未対応siteを含む複数key Workは引き続きblocked。安全な正規URLの単一key手動登録はStage 05の条件に従い継続。
 - サイトごとにdocs、site note、PROGRESSの実装済み/未確認を更新。全7サイト完了をStage 05の完了条件にしない。

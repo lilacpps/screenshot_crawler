@@ -1,5 +1,19 @@
 # BookWalker adapter
 
+## Single-part retained final-join redraw recovery
+
+A complete raw final-join witness may authorize one fresh native capture after
+a same-page redraw advances both geometry/content versions. The original result
+is discarded. After a bounded 100 ms settle, the same authorized CID, counter,
+connected renderer object, generations, dimensions and safe observer state are
+required; source/layout remain exact and draw versions/snapshot IDs must be fresh.
+The second attempt skips JPEG work and must pass its own initial and final atomic
+ROI proof, including when the fresh draw is not retained. It returns the current
+native lossless artifact. Changed identity/source/layout, incomplete evidence,
+pixel-only mismatch, a second race or an already-used redraw retry stops UNKNOWN.
+This does not change quota consumption, navigation, or exact-two behavior.
+Live verification and its limits are recorded in `note/01_bookwalker.md`.
+
 ## Discovery access for bonus and preorder products
 
 Bonus products retain their special order metadata but no longer force an

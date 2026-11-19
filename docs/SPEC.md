@@ -56,7 +56,11 @@ local state. Actual crawl integration remains Phase 5B.
 `batch run` now executes Manga ONE Batch candidates sequentially through the
 existing CrawlerRunner and manifest-based packaging. A quota candidate records
 its local quota start and Policy-provided grant expiry immediately before the
-crawl. Only successful crawl and packaging update the item to `completed`.
+crawl. If an Adapter explicitly proves that access entry was never attempted
+(`AccessEntryNotAttemptedError`), Batch restores only the pre-run grant expiry
+while retaining the local quota reservation. Later grant evidence is preserved.
+Unknown failures and failures after an entry attempt retain both fields.
+Only successful crawl and packaging update the item to `completed`.
 The plan command remains read-only; BookWalker Batch execution remains
 unsupported.
 
@@ -304,6 +308,7 @@ CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
 ## 8. Site Adapterの責務
 
 - `prepare_page`
+- optional `prepare_entry_only_page` (default delegates to `prepare_page`)
 - `initialize`
 - `detect_state`
 - optional `capture_page`
@@ -521,6 +526,8 @@ manifestは保存ページのauthorityである。
 
 `progress.json` は実行中のlast sequence / identity / fingerprint / contextを記録するが、現時点では自動resume機能ではない。
 
+Grant-onlyの`entry_only`では権利確認と消費記録だけを行い、CONTENTページはcapture/saveしない。成功時も失敗時もpage Manifest / Progress stateを作らず、packageやItem completionへ進まない。失敗diagnosticにはmetadataとerrorのみを保存し、screenshot / HTML snapshotは含めない。Adapterはcapture専用の初期化を避ける必要がある場合だけ`prepare_entry_only_page`をoverrideできる。通常の`prepare_page`はdefault behaviorとして維持し、Page/Guard ownershipとcleanup contractを変えない。
+
 JSONはtemporary file → replaceで更新する。
 
 ## 18. Packaging / output metadata
@@ -605,6 +612,8 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 ## 21. Diagnostics
 
 失敗時は設定されたdiagnostics directoryへ、可能な範囲で以下を保存する。
+
+Grant-only `entry_only` is the explicit exception to page snapshots: it keeps only metadata/error diagnostics and omits the screenshot/HTML described here. See the entry-only output contract in section 17.
 
 - screenshot
 - HTML
@@ -803,7 +812,21 @@ existing Screenshot Crawler
 通るまで書き込めない。succeeded/partial/failed/cancelled等の終了履歴は、そのsummaryや過去ログを
 停止理由・plan fingerprintに含めない。interruptedはworker identity/token/PIDとOSの生存・
 creation identityで終了を証明できた場合だけ履歴扱いにし、不明・生存中は停止する。
+起動側PIDも番号だけで生存扱いにせず、開始gateを開く前に保存した`launcher.identity`の
+token/PID/creation identityとOS観測を照合する。旧jobで同fileがない場合は、起動側PIDの
+現在の数値creation identityが記録済みchildのcreation identityより厳密に後である場合だけ
+PID再利用として扱う。child自身の終了またはPID再利用証明も必須。取得不能・不正file・
+token不一致は停止を維持し、job state/historyを変更しない。
 queuedにはまだworker.identityがないのが正常で、欠落を追加エラーにしない。
+
+削除対象のZIP rootはLibraryに加えて履歴rootも扱う。既定はLibraryの兄弟
+`<library-root名>-history`（標準配置では`output/Books-history`）、CLIは`--history-root`で
+明示overrideできる。全rootのcanonical identityをPlan/tokenへ含め、相互重複・同basename・
+trashとの重複を拒否する。履歴ZIPにも全Artifact参照・所有・size/SHA・strong file identity・
+alias検査を適用し、`trash/<operation-id>/<履歴root名>/<履歴root相対path>`へ退避する。
+標準配置では`Books/…`と`Books-history/…`を区別してmanifestのsource/destinationに残す。
+履歴分離は古いstatus/manifestを移動していないため、履歴locatorからstatus位置を推測せず、
+旧snapshotは残す。通常ZIPのstatus候補規則とApply/rollback/recoveryの検証は維持する。
 
 status JSONは、検証対象ZIPのlibrary-root相対pathをstatus-rootへ対応させ、拡張子を.jsonに
 した候補だけを読む。status rootの全走査や、別配置・別名の歴史的JSON探索は行わない。

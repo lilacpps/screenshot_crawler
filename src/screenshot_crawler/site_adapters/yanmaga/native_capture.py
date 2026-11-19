@@ -1,9 +1,13 @@
-"""Bounded capture of the observed Yanmaga viewer's pre-JPEG page pixels.
+"""Bounded capture of Yanmaga pre-JPEG pixels and selected decoded segments.
 
 The normal viewer's generated JPEG Blobs are used only as an exact identity
 bridge from a visible image back to the canvas pixels copied immediately
 before the viewer's own JPEG encoding. They are never saved as original page
 images.
+
+When pre-JPEG binding is ambiguous, a lower capture level may use the actual
+selected DOM image objects at intrinsic resolution. It validates static JPEG
+Blobs and the same geometry/style proofs, and records distinct provenance.
 """
 
 from __future__ import annotations
@@ -93,7 +97,8 @@ _OBSERVER_SCRIPT = r"""(() => {
     storedEncodedBytes: 0,
     inFlight: 0,
     lastCaptures: new Map(),
-    stats: {canvasCopies:0, exactBlobBindings:0, ambiguities:0, misses:0, readFailures:0},
+    stats: {canvasCopies:0, exactBlobBindings:0, regeneratedBlobBindings:0,
+      ambiguities:0, misses:0, readFailures:0},
     originalCanvasDescriptor: null,
     originalUrlDescriptor: null,
     originalBlobDescriptor: null,
@@ -124,6 +129,7 @@ _OBSERVER_SCRIPT = r"""(() => {
     state.storedPixelBytes = Math.max(0, state.storedPixelBytes - candidate.pixels.byteLength);
     candidate.pixels = null;
     candidate.payload = '';
+    candidate.predecessor = null;
   }
 
   function equalBytesToBase64(bytes, payload) {
@@ -208,6 +214,9 @@ _OBSERVER_SCRIPT = r"""(() => {
       encodedChars,
       encodedBytes,
       ambiguous: state.seenPayloads.has(payload),
+      previousSequence: state.seenPayloads.get(payload) || null,
+      predecessor: null,
+      historyProven: false,
       released: false,
       url: null
     };
@@ -228,9 +237,14 @@ _OBSERVER_SCRIPT = r"""(() => {
     const matches = [...candidates].filter(candidate =>
       !candidate.released && candidate.encodedBytes === bytes.byteLength &&
       equalBytesToBase64(bytes, candidate.payload));
-    if (matches.length === 1 && !matches[0].ambiguous &&
-        !state.boundCandidates.has(matches[0])) {
-      const candidate = matches[0];
+    const pending = matches.filter(candidate => !state.boundCandidates.has(candidate));
+    const candidate = pending.length === 1 ? pending[0] : null;
+    const predecessor = candidate?.ambiguous ? matches.find(previous =>
+      previous.sequence === candidate.previousSequence && state.boundCandidates.has(previous)) : null;
+    if (candidate && (!candidate.ambiguous || predecessor)) {
+      // Reserve only one fresh copy. Repeated payloads still need the complete
+      // predecessor pixel proof after Blob reading, outside the viewer hook.
+      candidate.predecessor = predecessor || null;
       state.candidates.splice(state.candidates.indexOf(candidate), 1);
       state.boundCandidates.add(candidate);
       state.blobCandidates.set(blob, candidate);
@@ -238,13 +252,10 @@ _OBSERVER_SCRIPT = r"""(() => {
     }
     if (matches.length > 0) {
       state.stats.ambiguities++;
-      for (const candidate of matches) {
+      // A later ambiguous Blob does not invalidate an earlier exact binding.
+      for (const candidate of pending) {
         const index = state.candidates.indexOf(candidate);
         if (index >= 0) state.candidates.splice(index, 1);
-        for (const [url, bound] of state.byUrl) {
-          if (bound === candidate) state.byUrl.delete(url);
-        }
-        state.boundCandidates.delete(candidate);
         releaseCandidate(candidate);
       }
       state.invalidBlobs.add(blob);
@@ -271,14 +282,32 @@ _OBSERVER_SCRIPT = r"""(() => {
         releaseCandidate(candidate);
         return;
       }
+      if (candidate.ambiguous) {
+        const previous = candidate.predecessor;
+        // historyProven inductively covers every earlier copy of this exact
+        // payload. Missing/released history or a JPEG collision stays closed.
+        if (!previous || previous.released || !previous.historyProven ||
+            previous.payload !== candidate.payload || previous.width !== candidate.width ||
+            previous.height !== candidate.height || !previous.pixels || !candidate.pixels ||
+            previous.pixels.length !== candidate.pixels.length ||
+            !candidate.pixels.every((value, index) => value === previous.pixels[index])) {
+          state.stats.ambiguities++;
+          state.invalidBlobs.add(blob);
+          releaseCandidate(candidate);
+          return;
+        }
+      }
       if (state.byUrl.size >= urlBindingLimit) {
         fail('blob_url_binding_overflow');
         releaseCandidate(candidate);
         return;
       }
+      candidate.historyProven = true;
+      candidate.predecessor = null;
       candidate.url = url;
       state.byUrl.set(url, candidate);
       state.stats.exactBlobBindings++;
+      if (candidate.ambiguous) state.stats.regeneratedBlobBindings++;
     }).catch(() => {
       state.stats.readFailures++;
       releaseCandidate(candidate);
@@ -406,6 +435,7 @@ _OBSERVER_SCRIPT = r"""(() => {
 
 _CAPTURE_PAGE_SCRIPT = r"""async args => {
   const {pageId,waitMs}=args;
+  const decodedSegments = args.mode === 'decoded_segments';
   const state = window.__yanmagaNativeCaptureV1;
   const fail = reason => ({ok:false,reason});
   if (!state || state.version !== 1 || state.disposed) return fail('observer_unavailable');
@@ -606,6 +636,46 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
   while (true) {
     sources = images.map(image => image.currentSrc || '');
     if (sources.some(source => !source.startsWith('blob:'))) return fail('segment_source_not_blob');
+    if (decodedSegments) {
+      // Read the actual selected image objects at intrinsic resolution. This
+      // lower capture level makes no attribution to pre-JPEG canvas copies.
+      records = [];
+      for (let index=0;index<images.length;index++) {
+        const image=images[index];
+        // A static bounded JPEG is required: an unchanged animated image URL
+        // would not prove stable decoded pixels across composition/encoding.
+        const response=await fetch(sources[index]);
+        const length=Number(response.headers.get('Content-Length'));
+        if (!Number.isInteger(length) || length<3 || length>1024*1024) {
+          return fail('decoded_segment_not_bounded_jpeg');
+        }
+        const blob=await response.blob();
+        if (!response.ok || blob.type!=='image/jpeg' || blob.size!==length) {
+          return fail('decoded_segment_not_bounded_jpeg');
+        }
+        const bytes=new Uint8Array(await blob.arrayBuffer());
+        if (bytes[0]!==255 || bytes[1]!==216 || bytes[2]!==255) {
+          return fail('decoded_segment_not_bounded_jpeg');
+        }
+        const segment = document.createElement('canvas');
+        segment.width=expected[index].width; segment.height=expected[index].height;
+        const context=segment.getContext('2d',{alpha:true,colorSpace:'srgb'});
+        const attributes=context?.getContextAttributes?.();
+        if (!context || !attributes || attributes.colorSpace!=='srgb' ||
+            (attributes.colorType && !['unorm8','uint8'].includes(attributes.colorType))) {
+          throw new Error('decoded_segment_context_unavailable');
+        }
+        context.drawImage(image,0,0);
+        const data=context.getImageData(0,0,segment.width,segment.height);
+        if (data.colorSpace!=='srgb' || (data.pixelFormat &&
+            !['uint8','rgba-unorm8'].includes(data.pixelFormat))) {
+          throw new Error('decoded_segment_pixels_unsupported');
+        }
+        records.push({sequence:index,width:segment.width,height:segment.height,
+          pixels:data.data,url:sources[index],released:false});
+      }
+      break;
+    }
     records = sources.map(source => state.byUrl.get(source) || null);
     if (records.every(Boolean)) break;
     if (state.overflow) return fail(state.overflowReason || 'capture_buffer_overflow');
@@ -648,12 +718,15 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
     if (outputPixels.data[offset] !== 255) return fail('composite_contains_transparency');
   }
   if (images.some((image,index) => image.currentSrc !== sources[index] ||
-      state.byUrl.get(sources[index]) !== records[index])) return fail('segment_binding_changed');
+      (!decodedSegments && state.byUrl.get(sources[index]) !== records[index]))) {
+    return fail('segment_binding_changed');
+  }
   if (proofSignature()!==initialProof) return fail('native_proof_changed_during_composition');
   const png = canvas.toDataURL('image/png');
   const expectedToken=++state.captureSequence;
   state.lastCaptures.set(pageId,{
-    pageId,token:expectedToken,proof:initialProof,proofSignature,sources:[...sources],records:[...records]
+    pageId,token:expectedToken,proof:initialProof,proofSignature,sources:[...sources],
+    images:[...images],decodedSegments,records:decodedSegments?null:[...records]
   });
   return {ok:true,token:expectedToken,png};
 }"""
@@ -668,8 +741,9 @@ _VERIFY_CAPTURE_SCRIPT = r"""args => {
   if (!wrapper) return false;
   const images=[...wrapper.querySelectorAll('img')];
   return images.length===3 && images.every((image,index) =>
-    image.currentSrc===last.sources[index] && state.byUrl.get(last.sources[index])===last.records[index] &&
-    !last.records[index].released);
+    image===last.images[index] && image.currentSrc===last.sources[index] &&
+    (last.decodedSegments || (state.byUrl.get(last.sources[index])===last.records[index] &&
+    !last.records[index].released)));
 }"""
 
 
@@ -688,9 +762,9 @@ _VERIFY_CAPTURE_GROUP_SCRIPT = r"""captures => {
     if (!wrapper) return false;
     const images=[...wrapper.querySelectorAll('img')];
     return images.length===3 && images.every((image,index) =>
-      image.currentSrc===last.sources[index] &&
-      state.byUrl.get(last.sources[index])===last.records[index] &&
-      !last.records[index].released);
+      image===last.images[index] && image.currentSrc===last.sources[index] &&
+      (last.decodedSegments || (state.byUrl.get(last.sources[index])===last.records[index] &&
+      !last.records[index].released)));
   });
 }"""
 
@@ -744,10 +818,26 @@ async def capture_yanmaga_native_webp(
 ) -> NativeCaptureOutcome:
     """Capture one observed logical page as lossless WebP, or explain fallback."""
 
+    return await _capture_yanmaga_webp(page, page_id, decoded_segments=False)
+
+
+async def capture_yanmaga_decoded_segment_webp(page: Page, page_id: str) -> NativeCaptureOutcome:
+    """Read the current DOM image objects without attributing pre-JPEG pixels."""
+
+    return await _capture_yanmaga_webp(page, page_id, decoded_segments=True)
+
+
+async def _capture_yanmaga_webp(
+    page: Page, page_id: str, *, decoded_segments: bool
+) -> NativeCaptureOutcome:
     try:
         raw = await page.evaluate(
             _CAPTURE_PAGE_SCRIPT,
-            {"pageId": page_id, "waitMs": SOURCE_READY_TIMEOUT_MS},
+            {
+                "pageId": page_id,
+                "waitMs": SOURCE_READY_TIMEOUT_MS,
+                "mode": "decoded_segments" if decoded_segments else "pre_jpeg",
+            },
         )
     except (PlaywrightError, TypeError, ValueError):
         return NativeCaptureOutcome(None, "browser_capture_unavailable")
@@ -782,7 +872,9 @@ async def capture_yanmaga_native_webp(
     if not await _verify_yanmaga_native_capture(page, page_id, token):
         return NativeCaptureOutcome(None, "native_capture_changed_during_encoding")
     return NativeCaptureOutcome(
-        capture, "native_pre_jpeg_lossless_webp", proof_token=token
+        capture,
+        "decoded_viewer_segment_lossless_webp" if decoded_segments else "native_pre_jpeg_lossless_webp",
+        proof_token=token,
     )
 
 

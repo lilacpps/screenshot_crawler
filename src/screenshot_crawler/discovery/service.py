@@ -155,6 +155,7 @@ class DiscoveryService:
                 discovery_key=source.discovery_key,
                 access_mode=source.access_mode,
                 available=source.available,
+                access_granted_until=source.access_granted_until,
             )
             for source in self.catalog.list_sources(site=target.site)
         }
@@ -174,6 +175,23 @@ class DiscoveryService:
         bounded = target.discovery_scope is not None
 
         try:
+            configure_snapshots = getattr(adapter, "configure_source_snapshots", None)
+            if callable(configure_snapshots):
+                try:
+                    configure_snapshots(
+                        target,
+                        tuple(
+                            snapshot
+                            for snapshot in initial_sources.values()
+                            if snapshot.discovery_key == target.key
+                        ),
+                    )
+                except DiscoveryIncompleteError:
+                    raise
+                except (PlaywrightError, TimeoutError, ValueError, TypeError) as exc:
+                    raise DiscoveryIncompleteError(
+                        "Discovery run-start source context is invalid"
+                    ) from exc
             async for record in adapter.iter_records(page, target, mode):
                 if self._is_excluded_from_acquisition(record, target):
                     continue

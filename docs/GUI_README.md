@@ -4,6 +4,10 @@ Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とW
 チェックしたWatchlist keyだけを実行対象に
 Discover / Batch Run / Grant-onlyできます。通常の実行は詳細確認画面を出さずジョブへ登録します。
 Grant-onlyでは操作欄に権利・チケット・Quotaを消費する可能性を明示します。
+通常BatchではPiccomaを含む対象の無料チケットを自動で使う場合があります。
+Runボタンのtooltipにその可能性を表示し、ボタン押下後は追加確認dialogなしでjobを登録します。
+Piccoma専用checkboxや追加opt-in確認は表示しません。
+Grant-onlyではPiccomaのResourceを選択します。`work_ticket`は待てば¥0・¥0+、`binge_ticket`は爆読みです。`all`は順に実行します。
 
 ## インストール・起動
 
@@ -28,6 +32,13 @@ worker PID・識別token・開始日時が全て未登録のqueued予約は、�
 件数と次の操作を表示します。中断扱いのjobは、
 実workerの終了を確認できれば履歴として扱い、動作中または終了確認不能なら停止します。
 管理DBや過去ログを削除して回避する必要はありません。
+
+履歴ZIP（既定`output/Books-history`）も検証して退避します。退避先の操作ID配下では
+`Books/…`と`Books-history/…`に分け、履歴ZIPの元の相対配置を維持します。
+履歴分離時に残された古いstatus JSONは推測して移動しません。
+中断jobの起動側PIDは作成識別情報も照合し、別processに再利用された番号だけで停止しません。
+同じCatalogの実行中job、実workerの生存、識別情報が確認不能な場合は引き続き停止します。
+コード更新を反映するには、実行中jobの終了後にGUIを起動し直してください。
 
 status JSONは全件を読みません。`Books/<相対path>.zip`に対する
 `crawl-status/<同じ相対path>.json`だけを直接確認します。候補がなければ従来どおりZIPのみを
@@ -402,8 +413,10 @@ keyを1つ以上チェックすると下部のDiscover、Batch Run、Grant-only�
 検索・表示モード・フォーカスを変えても選択集合はkey単位で保持されます。
 ボタンを押すと詳細確認画面を出さず、選択したkeyでジョブを登録します。
 候補数・Quota・スキップ理由の事前計算と表示は行いません。実行結果はモニターとジョブ履歴で確認します。
-空選択はサイト全件として扱いません。Watchlist保存後だけは、対象keyと警告を示す
-「Full Discoveryを実行しますか？」のYes/No確認を一度表示します。
+空選択はサイト全件として扱いません。Watchlist保存後も、対象keyと警告を示す
+「Full Discoveryを実行しますか？」のYes/No確認を一度表示します。通常BatchではRunボタンの
+tooltipにPiccomaの無料チケットを含む無料アクセスresourceを使う可能性を表示しますが、
+実行時に確認dialogは出さずjobを登録します。Piccoma専用checkboxもありません。
 下部の最大件数は0（無制限）または候補数の上限を指定できます。Grant-onlyのResourceは
 選択中のサイトごとに表示されるセレクタで`all`またはサイト対応Resourceを選びます。
 key追加や再読込でもサイト別の指定値を保持します。以前のResourceが未対応になった場合は
@@ -628,7 +641,10 @@ HTMLのscriptを実行せず、ゼブラックは固定された公開作品情�
 作品一覧の件数・表示順・同じ作品の話かを確認し、無条件で無料の最初の話URLを保存先にします。
 一覧と無料表示を確認できない場合はblockedのままで、手動確認では解除できません。
 貼り付けた一覧URLは「入力URL」、watchlist.yamlへ追加する話URLは「保存URL」として
-保存前プレビューに表示します。変換の証拠は5分間有効です。期限切れなら選択行を再解析し、
-作品名・所属・IDを確認し直してください。viewerは開かず、チケットやポイントも使いません。
+保存前プレビューに表示します。URL変換の確認結果と範囲・完成順の編集用一覧に有効期限はなく、
+時間の経過だけで確認済み状態や詳細設定をリセットしません（通常の作品編集も同じです）。
+URL・所属・設定の変更やCatalog・Watchlistとの不整合があれば再確認が必要です。
+登録時の確認結果は現在の無料・閲覧権利を保証せず、Discovery・実行時に別途確認します。
+viewerは開かず、チケットやポイントも使いません。
 作品名だけ取得できなかった場合は手入力で確認できます。対応形式と未対応理由の一覧は
 [Stage 06対応表](../runbooks/watchlist-url-registration/06-site-coverage/CAPABILITIES.md)を参照してください。
