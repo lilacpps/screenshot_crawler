@@ -1,5 +1,78 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## リンクのない公開予定行を含む一覧（2026-11-19）
+
+妹は知っている第95話（Item 50683 / Source 50990）は、Viewer前の作品一覧preflightで
+`Yanmaga episode URL does not match its work`となり保存0枚で停止していた。
+metricsの403/429/5xxは0。末尾の第98話が、リンクも本文title要素もない
+`div.mod-episode-link.mod-episode-nopublic`の公開予定行だったため。
+保存DOMとshared-CDPの作品一覧GETで、同一作品の`data-original-url`、
+`data-episode-title`、`次回公開予定：`と`2026/11/24(火)`のnative構造を再確認した。
+
+現在は単一の末尾公開予定行だけをsite-localな`unpublished=True`で保持する。
+既知のLI/div/body/text/p/span/time構造と表示、リンク・button/form/input/role control・
+無料/価格/wait/modal markerがないこと、`data-is-free=false`、
+`data-modal=registration`、非空title、同一作品のstrict話URL/一意IDを検証。
+日付は既知の日本語書式・実在する暦日・正しい曜日を要求し、日付から公開済みや
+アクセス可能とは推測しない。不正/重複/途中の予定行、通常行のURL欠落はfail-closed。
+
+予定行は内部snapshotの順序、安定性、重複検出、Moreのoffset、直後話/最新話判定に
+残すが、Discovery recordをemitせずCatalogのItem/Source/targetには登録しない。
+レンタル履歴照会からも既存grant候補を含めて除外し、hidden URLへは遷移しない。
+既存公開話のdisplay positionはnativeのまま。公開後に通常行へ変わった時だけ通常の
+分類・Discoveryへ入る。CLI/設定・Core/Policy・Catalog schemaに変更なし。
+
+修正後のlive Fullで内部99行（公開予定1行）から公開済み98件を取得した。
+該当第95話はpublic-freeでfirst-freeではないことを確認し、通常Catalogのread-only
+backupと専用出力でRunnerを実行。本文index 1..20を保存しcounter `20/20`でEND、
+全20画像のmanifest SHA-256一致を確認した。first-free observerは付けず、
+first-free未試行・first-party non-GET試行0。通常Catalog/Watchlistと元の失敗出力は
+変更していない。証拠は`.tmp/yanmaga-unpublished/probe.json`、
+`discovery-result.json`、`live-result.json`、`live-capture/`。
+通常11候補Batch全体は再実行していない。
+
+検証はDiscovery Unit＋人工browser全体154件と、Adapter identity/Runner/Batch-ZIP/
+失敗時pending維持のaffected 8件が全PASS、skip 0。公開予定行の正常/不正構造、
+別作品URL・欠落・日付/曜日・リンク/無料badge混在・非表示・重複・途中配置、
+More展開、incremental、公開後の通常登録、履歴候補からの除外を確認した。
+`ruff check src tests`と本変更5ファイルの`git diff --check`もPASS。
+site-localな一覧metadata処理のみの変更のためfull pytest、独立Research suite、
+native encoder内部testは未実行。該当話の未解決failureはない。
+
+## 評価カードと作者フォローの併設終了（2026-11-19）
+
+サタノファニ第345話「戦争」（Item 50014 / Source 50321）は本文20枚を保存後、
+counter `20/20`の終了判定で`go_next` timeoutになった。metricsの403/429/5xxは0。
+保存診断では評価カード自体・本文全保存・非遮蔽は成立していたが、併設された
+作者フォローlinkを評価カードbranchの「作者linkなし」条件が拒否していた。
+独立の作者branchもnative X profile URLの`?s=20`を拒否していた。
+保存DOMとshared-CDPの専用Pageでこの構成を再確認した。
+
+現在は最終本文併置の評価カードに、単一のexact作者linkを許可する。
+既知のhierarchy内で評価button群の直後の同一parentのsiblingであること、
+exact label/class、loadedな既知2画像、表示・非遮蔽を検証する。
+HTTPS `x.com`の単一profile path、credentials/port/fragmentなしを維持し、
+queryは「なし」または実観測の完全一致`?s=20`だけを受け入れる。
+重複・非表示・不正query・外部origin・未知asset/label・位置違いは拒否する。
+評価form/shareの同一話identity、全本文index連続保存、最終本文とrentalの表示・
+周辺非遮蔽、menu非表示、未知gate拒否は維持。独立作者branchの最新一覧row条件も
+維持し、評価branchは従来の同一話form/share proofを使う。リンクは操作しない。
+terminal-onlyの評価card単独許可、timeout延長、CLI/設定/Core変更はない。
+
+通常Catalogのread-only backupへ既存grant/observerを隔離したRunnerで、該当話の
+`max_pages=20`のまま本文20枚保存→positive END、counter `20/20`を確認した。
+全20枚のSHA-256は元の失敗runと一致。first-free未試行、first-party non-GET試行0。
+通常Catalog/Watchlist・元の失敗出力を変更していない。証拠は
+`.tmp/yanmaga-engagement-author/probe.json`、`live-result.json`、`live-capture-v2/`。
+通常50件Batch全体の再実行は行っていない。
+
+検証はtargeted browser 28件、Adapter Unit 10件、既存終端/1ページ/terminal-only/
+counter先行/menu/Runner/Batch連携のaffected browser 108件が全PASS、skip 0。
+作者linkの同一parent内の順序違いもfixtureを強化して1件再確認しPASS。
+`ruff check src tests`と変更4ファイルの`git diff --check`もPASS。
+site-localの終端条件修正のためfull pytest、独立Research suite、変更していない
+native encoder内部testsは未実行。CLI/設定の追加や未解決の該当話failureはない。
+
 ## 1ページ作品のメニュー非表示と終了（2026-11-19）
 
 パラレルパラダイス「【会員限定無料】ヤンマガカバーガール風イラスト」
@@ -96,7 +169,8 @@ Adapterは既存の全本文index連続保存・最終counter・同一Viewer rou
 既知assetのloadedな`like-note`画像、一意の評価3control、spacer/like-wrapper順序、
 exact label/classを検証する。favorite/likeはnative formのsame-origin POST先、
 一意のhidden `jdcn`と現在URLの`cid`一致、shareはTwitter intentと同一話Source URLを
-要求する。他の終端CTA/titleとの混在、欠落・重複・identity不一致・hidden/遮蔽・
+要求する。検証済み作者linkの併設は上記条件で許可する。他の終端CTA/titleとの混在、
+欠落・重複・identity不一致・hidden/遮蔽・
 semantic access gateは従来どおり停止。評価controlはclick/submitしない。
 この追加ENDは観測済みの最終本文併置layoutに限定し、`-/N`専用画面には適用しない。
 snapshot安定判定とdiagnosticsにも`engagement_card_exact`の根拠を含める。
@@ -902,7 +976,9 @@ oldest-first same-work URL. The resulting complete DOM order supplies
 global_display_position; records are yielded latest-first. Without sort
 controls, the existing oldest-first fixture contract remains. Order and
 missing rows are never inferred from IDs, dates, or titles. A complete public
-listing snapshot does not prove unpublished or future backend rows.
+listing snapshot does not invent unpublished or future backend rows. The exact
+native upcoming row described above is internal metadata only and never proves
+readability or creates an acquisition target.
 
 ## Viewer・Capture
 

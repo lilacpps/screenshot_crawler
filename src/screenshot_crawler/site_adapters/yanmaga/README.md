@@ -17,7 +17,12 @@ favorite/like/share controls and labels, native same-origin POST form shapes
 with hidden episode codes matching the current Viewer `cid`, and a Twitter
 share URL for the exact current Source. The whole rental card and final body
 must remain visible and unobstructed, with the menu hidden and no conflicting
-terminal CTA/title or access gate. The controls are only inspected, never used.
+terminal CTA/title or access gate. An optional single author-follow link must
+have the exact known hierarchy, label, loaded assets and presentation, and be
+the direct sibling immediately after the engagement buttons. Its HTTPS X
+profile URL accepts only no query or the observed exact `?s=20`; other queries,
+duplicates, hidden links and misplaced links fail closed. The controls are only
+inspected, never used.
 Terminal-only `-/N` does not gain this boundary. Diagnostics expose
 `engagement_card_exact`; Core timeout and capture behavior are unchanged.
 
@@ -26,6 +31,17 @@ This resolves the normal Chapter 10 part 1 failure for Item 49648 / Source
 the engagement-only card. A fresh shared-CDP Runner verification with isolated
 output saved 16 images and reached END, with no first-free entry or first-party
 non-GET attempt. The normal Catalog and original failed output were preserved.
+
+The normal Chapter 345 failure for Item 50014 / Source 50321 exposed the
+combined engagement/author card and its `?s=20` URL (2026-11-19). Both the saved
+diagnostic DOM and a fresh shared-CDP probe confirmed this shape. Previously
+the engagement boundary required no author link, while the author boundary
+rejected the query. An isolated Runner now saves all 20 pages and reaches END
+at `20/20`; every image SHA-256 matches the failed run. No first-free entry or
+first-party non-GET attempt occurred, and normal Catalog/Watchlist and failed
+output remain unchanged. The latest-listed-episode requirement still applies
+to the independent author-card boundary; the engagement boundary proves the
+current episode through its own forms/share URL and complete body sequence.
 
 ## Rental History pagination and expired-ticket preflight (2026-11-17)
 
@@ -191,6 +207,33 @@ Source=1, Viewer=1, ticket POST=0. Root audited the 16-page Manifest and ZIP.
 The user's normal Catalog and original failed output were left unchanged.
 
 ## Discovery
+
+### Native upcoming row (2026-11-19)
+
+The observed single trailing `.mod-episode-nopublic` row has no episode anchor
+or visible episode title. It instead carries `data-original-url`,
+`data-episode-title`, and an exact `次回公開予定：` / Japanese calendar-date pair.
+Discovery validates its known hierarchy, visibility, absence of reader/access
+controls and price/free badges, `data-is-free="false"`, same-work strict episode
+URL, unique ID, and a real date with matching weekday. Unsupported or malformed
+rows still stop the whole listing before emission.
+
+The row is retained internally as `YanmagaListingRow.unpublished` for stable
+native order, duplicate detection, continuation offsets and next/latest checks.
+It emits no Catalog Item/Source/target and is excluded from Rental History
+requests even if a previous grant names that ID. Its hidden URL is never
+navigated. Only a later normal public row can enter ordinary classification.
+Published display positions retain their native values; no Core/Policy/CLI or
+Catalog schema changes are required.
+
+This fixes the Chapter 95 preflight for 妹は知っている (Item 50683 / Source
+50990), which previously rejected Chapter 98's linkless scheduled row as an
+invalid episode URL. Saved diagnostics and a shared-CDP metadata probe confirmed
+the shape. A fresh full traversal yielded 98 published records from 99 internal
+rows, and an isolated Runner captured Chapter 95's 20 pages through END. No
+first-free entry or first-party non-GET attempt occurred; normal Catalog,
+Watchlist and failed output remain unchanged. The whole 11-candidate Batch was
+not rerun.
 
 `YanmagaDiscoveryAdapter` is registered in the CLI Discovery registry under
 `yanmaga`. It accepts a canonical HTTPS work URL on the exact `yanmaga.jp`

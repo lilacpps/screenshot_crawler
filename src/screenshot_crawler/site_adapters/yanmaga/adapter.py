@@ -364,7 +364,8 @@ def _read_snapshot_js() -> str:
         try {
           const url = new URL(authorLink.href, location.href);
           authorHrefValid = url.protocol === 'https:' && url.origin === 'https://x.com' &&
-            !url.username && !url.password && !url.port && !url.search && !url.hash &&
+            !url.username && !url.password && !url.port &&
+            (!url.search || url.search === '?s=20') && !url.hash &&
             /^\/[^/]+\/?$/.test(url.pathname);
         } catch {}
       }
@@ -481,6 +482,9 @@ def _read_snapshot_js() -> str:
             children[2].firstElementChild === like && children[3] === share &&
             children[4].matches('div.spacer') &&
             engagement.querySelectorAll('.like-note > img').length === 1 &&
+            (authorLinks.length === 0 || (authorFollowExact &&
+              authorLink.previousElementSibling === engagementButtons &&
+              authorLink.parentElement === engagementButtons.parentElement)) &&
             engagementNote.complete && engagementNote.naturalWidth > 0 && visible(engagementNote) &&
             engagementNote.src === 'https://viewer-assets.yanmaga.jp/viewer/assets/img/like_note-4469488c0f4e846b0cc34a2dcb85e4d6b0eb5f68101e4ebfb5a521476d99adf3.png' &&
             engagementFormExact(favorite, 'favorite', 'お気に入り') &&
@@ -2567,6 +2571,8 @@ class YanmagaAdapter(SiteAdapter):
             and snapshot.rental_author_follow_count == 0
             and self._rental_title_matches_immediate_next_row(snapshot, require_wait=True)
         )
+        # The author link may accompany engagement controls on a non-latest
+        # episode; the current-episode forms/share proof remains authoritative.
         engagement_boundary = (
             not snapshot.terminal_only
             and snapshot.rental_engagement_exact
@@ -2576,7 +2582,11 @@ class YanmagaAdapter(SiteAdapter):
             and snapshot.rental_signup_count == 0
             and snapshot.rental_wait_count == 0
             and snapshot.rental_point_count == 0
-            and snapshot.rental_author_follow_count == 0
+            and (
+                snapshot.rental_author_follow_count == 0
+                or (snapshot.rental_author_follow_count == 1
+                    and snapshot.rental_author_follow_exact)
+            )
         )
         if not (
             valid_next
