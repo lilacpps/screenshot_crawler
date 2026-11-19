@@ -737,10 +737,10 @@ class PiccomaAdapter(SiteAdapter):
         self, page: Page, candidates: tuple[object, ...], quota_resource: str,
         *, timeout_ms: int = 15_000,
     ) -> AccessResourceResolution:
-        """Read one product's stock before selecting any grant-only episodes."""
+        """Read one product's stock before selecting ticket-backed episodes."""
 
-        if quota_resource not in _GRANT_ONLY_TICKET_RESOURCES or not candidates:
-            raise UnsupportedAccessStrategyError("Piccoma grant resolver requires an explicit resource")
+        if quota_resource not in _TICKET_KINDS_BY_RESOURCE or not candidates:
+            raise UnsupportedAccessStrategyError("Piccoma stock resolver requires a supported resource")
         identities = [parse_piccoma_viewer_url(candidate.locator) for candidate in candidates]
         if (
             any(identity is None for identity in identities)
@@ -778,6 +778,10 @@ class PiccomaAdapter(SiteAdapter):
         daily_left = int(daily)
         selected: list[int] = []
         skipped: list[tuple[int, str]] = []
+        unavailable_reason = (
+            PICCOMA_TICKET_NO_ACTION_REASON if quota_resource == _AUTO_TICKET_RESOURCE
+            else f"{quota_resource}_unavailable"
+        )
         for candidate, row in zip(candidates, rows, strict=True):
             mode = classify_piccoma_access(
                 row["markers"], row["label"], point_prices=row.get("pointPrices")
@@ -795,29 +799,39 @@ class PiccomaAdapter(SiteAdapter):
             if mode != "quota" or row.get("userAccess") != "require":
                 raise UnknownPageStateError("Piccoma work grant row has ambiguous access")
             markers = set(row["markers"])
-            if quota_resource == _WORK_TICKET_RESOURCE:
+            if quota_resource in {_WORK_TICKET_RESOURCE, _AUTO_TICKET_RESOURCE}:
                 if daily_left:
                     daily_left -= 1
                 elif TICKET_ROW_MARKER["zero_plus"] in markers:
                     if zero is None:
                         raise UnknownPageStateError("Piccoma work ¥0+ balance is missing or ambiguous")
                     if zero <= 0:
-                        skipped.append((candidate.source_id, "work_ticket_unavailable"))
+                        skipped.append((candidate.source_id, unavailable_reason))
                         continue
                     zero -= 1
+                elif (
+                    quota_resource == _AUTO_TICKET_RESOURCE
+                    and TICKET_ROW_MARKER["binge_free"] in markers
+                ):
+                    if binge is None:
+                        raise UnknownPageStateError("Piccoma work binge balance is missing or ambiguous")
+                    if binge <= 0:
+                        skipped.append((candidate.source_id, unavailable_reason))
+                        continue
+                    binge -= 1
                 else:
-                    skipped.append((candidate.source_id, "work_ticket_unavailable"))
+                    skipped.append((candidate.source_id, unavailable_reason))
                     continue
             else:
                 # A charged daily ticket takes precedence in the native UI.
                 # Binge never spends that other resource implicitly.
                 if daily or TICKET_ROW_MARKER["binge_free"] not in markers:
-                    skipped.append((candidate.source_id, "binge_ticket_unavailable"))
+                    skipped.append((candidate.source_id, unavailable_reason))
                     continue
                 if binge is None:
                     raise UnknownPageStateError("Piccoma work binge balance is missing or ambiguous")
                 if binge <= 0:
-                    skipped.append((candidate.source_id, "binge_ticket_unavailable"))
+                    skipped.append((candidate.source_id, unavailable_reason))
                     continue
                 binge -= 1
             selected.append(candidate.source_id)

@@ -100,6 +100,11 @@ class SitePolicy(ABC):
 
         return False
 
+    def resolve_batch_quota_per_work(self) -> bool:
+        """Resolve quota pools lazily per Work while preserving Batch order."""
+
+        return False
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int | None:
         """Return local quota slots, or ``None`` for policies without quota."""
 

@@ -127,6 +127,9 @@ class PiccomaSitePolicy(SitePolicy):
     def resolve_grant_only_per_work(self) -> bool:
         return True
 
+    def resolve_batch_quota_per_work(self) -> bool:
+        return True
+
     def evaluate_for_quota_resource(
         self,
         source: Source,

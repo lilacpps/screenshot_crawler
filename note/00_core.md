@@ -1,3 +1,23 @@
+## Work-level normal Batch stock selection (2026-11-19)
+
+`SitePolicy.resolve_batch_quota_per_work()` defaults to false; Piccoma opts in.
+Before a normal Batch Work/resource's first quota candidate, CLI resolves its
+remaining consuming pool with the existing guarded resolver on an owned Page,
+then closes that Page. It caches selected Source IDs only for that phase.
+Zero stock skips the whole quota pool without individual candidate Pages or
+CrawlRuns. Remaining direct candidates retain their original positions and
+still run. Later expected unavailability clears only that Work/resource's
+selected quota pool; `stop_work=False` races, explicit pass stops and unknown
+failure semantics remain intact. Metrics/execution events record each skipped
+Source once, while console output gives one Work selected/skipped summary.
+Resolver skip lookup is indexed by Source ID rather than repeated pool scans.
+Snapshots do not count as entry attempts. Snapshot-to-entry/next-Work pacing
+uses the existing setting, with no final empty-pool sleep. No new CLI option,
+Catalog schema, stock persistence or Core Runner behavior is introduced.
+Normal Batch order and existing deferred/prepared/grant-only flows are retained.
+The narrow change is validated with CLI/Policy/Executor and synthetic browser
+tests; results and live limits are recorded in `note/09_piccoma.md`.
+
 ## Work-level grant-only stock selection (2026-11-19)
 
 `SitePolicy.resolve_grant_only_per_work()` defaults to false; Piccoma opts in
@@ -16,7 +36,8 @@ allows the rest of the Work's selected pool to proceed. Snapshot-only site acces
 when no entry was attempted. Resolver and entry each retain their AccessGuard,
 bounded cleanup, Catalog scope validation and owned-Page lifecycle. Resource
 names/selectors/balance rules stay in the site adapter. There is no new CLI
-option, Catalog state, or normal-Batch/deferred prepared-entry behavior.
+option or Catalog state; normal Batch uses the separate opt-in above, and
+deferred prepared-entry behavior is unchanged.
 
 Validation and live limits are recorded with the Piccoma change in
 `note/09_piccoma.md`; this revision has no consuming live verification.

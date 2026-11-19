@@ -353,10 +353,12 @@ def test_piccoma_auto_tickets_cli_option_is_removed_but_worker_consent_remains()
 
 
 async def test_piccoma_batch_run_persists_attempt_through_metrics_sink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ) -> None:
     candidate = SimpleNamespace(
         item_id=1,
+        work_id=7,
+        site="piccoma",
         source_id=2,
         target_id=3,
         discovery_key=None,
@@ -379,6 +381,9 @@ async def test_piccoma_batch_run_persists_attempt_through_metrics_sink(
     received_options: dict[str, object] = {}
 
     class FakePolicy:
+        def resolve_batch_quota_per_work(self) -> bool:
+            return True
+
         def defer_quota_access_to_grant_phase(self) -> bool:
             return False
 
@@ -413,6 +418,11 @@ async def test_piccoma_batch_run_persists_attempt_through_metrics_sink(
             received_options.update(kwargs)
             self.runtime_settings = None
             self.access_event_sink = None
+
+        async def resolve_access_resource_candidates(self, _page, pool, resource):
+            assert pool == [candidate]
+            assert resource == "piccoma_ticket_auto"
+            return SimpleNamespace(selected_source_ids=(2,), skipped_source_reasons=())
 
         async def execute_candidate(
             self, _page: object, _candidate: object, **kwargs: object
@@ -464,6 +474,7 @@ async def test_piccoma_batch_run_persists_attempt_through_metrics_sink(
     args.metrics_root = metrics_root
     await cli._run_batch_run_locked(args, object())
 
+    assert "executing: direct + work-stock-selected quota" in capsys.readouterr().out
     assert callable(received_options["access_attempt_sink"])
     metric_files = list(metrics_root.glob("*.jsonl"))
     assert len(metric_files) == 1
@@ -1149,6 +1160,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     assert grant_only.grant_only == "work_ticket"
     assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
     piccoma_policy = cli._batch_policy_registry().create("piccoma")
+    assert piccoma_policy.resolve_batch_quota_per_work() is True
     assert piccoma_policy.supported_access_resources() == (
         "piccoma_ticket_auto", "work_ticket", "binge_ticket"
     )
@@ -2754,6 +2766,131 @@ def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
         "success": 6, "already_accessible": 6, "unavailable": 5,
         "unknown": 2, "pass_exhausted": 2, "limit": 2,
     }[outcome]
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "all_zero", "unavailable", "already_accessible", "unknown", "pass_exhausted"]
+)
+def test_normal_batch_resolves_work_stock_once_without_reordering_direct_candidates(
+    outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    sleeps: list[float] = []
+
+    async def no_wait(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", no_wait)
+    resolved: list[int] = []
+    executed: list[int] = []
+    skipped: list[int] = []
+    events: list[tuple[str, dict]] = []
+    pages: list[object] = []
+    closed: list[object] = []
+    candidates = [
+        SimpleNamespace(
+            site="piccoma", work_id=work, source_id=item, item_id=item,
+            discovery_key=None,
+            consumes_quota=quota, quota_resource="piccoma_ticket_auto" if quota else None,
+            access_strategy="quota" if quota else "direct", metadata={},
+        )
+        for work, item, quota in (
+            (1, 11, True), (1, 12, True), (1, 13, False), (2, 21, True),
+            (1, 14, True), (2, 22, True), (2, 23, False), (2, 24, True),
+            (1, 15, False), (3, 31, True),
+        )
+    ]
+
+    class Session:
+        async def new_page(self):
+            page = object()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+
+    class Executor:
+        def grant_only_skip_reason(self, _candidate):
+            pytest.fail("Normal Batch must not validate grant-only resources")
+
+        def resource_state_skip_reason(self, _candidate):
+            return None
+
+        async def resolve_access_resource_candidates(self, _page, pool, resource):
+            assert resource == "piccoma_ticket_auto"
+            assert all(c.consumes_quota for c in pool)
+            work = pool[0].work_id
+            resolved.append(work)
+            unavailable = work == 1 or outcome == "all_zero"
+            return SimpleNamespace(
+                selected_source_ids=tuple(c.source_id for c in pool if not unavailable),
+                skipped_source_reasons=tuple(
+                    (c.source_id, "no_stock") for c in pool if unavailable
+                ),
+            )
+
+        async def execute_candidate(self, _page, candidate, **_kwargs):
+            executed.append(candidate.item_id)
+            if candidate.item_id == 21:
+                if outcome == "unknown":
+                    raise UnknownPageStateError("unknown consumption")
+                if outcome in {"unavailable", "already_accessible", "pass_exhausted"}:
+                    from screenshot_crawler.site_adapters.piccoma.live_access import (
+                        PiccomaTicketNoActionError,
+                    )
+
+                    if outcome == "pass_exhausted":
+                        raise cli.AccessResourceUnavailableError("exhausted", stop_resource_pass=True)
+                    raise PiccomaTicketNoActionError(stop_work=outcome != "already_accessible")
+            return SimpleNamespace(archive_path="fixture.zip")
+
+    metrics = SimpleNamespace(
+        record_local_skip=lambda candidate, **_kwargs: skipped.append(candidate.item_id),
+        start_candidate=lambda _candidate: None,
+        finish_candidate=lambda **_kwargs: None,
+    )
+    args = SimpleNamespace(
+        output_root=tmp_path / "output", library_dir=tmp_path / "Books",
+        max_pages=2, max_same_content=2, keep_open=False,
+        event_sink=lambda event, **fields: events.append((event, fields)),
+    )
+
+    async def run():
+        return await cli._execute_batch_candidates(
+            args, Session(), Executor(), candidates, phase="default",
+            resolve_quota_per_work=True, metrics=metrics,
+        )
+
+    if outcome == "unknown":
+        with pytest.raises(cli.BatchExecutionError, match="unknown consumption"):
+            asyncio.run(run())
+    else:
+        processed, keep_going = asyncio.run(run())
+        assert processed == len(executed)
+        assert keep_going == (outcome != "pass_exhausted")
+    assert executed == {
+        "success": [13, 21, 22, 23, 24, 15, 31],
+        "all_zero": [13, 23, 15],
+        "unavailable": [13, 21, 23, 15, 31],
+        "already_accessible": [13, 21, 22, 23, 24, 15, 31],
+        "unknown": [13, 21], "pass_exhausted": [13, 21],
+    }[outcome]
+    assert resolved == ([1, 2] if outcome in {"unknown", "pass_exhausted"} else [1, 2, 3])
+    assert skipped == {
+        "all_zero": [11, 12, 14, 21, 22, 24, 31],
+        "unavailable": [11, 12, 14, 22, 24],
+    }.get(outcome, [11, 12, 14])
+    assert pages == closed
+    assert [
+        fields["item_id"] for event, fields in events
+        if event == "candidate_finished" and fields.get("result") == "skipped"
+        and fields["item_id"] not in executed
+    ] == skipped
+    assert len(pages) == len(resolved) + len(executed)
+    assert sleeps == [3.0] * (len(resolved) + len(executed) - 1)
+    output = capsys.readouterr().out
+    assert "work=1: quota selected=0 skipped=3" in output
+    assert "SKIPPED item=11" not in output
 
 
 @pytest.mark.parametrize("consumed", [False, None])

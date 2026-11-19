@@ -8,6 +8,16 @@ Piccoma Discovery and the horizontal viewer/Capture adapter support exact-free a
 two explicit resources: `work_ticket` allows waitfree / ¥0+, and `binge_ticket`
 allows binge-free. `--grant-only all` runs Work first, replans, then runs Binge;
 each pass is restricted to its resource's kinds and does not silently fallback.
+Normal Batch checks each Work's stock once before its first quota entry and
+selects at most the available daily plus supported secondary stock. Zero stock
+skips the Work's quota pool without opening each episode. Later unavailability
+also skips the remaining selected quota rows; free/active-grant direct rows
+keep their original order. Selected entries still recheck live state and debit.
+No CLI/configuration change is required; restart the Batch worker to load this
+behavior. Selection is transient, with no persisted stock estimate. The resolver
+requires one bound Piccoma product per Catalog Work and fails closed on mixed
+products or ambiguous state. Normal and grant-only stock integration is covered
+by synthetic browser tests; this revision adds no consuming live verification.
 Both modes
 bind the full-list row, product-home charge/balance, login indicator,
 target-bound eligibility exchange, exact native modal, and matching one-off

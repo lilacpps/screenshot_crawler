@@ -1719,10 +1719,14 @@ async def _resolve_access_resource_candidates(
     metrics: BatchMetricsWriter | None = None,
     grant_report: GrantOnlyReport | None = None,
     selected_keys: frozenset[str] | None = None,
+    grant_only: bool = True,
+    execution_args: argparse.Namespace | None = None,
 ) -> list[BatchCandidate]:
     """Resolve site-native candidates without counting the snapshot as an attempt."""
 
-    candidates = _filter_local_grant_candidates(executor, candidates, metrics=metrics)
+    candidates = _filter_local_grant_candidates(
+        executor, candidates, metrics=metrics, grant_only=grant_only
+    )
     if not candidates:
         return []
     if delay_before_first_ms is not None:
@@ -1760,6 +1764,7 @@ async def _resolve_access_resource_candidates(
         metrics=metrics,
         grant_report=grant_report,
         selected_keys=selected_keys,
+        execution_args=execution_args,
     )
 
 
@@ -1768,14 +1773,22 @@ def _apply_access_resolution(
     metrics: BatchMetricsWriter | None,
     grant_report: GrantOnlyReport | None = None,
     selected_keys: frozenset[str] | None = None,
+    execution_args: argparse.Namespace | None = None,
 ) -> list[BatchCandidate]:
-    if metrics is not None:
+    if metrics is not None or execution_args is not None:
+        by_source = {candidate.source_id: candidate for candidate in candidates}
         for source_id, reason in resolution.skipped_source_reasons:
-            candidate = next(
-                (item for item in candidates if item.source_id == source_id), None
-            )
+            candidate = by_source.get(source_id)
             if candidate is not None:
-                metrics.record_local_skip(candidate, reason=reason)
+                if metrics is not None:
+                    metrics.record_local_skip(candidate, reason=reason)
+                if execution_args is not None:
+                    _execution_event(
+                        execution_args, "candidate_finished", key=candidate.discovery_key,
+                        item_id=candidate.item_id, source_id=candidate.source_id,
+                        resource=candidate.quota_resource, result="skipped",
+                        reason=reason, resource_consumed=False,
+                    )
     selected_ids = set(resolution.selected_source_ids)
     if not selected_ids.issubset(
         {candidate.source_id for candidate in candidates}
@@ -1829,8 +1842,11 @@ def _record_local_grant_skip(
 def _filter_local_grant_candidates(
     executor: BatchExecutor, candidates: list[BatchCandidate], *,
     metrics: BatchMetricsWriter | None,
+    grant_only: bool = True,
 ) -> list[BatchCandidate]:
-    check = getattr(executor, "grant_only_skip_reason", None)
+    check = getattr(
+        executor, "grant_only_skip_reason" if grant_only else "resource_state_skip_reason", None
+    )
     if not callable(check):
         return candidates
     eligible = []
@@ -2074,6 +2090,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     policy = policies.create(args.site)
     defer_quota = _policy_defers_quota_access(policy)
     resolve_per_work = getattr(policy, "resolve_grant_only_per_work", lambda: False)()
+    resolve_batch_quota = getattr(policy, "resolve_batch_quota_per_work", lambda: False)()
     execute_grants = _execute_work_grants if resolve_per_work else _execute_batch_candidates
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
@@ -2168,10 +2185,13 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         print(deferred_summary)
         print(f"  executing direct: {len(candidates)}")
     else:
-        print(
-            f"  executing: {len(candidates)}"
-            + (f" resource={grant_only}" if grant_only is not None else "")
-        )
+        if resolve_batch_quota and grant_only is None and any(c.consumes_quota for c in candidates):
+            print("  executing: direct + work-stock-selected quota")
+        else:
+            print(
+                f"  executing: {len(candidates)}"
+                + (f" resource={grant_only}" if grant_only is not None else "")
+            )
         if plan is not None:
             print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
             print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
@@ -2427,6 +2447,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 grant_only=False,
                 attempt_limit=None,
                 allow_quota_access=allow_quota_access,
+                resolve_quota_per_work=resolve_batch_quota,
             )
         if (
             not grant_only_all
@@ -2606,14 +2627,48 @@ async def _execute_batch_candidates(
     confirmed_grants: list[BatchCandidate] | None = None,
     allow_quota_access: bool = False,
     stop_work_on_unavailable: bool = False,
+    resolve_quota_per_work: bool = False,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
     attempts = 0
+    resolved_pools: dict[tuple[str, int, str], set[int]] = {}
+
+    def pool_key(candidate: BatchCandidate) -> tuple[str, int, str] | None:
+        if not resolve_quota_per_work or not candidate.consumes_quota:
+            return None
+        if candidate.work_id is None or not candidate.quota_resource:
+            raise BatchPlanningError("Work stock resolution requires a Work and resource")
+        return candidate.site, candidate.work_id, candidate.quota_resource
+
+    def still_selected(candidate: BatchCandidate) -> bool:
+        key = pool_key(candidate)
+        return key not in resolved_pools or candidate.source_id in resolved_pools[key]
+
     for index, candidate in enumerate(candidates, start=1):
         _execution_checkpoint(args)
         if attempt_limit is not None and attempts >= attempt_limit:
             break
+        key = pool_key(candidate)
+        if key is not None:
+            if key not in resolved_pools:
+                pool = [future for future in candidates[index - 1:] if pool_key(future) == key]
+                selected = await _resolve_access_resource_candidates(
+                    session, executor, pool, resource=candidate.quota_resource,
+                    delay_before_first_ms=delay_before_first_ms if attempts == 0 else None,
+                    metrics=metrics, grant_only=False, execution_args=args,
+                )
+                delay_before_first_ms = None
+                resolved_pools[key] = {item.source_id for item in selected}
+                print(
+                    f"Batch work={candidate.work_id}: quota selected={len(selected)} "
+                    f"skipped={len(pool) - len(selected)}"
+                )
+                if any(still_selected(future) for future in candidates[index - 1:]):
+                    await asyncio.sleep(inter_candidate_delay_ms / 1000)
+                _execution_checkpoint(args)
+            if not still_selected(candidate):
+                continue
         if grant_only:
             local_skip_reason = executor.grant_only_skip_reason(candidate)
             if local_skip_reason is not None:
@@ -2849,6 +2904,25 @@ async def _execute_batch_candidates(
             if stop_work_on_unavailable and getattr(exc, "stop_work", True):
                 print("  Skipping remaining candidates in this work.")
                 return attempts, True
+            if key is not None and getattr(exc, "stop_work", True):
+                remaining = [
+                    future for future in candidates[index:]
+                    if pool_key(future) == key and still_selected(future)
+                ]
+                resolved_pools[key].clear()
+                print(
+                    f"  Skipping remaining quota candidates in work={candidate.work_id}: "
+                    f"{len(remaining)}"
+                )
+                for future in remaining:
+                    if metrics is not None:
+                        metrics.record_local_skip(future, reason=reason)
+                    _execution_event(
+                        args, "candidate_finished", key=getattr(future, "discovery_key", None),
+                        item_id=future.item_id, source_id=future.source_id,
+                        resource=future.quota_resource, result="skipped",
+                        reason=reason, resource_consumed=False,
+                    )
             continue_after_candidate = True
         except CandidateExecutionError as exc:
             primary_error = exc
@@ -2935,7 +3009,9 @@ async def _execute_batch_candidates(
                         if attempt_limit is not None and attempts >= attempt_limit:
                             has_future_access = False
                     else:
-                        has_future_access = index < len(candidates)
+                        has_future_access = any(
+                            still_selected(future) for future in candidates[index:]
+                        )
                     if has_future_access:
                         await asyncio.sleep(inter_candidate_delay_ms / 1000)
             except (KeyboardInterrupt, asyncio.CancelledError) as exc:

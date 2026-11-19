@@ -1,3 +1,52 @@
+## Normal Batch work stock selection (2026-11-19)
+
+Normal Batch now uses the existing non-consuming Work listing/home snapshot
+before its first `piccoma_ticket_auto` quota candidate. One Work's pool is
+bounded by one charged waitfree use plus its observed supported ¥0+ or Binge
+stock. Each quota row's live identity/access markers remain validated. A zero
+pool skips the Work's remaining quota candidates without opening individual
+entries, eligibility POSTs or viewers. The selected IDs are kept only within
+the Batch phase. Normal candidate order is preserved, including interleaved
+free and already-granted direct rows. Selected entries still perform fresh
+eligibility/modal/debit proof. If availability disappears, the remaining quota
+pool for that Work is skipped and subsequent direct rows/Works continue.
+Unknown outcomes stop the run; the account Binge balance still requires the
+native modal and is not inferred from product stock. Mixed-product Catalog
+Works remain unsupported by the resolver and fail closed.
+
+CLI/GUI options and output formats are unchanged. Restart the Batch worker
+and run the ordinary Piccoma Batch command. Console output reports one
+`Batch work=...: quota selected=... skipped=...` summary per Work; metrics and
+execution events retain per-Source skips without extra site requests. The
+initial summary is `executing: direct + work-stock-selected quota` because the
+quota plan is a pool for live selection. Snapshot skips create no CrawlRun,
+grant, completed Item or Artifact. Availability is cached only within the
+phase: a new run checks fresh stock. Existing
+inter-candidate pacing also covers snapshots; the final empty pool has no
+trailing delay. This extends the already observed stock/entry contract using
+synthetic tests; no real-site/CDP action or new ticket use was performed.
+
+Validation: 387 affected CLI/Policy/live-access/Planner/Executor/deferred-grant
+Unit cases passed; 68 ticket/quota/grant/Batch synthetic browser Integration
+cases passed (348 unrelated capture/reader cases deselected, zero skipped).
+After the startup-summary adjustment, all 129 CLI cases passed again. The
+normal browser path exercises stock resolution -> BatchExecutor -> actual
+Runner -> ticket entry -> END -> ZIP -> Catalog completion. Zero-stock browser
+cases allow only listing/home GETs, with no eligibility POST or viewer request.
+CLI regressions cover interleaved Works/direct rows, all-zero pools, later
+unavailability, no-action races, unknown/pass stops, skip metrics/events,
+pacing and Page cleanup. Three existing Executor cases referenced the removed
+`GRANT_ONLY_RESOURCE`; their fixtures now use `WORK_TICKET_RESOURCE`, preserving
+their identity/sink/grant-failure assertions, and all pass. Existing
+pytest-asyncio deprecation warnings remain. Logs are ignored local
+`output/pba2.log`, `output/pbb2.log` and `output/pbc1.log` (short isolated
+basetemps of the same stems). `ruff check src tests` and scoped
+`git diff --check -- src tests docs note` passed. Repository full suite and
+standalone Research were not run: this is a Piccoma opt-in stock-selection
+extension with affected shared/deferred flows covered, not a capture/Core
+change. Current real-site stock/entry behavior under this orchestration remains
+unverified; no new consuming live run or normal Catalog/library write is claimed.
+
 ## Grant-only work stock selection (2026-11-19)
 
 Explicit grant-only now checks one Work's availability before opening any
@@ -27,7 +76,8 @@ The native Binge modal remains authority for the
 account balance; product-home stock is a Work limit, not account stock proof.
 The resolver currently requires one product per Catalog Work and rejects
 mixed-product pools. Snapshot and entry use separate guarded owned Pages.
-Normal Batch sequence/capture behavior and CLI options are unchanged.
+Normal Batch sequence/capture behavior and CLI options are unchanged; its
+quota pool now uses the separate lazy Work resolution described above.
 
 Synthetic acceptance covers 0/positive/unknown balances, daily plus auxiliary
 stock, resource isolation, one resolution per Work, next-Work advancement,

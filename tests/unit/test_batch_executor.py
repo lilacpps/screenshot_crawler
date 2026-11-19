@@ -677,7 +677,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
                 AccessAttemptObservation(
                     site="piccoma",
                     external_id="wrong-source" if failure == "identity" else candidate.external_id,
-                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    resource=PiccomaSitePolicy.WORK_TICKET_RESOURCE,
                     resource_kind="zero_plus",
                     status="attempting",
                     observed_at=NOW,
@@ -689,7 +689,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
                     AccessAttemptObservation(
                         site="piccoma",
                         external_id=candidate.external_id,
-                        resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                        resource=PiccomaSitePolicy.WORK_TICKET_RESOURCE,
                         resource_kind="zero_plus",
                         status="confirmed",
                         observed_at=NOW,
@@ -706,7 +706,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
                 )
                 self.consumption = AccessConsumption(
                     consumed=True,
-                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    resource=PiccomaSitePolicy.WORK_TICKET_RESOURCE,
                     consumed_at=NOW,
                     access_granted_until=NOW + timedelta(hours=2),
                 )
@@ -743,7 +743,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
     candidate = planner.plan(
         site="piccoma",
         now=NOW,
-        quota_resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+        quota_resource=PiccomaSitePolicy.WORK_TICKET_RESOURCE,
         output_mode="grant_only",
     ).candidates[0]
     adapter = AttemptAdapter()
@@ -768,7 +768,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
             expose_callback(configured_adapter)
             await configured_adapter.configure_run(page, "quota")
             await configured_adapter.configure_quota_resource(
-                page, PiccomaSitePolicy.GRANT_ONLY_RESOURCE
+                page, PiccomaSitePolicy.WORK_TICKET_RESOURCE
             )
             await configured_adapter.initialize_entry_only(page)
             return RunResult(
@@ -823,7 +823,7 @@ async def test_grant_only_executor_scopes_attempts_and_preserves_confirmed_grant
                 AccessAttemptObservation(
                     site="piccoma",
                     external_id=candidate.external_id,
-                    resource=PiccomaSitePolicy.GRANT_ONLY_RESOURCE,
+                    resource=PiccomaSitePolicy.WORK_TICKET_RESOURCE,
                     resource_kind="zero_plus",
                     status="confirmed",
                     observed_at=NOW,

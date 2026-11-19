@@ -442,6 +442,18 @@ already-accessible target: this skips that row without declaring the Work's
 resource unavailable. Piccoma retains its durable no-action error identity and
 fresh-grant persistence on that race.
 
+The separate optional `resolve_batch_quota_per_work()` policy hook also
+defaults to false. In normal Batch, it resolves only the remaining consuming
+candidates for a `(site, Work, resource)` when that pool is first encountered.
+The existing guarded resolver bounds the pool; its snapshot Page closes before
+entry. Selected IDs are cached within that phase without regrouping the
+candidate sequence. Empty pools and later expected Work unavailability skip
+only consuming candidates in that pool, leaving direct candidates in place.
+Snapshot/local skips are recorded in metrics and execution events without
+creating entry attempts or CrawlRuns. Snapshot access and later site operations
+retain inter-candidate pacing; there is no trailing sleep after a final empty
+pool. Unknown results and explicit resource-pass stops still stop as before.
+
 An adapter that must retain restart-visible evidence around a possible resource
 action may report the optional site-neutral `AccessAttemptObservation`. It
 contains the exact site, external identity, logical candidate resource,

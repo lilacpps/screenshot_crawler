@@ -26,6 +26,16 @@ waitfree/¥0+/Binge stock bounds, unknown balances, next-Work advancement,
 shared limits, pass exhaustion, failure stops and Page cleanup. This revision's
 stock-selection checks are synthetic; no additional live ticket use is claimed.
 
+Normal Piccoma Batch now also opts into `resolve_batch_quota_per_work()`.
+The shared orchestration resolves a Work/resource lazily, caches its selected
+quota pool for the phase, and preserves interleaved direct/quota candidate order.
+Zero stock skips the pool before entry; later unavailability skips only its
+remaining quota rows. Acceptance includes daily/secondary stock bounds,
+normal Batch-to-ZIP/Catalog execution, empty and interleaved Works, no-action
+races, pass/unknown stops, metrics/events, pacing and Page cleanup. The hook
+defaults to false for other policies. This extension uses synthetic checks;
+no new real-site ticket use is claimed.
+
 ## Bounded resolver prerequisite extension (2026-10-29)
 
 Implemented the optional site-neutral resolver configuration hook supplying

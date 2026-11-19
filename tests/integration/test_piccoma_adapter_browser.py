@@ -1970,6 +1970,14 @@ def _ticket_home_html(
         ("binge_ticket", "zero_plus", False, 6, 0, False),
         ("work_ticket", "zero_plus", False, 2, 0, True),
         ("binge_ticket", "binge_free", False, 2, 0, True),
+        ("piccoma_ticket_auto", "waitfree", False, 6, 0, False),
+        ("piccoma_ticket_auto", "waitfree", True, 6, 1, False),
+        ("piccoma_ticket_auto", "zero_plus", False, 0, 0, False),
+        ("piccoma_ticket_auto", "zero_plus", True, 2, 3, False),
+        ("piccoma_ticket_auto", "binge_free", False, 2, 2, False),
+        ("piccoma_ticket_auto", "binge_free", True, 2, 3, False),
+        ("piccoma_ticket_auto", "zero_plus", False, 2, 0, True),
+        ("piccoma_ticket_auto", "binge_free", False, 2, 0, True),
     ],
 )
 async def test_piccoma_work_grant_snapshot_bounds_pool_without_episode_attempts(
@@ -4016,11 +4024,14 @@ async def test_piccoma_quota_batch_blocks_external_tracking_then_captures_one_ep
         assert catalog.get_item(item.id).status == "completed"
 
 
+@pytest.mark.parametrize("grant_only", [True, False], ids=["grant-only", "normal-batch"])
 async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
-    browser_page: Page, tmp_path: Path,
+    browser_page: Page, tmp_path: Path, grant_only: bool,
 ) -> None:
     catalog, _work, item, source, _target, policies, adapters, candidate = (
-        _piccoma_batch_setup(tmp_path, quota_resource="work_ticket")
+        _piccoma_batch_setup(
+            tmp_path, quota_resource="work_ticket" if grant_only else "piccoma_ticket_auto"
+        )
     )
     counts = await _route_ticket_batch_fixture(browser_page)
     attempts: list[object] = []
@@ -4042,13 +4053,15 @@ async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
             assert page is browser_page
             lifecycle.append("close")
 
-    processed, keep_going = await cli._execute_work_grants(
+    execute = cli._execute_work_grants if grant_only else cli._execute_batch_candidates
+    processed, keep_going = await execute(
         SimpleNamespace(
             output_root=tmp_path / "batch-output", max_pages=3,
-            max_same_content=3, keep_open=False,
+            library_dir=tmp_path / "library", max_same_content=3, keep_open=False,
         ),
         Session(), executor, [candidate], phase="grant-only:work_ticket",
         inter_candidate_delay_ms=0,
+        **({} if grant_only else {"resolve_quota_per_work": True}),
     )
     assert (processed, keep_going) == (1, True)
     assert lifecycle == ["new", "close", "new", "close"]
@@ -4056,9 +4069,16 @@ async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
     assert [value.status for value in attempts] == ["attempting", "confirmed"]
     assert catalog.get_source(source.id).quota_started_at is not None
     assert catalog.get_source(source.id).access_granted_until is not None
-    assert catalog.get_item(item.id).status == "pending"
-    assert catalog.list_artifacts(item_id=item.id) == []
-    assert not list((tmp_path / "batch-output").rglob("*.webp"))
+    assert catalog.get_item(item.id).status == ("pending" if grant_only else "completed")
+    artifacts = catalog.list_artifacts(item_id=item.id)
+    if grant_only:
+        assert artifacts == []
+        assert not list((tmp_path / "batch-output").rglob("*.webp"))
+    else:
+        assert len(artifacts) == 1
+        with ZipFile(artifacts[0].locator) as archive:
+            assert len(archive.namelist()) == 3
+            assert archive.testzip() is None
 
 
 @pytest.mark.parametrize("live_status", ["free", "granted"])

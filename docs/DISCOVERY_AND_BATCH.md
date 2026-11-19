@@ -261,6 +261,22 @@ Resource kind and
 availability are revalidated by the Piccoma adapter immediately before use.
 Other policies keep their existing ordering and resource contracts.
 
+Normal Batch also opts into `resolve_batch_quota_per_work()`: immediately
+before the first quota candidate for a Work/resource, it resolves that Work's
+remaining quota pool once using the same non-consuming listing/home snapshot.
+For `piccoma_ticket_auto`, the pool is bounded by one charged waitfree use
+plus the supported secondary stock (¥0+ or per-product Binge) on the observed
+rows. An empty pool skips all those quota candidates without individual entry
+checks. The selected pool is cached only within the current Batch phase;
+normal candidate order, including interleaved free/active-grant direct rows,
+is preserved. A later unavailable entry skips only that Work/resource's
+remaining selected quota candidates; direct rows continue. Explicit pass-stop
+and unknown-result behavior remain unchanged. Snapshot skips create no
+CrawlRuns, grants, completed Items or Artifacts and do not count as entry
+attempts. Balances are refreshed at the next Work and never persisted as
+quota capacity. Each selected entry still proves current availability and
+actual consumption; the Binge account balance remains modal authority.
+
 Before a consuming attempt, the Piccoma adapter binds the fresh full-list row,
 product-home state, login indicator, exact `/web/user/access` request/response,
 one native confirmation modal, one concrete kind-specific affirmative control,
