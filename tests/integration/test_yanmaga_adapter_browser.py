@@ -384,8 +384,29 @@ def _viewer_html(
         '<div class="spacer"></div></div></div>'
         '<p id="error-favorite-like" class="error-text"></p></div></div></div>'
     )
+    author_control = latest_author_control[
+        latest_author_control.index('<a class="author-info"'):latest_author_control.index('</a>') + 4
+    ].replace('https://x.com/test-author', 'https://x.com/test-author?s=20')
+    engagement_with_author = engagement_control.replace(
+        '<div class="spacer"></div></div></div>',
+        '<div class="spacer"></div></div>' + author_control + '</div>',
+    )
     controls.update({
         "engagement": engagement_control,
+        "engagement_author": engagement_with_author,
+        "engagement_author_plain_url": engagement_with_author.replace('?s=20', ''),
+        "engagement_author_bad_query": engagement_with_author.replace('?s=20', '?s=21'),
+        "engagement_author_duplicate_query": engagement_with_author.replace('?s=20', '?s=20&s=20'),
+        "engagement_author_foreign": engagement_with_author.replace('https://x.com/', 'https://example.invalid/'),
+        "engagement_author_wrong_label": engagement_with_author.replace('作者をフォロー', '作品をフォロー'),
+        "engagement_author_wrong_asset": engagement_with_author.replace('sns-x-', 'unknown-'),
+        "engagement_author_duplicate": engagement_with_author.replace(author_control, author_control * 2),
+        "engagement_author_hidden": engagement_with_author.replace(
+            'class="author-info"', 'class="author-info" style="display:none"'),
+        "engagement_author_wrong_position": engagement_with_author.replace(
+            author_control, '').replace('<div class="mod-modal-button">',
+                                       author_control + '<div class="mod-modal-button">'),
+        "engagement_author_wrong_code": engagement_with_author.replace('AbCd0123456789EfGhIj', '0' * 20),
         "engagement_offscreen": engagement_control,
         "engagement_obstructed": engagement_control,
         "engagement_wrong_code": engagement_control.replace('AbCd0123456789EfGhIj', '0' * 20),
@@ -2429,6 +2450,17 @@ async def test_yanmaga_hides_fresh_reader_menu_with_normal_roundtrip_before_capt
         ("ready_wait_wrong_thumbnail", False),
         ("ready_wait_duplicate", False),
         ("engagement", True),
+        ("engagement_author", True),
+        ("engagement_author_plain_url", True),
+        ("engagement_author_bad_query", False),
+        ("engagement_author_duplicate_query", False),
+        ("engagement_author_foreign", False),
+        ("engagement_author_wrong_label", False),
+        ("engagement_author_wrong_asset", False),
+        ("engagement_author_duplicate", False),
+        ("engagement_author_hidden", False),
+        ("engagement_author_wrong_position", False),
+        ("engagement_author_wrong_code", False),
         ("engagement_offscreen", False),
         ("engagement_obstructed", False),
         ("engagement_wrong_code", False),

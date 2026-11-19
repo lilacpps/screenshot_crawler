@@ -247,7 +247,7 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
 
     def row(
         number: int, *, free: bool = False, first: bool = False,
-        wait: bool = False, paid: bool = False,
+        wait: bool = False, paid: bool = False, unpublished: bool = False,
     ):
         episode_id = f"{number:032x}"
         return yanmaga_discovery.YanmagaListingRow(
@@ -260,6 +260,7 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
             first_free_marker=first,
             wait_free_marker=wait,
             paid_marker=paid,
+            unpublished=unpublished,
         )
 
     snapshot = yanmaga_discovery.YanmagaListingSnapshot(
@@ -276,6 +277,7 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
             row(8, wait=True),
             row(9, free=True),
             row(10, first=True),
+            row(11, unpublished=True),
         ),
         continuation=None,
         authenticated=True,
@@ -285,6 +287,8 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
     assert [target.episode_id for target in targets] == [
         f"{number:032x}" for number in (1, 2, 3, 4, 5, 6, 7)
     ]
+    assert all(value.episode_id != f'{11:032x}' for value in adapter._history_targets(
+        snapshot, work, {external_id(11): object()}))
 
     def countdown(hours: int, until: datetime | None, evidence: str | None):
         return RentalCountdown(
@@ -325,6 +329,7 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
     assert records[external_id(8)].access_granted_until is None
     assert records[external_id(9)].access_mode == "free"
     assert records[external_id(10)].access_mode == "free"
+    assert external_id(11) not in records
     assert records[trusted].access_mode == "unknown"
     assert records[trusted].access_granted_until is None
     assert records[trusted].access_granted_until_observed is False

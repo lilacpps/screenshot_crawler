@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import parse_qsl, quote, unquote_plus, unquote_to_bytes, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
@@ -84,6 +84,7 @@ class YanmagaListingRow:
     first_free_marker: bool = False
     wait_free_marker: bool = False
     paid_marker: bool = False
+    unpublished: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1191,6 +1192,27 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   const rawOriginal = row.getAttribute('data-original-url');
                   originalURL = rawOriginal ? new URL(rawOriginal, location.href).href : null;
                 } catch (_) {}
+                // Native upcoming row: metadata only, with no reader link.
+                const unpublishedNodes = [...row.querySelectorAll('.mod-episode-nopublic')];
+                const unpublished = unpublishedNodes.length === 1 ? unpublishedNodes[0] : null;
+                const scheduledDates = [...row.querySelectorAll('.mod-episode-date-before-publication')];
+                const scheduled = scheduledDates.length === 1 ? scheduledDates[0] : null;
+                const scheduledChildren = scheduled ? [...scheduled.children] : [];
+                const scheduledDate = scheduledChildren[1]?.textContent.trim() || null;
+                const unpublishedExact = !!unpublished && row.children.length === 1 &&
+                  row.firstElementChild === unpublished &&
+                  unpublished.matches('div.mod-episode-link.mod-episode-nopublic') &&
+                  visible(unpublished) && anchors.length === 0 && titleNodes.length === 0 &&
+                  row.querySelectorAll('a,button,form,input,[role="button"]').length === 0 &&
+                  row.querySelectorAll('[class*="mod-episode-point"],.mod-episode-free_browse,.by_wait,.js-modal').length === 0 &&
+                  !row.classList.contains('js-modal') && row.dataset.isFree === 'false' &&
+                  row.dataset.modal === 'registration' && !!row.dataset.episodeTitle?.trim() &&
+                  scheduled?.matches('div.mod-episode-nopublic > div.mod-episode-body > div.mod-episode-text > p.mod-episode-date.mod-episode-date-before-publication') &&
+                  visible(scheduled) && scheduledChildren.length === 2 &&
+                  scheduledChildren[0].tagName === 'SPAN' &&
+                  scheduledChildren[0].textContent.trim() === '次回公開予定：' &&
+                  scheduledChildren[1].tagName === 'TIME' && visible(scheduledChildren[1]) &&
+                  /^\d{4}\/\d{2}\/\d{2}\([日月火水木金土]\)$/.test(scheduledDate || '');
                 return {
                   index,
                   tag: row.tagName,
@@ -1216,6 +1238,10 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                   dataIsFree: row.getAttribute('data-is-free'),
                   paidPointMarker,
                   originalUrl: originalURL,
+                  unpublishedCandidate: unpublishedNodes.length > 0,
+                  unpublishedExact,
+                  scheduledDate,
+                  unpublishedTitle: row.dataset.episodeTitle || null,
                   anchorUrl: href?.href || null,
                   conflictingFreeBadge: [...row.querySelectorAll(
                     '.mod-episode-point,[class*="mod-episode-point--"]')].some(element => {
@@ -1384,16 +1410,36 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError("Yanmaga row order is invalid")
             if raw_row.get("tag") != "LI" or raw_row.get("visible") is not True:
                 raise DiscoveryIncompleteError("Yanmaga episode row is hidden or malformed")
-            href = raw_row.get("href")
+            unpublished = raw_row.get("unpublishedCandidate") is True
+            if unpublished:
+                date_text = raw_row.get("scheduledDate")
+                try:
+                    scheduled_date = date.fromisoformat(str(date_text)[:10].replace("/", "-"))
+                    date_valid = str(date_text)[10:] == f"({'月火水木金土日'[scheduled_date.weekday()]})"
+                except ValueError:
+                    date_valid = False
+                if (raw_row.get("unpublishedExact") is not True or not date_valid
+                        or index != len(rows_value) - 1):
+                    raise DiscoveryIncompleteError("Yanmaga unpublished episode row is malformed")
+            href = raw_row.get("originalUrl") if unpublished else raw_row.get("href")
             episode = parse_yanmaga_episode_url(href) if isinstance(href, str) else None
             if episode is None or episode.slug != work.slug:
                 raise DiscoveryIncompleteError("Yanmaga episode URL does not match its work")
             if episode.episode_id in seen_ids:
                 raise DiscoveryIncompleteError("Yanmaga listing contains a duplicate episode")
             seen_ids.add(episode.episode_id)
-            title = " ".join(str(raw_row.get("title") or "").split())
+            title = " ".join(str(raw_row.get("unpublishedTitle" if unpublished else "title") or "").split())
             if not title:
                 raise DiscoveryIncompleteError("Yanmaga episode title is unavailable")
+            if unpublished:
+                # Keep the native row for offsets and next/latest identity, but
+                # never turn its metadata-only URL into an acquisition target.
+                rows.append(YanmagaListingRow(
+                    episode_id=episode.episode_id, title=title, url=href,
+                    free_marker=False, red_marker_present=False, known_restricted=True,
+                    unpublished=True,
+                ))
+                continue
 
             marker_class = raw_row.get("markerClass")
             marker_count = raw_row.get("markerCount", 0)
@@ -1600,15 +1646,17 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
 
         episode_ids: list[str] = []
         seen: set[str] = set()
+        unpublished_ids = {row.episode_id for row in snapshot.rows if row.unpublished}
         for row in snapshot.rows:
-            if row.free_marker or row.first_free_marker or row.wait_free_marker:
+            if row.unpublished or row.free_marker or row.first_free_marker or row.wait_free_marker:
                 continue
             if row.episode_id not in seen:
                 seen.add(row.episode_id)
                 episode_ids.append(row.episode_id)
         for external_id in (previous_grants or {}):
             parsed = _parse_composite_id(external_id)
-            if parsed is not None and parsed[0] == work.slug and parsed[1] not in seen:
+            if (parsed is not None and parsed[0] == work.slug
+                    and parsed[1] not in seen and parsed[1] not in unpublished_ids):
                 seen.add(parsed[1])
                 episode_ids.append(parsed[1])
         return tuple(YanmagaEpisodeParts(work.slug, episode_id) for episode_id in episode_ids)
@@ -1661,6 +1709,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         records: list[DiscoveredRecord] = []
         for index in reversed(range(total)):
             row = snapshot.rows[index]
+            if row.unpublished:
+                continue
             external_id = f"{work.slug}:{row.episode_id}"
             history_grant = (history_grants or {}).get(row.episode_id)
             access_mode = (

@@ -65,6 +65,20 @@ def _row(
     </li>'''
 
 
+def _upcoming_row(episode_id: str) -> str:
+    return f'''<li class="mod-episode-item" data-episode-title="Synthetic upcoming"
+      data-is-free="false" data-modal="registration" data-original-url="{WORK_URL}/{episode_id}">
+      <div class="mod-episode-link mod-episode-nopublic">
+        <div class="mod-episode-thumbnail"><div class="mod-episode-thumbnail-image"></div></div>
+        <div class="mod-episode-body"><div class="mod-episode-text">
+          <p class="mod-episode-date mod-episode-date-before-publication">
+            <span>次回公開予定：</span><time>2026/11/24(火)</time>
+          </p>
+        </div></div>
+      </div>
+    </li>'''
+
+
 def _listing_html(
     rows: list[tuple[str, str, str]],
     *,
@@ -483,15 +497,21 @@ async def test_yanmaga_missing_limit_continuation_pages_before_catalog_emit(
             "offset=5&sort=older", "offset=155&sort=older", "offset=305&sort=older&limit=38"]
 
 
+@pytest.mark.parametrize("upcoming", [False, True])
 async def test_yanmaga_full_expands_complete_oldest_list_and_repeat_refreshes_catalog(
     browser_page,
     tmp_path: Path,
+    upcoming: bool,
 ) -> None:
     path = f"/comics/{quote(SLUG, safe='')}/episodes"
     html = _listing_html(
         [(_episode_id(1), "第1話", "red"), (_episode_id(3), "第3話", "wait")],
         continuation=(2, 1, path),
         insert_row=_row(_episode_id(2), "第2話", "red"),
+        raw_row_html=(
+            _row(_episode_id(1), "第1話") + _row(_episode_id(3), "第3話", "wait")
+            + _upcoming_row(_episode_id(4)) if upcoming else None
+        ),
     )
     catalog, result, service, _state = await _run_discovery(browser_page, tmp_path, html)
 
@@ -1608,6 +1628,63 @@ async def test_yanmaga_invalid_or_incomplete_listing_fails_before_catalog_reconc
     ]
     assert after == original, failure
     assert catalog.list_items()
+
+
+@pytest.mark.parametrize("failure", [
+    None, "missing_class", "foreign", "missing_url", "missing_title", "missing_date",
+    "wrong_label", "bad_date", "wrong_weekday", "duplicate_time", "link", "free",
+    "hidden", "duplicate_id", "not_last",
+])
+async def test_yanmaga_upcoming_row_is_metadata_only_and_never_entered(
+    browser_page, tmp_path, failure,
+) -> None:
+    catalog, initial, service, state = await _run_discovery(
+        browser_page, tmp_path, _listing_html([(_episode_id(1), "existing", "red")]))
+    assert initial.complete is True
+    original = catalog.list_sources(site="yanmaga")
+    upcoming = _upcoming_row(_episode_id(3))
+    changes = {
+        "missing_class": ('mod-episode-nopublic', 'unknown'),
+        "foreign": (f'{WORK_URL}/{_episode_id(3)}', f'{BASE}/comics/other/{_episode_id(3)}'),
+        "missing_url": ('data-original-url=', 'data-other='),
+        "missing_title": ('data-episode-title=', 'data-other='),
+        "missing_date": ('mod-episode-date-before-publication', 'other'),
+        "wrong_label": ('次回公開予定：', '公開中'),
+        "bad_date": ('2026/11/24(火)', '2026/02/31(火)'),
+        "wrong_weekday": ('2026/11/24(火)', '2026/11/24(水)'),
+        "duplicate_time": ('</time>', '</time><time>2026/11/24(火)</time>'),
+        "link": ('</time>', '</time><a href="/customers/sign-up">読む</a>'),
+        "free": ('</time>', '</time><span class="mod-episode-point--free">無料</span>'),
+        "hidden": ('class="mod-episode-link', 'style="display:none" class="mod-episode-link'),
+        "duplicate_id": (_episode_id(3), _episode_id(1)),
+    }
+    if failure in changes:
+        upcoming = upcoming.replace(*changes[failure])
+    published = _row(_episode_id(1), "existing") + _row(_episode_id(2), "second")
+    raw = published + upcoming
+    if failure == "not_last":
+        raw = upcoming + published
+    state['html'] = _listing_html([], raw_row_html=raw)
+    result = await service.discover(browser_page, _target(), "full")
+    if failure:
+        assert result.complete is False and result.observed_count == 0
+        assert catalog.list_sources(site="yanmaga") == original
+    else:
+        assert result.complete is True and result.observed_count == 2
+        sources = catalog.list_sources(site="yanmaga")
+        assert {s.external_id for s in sources} == {f'{SLUG}:{_episode_id(i)}' for i in (1, 2)}
+        assert sorted(s.display_position for s in sources) == [1, 2]
+        assert catalog.get_source(original[0].id).external_id == original[0].external_id
+        repeated = await service.discover(browser_page, _target(), "incremental")
+        assert repeated.observed_count == 2
+        state['html'] = _listing_html([
+            (_episode_id(i), f'published {i}', 'red') for i in (1, 2, 3)])
+        released = await service.discover(browser_page, _target(), "full")
+        assert released.complete is True and released.observed_count == 3
+        assert len(catalog.list_sources(site="yanmaga")) == 3
+    assert all(r['method'] == 'GET' and r['path'].split('/')[-1] not in {
+        _episode_id(1), _episode_id(2), _episode_id(3), 'sign-up'
+    } for r in state['requests'])
 
 
 async def test_yanmaga_keeps_ephemeral_reason_for_stale_free_preflight(
