@@ -5043,6 +5043,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._initial_render_deadline: float | None = None
         self._last_render_ready_signature: tuple[int, int] | None = None
         self._entry_only_initialization = False
+        self._capture_session = None
         self._capture_run = 0
         self._output_title: str | None = None
         self._output_author: str | None = None
@@ -5122,6 +5123,7 @@ class BookWalkerAdapter(SiteAdapter):
                 f"access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._capture_session = None
         self._auto_login_attempted = False
         diagnostics_root = Path(
             os.environ.get(
@@ -7083,6 +7085,8 @@ class BookWalkerAdapter(SiteAdapter):
             # the click promise pending while the new document is loading.
             # The adapter has its own bounded URL-change wait below, so do not
             # make Playwright wait for scheduled navigations here.
+            if self._capture_session is not None:
+                self._capture_session.start()
             await link.click(force=True, timeout=3_000, no_wait_after=True)
         except (PlaywrightTimeoutError, TimeoutError) as exc:
             raise PageChangeTimeoutError(
@@ -7322,11 +7326,92 @@ class BookWalkerAdapter(SiteAdapter):
                 reason="strict entry requires a BookWalker product page",
             )
 
-        if self._entry_only_initialization:
+        if self._capture_session is not None and self._capture_session.checkpoint:
+            await self._restore_capture_position(page)
+        elif self._entry_only_initialization:
             await self._wait_for_render_ready(page)
         else:
             await self._ensure_initial_page_before_capture(page)
         await self._remember_viewer_title(page)
+
+    async def configure_capture_session(self, page: Page, session: Any) -> None:
+        from screenshot_crawler.core.resume import ResumeError
+
+        if self._access_strategy != "quota" and not (
+            self._access_strategy == "direct" and session.owned_test
+        ):
+            raise ResumeError("BookWalker capture continuation requires quota intent")
+        self._capture_session = session
+
+    async def get_resume_checkpoint(self, page: Page) -> dict[str, Any]:
+        from screenshot_crawler.core.resume import ResumeError
+
+        await self._wait_for_render_ready(page)
+        first = await self._initial_page_observation(page)
+        final = await self._initial_page_observation(page)
+        key = self._initial_frame_join_key(first)
+        if (key is None or key != self._initial_frame_join_key(final)
+            or not self._content_ids_match(final.get("content_id"), self._initial_content_id)
+            or type(final.get("current")) is not int or type(final.get("total")) is not int
+            or not 1 <= final["current"] <= final["total"]
+            or not final.get("signature") or final["signature"][1] <= 0):
+            raise ResumeError("BookWalker checkpoint frame is not stable")
+        geometry = final["geometry"]
+        return {
+            "cid": final["content_id"], "current": final["current"], "total": final["total"],
+            "layout": [geometry[k] for k in ("width", "height", "displayWidth", "displayHeight")],
+        }
+
+    async def _restore_capture_position(self, page: Page) -> None:
+        from screenshot_crawler.core.resume import ResumeError
+
+        expected = self._capture_session.checkpoint
+        # Rejoin the saved boundary even when Chrome restored the next unsaved spread.
+        # No counter arithmetic predicts the next spread; actual keyboard transitions do.
+        deadline = time.monotonic() + self.page_change_timeout_ms / 1000
+        redraw_started = False
+        for attempt in range(9):
+            actual = await self.get_resume_checkpoint(page)
+            if (not self._content_ids_match(actual["cid"], expected.get("cid"))
+                or actual["total"] != expected.get("total") or actual["layout"] != expected.get("layout")):
+                raise ResumeError("BookWalker resume book/total/layout changed")
+            target = expected.get("current")
+            if type(target) is not int or not 1 <= target <= actual["total"]:
+                raise ResumeError("Invalid saved BookWalker position")
+            if actual["current"] == target and redraw_started:
+                return
+            if attempt == 8 or time.monotonic() >= deadline:
+                break
+            if not await self._focus_viewer_for_initial_home(page):
+                raise ResumeError("Cannot focus BookWalker for resume")
+            before = await self.get_content_identity(page)
+            await self._arm_native_capture(page)
+            before_frame = await self._initial_page_observation(page)
+            if actual["current"] == target:
+                # Force a witnessed redraw, rather than trusting a restored counter alone.
+                if actual["total"] <= 1:
+                    raise ResumeError("Cannot redraw a single-position resumed reader")
+                direction = "ArrowRight" if target > 1 else "ArrowLeft"
+                redraw_started = True
+            else:
+                direction = "ArrowRight" if actual["current"] > target else "ArrowLeft"
+                redraw_started = True
+            await page.keyboard.press(direction)
+            while time.monotonic() < deadline:
+                await page.wait_for_timeout(100)
+                observed = await self._initial_page_observation(page)
+                old_geometry = before_frame.get("geometry") or {}
+                geometry = observed.get("geometry") or {}
+                painted = (
+                    geometry.get("actualCanvasId") != old_geometry.get("actualCanvasId")
+                    or geometry.get("contentVersion", -1) > old_geometry.get("contentVersion", -1)
+                )
+                if (await self.get_content_identity(page) != before and painted
+                    and observed.get("signature") != before_frame.get("signature")):
+                    break
+            else:
+                break
+        raise ResumeError("BookWalker resume position could not be restored within its bound")
 
     async def initialize_entry_only(self, page: Page) -> None:
         """Prepare a grant-only entry without changing the reader position."""

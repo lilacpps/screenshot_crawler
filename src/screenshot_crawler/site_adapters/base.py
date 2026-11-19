@@ -83,6 +83,13 @@ class SiteAdapter(ABC):
 
         del external_id, work_key
 
+    async def configure_capture_session(self, page: Page, session: Any) -> None:
+        """Opt into caller-admitted capture continuation and its entry-started budget."""
+        raise UnsupportedAccessStrategyError(f"{type(self).__name__} does not support capture sessions")
+
+    async def get_resume_checkpoint(self, page: Page) -> dict[str, Any]:
+        raise UnsupportedAccessStrategyError(f"{type(self).__name__} has no resume checkpoint")
+
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
     ) -> None:

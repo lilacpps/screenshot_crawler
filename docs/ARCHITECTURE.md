@@ -221,6 +221,7 @@ CrawlerRunnerとDiscovery AdapterはCatalogを直接知らない。
 - `capture.py`: capture / PNG保存
 - `fingerprint.py`: SHA-256
 - `progress.py`: manifest / progressと新規run安全確認
+- `resume.py`: 呼出側が明示した取得の検証・継続とentry通知からのmonotonic期限（Catalog非依存）
 - `diagnostics.py`: 異常時情報
 - `packaging.py`: manifest基準のZIP/library出力
 - `errors.py`: 独自例外
@@ -625,10 +626,16 @@ Site Policyによるquota eligibility判定
 
 別コンテンツや無関係ファイルを誤処理するより停止を優先する。
 
+[BookWalker quota resume](../runbooks/bookwalker-resume/README.md)
+（2026-11-19）は通常quota Batchのみ再開参照を自動解決する例外である。
+site integrationが対象・保存namespace・優先順を管理し、CoreはCatalogを知らずに
+検証済みmanifestの継続と期限中断を扱う。正常終端の永続化→専用Page close→ZIP→Catalogの順とし、
+途中停止を成功にしない。他の新規runは引き続き非空directoryを拒否する。
+
 - UNKNOWNは停止
 - retryはbounded
 - 非空run dirは拒否
-- resumeは暗黙実行しない
+- 一般経路ではresumeを暗黙実行しない（上記BookWalker quota Batchのみ限定対応）
 - packagingはmanifestをauthorityにする
 - Coreへsite-specific ifを追加しない
 - Adapterへbrowser/session管理を入れない

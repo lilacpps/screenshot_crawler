@@ -96,10 +96,17 @@ Crawlerが実サイトごとにChromiumをlaunchして認証状態を個別管�
 
 ---
 
-## D-009 Resumeはv1.1では未実装
+## D-009 一般resumeは未対応、BookWalker quota Batchは限定対応
+
+2026-11-19実装拡張: [BookWalker quota resume runbook](../runbooks/bookwalker-resume/README.md)
+は通常quota Batchに限り再開参照の自動解決を許可する。新規runの非空出力拒否は維持し、
+既存取得ID・Catalog/Source binding・manifest・画像整合性を確認した継続を区別する。
+参照削除時は新規取得、破損時は停止とし、旧出力やquota履歴を暗黙に消さない。
+購入済みreaderだけで実機検証し、実quota E2Eの成功とは区別する。
 
 ### 決定
-既存の非空run directoryは拒否し、暗黙resumeやmanifest/progress上書きを行わない。
+一般の非空run directoryは拒否し、既存manifest/progressを暗黙上書きしない。
+上記の限定経路だけ、Catalog bindingと取得ID・画像整合性を検証して同じ取得へ追記する。
 
 ### 理由
 不完全なresumeより既存成果物保護を優先する。
@@ -539,7 +546,7 @@ BookWalker Site AdapterのBatch entryはstrictにする。
 requested strategyに合うcontrolが安全に一意決定できなければclick前に失敗する。
 
 ### 理由
-Resume未実装の状態で10分を複数冊へ最大利用すると、途中でquotaが切れた巻を
+初期Batchでresume未実装だった時点で10分を複数冊へ最大利用すると、途中でquotaが切れた巻を
 安全に継続する仕組みが必要になり実装範囲が大きくなる。1日1冊なら既存の
 1 URL -> 1 runモデルを維持できる。
 

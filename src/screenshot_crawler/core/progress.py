@@ -68,8 +68,9 @@ def _context_dict(context: ContentContext | None) -> dict[str, Any]:
 def ensure_new_run(output_dir: str | Path) -> Path:
     """Reject a directory that is not empty before starting a new run.
 
-    Resume is deliberately not implemented yet. Refusing these directories
-    keeps a new manifest/progress pair from being associated with old artifacts.
+    Refusing these directories keeps a new manifest/progress pair from being
+    associated with old artifacts. Validated capture sessions use a separate,
+    explicit persistence path; an arbitrary directory is never auto-adopted.
     An empty, pre-created directory remains usable.
     """
 
@@ -88,7 +89,7 @@ def ensure_new_run(output_dir: str | Path) -> Path:
             names += ", ..."
         raise RunAlreadyExistsError(
             f"Output directory is not empty ({names}). "
-            "Resume is not implemented; choose a new output directory."
+            "Resume is not implemented for this entry point; choose a new output directory."
         )
     return destination
 
@@ -104,13 +105,24 @@ class ProgressStore:
         source_url: str,
         site: str,
         content_context: ContentContext,
+        existing_manifest: dict[str, Any] | None = None,
     ) -> None:
         self.manifest_path = normalize_path(manifest_path)
         self.progress_path = normalize_path(progress_path)
+        if existing_manifest is not None:
+            self._manifest = existing_manifest
+            last = self.pages[-1] if self.pages else {}
+            self._progress = {
+                "last_saved_sequence": last.get("sequence", 0),
+                "last_identity": last.get("identity"),
+                "last_fingerprint": last.get("fingerprint"),
+                "content_context": existing_manifest.get("content_context", {}),
+            }
+            return
         ensure_new_run(self.manifest_path.parent)
         if self.manifest_path.exists() or self.progress_path.exists():
             raise RunAlreadyExistsError(
-                "Manifest or progress already exists. Resume is not implemented; "
+                "Manifest or progress already exists. Resume is not implemented for this entry point; "
                 "choose a new output directory."
             )
         self._manifest: dict[str, Any] = {
@@ -128,6 +140,10 @@ class ProgressStore:
         self.flush()
 
     @property
+    def manifest(self) -> dict[str, Any]:
+        return self._manifest
+
+    @property
     def pages(self) -> list[dict[str, Any]]:
         return self._manifest["pages"]
 
@@ -138,11 +154,13 @@ class ProgressStore:
         self,
         pages: tuple[CapturedPage, ...] | list[CapturedPage],
         fingerprints: tuple[str, ...] | list[str],
+        *, checkpoint: dict[str, Any] | None = None,
     ) -> None:
         """Persist all artifacts belonging to one logical page/spread together."""
 
         if len(pages) != len(fingerprints):
             raise ValueError("pages and fingerprints must have the same length")
+        start = len(self.pages) + 1
         for page, fingerprint in zip(pages, fingerprints, strict=True):
             self.pages.append(
                 {
@@ -165,8 +183,14 @@ class ProgressStore:
                     "last_fingerprint": fingerprint,
                 }
             )
+        if checkpoint is not None:
+            self._manifest["capture_groups"].append({
+                "start": start, "end": len(self.pages),
+                "identity": _identity_dict(pages[0].identity), "checkpoint": checkpoint,
+            })
         self.flush()
 
     def flush(self) -> None:
+        self._progress["content_context"] = self._manifest.get("content_context", {})
         atomic_write_json(self.manifest_path, self._manifest)
         atomic_write_json(self.progress_path, self._progress)

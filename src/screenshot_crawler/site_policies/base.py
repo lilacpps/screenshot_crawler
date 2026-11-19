@@ -39,6 +39,10 @@ class SitePolicy(ABC):
 
     site: str
 
+    def capture_session_manager(self, catalog):
+        """Optional site integration for validated, local capture continuations."""
+        return
+
     def batch_ordering(self) -> BatchOrdering:
         """Return the site-owned ordering strategy for Batch candidates."""
 

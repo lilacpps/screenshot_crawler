@@ -474,7 +474,7 @@ def _parser() -> argparse.ArgumentParser:
         "--output-root",
         type=Path,
         default=Path("output/batch"),
-        help="Root directory for candidate crawl runs (default: output/batch)",
+        help="Root for ordinary candidate runs (default: output/batch); managed capture sessions stay beside Catalog",
     )
     batch_run.add_argument(
         "--library-dir",
@@ -2166,7 +2166,12 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             cli_endpoint=args.cdp_endpoint,
             values=values,
         )
-        session = await BrowserSession.connect(endpoint)
+        local_completion_only = (
+            bool(candidates) and all(getattr(candidate, "local_completion", False) for candidate in candidates)
+            and grant_only is None and not defer_quota and not has_deferred_normal_work
+        )
+        if not local_completion_only:
+            session = await BrowserSession.connect(endpoint)
         executor = BatchExecutor(
             catalog,
             policies,
@@ -2591,9 +2596,15 @@ async def _execute_batch_candidates(
         attempts += 1
         order = candidate.metadata.get("order", "-")
         resource = f" resource={candidate.quota_resource}" if candidate.quota_resource else ""
+        capture_mode = (
+            f" local-completion saved={candidate.resume_page_count}"
+            if getattr(candidate, "local_completion", False)
+            else f" resume saved={candidate.resume_page_count} file={candidate.resume_path}"
+            if getattr(candidate, "capture_session_id", None) else ""
+        )
         print(
             f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
-            f"source={candidate.source_id} {order} {candidate.access_strategy}{resource}"
+            f"source={candidate.source_id} {order} {candidate.access_strategy}{resource}{capture_mode}"
         )
         page = None
         contacted_site = False
@@ -2611,8 +2622,9 @@ async def _execute_batch_candidates(
         if metrics is not None:
             metrics.start_candidate(candidate)
         try:
-            page = prepared_access.page if prepared_access is not None else await session.new_page()
-            contacted_site = True
+            if not getattr(candidate, "local_completion", False):
+                page = prepared_access.page if prepared_access is not None else await session.new_page()
+                contacted_site = True
             if grant_only:
                 _execution_event(
                     args, "grant_attempted", key=getattr(candidate, "discovery_key", None),

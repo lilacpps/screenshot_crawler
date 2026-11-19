@@ -27,6 +27,7 @@ from screenshot_crawler.core.models import (
     RunConfig,
 )
 from screenshot_crawler.core.progress import ProgressStore, ensure_new_run, normalize_path
+from screenshot_crawler.core.resume import ResumeError
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 
@@ -158,6 +159,9 @@ class CrawlerRunner:
                 )
             return operation_task.result()
         finally:
+            if not operation_task.done():
+                operation_task.cancel()
+                await asyncio.gather(operation_task, return_exceptions=True)
             if not stop_task.done():
                 stop_task.cancel()
                 await asyncio.gather(stop_task, return_exceptions=True)
@@ -237,12 +241,51 @@ class CrawlerRunner:
         self, page: Page, adapter: SiteAdapter, *,
         prepared_entry: bool = False, access_guard: AccessGuard | None = None,
     ) -> RunResult:
+        session = self.config.capture_session
+        if session is None:
+            return await self._run(page, adapter, prepared_entry=prepared_entry, access_guard=access_guard)
+        if prepared_entry or self.config.entry_only:
+            raise ValueError("Capture sessions cannot use grant-only/prepared entry")
+        if normalize_path(self.config.output_dir).resolve() != session.directory:
+            raise ResumeError("Capture session output directory changed")
+        operation = asyncio.create_task(self._run(page, adapter))
+        deadline = asyncio.create_task(session.wait_for_budget())
+        try:
+            done, _ = await asyncio.wait({operation, deadline}, return_when=asyncio.FIRST_COMPLETED)
+            if operation in done:
+                result = operation.result()
+                if result.stop_state in {PageState.END, PageState.NEXT_CONTENT}:
+                    session.finish(result.stop_state.value, result.stop_reason, adapter.get_output_metadata())
+                return result
+            operation.cancel()
+            # Closing only this Page also unblocks pending browser operations.
+            await asyncio.wait_for(page.close(), timeout=_CLEANUP_TIMEOUT_SECONDS)
+            await asyncio.wait_for(asyncio.gather(operation, return_exceptions=True), timeout=_CLEANUP_TIMEOUT_SECONDS)
+            return RunResult(tuple(session.saved_pages()), PageState.UNKNOWN, "quota_time_budget")
+        finally:
+            for task in (operation, deadline):
+                if not task.done():
+                    task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(operation, deadline, return_exceptions=True), timeout=_CLEANUP_TIMEOUT_SECONDS)
+                if not page.is_closed():
+                    await asyncio.wait_for(page.close(), timeout=_CLEANUP_TIMEOUT_SECONDS)
+            except BaseException:
+                session.invalidate("reader_close_or_cancellation_failed")
+                raise
+
+    async def _run(
+        self, page: Page, adapter: SiteAdapter, *,
+        prepared_entry: bool = False, access_guard: AccessGuard | None = None,
+    ) -> RunResult:
         if prepared_entry and (not self.config.entry_only or access_guard is None):
             raise ValueError("Prepared access requires entry_only and its active resolver guard")
         if access_guard is not None and not prepared_entry:
             raise ValueError("A borrowed access guard requires prepared entry")
         output_dir = normalize_path(self.config.output_dir)
-        ensure_new_run(output_dir)
+        session = self.config.capture_session
+        if session is None:
+            ensure_new_run(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         profile = adapter.get_access_profile()
         owns_guard = access_guard is None
@@ -269,6 +312,8 @@ class CrawlerRunner:
                 adapter.configure_quota_resource(page, self.config.quota_resource),
                 "configure_quota_resource",
             )
+            if session is not None:
+                await self._adapter_call(adapter.configure_capture_session(page, session), "configure_capture_session")
             initial_navigation_url = adapter.resolve_initial_navigation_url(
                 self.config.source_url
             )
@@ -302,7 +347,11 @@ class CrawlerRunner:
             initial_context = await self._adapter_call(
                 adapter.get_content_context(page), "get_content_context"
             )
-            store = ProgressStore(
+            if session is not None:
+                session.attach_context(initial_context)
+                store = session.store
+            else:
+                store = ProgressStore(
                 manifest_path=output_dir / "manifest.json",
                 progress_path=output_dir / "progress.json",
                 source_url=self.config.source_url,
@@ -316,13 +365,28 @@ class CrawlerRunner:
             self._access_guard = None
             raise
 
-        saved_pages: list[CapturedPage] = []
-        seen_capture_keys: set[tuple[object, ...]] = set()
+        saved_pages: list[CapturedPage] = session.saved_pages() if session else []
+        seen_capture_keys: set[tuple[object, ...]] = {
+            _capture_key(_identity_key(p.identity), part_index=p.metadata.get("part", 1) - 1,
+                         part_count=p.metadata.get("parts", 1),
+                         fingerprint=store.pages[index]["fingerprint"])
+            for index, p in enumerate(saved_pages)
+        }
         same_content_count = 0
         previous_identity: ContentIdentity | None = None
 
         primary_error: BaseException | None = None
         try:
+            if saved_pages:
+                identity = await self._adapter_call(adapter.get_content_identity(page), "get_content_identity")
+                if identity != saved_pages[-1].identity:
+                    raise ResumeError("Resume boundary identity changed before advance")
+                previous_identity = identity
+                await self._pace_before_page_turn(page)
+                await self._check_access(page)
+                await self._adapter_call(adapter.go_next(page), "go_next")
+                await self._adapter_call(adapter.wait_for_change(page, identity), "wait_for_change",
+                                         timeout_ms=adapter.get_page_change_timeout_ms(self.config.page_change_timeout_ms))
             while True:
                 await self._check_access(page)
                 if self.config.entry_only:
@@ -441,6 +505,13 @@ class CrawlerRunner:
                     continue
 
                 same_content_count = 0
+                if session is not None and len(saved_pages) + len(new_captures) > self.config.max_pages:
+                    raise MaxPagesExceededError(f"max_pages exceeded: {self.config.max_pages}")
+                checkpoint = None
+                if session is not None:
+                    checkpoint = await self._adapter_call(adapter.get_resume_checkpoint(page), "get_resume_checkpoint")
+                    if await adapter.get_content_identity(page) != identity:
+                        raise ResumeError("Capture identity changed before checkpoint commit")
                 captured_pages: list[CapturedPage] = []
                 captured_fingerprints: list[str] = []
                 captured_keys: list[tuple[object, ...]] = []
@@ -456,6 +527,8 @@ class CrawlerRunner:
                             f"Capture returned an unsafe file extension: {capture.file_extension!r}"
                         )
                     filename = Path(f"page-{sequence:04d}{extension}")
+                    if session is not None and (output_dir / filename).exists():
+                        raise ResumeError("Uncommitted artifact would be overwritten")
                     save_capture(capture, output_dir / filename)
                     captured = CapturedPage(
                         sequence=sequence,
@@ -475,7 +548,10 @@ class CrawlerRunner:
                     captured_pages.append(captured)
                     captured_fingerprints.append(fingerprint)
                     captured_keys.append(capture_key)
-                store.add_pages(captured_pages, captured_fingerprints)
+                if session is None:
+                    store.add_pages(captured_pages, captured_fingerprints)
+                else:
+                    store.add_pages(captured_pages, captured_fingerprints, checkpoint=checkpoint)
                 saved_pages.extend(captured_pages)
                 seen_capture_keys.update(captured_keys)
                 previous_identity = identity

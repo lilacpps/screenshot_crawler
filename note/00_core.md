@@ -2418,13 +2418,48 @@ JSON更新はtemporary file → `os.replace`。
 
 ## 15. Resume
 
-現行ではresume未実装。
+一般の新規runは非空directoryを拒否し、単独のprogress.jsonから暗黙resumeしない。
+2026-11-19の[BookWalker quota resume](../runbooks/bookwalker-resume/README.md)だけが限定対応。
+通常Batchでsite policyのoptional `capture_session_manager(catalog)` を通して対象を解決する。
+CoreはCatalogやsite名による分岐を持たず、内部RunConfigの `capture_session` を受け取る。
+追加CLIや通常owned/direct/autoへの公開タイマー設定は設けない。
 
-- 非空run dirは拒否
-- 既存manifest/progressを読み込んで続行しない
-- 暗黙resumeしない
+- 再開参照: `<Catalogファイル名>.resume/bookwalker/<CID>.json`。
+  実データはその配下 `data/<取得UUID>/`。namespaceはCatalog単位で分離し、runtime出力としてGit対象外。
+- 参照はversion・取得ID・Catalog/Work/Item/Source/Targetのidentity bindingを持つ。
+  参照削除後は履歴やdirectory走査から復活させず、別取得として新規開始する。
+- `core/resume.py` のCaptureSessionはmanifestと画像SHA-256、ファイル名、連番、
+  表示単位の全partを検証する。`capture_groups` はstart/end・ContentIdentity・adapter checkpointを持つ。
+  `capture_session` は取得ID、binding、attemptのCrawlRun ID、正常終端とローカル完了処理の情報を持つ。
+- ProgressStoreの既存manifest経路は検証済みsessionからだけ使う。
+  見開き取得・checkpoint観測後、全画像保存→groupを含むmanifest確定をawaitなしの区間で行う。
+  manifestが正本、progressは再構築可能。未登録画像を次回に自動採用・上書きしない。
+- max_pagesは過去保存分を含む累計。seen capture keyも保存済みpartから復元する。
+  site adapterが保存済み境界の位置・描き直しを確認し、Runnerはidentityを再確認して次へ進む。
+- sessionの単一monotonic期限はentry直前のadapter通知で開始し、同一attemptではリセットしない。
+  BookWalker integrationの既定590秒。期限ではadapter子taskもcancel/joinして専用Pageだけcloseする。
+  `quota_time_budget` は正常ENDやcompletedではなく、checkpointを保持した途中終了として記録する。
+- 継続不能な未確定出力／close失敗は、既知の実行中sessionを理由付きで無効化・参照解除する。
+  読込み時の不明な破損・別bindingは停止。旧画像・履歴・quotaは消さない。
+- 正常終端をmanifestへ記録してPage close後にZIP化／Catalog finalizeする。
+  `capture-session.keep` によりCatalog commit前の画像・manifestを保持する。
+  package intentとZIP entries/hashで同じ取得のarchiveだけを再利用できる。
+  終端確認済みのローカル処理だけならCLIもCDP接続を省く。新しいItem statusは追加しない。
+- Plannerは既存scope/selection条件を維持して途中巻をquota仮割当前に優先する。
+  参照ID・manifest revisionをexecute直前にも検証し、GUI preview fingerprintにも含める。
+  別ジョブによる更新後はreplanを要求する。一般のoutput collision保護は維持する。
 
-将来追加するなら `--resume` 等で新規runと明示的に分離する。
+実サイト検証は購入済みreaderにtest-only driverで短縮条件を注入した。
+canvasモードで10枚の途中終了→291枚まで継続→close後ZIP/Catalog完了、nativeで5→17枚の
+継続・再度の期限終了を確認した。最終コードのnative短縮再検証では4→8枚まで継続し、
+押下直前からcloseまで20.041秒／20.052秒だった（20秒設定、2026-11-20同期）。
+実quota・サーバー側失効・本番590秒の実待機は未実施。
+テスト内の短縮deadline／fake clockとlive結果の詳細・full suite状況はrunbookのPROGRESSを参照。
+最終検証は新規resume契約32件、Core/BookWalker選択93件、affected選択306件、
+CLI/GUI選択177件、local browser resume 6件がPASS。分割したfull coverageは全9052 nodeを網羅し、
+9051 PASS／既存の設定不一致1 FAIL／skip 0。既存 `crawler.yaml` のBookWalker delay=0msと
+配布設定testの期待200msの不一致で、HEADにも同じ差がある。設定・当該testは変更していない。
+Catalogの作り直し等で旧参照のbindingが合わなければ停止するため、不要な旧参照は停止中に削除する。
 
 ## 16. Packaging
 

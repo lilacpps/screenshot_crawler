@@ -51,6 +51,7 @@ from screenshot_crawler.core.errors import AccessResourceUnavailableError, Acces
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, archive_stem, package_crawl_output
 from screenshot_crawler.core.progress import atomic_write_json, normalize_path
+from screenshot_crawler.core.resume import ResumeError
 from screenshot_crawler.core.runner import CrawlerRunner, RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.maintenance.work_deletion_gate import assert_work_deletion_gate_clear
@@ -61,7 +62,7 @@ from screenshot_crawler.runtime_settings import (
 from screenshot_crawler.site_adapters.base import AccessResourceResolution, SiteAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
-from screenshot_crawler.site_policies.base import SitePolicy
+from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
@@ -238,7 +239,7 @@ class BatchExecutor:
     @_catalog_job_locked
     async def execute_candidate(
         self,
-        page: Page,
+        page: Page | None,
         candidate: BatchCandidate,
         *,
         output_root: str | Path = "output/batch",
@@ -258,22 +259,44 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
+        capture_manager = None
+        session = None
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
                     f"unsupported batch backend: {candidate.backend!r}"
                 )
             policy = self.policies.create(candidate.site)
+            manager_factory = getattr(policy, "capture_session_manager", None)
+            capture_manager = manager_factory(self.catalog) if callable(manager_factory) else None
+            source = self.catalog.get_source(candidate.source_id)
+            target = self.catalog.get_source_target(candidate.target_id)
+            if capture_manager is not None and candidate.access_strategy == "quota":
+                session = capture_manager.load(source, target)
             output_preflight = self._validate_candidate(
-                candidate, policy, current, library_dir=effective_library_dir
+                candidate, policy, current, library_dir=effective_library_dir,
+                capture_session=session, capture_manager=capture_manager,
             )
             local_skip_reason = self.resource_state_skip_reason(
                 candidate, policy=policy, now=current
             )
             if local_skip_reason is not None:
                 raise AccessResourceUnavailableError(local_skip_reason)
-            adapter = self.adapters.create(candidate.site)
-            source = self.catalog.get_source(candidate.source_id)
+            local_completion = bool(session and session.terminal)
+            if page is None and not local_completion:
+                raise BatchExecutionError("Capture requires an active browser Page")
+            if local_completion and self.catalog.get_item(candidate.item_id).status == "completed":
+                artifact = capture_manager.completed_artifact(session)
+                package = capture_manager.owned_package(session, candidate, effective_library_dir, write_status=True)
+                if package is None:
+                    raise ResumeError("Completed capture archive is missing")
+                capture_manager.clear(session)
+                capture_manager.cleanup(session)
+                return BatchExecutionResult(candidate.item_id, candidate.source_id, candidate.target_id,
+                                            artifact.crawl_run_id, artifact.id, package.archive_path,
+                                            package.status_path, len(session.store.pages), "completion_cleanup")
+            if not local_completion:
+                adapter = self.adapters.create(candidate.site)
             work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
             configure_identity = getattr(adapter, "configure_target_identity", None)
             if configure_identity is not None:
@@ -287,6 +310,14 @@ class BatchExecutor:
             )
             run_id = run.id
             output_dir = _new_output_dir(output_root, candidate, current)
+            if (capture_manager is not None and candidate.access_strategy == "quota"
+                and (local_completion or callable(getattr(adapter, "configure_capture_session", None)))):
+                if session is None:
+                    session = capture_manager.create(source, target, current)
+                session.record_attempt(run_id)
+                output_dir = session.directory
+                print(f"  capture={'local completion' if local_completion else 'resume' if session.checkpoint else 'new'} "
+                      f"saved={len(session.store.pages)} resume_file={capture_manager.marker(source)}", flush=True)
 
             if candidate.consumes_quota and candidate.quota_commit_mode == "before_run":
                 grant_until = policy.access_grant_until(current)
@@ -338,17 +369,28 @@ class BatchExecutor:
                 access_strategy=candidate.access_strategy,
                 quota_resource=candidate.quota_resource,
                 output_metadata=candidate.metadata,
+                capture_session=session,
             )
-            crawl_result = await self.runner_factory(config).run(page, adapter)
+            if local_completion:
+                crawl_result = RunResult(tuple(session.saved_pages()), PageState(session.terminal["state"]),
+                                         session.terminal["reason"])
+            else:
+                crawl_result = await self.runner_factory(config).run(page, adapter)
             # A deferred commit is based on observed adapter state, never planning intent.
-            _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
+            if adapter is not None:
+                _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
             consumption_checked = True
+            if crawl_result.stop_reason == "quota_time_budget":
+                error = CandidateExecutionError("Reader time budget reached; committed pages retained for resume")
+                error.reason = "quota_time_budget"
+                raise error
             _require_normal_stop(crawl_result, candidate)
             # The output directory is selected before site access. Recheck the
             # final ZIP/status path immediately before packaging so a file that
             # appeared during the crawl is preserved rather than replaced.
             try:
-                _validate_candidate_output_path(
+                if session is None or not session.info.get("package_intent"):
+                    _validate_candidate_output_path(
                     self.catalog,
                     candidate,
                     library_dir=effective_library_dir,
@@ -364,11 +406,12 @@ class BatchExecutor:
                 package_kwargs["artifact_prefix"] = candidate.artifact_prefix
             if candidate.artifact_disambiguator is not None:
                 package_kwargs["artifact_disambiguator"] = candidate.artifact_disambiguator
-            package = self.package_function(
-                output_dir,
-                adapter.get_output_metadata(),
-                **package_kwargs,
-            )
+            if session is not None:
+                package = capture_manager.package(session, candidate, effective_library_dir, self.package_function)
+            else:
+                package = self.package_function(
+                    output_dir, adapter.get_output_metadata(), **package_kwargs,
+                )
             archive_path = Path(package.archive_path)
             sha256, byte_size = _hash_archive(archive_path)
             _, artifact, _ = self.catalog.finalize_successful_crawl(
@@ -385,6 +428,12 @@ class BatchExecutor:
                 page_count=len(crawl_result.pages),
                 stop_reason=crawl_result.stop_reason,
             )
+            if session is not None:
+                try:
+                    capture_manager.clear(session)
+                    capture_manager.cleanup(session)
+                except (OSError, ResumeError) as cleanup_error:
+                    warnings.warn(f"Completed capture retained for cleanup: {cleanup_error}", RuntimeWarning, stacklevel=2)
             return BatchExecutionResult(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -398,6 +447,11 @@ class BatchExecutor:
                 stop_resource_pass=_stop_after_resource_consumption(candidate, adapter),
             )
         except BaseException as exc:
+            if session is not None and capture_manager is not None and (not session.terminal or session.info.get("invalid")):
+                try:
+                    capture_manager.abandon_if_unsafe(session)
+                except Exception as cleanup_error:  # noqa: BLE001 - keep the original failure
+                    exc.add_note(f"Could not release unsafe capture session: {cleanup_error}")
             resource_consumed = _confirmed_grant_consumption(candidate, adapter)
             if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
                 interrupted = BatchInterruptedError(
@@ -931,6 +985,7 @@ class BatchExecutor:
         expected_quota_resource: str | None = None,
         library_dir: Path | None = None,
         check_output_paths: bool = True,
+        allow_completed_capture: bool = False,
         work_snapshots: dict[int, tuple[list[Item], list[Source]]] | None = None,
     ) -> CandidateOutputPreflight | None:
         """Validate Catalog identity and current flags before policy or site access."""
@@ -963,7 +1018,7 @@ class BatchExecutor:
                 raise BatchExecutionError("stale batch candidate: target.locator")
             if not target.enabled:
                 raise BatchExecutionError("stale batch candidate: target.enabled=false")
-            if item.status != "pending":
+            if item.status != "pending" and not (allow_completed_capture and item.status == "completed"):
                 raise BatchExecutionError(
                     f"stale batch candidate: item.status={item.status!r}"
                 )
@@ -1082,6 +1137,8 @@ class BatchExecutor:
         *,
         library_dir: Path | None = None,
         output_mode: str = "capture",
+        capture_session=None,
+        capture_manager=None,
     ) -> CandidateOutputPreflight | None:
         """Reject a plan whose required Catalog identity/state is stale."""
 
@@ -1101,15 +1158,28 @@ class BatchExecutor:
             source=source,
             target=target,
             library_dir=library_dir,
-            check_output_paths=output_mode == "capture",
+            check_output_paths=output_mode == "capture" and not (capture_session and capture_session.terminal),
+            allow_completed_capture=bool(
+                capture_session and capture_session.terminal and item.status == "completed"
+                and capture_manager.completed_artifact(capture_session)
+            ),
         )
+        if capture_session is not None and capture_session.terminal:
+            capture_manager.owned_package(capture_session, candidate, library_dir or self.library_dir)
         mismatches: list[str] = []
         if candidate.quota_resource is not None:
             try:
                 policy.validate_access_resource(candidate.quota_resource)
             except SitePolicyError as exc:
                 raise BatchExecutionError(str(exc)) from exc
-        if item.status != "pending":
+        local_completion = bool(capture_session and capture_session.terminal)
+        if candidate.capture_session_id != (capture_session.id if capture_session else None):
+            mismatches.append("capture session changed; replan")
+        if candidate.capture_revision != (capture_session.revision if capture_session else None):
+            mismatches.append("capture checkpoint changed; replan")
+        if candidate.local_completion != local_completion:
+            mismatches.append("capture completion phase changed; replan")
+        if item.status != "pending" and not (local_completion and item.status == "completed"):
             mismatches.append(f"item.status={item.status!r}")
         if source.item_id != candidate.item_id:
             mismatches.append("source.item_id")
@@ -1148,6 +1218,8 @@ class BatchExecutor:
                     now=now,
                     quota_available=actual_quota_available,
                 )
+            if local_completion and source.available:
+                decision = PolicyDecision(True, "quota", "local_completion")
         except SitePolicyError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
         if (

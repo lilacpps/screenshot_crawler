@@ -1717,8 +1717,19 @@ Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない�
 
 ### 10.4 BookWalker Site Policy
 
+**BookWalker quota resume拡張（2026-11-19、検証範囲はrunbook参照）:**
+[quota resume runbook](../runbooks/bookwalker-resume/README.md) に従い、通常quota実行で
+途中取得を自動継続し、eligibleな途中巻をquota割当より前に優先する。
+再開参照の削除は新しい取得への切替であり、local quota履歴や過去出力を消さない。
+終端確認済みのローカル完了再試行はreader・新規quotaを必要としない。
+05:00 JST/capacity=1、同windowの自動refund禁止、strict quota entryは変更しない。
+約590秒はまる読み押下直前から専用reader closeまでで、ZIP化はその後に行う。
+再開参照はCatalogごとのnamespaceに置き、read-only planで検証・優先し、execute時は
+参照IDとmanifest revisionを再検証する。通常のCLI／GUI Batchから自動適用し、追加CLIは不要。
+詳細・進捗・実quota未検証の限界はrunbookで管理する。
+
 BookWalker公式の「まる読み10分」はsite-wideで1日合計10分であるが、
-初期Batch実装では秒単位の残時間最適化やresumeを行わない。
+Batch実装では秒単位のサーバー残時間最適化を行わない。
 安全運用として**1 quota book / 05:00 JST window**をlocal policyとする。
 
 window:
@@ -1731,7 +1742,7 @@ scope = BookWalker site-wide
 
 05:00より前は前日05:00から当日05:00までをcurrent windowとする。
 同じwindow内のBookWalker `quota_started_at` を数え、1件記録済みなら
-新しいquota candidateを選ばない。
+新しいquota candidateを選ばない。終端確認済みのローカル完了再試行はquotaを割り当てない。
 
 このcapacity=1はBookWalker側の上限そのものではなく、Crawler側の
 conservative local safety policyである。manual browser、別client、別端末での

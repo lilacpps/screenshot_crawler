@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from screenshot_crawler.core.resume import CaptureSession
 
 from screenshot_crawler.core.access_guard import AccessEvent
 
@@ -77,6 +80,7 @@ class RunConfig:
     quota_resource: str | None = None
     entry_only: bool = False
     output_metadata: Mapping[str, str | None] | None = field(default_factory=dict)
+    capture_session: CaptureSession | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.page_turn_delay_ms, bool) or not isinstance(

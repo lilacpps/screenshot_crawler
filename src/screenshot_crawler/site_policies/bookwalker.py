@@ -28,6 +28,11 @@ class BookWalkerSitePolicy(SitePolicy):
     quota_capacity = QUOTA_CAPACITY
     reset_hour = RESET_HOUR
 
+    def capture_session_manager(self, catalog):
+        from screenshot_crawler.site_adapters.bookwalker.resume import BookWalkerResumeManager
+
+        return BookWalkerResumeManager(catalog)
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int:
         window_start, window_end = self.quota_window(now)
         used = 0

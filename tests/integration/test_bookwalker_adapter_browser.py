@@ -2,6 +2,7 @@ import base64
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -201,6 +202,48 @@ async def test_bookwalker_entry_only_does_not_rewind_reader_position(
 
     assert await browser_page.locator("#pageSliderCounter").inner_text() == "3 / 10"
     assert await browser_page.evaluate("window.__homePresses") == 0
+
+
+@pytest.mark.parametrize("restored", [2, 4, 6])
+@pytest.mark.parametrize("paint_delay", [40, 2300])
+async def test_resume_rejoins_saved_spread_without_home_and_waits_for_redraw(
+    browser_page: Page, restored: int, paint_delay: int,
+) -> None:
+    async def fulfill(route):
+        await route.fulfill(content_type="text/html", body=_viewer_html())
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.goto(f"{VIEWER_BASE}?cid={PRODUCT_ID}")
+    await browser_page.evaluate("""({restored, delay}) => {
+      window.__position = restored;
+      window.__version = 1;
+      window.__keys = [];
+      const canvas = document.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      const counter = document.querySelector('#pageSliderCounter');
+      const paint = p => {ctx.fillStyle = `rgb(${p*20},40,70)`; ctx.fillRect(0,0,100,100); window.__version++;};
+      window.__bookwalkerDirectOneHopGeometryState = () => ({canvasId:'synthetic-canvas',contentVersion:window.__version});
+      counter.textContent = `${restored} / 10`; paint(restored);
+      document.addEventListener('keydown', e => {
+        window.__keys.push(e.key);
+        if (!['ArrowLeft','ArrowRight'].includes(e.key)) return;
+        window.__position += e.key === 'ArrowLeft' ? 2 : -2;
+        const p = window.__position;
+        counter.textContent = `${p} / 10`;
+        setTimeout(() => paint(p), delay);
+      });
+    }""", {"restored": restored, "delay": paint_delay})
+    adapter = BookWalkerAdapter()
+    adapter.page_change_timeout_ms = 12_000
+    adapter._initial_content_id = PRODUCT_ID
+    adapter._capture_session = SimpleNamespace(checkpoint={
+        "cid": PRODUCT_ID, "current": 4, "total": 10, "layout": [100,100,100,100],
+    })
+    await adapter._restore_capture_position(browser_page)
+    checkpoint = await adapter.get_resume_checkpoint(browser_page)
+    assert checkpoint["current"] == 4
+    assert "Home" not in await browser_page.evaluate("window.__keys")
+    assert await browser_page.evaluate("Array.from(document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)") == [80,40,70,255]
 
 
 async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(

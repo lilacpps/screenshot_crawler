@@ -17,6 +17,7 @@ catalog.sqlite
 catalog.sqlite-wal
 catalog.sqlite-shm
 catalog.sqlite-journal
+*.resume/
 catalog-export.csv
 .*.job.lock
 /debug.log

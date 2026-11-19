@@ -38,6 +38,7 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.packaging import archive_stem
+from screenshot_crawler.core.resume import ResumeError
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 from screenshot_crawler.watchlist.models import WatchlistTarget
@@ -81,6 +82,8 @@ class BatchPlanner:
         unmanaged_source_ids: set[int] = set()
         try:
             policy = self.policies.create(site)
+            manager_factory = getattr(policy, "capture_session_manager", None)
+            capture_manager = manager_factory(self.catalog) if callable(manager_factory) else None
             if quota_resource is not None:
                 policy.validate_access_resource(quota_resource)
             works, items, all_sources, all_targets = (
@@ -230,7 +233,7 @@ class BatchPlanner:
             for item in items:
                 if item.id not in site_item_ids:
                     continue
-                if item.status != "pending":
+                if item.status != "pending" and not (item.status == "completed" and capture_manager is not None):
                     plan.skipped.append(BatchSkipped(item.id, None, item.status))
                     continue
                 item_sources = sources_by_item.get(item.id, [])
@@ -276,10 +279,16 @@ class BatchPlanner:
                     skipped=plan.skipped,
                     targets_by_source=targets_by_source,
                     quota_resource=quota_resource,
+                    capture_manager=capture_manager if output_mode == "capture" else None,
                 )
                 if selected is None:
                     continue
-                source, target, decision = selected
+                source, target, decision, resume = selected
+                if item.status != "pending" and not (resume is not None and resume.terminal):
+                    plan.skipped.append(BatchSkipped(item.id, source.id, item.status))
+                    continue
+                if item.status == "completed":
+                    capture_manager.completed_artifact(resume)
                 if decision.access_strategy is None:
                     raise BatchPlanningError(
                         f"Eligible source {source.id} has no access strategy"
@@ -291,6 +300,7 @@ class BatchPlanner:
                         source=source,
                         target=target,
                         decision=decision,
+                        resume=resume,
                     )
                 )
 
@@ -312,16 +322,23 @@ class BatchPlanner:
                     library_dir=self.library_dir,
                     archive_positions_by_source=archive_positions_by_source,
                     collision_source_ids=collision_source_ids,
+                capture_manager=capture_manager,
                 )
             )
 
             quota_selections = [
                 selection for selection in selections if selection.decision.consumes_quota
             ]
+            plan.warnings.extend(
+                f"{'ローカル完了処理' if selection.resume.terminal else '再開予定'}: "
+                f"item={selection.item.id} 保存済み={len(selection.resume.store.pages)}枚 "
+                f"再開ファイル={capture_manager.marker(selection.source)}"
+                for selection in capture_selections if selection.resume is not None
+            )
             quota_selections = _enforce_work_quota_limits(quota_selections, plan.skipped)
             group_ranks = _discovery_group_ranks(sources)
             quota_selections.sort(
-                key=lambda selection: _quota_selection_order_key(selection, group_ranks)
+                key=lambda selection: (selection.resume is None, _quota_selection_order_key(selection, group_ranks))
             )
             if quota_available is None:
                 accepted_quota = quota_selections
@@ -395,6 +412,10 @@ class BatchPlanner:
                     else next(direct_selections)
                     for selection in ordered_selections
                 ]
+            # Finish an already-captured acquisition before opening a new reader.
+            # This does not allocate quota or reorder the remaining access pools.
+            if capture_manager is not None:
+                ordered_selections.sort(key=lambda selection: not bool(selection.resume and selection.resume.terminal))
             for selection in ordered_selections:
                 plan.candidates.append(
                     _candidate_from_selection(
@@ -409,7 +430,7 @@ class BatchPlanner:
                 if quota_available is None
                 else quota_available - len(accepted_quota)
             )
-        except SitePolicyError as exc:
+        except (SitePolicyError, ResumeError) as exc:
             raise BatchPlanningError(str(exc)) from exc
         return plan
 
@@ -423,8 +444,14 @@ class BatchPlanner:
         skipped: list[BatchSkipped],
         targets_by_source: dict[int, list[SourceTarget]],
         quota_resource: str | None,
-    ) -> tuple[Source, SourceTarget, PolicyDecision] | None:
+        capture_manager=None,
+    ) -> tuple | None:
         for source in sorted(sources, key=_source_priority_key):
+            web_targets = [target for target in targets_by_source.get(source.id, [])
+                           if target.backend == "web" and target.enabled]
+            target = min(web_targets, key=lambda candidate: (candidate.priority, candidate.id)) if web_targets else None
+            resume = (capture_manager.load(source, target)
+                      if capture_manager is not None and source.available and target is not None else None)
             if quota_resource is None:
                 decision = policy.evaluate(
                     source,
@@ -438,6 +465,8 @@ class BatchPlanner:
                     quota_available=quota_remaining,
                     quota_resource=quota_resource,
                 )
+            if resume is not None and resume.terminal and source.available:
+                decision = PolicyDecision(True, "quota", "local_completion")
             if not decision.eligible:
                 skipped.append(BatchSkipped(source.item_id, source.id, decision.reason))
                 continue
@@ -446,16 +475,10 @@ class BatchPlanner:
             if decision.consumes_quota and quota_remaining is not None and quota_remaining <= 0:
                 skipped.append(BatchSkipped(source.item_id, source.id, "quota_exhausted"))
                 continue
-            web_targets = [
-                target
-                for target in targets_by_source.get(source.id, [])
-                if target.backend == "web" and target.enabled
-            ]
             if not web_targets:
                 skipped.append(BatchSkipped(source.item_id, source.id, "no enabled web target"))
                 continue
-            target = min(web_targets, key=lambda candidate: (candidate.priority, candidate.id))
-            return source, target, decision
+            return source, target, decision, resume
         return None
 
 
@@ -470,6 +493,7 @@ class _Selection:
     source: Source
     target: SourceTarget
     decision: PolicyDecision
+    resume: object = None
 
 
 def _candidate_from_selection(
@@ -492,6 +516,11 @@ def _candidate_from_selection(
         target_key=selection.target.target_key,
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
+        capture_session_id=selection.resume.id if selection.resume else None,
+        capture_revision=selection.resume.revision if selection.resume else None,
+        resume_page_count=len(selection.resume.store.pages) if selection.resume else 0,
+        resume_path=str(selection.resume.directory.parent.parent / (source.external_id + ".json")) if selection.resume else None,
+        local_completion=bool(selection.resume and selection.resume.terminal),
         metadata=_metadata(selection.work, item, source),
         artifact_prefix=archive_position_prefix(
             archive_positions_by_source.get(source.id, source.display_position)
@@ -529,6 +558,7 @@ def _validate_candidate_archive_paths(
     library_dir: Path,
     archive_positions_by_source: dict[int, int],
     collision_source_ids: set[int],
+    capture_manager=None,
 ) -> list[str]:
     planned: dict[str, int] = {}
     warnings: list[str] = []
@@ -561,6 +591,13 @@ def _validate_candidate_archive_paths(
             / title
             / f"{stem}.json"
         )
+        if selection.resume is not None and selection.resume.terminal:
+            candidate = _candidate_from_selection(
+                selection, collision_source_ids=collision_source_ids,
+                archive_positions_by_source=archive_positions_by_source,
+            )
+            capture_manager.owned_package(selection.resume, candidate, library_dir)
+            continue
         try:
             output_preflight = validate_candidate_output_paths(
                 catalog,

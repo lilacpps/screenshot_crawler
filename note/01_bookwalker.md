@@ -80,7 +80,7 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 `BookWalkerAdapter.initialize()` now verifies the viewer's authorized `cid`,
 the `1/N` counter, and a non-empty visible canvas before the first normal
-capture. This applies to `auto`, `direct`, and `quota` initialization after a
+capture. This applies to fresh `auto`, `direct`, and `quota` initialization after a
 viewer is reached. If the restored counter is middle or final, the adapter
 focuses the viewer and sends Playwright `Home` at most twice within the
 existing `page_change_timeout_ms` budget. It accepts the rewind only when the
@@ -95,7 +95,8 @@ changed post-ready frame, or a second identity mutation fail closed as
 `UnknownPageStateError`. Missing or changing identity, missing counter/canvas,
 ignored Home, and unstable rendering stop before the first save. Already stable
 `1/N` viewers do not receive Home; normal `go_next()` is unchanged. The
-entry-only/grant path keeps its existing reader position and only waits for
+quota resume uses the saved-boundary redraw contract in section 20.6 instead of Home.
+The entry-only/grant path keeps its existing reader position and only waits for
 render readiness. Browser-backed synthetic coverage includes delayed viewer
 mount, Home counter-before-paint behavior, and entry-only position retention.
 The final affected W1/W2 selection is 442 passed, 0 skipped; Ruff and diff
@@ -2004,10 +2005,54 @@ login成功後に対象viewerへ直接遷移することを前提に、商品ペ
 synthetic browser testでlogin redirect → form submit → viewer、credential未設定、login form残存時の
 fail-safeを確認する。実サイトでのquota消費を伴うauto-login live verificationは今回も実施していない。
 
-### 20.6 初期非対象
+### 20.6 quota resumeと現在の非対象（2026-11-20同期）
+
+[quota resume runbook](../runbooks/bookwalker-resume/README.md) に従い、通常quota Batchで
+途中巻優先・自動resumeとまる読み押下から約590秒での専用reader終了に対応している。
+通常のdirect/auto、manual crawl、他site、grant-onlyには適用しない。
+まる読みcontrolのstrict選択後、click直前にmonotonic期限を開始する。
+再入場・読み込み・位置補正を含めて計測し、ZIP化／Catalog完了はPage close後に行う。
+local quotaのcapacity/reset/記録時点/自動refund禁止は20.4から変更しない。
+
+再開参照は `<Catalogファイル名>.resume/bookwalker/<CID>.json`。
+削除すれば旧出力を残して別の取得UUIDで最初から取り直し、quota履歴は戻さない。
+破損・別identity・欠落画像はreader接触前に可能な検証を行って停止する。
+正常終端済みのZIP／Catalog処理はreaderを開かず再試行でき、公開Item statusは増やさない。
+各attemptは新規CrawlRunで履歴を残す。実データと共通の永続化契約はCore note §15を参照。
+
+再開時はHomeを省き、保存済みcheckpointのCID/総数/layoutと、実際のcounterを照合する。
+最大8回のArrowRight/ArrowLeftで保存済み表示へ戻し、必要なら隣接表示との往復で描き直す。
+counter変化だけでは通さず、操作後のcanvas identity/content versionとsignatureの変化、
+通常render readiness、連続したframe joinを確認する。そこから通常のgo_nextで未保存表示へ進む。
+保存画像を再取得で置換せず、capture/END/source-nativeの既存proofは変更しない。
+
+利用者指定の購入済みCID `2532de3b-1769-4210-ab6e-2952e4ecbe08` でstrict direct entryを確認し、
+3/291と4/291への再入場復元、前後操作、1/291への復元を実測した。
+同じcounterでも再入場前後の全canvas hashやcapture分割／解像度／codecは一致しない場合があり、
+これらのcross-session一致をresumeのauthorityにはしない。
+owned test-only driverは分類をownedのまま同じCaptureSession/Runner/Adapter部品へ条件を注入する。
+canvasモードでは20秒の期限で10枚保存→再開後291枚で正常END→close後ZIP/Catalog完了を確認。
+nativeでは20秒で5枚→30秒の再開で17枚→再度の期限終了を確認した。
+最終コードでも20秒で4枚→再開して8枚を保存し、押下直前からcloseまで20.041秒／20.052秒だった。
+両検証は既存tabを維持し、終了後に1/291へ戻した。隔離Catalogのquota_started_atもNULLのまま。
+
+証拠は `.tmp/bookwalker-resume-position-20261119/`、
+`.tmp/bw-resume-live-canvas-20261119/report.json`、
+`.tmp/bw-resume-live-native-r2-20261119/report.json`、
+`.tmp/bw-resume-live-native-r4-20261119/report.json`。
+初回native試行は表紙の既存 `retained capture final renderer join failed` guardで停止した。
+通常no-sessionのnative表紙対照はmax_pages=1まで取得でき、次のnative resume試行も上記の通り継続した。
+guardを弱める変更はしておらず、native全巻E2Eの成功やこのraceの根本解決は主張しない。
+実quotaのclick・実残時間・サーバー失効は未検証。本番590秒値は短縮時間／fake clockで検証する。
+テスト結果と残課題はrunbookのPROGRESSを参照する。
+resume契約32件、Core/BookWalker選択93件、local browser resume 6件はPASS。
+分割full coverageは全9052件を網羅し9051 PASS／既存設定不一致1 FAIL／skip 0。
+残る1件は既存BookWalker delay=0msと配布設定testの期待200msの差で、設定・testは維持した。
+
+現在の非対象:
 
 - 10分残量を秒単位で計測して複数冊を詰め込む最適化
-- 10分切れで途中停止した巻を翌日に同じrunへresume
+- 過去のCrawlRun自体を再使用して失敗履歴を成功へ書き換えるresume
 - 読み放題MAX等を自動crawl対象として扱うこと
 - BookWalker全作品・全まる読み対象の自動探索
 

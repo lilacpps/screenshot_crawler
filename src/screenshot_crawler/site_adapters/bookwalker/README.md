@@ -33,7 +33,7 @@ boundaries still apply.
 
 The crawler accepts a direct viewer URL or a BookWalker product URL such as `/de<content-id>/`. For a product URL, `initialize()` locates the product reading control and follows the best reader candidate in the same tab.
 
-Before the first capture of an ordinary `auto`, `direct`, or `quota` run,
+Before the first capture of a fresh `auto`, `direct`, or `quota` run,
 `initialize()` verifies the authorized `cid` and the viewer counter. If the
 viewer restored a middle or final position, it focuses the viewer and sends
 `Home` at most twice within the existing bounded initialization deadline. A
@@ -48,6 +48,27 @@ counter/CID change, ignored Home, or stale pixels fails before the first save.
 Normal `go_next()` navigation is unchanged.
 Grant-only/entry-only initialization keeps the current reader position and
 waits only for render readiness.
+
+Normal quota Batch additionally supports Catalog-bound capture sessions; see
+[the resume runbook](../../../../runbooks/bookwalker-resume/README.md).
+The Batch policy resolves `<Catalog filename>.resume/bookwalker/<CID>.json` and
+keeps its data under `data/<acquisition UUID>/`. Deleting the reference while
+stopped starts a separate acquisition next time; it does not refund quota or
+delete old output. Arbitrary nonempty output directories are still rejected.
+Fresh sessions retain the Home guard. Continuing sessions rejoin the saved
+counter through at most eight actual ArrowRight/ArrowLeft operations, witness
+a redraw and stable frame join, then advance normally past the saved group.
+Restored counters alone, temporary canvas IDs, and cross-session artifact
+byte equality are not sufficient to decide which images to skip or replace.
+Saved artifacts remain immutable and the existing capture proof is unchanged.
+
+The quota integration starts one monotonic 590-second budget immediately
+before activating the strict maruyomi control. It closes only the dedicated
+reader Page at the limit and retains committed groups with `quota_time_budget`;
+ZIP/Catalog completion runs after Page close. Terminal acquisitions can finish
+locally without Chrome or new quota. Ordinary direct/auto/manual crawls do not
+enable this behavior. Owned live testing uses an internal driver and shortened
+budgets without changing access classification or weakening strict entry.
 
 For a body-page spread with exactly two selected, integer, non-overlapping
 regions, BookWalker can promote source-native JPEGs through the strict

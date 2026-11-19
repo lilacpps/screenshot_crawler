@@ -175,7 +175,9 @@ page counter / `#endOfBook` / `#eobNext` / known final-navigation behaviorを組
 - manifest記載ファイル欠落はfail
 - user fileを含むdirectoryを丸ごと削除しない
 
-Resumeは現在未実装。追加する場合は明示CLIと受け入れ条件を先に定義する。
+一般resumeは未対応。BookWalker通常quota Batchには
+`runbooks/bookwalker-resume/README.md` の限定resumeがあり、Catalog/Source binding、
+manifestと画像の検証後だけ継続する。他経路へ追加する場合は明示CLIと受け入れ条件を先に定義する。
 
 ## 10. 新規Site Adapter追加時
 

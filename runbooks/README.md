@@ -46,6 +46,10 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 
 ## Active workstreams
 
+- [BookWalker quota 自動resume / 590秒停止](bookwalker-resume/README.md) —
+  通常quota実行での途中巻優先・位置照合・再開ファイル削除による取り直し・reader終了後のZIP化。
+  実装・購入済みreader／短縮timer検証済み。実quotaは消費せず、実quota失効は未検証。
+
 - [Piccoma free-only Site Adapter](piccoma-free/README.md) — five-role autonomous
   discovery/capture/direct-batch/E2E implementation contract (planned).
 - [花とゆめ＋「無料」「今なら無料」Site Adapter](hanayume-free/README.md) —

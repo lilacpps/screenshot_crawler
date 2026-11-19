@@ -66,6 +66,11 @@ class BatchCandidate:
     # stages can enforce the original selection boundary without guessing from
     # display metadata.
     discovery_key: str | None = None
+    capture_session_id: str | None = None
+    capture_revision: str | None = None
+    resume_page_count: int = 0
+    resume_path: str | None = None
+    local_completion: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +98,7 @@ class BatchPlan:
 
     @property
     def quota_count(self) -> int:
-        return sum(candidate.access_strategy == "quota" for candidate in self.candidates)
+        return sum(candidate.access_strategy == "quota" and not candidate.local_completion for candidate in self.candidates)
 
 
 @dataclass(frozen=True, slots=True)

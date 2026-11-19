@@ -505,13 +505,25 @@ output/crawl-xxx/
 └─ diagnostics/   # 失敗時に作られる場合あり
 ```
 
-正常な `END` / `NEXT_CONTENT` 後は、manifestに記載されたJPEGまたはPNGだけをZIPへ格納します。manifestにない古い画像は混入しません。中間crawl directoryは、manifest / progress / manifest記載画像以外のファイルを含まない場合だけ削除されます。
+正常な `END` / `NEXT_CONTENT` 後は、manifestに記載されたJPEG/PNG/WebPだけをZIPへ格納します。manifestにない古い画像は混入しません。中間crawl directoryは、manifest / progress / manifest記載画像以外のファイルを含まない場合だけ削除されます。
 
 失敗runは調査用に残します。
 
 ## Resume
 
-自動resumeは現在未実装です。既存の非空run directoryを新規runとして上書きせず、明示的に拒否します。`progress.json` は実行状況の記録であり、自動resume機能を意味しません。
+BookWalkerの通常quota Batchは、保存済みの途中巻があれば自動で続きを取得します。
+追加コマンドやrun-id指定は不要です。まる読み押下から約9分50秒で専用readerを閉じ、
+確定済みの見開きを保持します。ZIP化・Catalogの完了更新はreaderを閉じた後に行います。
+
+再開情報は `<Catalogファイル名>.resume/bookwalker/<書籍CID>.json`、途中画像はその配下の
+`data/<取得UUID>/` にあります。停止中に再開JSONだけを削除すると、次回は別の取得として
+先頭から取り直します。旧画像・実行履歴・当日のquota消費履歴は保持します。
+再開情報の破損や画像欠落は理由を表示して停止し、勝手に新規取得へ切り替えません。
+
+通常のdirect/auto/manual crawlや他siteの自動resumeは未対応です。
+非空run directoryを新規runとして上書きせず拒否する安全規則は維持します。
+`progress.json` 単体を再開情報として使いません。詳細・購入済み作品による検証範囲は
+[BookWalker resume runbook](runbooks/bookwalker-resume/README.md) を参照してください。
 
 ## サイト固有の挙動
 

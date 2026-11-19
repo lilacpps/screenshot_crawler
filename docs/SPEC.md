@@ -567,11 +567,27 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 
 ## 19. Resume
 
-**自動resumeは未実装。**
+一般の自動resumeは未対応。BookWalkerの通常quota Batchだけ、下記の限定resumeを使う。
 
 既存の非空run directoryは新規runとして拒否する。`ProgressStore` は既存manifest/progressを暗黙上書きしない。
 
-将来resumeを実装する場合は、明示的な `--resume` 等を導入し、新規runと区別する。
+他の経路で将来resumeを実装する場合は、明示的な `--resume` 等で新規runと区別する。
+
+### BookWalker quota限定のresume（2026-11-19、検証範囲はrunbook参照）
+
+[実装runbook](../runbooks/bookwalker-resume/README.md) の限定例外を実装する。
+通常BookWalker quota Batchで再開参照があれば検証して継続し、なければ新規取得する。
+専用CLIやrun-id入力は追加しない。再開参照の削除は次回の新規取得を意味し、quota履歴を戻さない。
+途中巻は選択／除外等を尊重してquota割当より前に優先する。
+まる読み押下直前から約590秒で専用readerを閉じ、ZIP化／Catalog完了はclose後に行う。
+実サイト検証は購入済みreaderと短縮時間で同じ部品を用いる。通常のdirect/autoには適用しない。
+現行実装との区別・Phase進捗・実quota未検証の限界はrunbookに記録する。
+再開参照は `<Catalogファイル名>.resume/bookwalker/<CID>.json`、取得データはその配下の
+`data/<取得UUID>/` に保存する。見開き単位のmanifestと画像SHA-256を検証し、通常の
+非空directory拒否を、検証済みの取得IDによる継続と区別する。各attemptのCrawlRunは新規作成する。
+再開位置は最大8回の前後キー操作で保存済み境界へ戻し、描き直し・frame joinを確認してから
+次へ進む。期限終了は正常ENDではなく `quota_time_budget`、Itemはpendingのままとする。
+終端確認済みのZIP/Catalog処理はreader接続なしで再試行する。
 
 ## 20. Retry / safety guard
 
@@ -628,7 +644,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 複数サイト並列実行
 - 独自DSL
 - 複雑なPlugin Framework
-- 自動resume
+- BookWalker通常quota Batch以外の自動resume
 - 全site・全作品の無制限Discovery
 - site横断automatic item merge
 
