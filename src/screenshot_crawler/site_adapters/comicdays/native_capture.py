@@ -129,8 +129,9 @@ COMICDAYS_CAPTURE_HOOK = r"""
       isAdArea(areas[last-1])&&isColophonArea(areas[last]);
     // Observed dummy + two front links with a half-back-only leading tail.
     // Keep body identity structural even when earlier canvases are unmounted.
+    // Both body-count parities start on one body canvas, then ordinary spreads.
     const dummyTwoFrontSinglePrefix=Number.isInteger(last)&&last>=7&&last===colophon&&areas.length===last+1&&
-      (last-5)%2===0&&isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&
+      isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&
       isFrontArea(areas[1])&&isFrontArea(areas[2])&&areas.slice(3,last-2).every(isBodyAreaShell)&&
       pageChild(areas[last-2],isBackHalfPage)&&isAdArea(areas[last-1])&&isColophonArea(areas[last]);
     const frontPrefixMode=dummyTwoFrontSinglePrefix?'dummy-two-front-single':dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':dummyFrontDoublePrefix?'dummy-front-double':null;

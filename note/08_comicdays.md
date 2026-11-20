@@ -47,6 +47,56 @@ Shared grant-only entry uses Core `entry_only`: it creates no page Manifest or
 Progress state, ZIP, or completed Item; failure diagnostics are metadata-only.
 The normal capture path and its output are unchanged (see `note/00_core.md`).
 
+## Odd body count after dummy/two-front prefix (2026-11-20)
+
+Item/source `22377`, episode `2551460909617418619` (あくまでクジャクの話です。
+＃４７／配偶者防衛②), failed before capture in metrics run
+`53298899bce149e19cd6bafd3a3f20b6`: 11.88 seconds, zero retries and no HTTP
+403/429/5xx. Failure DOM and shared-CDP production initialization confirmed an
+empty dummy 0, two full front links 1/2, **19** body shells 3..21, half-back 22,
+ad 23 and standard Colophon 24, with sliderLast 24 and 25 areas. The
+`dummy-two-front-single` predicate previously required an even body count, so
+initialization waited at the front links until its 10-second normalization
+deadline. A safety-validated normal forward action reached slider 2 / body 3;
+metadata-only traversal then observed every body area through END at slider 24.
+
+The predicate now supports either body-count parity while retaining its minimum
+two body areas, exact empty dummy/two full front links, contiguous body shells,
+strict half-back/ad/Colophon and matching slider/area counts. The first advance
+still requires slider 2 and one render-ready canvas at structural area 3.
+Ordinary spread selection, lazy unmount, rewind, AD/END, capture provenance,
+timeouts, max-pages and same-content guards retain their existing contracts.
+This is site-local; no shared Core, Discovery, Batch, access-resource, CLI or
+configuration change is required.
+
+Post-fix production direct initialization completed in 1.12 seconds, observed
+body areas 3..21 exactly once at sliders 2,4,..20, then AD 22 and END 24.
+`resource_consumed=false`; no front-link anchor, ticket or purchase control was
+clicked. Dedicated Pages were closed and shared Chrome remained open. Sanitized
+post-fix metadata evidence is in `.tmp/comicdays-22377-20261120/report.json`;
+the original failure DOM remains in the item-22377 Batch diagnostics alongside
+the metrics run above. Operational Catalog/Watchlist/archive state was not modified.
+
+An isolated production Runner/direct crawl also saved **19 reconstructed JPEG
+pages**, reached END and produced a CRC-validated ZIP with 19 entries. Manifest
+identity groups were `3`, `4,5`, ..., `20,21`, covering every body area once.
+The normal 1-second page-turn pacing, max-pages (19) and same-content guards
+remained enabled, with `resource_consumed=false`. Evidence is `crawl-report.json`
+and `library/` under the same isolated directory. This does not mark the
+operational Catalog Item completed or rerun the whole 16-candidate Batch.
+
+Existing artificial-browser tests now cover both body-count parities, lazy
+unmount, terminal-state rewind and malformed dummy/front/body/half-back/count
+rejection with zero prefix advances. The regression subset failed before the
+fix (3 failed, 15 passed) and passed afterward (18 passed, zero skips).
+Final affected validation passed **405 tests in 122.03 seconds**, zero skips:
+Comic DAYS native-capture/live-access/Batch/policy/Discovery Unit tests and all
+three artificial-browser Integration files. `ruff check src tests --no-cache`
+and changed-file `git diff --check` passed. Full pytest and Research were not
+run for this site-local predicate change; no shared implementation or PoC
+contract changed. Operational Batch/Catalog completion remains for the user's
+normal rerun; isolated capture/END/packaging are verified.
+
 ## Odd body count after dummy/front prefix (2026-11-10)
 
 Item/source `22017`, episode `3269632237261316428` (スキップとローファー
@@ -168,7 +218,8 @@ full-back/half-back tail. The old production initialization reproduced its
 slider 2 / ready body area 3, establishing the missing transition.
 
 `dummy-two-front-single` now requires that observed empty dummy and exactly two
-validated full front links, an even contiguous body-shell run, strict half-back,
+validated full front links, a contiguous body-shell run of at least two areas
+(either parity), strict half-back,
 known ad/Colophon, `sliderLast == Colophon index`, and `area count == last+1`.
 At slider 1 the hook reports `front_link_prefix`; initialization uses the
 existing safety-checked forward control once and requires slider 2 with one
