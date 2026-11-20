@@ -1,3 +1,35 @@
+## Work-first grant-only all (2026-11-21)
+
+`SitePolicy.grant_only_all_per_work()` defaults to false; Piccoma opts in.
+CLI groups the preflight resource pools by Work in first-appearance order,
+checks each Work's resources together and executes explicit policy-ordered
+resource passes there before proceeding to the next Work. Shared stock can be
+allocated differently from the previous resource-first order. The initial
+combined snapshot is reused only while no earlier entry was attempted. After
+entry attempts, CLI replans the next resource locally against Catalog and
+refreshes only this Work's remaining originally selected scope. No all-Work
+live rescan or durable stock cache is introduced.
+
+`BatchExecutor.resolve_access_resource_pools()` reuses the existing prepared
+resolver lifecycle with an optional resource-pool map. All pool bindings are
+validated before network access. One bounded AccessGuard covers the site-owned
+combined resolver; each resource must return exactly its own candidate IDs,
+partitioned into selected/skipped with no overlap or duplicates. Missing
+capability, ambiguous state or invalid results fail closed. Normal prepared
+single-entry callers keep their original contract.
+
+The global attempt limit counts entries, not snapshots. Resource-pass
+exhaustion disables that resource for later Works; expected Work-local
+unavailability advances to the next resource/Work, and UNKNOWN stops the run.
+Configured pacing applies between snapshot, entry and next Work; local-only
+skips and the final cleanup add no delay. Each selected entry still uses its
+fresh Page/Adapter and existing scope, grant/debit and durable-observer checks.
+CLI/GUI options, Catalog schema, Core Runner and normal candidate order are
+unchanged. Piccoma preselection now loads the full listing once and fetches
+home once, also in normal Batch and single-resource grant-only.
+
+Validation and current live limits are maintained in `note/09_piccoma.md`.
+
 ## Work-level normal Batch stock selection (2026-11-19)
 
 `SitePolicy.resolve_batch_quota_per_work()` defaults to false; Piccoma opts in.
@@ -21,7 +53,8 @@ tests; results and live limits are recorded in `note/09_piccoma.md`.
 ## Work-level grant-only stock selection (2026-11-19)
 
 `SitePolicy.resolve_grant_only_per_work()` defaults to false; Piccoma opts in
-for explicit grant-only. CLI groups the planned candidates by Work in first
+for explicit single-resource grant-only. The Work-first `all` extension above
+shares its initial read across resources. CLI groups the planned candidates by Work in first
 appearance order, applies local Catalog gates, and uses the existing guarded
 resolver once per Work/resource. It closes that snapshot Page before executing
 the site's selected pool through fresh ordinary Runner entry. A zero pool
@@ -1687,7 +1720,7 @@ relevant-host rules, and response handling are unchanged.
 
 ## Piccoma adapter registration and current access semantics (updated 2026-11-19)
 
-The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access uses the exact-free or active-grant non-consuming path. Normal Batch admits eligible quota candidates through `piccoma_ticket_auto` and, without a Piccoma-only flag, selects among the three native free-ticket kinds using fresh site state. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` runs these as explicit ordered passes with a replan between them, and each pass is bound to its concrete kinds. It leaves Items pending without capture/package/complete. Both modes preserve candidate order, use a candidate-bound durable attempt observer and same-Source unresolved quota history guard, and preserve the existing entry/navigation/capture safety contracts. A plan that becomes fresh-free or freshly granted in grant-only is skipped without a ticket attempt or viewer navigation; a fresh grant is persisted before the skip. Existing source-native lossless WebP/PNG behavior and the earlier live capture evidence remain unchanged. Details and current evidence are in `note/09_piccoma.md` and the Piccoma ticket runbook.
+The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access uses the exact-free or active-grant non-consuming path. Normal Batch admits eligible quota candidates through `piccoma_ticket_auto` and, without a Piccoma-only flag, selects among the three native free-ticket kinds using fresh site state. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` checks them together per Work and executes explicit ordered passes there, replanning and refreshing the remaining Work pool after earlier entry attempts, and each pass is bound to its concrete kinds. It leaves Items pending without capture/package/complete. Normal Batch preserves candidate order and grant-only preserves episode order within each Work/resource. Both use a candidate-bound durable attempt observer and same-Source unresolved quota history guard, and preserve the existing entry/navigation/capture safety contracts. A plan that becomes fresh-free or freshly granted in grant-only is skipped without a ticket attempt or viewer navigation; a fresh grant is persisted before the skip. Existing source-native lossless WebP/PNG behavior and the earlier live capture evidence remain unchanged. Details and current evidence are in `note/09_piccoma.md` and the Piccoma ticket runbook.
 
 ## Read-only episode-list helper CLI (2026-10-01)
 
@@ -3929,7 +3962,8 @@ other policies retain their prior behavior.
 Normal Piccoma Batch uses logical resource `piccoma_ticket_auto` and allows
 site-native waitfree, ¥0+ and binge-free tickets by default. Grant-only uses
 `work_ticket` (waitfree/¥0+) then `binge_ticket` (binge-free) as separate
-ordered resources; `all` replans between passes. No per-Work episode limit is
+ordered resources within each Work; `all` checks both pools together there
+and replans/refreshes the next pool after earlier entry attempts. No per-Work episode limit is
 added. Its candidate loop confirms a target grant and
 leaves the Item pending; it does not capture, package, create an Artifact or
 complete the Item. A candidate that becomes free or freshly granted after

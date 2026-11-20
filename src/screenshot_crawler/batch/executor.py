@@ -105,6 +105,7 @@ class PreparedAccessResource:
     resource: str
     used: bool = False
     active: bool = True
+    resource_resolutions: dict[str, AccessResourceResolution] | None = None
 
     def take(self, page: Page, candidate: BatchCandidate) -> None:
         if (
@@ -758,6 +759,22 @@ class BatchExecutor:
         ) as prepared:
             return prepared.resolution
 
+    async def resolve_access_resource_pools(
+        self, page: Page, pools: dict[str, list[BatchCandidate]],
+        *, timeout_ms: int = 15_000,
+    ) -> dict[str, AccessResourceResolution]:
+        """Resolve one Work's explicit resource pools under one bounded guard."""
+
+        if not pools or any(not pool for pool in pools.values()):
+            raise BatchExecutionError("Combined resource resolution requires nonempty pools")
+        resource = next(iter(pools))
+        async with self.prepare_access_resource_candidates(
+            page, pools[resource], resource, timeout_ms=timeout_ms,
+            resource_pools=pools,
+        ) as prepared:
+            assert prepared.resource_resolutions is not None
+            return prepared.resource_resolutions
+
     @asynccontextmanager
     async def prepare_access_resource_candidates(
         self,
@@ -766,11 +783,13 @@ class BatchExecutor:
         quota_resource: str,
         *,
         timeout_ms: int = 15_000,
+        resource_pools: dict[str, list[BatchCandidate]] | None = None,
     ) -> AsyncIterator[PreparedAccessResource]:
         """Lock the Catalog before any access-resource adapter is prepared."""
         with self.catalog.job_lock():
             async with self._prepare_access_resource_candidates(
-                page, candidates, quota_resource, timeout_ms=timeout_ms
+                page, candidates, quota_resource, timeout_ms=timeout_ms,
+                resource_pools=resource_pools,
             ) as prepared:
                 yield prepared
 
@@ -782,33 +801,48 @@ class BatchExecutor:
         quota_resource: str,
         *,
         timeout_ms: int = 15_000,
+        resource_pools: dict[str, list[BatchCandidate]] | None = None,
     ) -> AsyncIterator[PreparedAccessResource]:
         """Keep the resolver guard active through a same-page selected grant."""
 
         pending_candidates = tuple(candidates)
         if not pending_candidates:
             raise BatchExecutionError("Prepared access requires candidates")
-        sites = {candidate.site for candidate in pending_candidates}
+        pools = resource_pools if resource_pools is not None else {quota_resource: candidates}
+        all_candidates = tuple(candidate for pool in pools.values() for candidate in pool)
+        if resource_pools is not None and (
+            quota_resource not in pools or tuple(pools[quota_resource]) != pending_candidates
+            or any(not pool for pool in pools.values())
+            or len({candidate.work_id for candidate in all_candidates}) != 1
+            or any(candidate.work_id is None for candidate in all_candidates)
+        ):
+            raise BatchExecutionError("Combined resource resolution requires one bound Work")
+        sites = {candidate.site for candidate in all_candidates}
         if len(sites) != 1:
             raise BatchExecutionError("access-resource resolution requires one site")
         # This loop has no await: one current Work snapshot can validate the
         # whole pool before any adapter or network operation is started.
         work_snapshots: dict[int, tuple[list[Item], list[Source]]] = {}
-        for candidate in pending_candidates:
-            if candidate.quota_resource != quota_resource:
-                raise BatchExecutionError(
-                    "stale grant candidate: quota_resource does not match resolver pass"
+        for resource, pool in pools.items():
+            for candidate in pool:
+                if candidate.quota_resource != resource:
+                    raise BatchExecutionError(
+                        "stale grant candidate: quota_resource does not match resolver pass"
+                    )
+                self._require_candidate_scope(
+                    candidate,
+                    expected_quota_resource=resource,
+                    library_dir=self.library_dir,
+                    check_output_paths=False,
+                    work_snapshots=work_snapshots,
                 )
-            self._require_candidate_scope(
-                candidate,
-                expected_quota_resource=quota_resource,
-                library_dir=self.library_dir,
-                check_output_paths=False,
-                work_snapshots=work_snapshots,
-            )
         # Entry after an await must read fresh rows, including newly observed grants.
         work_snapshots.clear()
         adapter = self.adapters.create(next(iter(sites)))
+        if resource_pools is not None:
+            resolver = getattr(adapter, "resolve_access_resource_pools", None)
+            if not callable(resolver):
+                raise BatchExecutionError("Site adapter does not support combined resource resolution")
         resolution_timeout_ms = timeout_ms
         configure_resolution = getattr(adapter, "configure_access_resource_resolution", None)
         if callable(configure_resolution):
@@ -817,7 +851,7 @@ class BatchExecutor:
                 work_keys = {
                     self.catalog.get_work(work_id).work_key
                     for work_id in {
-                        candidate.work_id for candidate in pending_candidates
+                        candidate.work_id for candidate in all_candidates
                         if candidate.work_id is not None
                     }
                 }
@@ -868,7 +902,8 @@ class BatchExecutor:
         )
         guard.start(page)
         operation = asyncio.create_task(
-            adapter.resolve_access_resource_candidates(
+            resolver(page, {key: tuple(pool) for key, pool in pools.items()}, timeout_ms=timeout_ms)
+            if resource_pools is not None else adapter.resolve_access_resource_candidates(
                 page,
                 pending_candidates,
                 quota_resource,
@@ -910,8 +945,27 @@ class BatchExecutor:
                     f"Site adapter {type(adapter).__name__} does not provide "
                     "an access-resource resolver"
                 )
+            resource_resolutions = None
+            if resource_pools is not None:
+                if not isinstance(result, dict) or result.keys() != pools.keys():
+                    raise BatchExecutionError("Combined resource resolver returned incomplete resources")
+                for resource, resolution in result.items():
+                    if not isinstance(resolution, AccessResourceResolution):
+                        raise BatchExecutionError("Invalid combined resource resolution")
+                    allowed_ids = {candidate.source_id for candidate in pools[resource]}
+                    selected = set(resolution.selected_source_ids)
+                    skipped = {source_id for source_id, _reason in resolution.skipped_source_reasons}
+                    if (
+                        selected & skipped or selected | skipped != allowed_ids
+                        or len(selected) != len(resolution.selected_source_ids)
+                        or len(skipped) != len(resolution.skipped_source_reasons)
+                    ):
+                        raise BatchExecutionError("Combined resource resolver returned invalid source coverage")
+                resource_resolutions = result
+                result = resource_resolutions[quota_resource]
             prepared = PreparedAccessResource(
-                page, adapter, guard, result, pending_candidates, quota_resource
+                page, adapter, guard, result, pending_candidates, quota_resource,
+                resource_resolutions=resource_resolutions,
             )
             yield prepared
             guard.raise_if_stopped()

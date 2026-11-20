@@ -561,6 +561,17 @@ Generic `all` means:
 
 `all` does not mean "click whichever resource appears first" inside a candidate.
 
+A Policy may explicitly opt into Work-first `all`: check one Work's resource
+pools together, then execute the policy-ordered resource passes within that Work
+before visiting the next. This can change allocation of shared balances across
+Works and must be documented by the site integration. Consumption is still
+bound to one explicit resource per attempt. After any earlier entry attempt,
+replan and refresh the next resource's remaining Work pool rather than reusing
+pre-attempt state. An exhausted resource stays disabled for subsequent Works;
+unknown outcomes stop the run. Snapshot checks are non-consuming and excluded
+from the shared attempt limit. Guard, bounded cleanup, configured pacing and
+per-entry proof remain required. Other policies retain resource-first passes.
+
 ## 10. Grant-only contract
 
 ### 10.1 Meaning

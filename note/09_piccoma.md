@@ -1,3 +1,69 @@
+## Work-first combined grant-only checks (2026-11-21)
+
+`--grant-only all` now processes A(Work-ticket → Binge-ticket), then B, then C.
+Both explicit resource pools are checked together from one listing navigation
+and one product-home GET per Work. Previously it visited all Works for
+`work_ticket`, then revisited them for `binge_ticket`, and each stock resolver
+also fetched the listing a second time. Normal Batch and explicit single-kind
+grant-only now remove that redundant listing GET as well.
+
+Piccoma opts into the default-false Policy `grant_only_all_per_work()` hook.
+Within a Work, `work_ticket` still allows waitfree/¥0+ and `binge_ticket` only
+Binge. They never switch implicitly. If both pools are empty, the Work is
+checked only once with no eligibility POST, viewer, CrawlRun or ticket use.
+After an earlier resource attempts entry, the next resource's old selection is
+discarded: replan current Catalog, intersect with the original current-Work
+scope, and refresh that pool's listing/home. Previously granted Sources drop
+out. No later Work is scanned early, and no stock is persisted. Work order is
+the first appearance in policy-ordered preflight pools; account-shared stock
+can consequently be allocated differently from the former global resource
+priority. Binge account balance still requires native modal evidence.
+
+Each selected entry retains its separate fresh owned Page and Adapter,
+pre/post-entry listing/home proof, exact modal, debit and durable grant/attempt
+observers. This change does not reuse a reader Page or weaken entry proof.
+Expected unavailability ends only the current Work/resource. Explicit resource
+exhaustion disables that resource for later Works; UNKNOWN stops the whole run.
+The one `--limit` counts attempts across all resources/Works, with snapshots
+excluded. Configured pacing and bounded cleanup remain enabled. CLI/GUI options,
+output formats, normal Batch candidate order and pending grant-only Item status
+are unchanged. Restart the worker/application to load the new behavior.
+
+Final affected verification: 476 related Unit cases passed; 2 distributed-
+configuration assertions failed because preexisting local `crawler.yaml` values
+are customized (Hanayume discovery delay 10000 vs 5000; Magapoke page delay 1500
+vs 1000). This change preserves that configuration. Both assertions passed
+against an isolated copy of the tracked HEAD configuration using the current
+production code (2 passed). The Piccoma ticket/grant/quota/Batch browser slice
+passed 89 cases; 348 unrelated capture/reader cases were deselected, not skipped.
+All completed selections had 0 skipped. Initial focused verification (307 Unit,
+including 8 combined-resolver boundaries, and 43 browser cases) is included in
+these scopes rather than added to the totals. Browser coverage includes exact
+single/combined snapshot GET counts and actual Runner entry in normal Batch,
+single-resource and `all`. `ruff check src tests` and scoped `git diff --check`
+passed. Logs: `output/pwf-affected.log`, `output/pwf-entry.log`,
+`output/pwf-defaults.log`; the isolated defaults fixtures are under
+`output/pwf-defaults/`. The full suite collected 9911 tests but was interrupted after
+an unchanged ComicFuz Runner test failed with `ComicFUZ page turn did not reach
+a stable next page or end panel` and progress reporting then remained at 5%.
+The failed test passed in one isolated rerun (1 passed, 0 skipped); its cause
+is unconfirmed, and the full suite is NOT verified green. Logs are
+`output/pwf-full.log`, `output/pwf-collection.log` and
+`output/pwf-comicfuz-retry.log`. No live/CDP operation, additional
+ticket use, or normal Catalog/library modification was performed for this change.
+Live timing and new orchestration with real changing stock remain unverified.
+Standalone Research/Probe tests were not selected because no probe contract
+changed; the incomplete full attempt is not counted as Research verification.
+
+Changed production files are `cli.py`, `batch/executor.py`,
+`site_policies/base.py`, `site_policies/piccoma.py`, and
+`site_adapters/piccoma/adapter.py` plus its README. Tests updated:
+`tests/unit/test_cli.py`, `tests/unit/test_batch_executor.py`,
+`tests/integration/test_piccoma_adapter_browser.py`. Authorities synchronized:
+`docs/ARCHITECTURE.md`, `docs/DISCOVERY_AND_BATCH.md`,
+`docs/ACCESS_CONTROL_AND_PACING.md`, `docs/ACCESS_CONTROL_AND_PACING_PLAN.md`,
+`docs/DECISIONS.md`; current snapshots: this note and `note/00_core.md`.
+
 ## Normal Batch work stock selection (2026-11-19)
 
 Normal Batch now uses the existing non-consuming Work listing/home snapshot
@@ -63,8 +129,9 @@ Binge rows up to the product's displayed stock are selected; a charged daily
 resource is not implicitly used in that pass. A zero pool skips directly to
 the next Work. Missing/ambiguous charge or a required balance fails closed.
 Within a Work the selected rows keep their planned order. Shared ¥0+ stock is
-freshly checked at the next Work, and `all` replans/resolves again in its Work
-then Binge pass order. Snapshot counts never become persisted quota capacity.
+freshly checked at the next Work. `all` now checks both resource pools together
+per Work and refreshes the next pool after earlier entry attempts, as described
+above. Snapshot counts never become persisted quota capacity.
 
 Each selected entry still performs the existing fresh row/home/eligibility/
 native-modal/debit proof. If live availability disappears, remaining selected
@@ -491,8 +558,8 @@ authorize execution. Normal Batch admits otherwise-eligible quota through
 site-owned checks. There is no Piccoma-only CLI flag or GUI checkbox.
 Grant-only uses the separate
 `work_ticket` (waitfree / ¥0＋) and `binge_ticket` (binge-free) are distinct
-grant-only resources. `all` executes them in that order with a replan between
-passes; each pass is resource-bound, and multiple episodes are allowed subject
+grant-only resources. `all` checks both together per Work and executes them
+in that order there, replanning/refreshing after earlier entry attempts; each pass is resource-bound, and multiple episodes are allowed subject
 to stock, selection and the normal `--limit`. Grants are confirmed without
 Capture, packaging or Item completion. Unknown,
 stale or ambiguous state fails closed, and an uncertain affirmative action is
@@ -1540,7 +1607,7 @@ manifest, so native-capture metadata was not independently rechecked from it.
 
 Phase 07 Stage A and Stage B passed independent review. The distributed `crawler.yaml` sets `sites.piccoma.page_turn_delay_ms: 200`, `inter_candidate_delay_ms: 3000`, and the existing fail-stop flags to true. Manual CLI and Batch use the shared runtime-settings loader and pass the resolved page delay into `RunConfig`; the common 1,000ms fallback and other site values are unchanged. Explicit zero remains valid. Stage B transports the same full native trace as JSON at all six existing checkpoints and restores dicts for existing validators/signatures. Intentional nulls are preserved; unsupported values, malformed/ambiguous JSON, negative zero, schema errors, and payloads above 8 MiB fail closed as unknown target continuity. The 8 MiB cap is a new full-trace transport bound derived as 512 events × 16 KiB/event, with an independent 512 × 256-node traversal bound; it never truncates traces. The existing finite DPR tolerance `1e-7` and raw viewport before/after equality are retained. Stage C compared object and JSON at the same YAML 200ms setting in four interleaved 12-page manual runs: all 48 corresponding WebP files were byte-identical, native-only, and fallback-free. Mean normal cycle fell from 3.601s to 2.743s (0.857s, 23.8%); the six trace RPCs fell by 0.864s and JSON decode added 0.034s. A separate 24-page Batch reached explicit END and passed ZIP/Catalog checks; a fresh prepackage audit then independently verified all 24 manifest entries and 144 native evaluations / 144 JSON decodes. The final Stage C Reviewer review passed with BLOCKING 0. WebP remains lossless method6; no PNG/trace-count/stability/thread refactor is included. The separate [genre correction plan](../research/piccoma-performance/GENRE_FIX_PLAN.md) remains unimplemented and requires verified product-type evidence.
 
-`PiccomaDiscoveryAdapter` is registered with Discovery. `PiccomaAdapter` is registered in the manual crawl and Batch adapter registries, and `PiccomaSitePolicy` is registered with the generic Batch Planner. Manual access remains non-consuming for exact-free and active manual grants. Current normal Batch may select `piccoma_ticket_auto` quota candidates in the preexisting candidate sequence. Grant-only exposes `work_ticket` (waitfree / ¥0＋) and `binge_ticket` (binge-free) as separate ordered passes; `all` replans between them. Each pass allows only its own concrete kinds, and a Binge pass never falls back to waitfree or ¥0＋. Grant-only resolves availability/stock once per Work before entering its bounded selected episode pool; zero stock skips the Work without per-episode eligibility attempts. Grant-only leaves Items pending after target grant confirmation without Capture/END/ZIP. Site-owned checks still bind the fresh listing row, product-home state, login, exact eligibility exchange, one native ticket modal and one matching affirmative control; after a consuming action they require same-target viewer navigation, a fresh grant row and exact balance/charge change. Unknown results stop without retry. The site Adapter and synthetic tests cover all three kinds and fresh free/grant races. Stage 02's four positive ticket uses and zeroPlus direct-recovery E2E remain historical; no additional ticket use occurred during this 2026-11-19 revision. The Stage 02 live limitations remain: normal packaging removed its run manifest, so native-source metadata was not independently rechecked from those archives, and no account-wide binge balance debit is claimed. The earlier 9473 full-suite result is historical and is not the validation total for this revision.
+`PiccomaDiscoveryAdapter` is registered with Discovery. `PiccomaAdapter` is registered in the manual crawl and Batch adapter registries, and `PiccomaSitePolicy` is registered with the generic Batch Planner. Manual access remains non-consuming for exact-free and active manual grants. Current normal Batch may select `piccoma_ticket_auto` quota candidates in the preexisting candidate sequence. Grant-only exposes `work_ticket` (waitfree / ¥0＋) and `binge_ticket` (binge-free) as explicit ordered passes within each Work; `all` initially checks both pools together and replans/refreshes the next current-Work pool after earlier entry attempts. Each pass allows only its own concrete kinds, and a Binge pass never falls back to waitfree or ¥0＋. Grant-only initially resolves availability/stock once per Work before entering its bounded selected episode pool; zero stock skips the Work without per-episode eligibility attempts. Grant-only leaves Items pending after target grant confirmation without Capture/END/ZIP. Site-owned checks still bind the fresh listing row, product-home state, login, exact eligibility exchange, one native ticket modal and one matching affirmative control; after a consuming action they require same-target viewer navigation, a fresh grant row and exact balance/charge change. Unknown results stop without retry. The site Adapter and synthetic tests cover all three kinds and fresh free/grant races. Stage 02's four positive ticket uses and zeroPlus direct-recovery E2E remain historical; no additional ticket use occurred during this 2026-11-19 revision. The Stage 02 live limitations remain: normal packaging removed its run manifest, so native-source metadata was not independently rechecked from those archives, and no account-wide binge balance debit is claimed. The earlier 9473 full-suite result is historical and is not the validation total for this revision.
 
 The 2026-11-18 default/grant revision's parameterized synthetic regression exercised daily, shared zero-plus and binge-stock/refill transitions through the actual Planner, CLI candidate loop, BatchExecutor and Piccoma adapter entry, using a synthetic SequenceRunner and stubbed reader setup (not the production CrawlerRunner). The new 2026-11-19 revision adds grant-only Work→Binge pass coverage through the same production Planner/CLI/Executor/Adapter path with that synthetic runner. A separate representative grant-only Work case uses the actual CrawlerRunner. The preceding 2026-11-19 resource-split revision's distinct affected validation was 274 passed (254 affected + 20 Piccoma Discovery browser tests), 0 failed, 0 skipped; `ruff check src tests` and `git diff --check` pass. It did not rerun the full suite; the prior 9473 all-file result belongs to the 2026-11-18 revision. No real-site/CDP or additional ticket action occurred. The first 39P/1F and 117P/2F runs exposed a test Catalog fixture setup issue and stale assertions that expected an access POST after a known preflight no-action; retained logs and their exact superseding focused runs are documented in the ignored validation record. No failures were counted as passing. The preceding resource-split revision recorded provisional independent source/test review PASS / BLOCKING 0; it is not an independent review of the later Work-level stock change.
 
@@ -1566,7 +1633,7 @@ Manual unlock evidence is the sole prefixed marker `PCM-epList_status_waitfreeRe
 
 Piccoma's incremental stop hook continues through every row in the requested scope because old episodes can be manually unlocked after discovery. The full DOM listing is already buffered, so no extra listing request is added. Incremental still does not mark unseen rows unavailable. Both modes refresh grants and `access_checked_at`, retaining completed Items and artifacts.
 
-At viewer initialization, the adapter refreshes the product listing and requires a unique composite row. Exact-free or active manual-grant evidence uses the existing non-consuming direct path. Normal Batch quota candidates use `piccoma_ticket_auto`; grant-only candidates use `work_ticket` or `binge_ticket`, each restricted to its corresponding fresh native kind. `all` is two explicit resource passes with a replan and fresh Work-level stock resolution; an unsupported kind does not silently switch passes. The adapter arms a Piccoma-local request/navigation guard, observes the matching native `/web/user/access` exchange, and accepts only one visible confirmation with the selected kind's observed class and exact label. Login, source/product identity, resource balance, modal data and exact control are revalidated before the one affirmative click. It blocks other owner-page mutations and unapproved frame/popup/document navigation, while unrelated shared-browser pages fall through. Confirmed same-target grant evidence is saved through the existing grant observer before capture; the logical resource consumption and concrete kind are recorded separately. Missing or inconsistent debit, route, grant or identity proof is unknown and cannot trigger another click. Direct purchase redirects and paid/gift/ad/time-saving controls are never followed or clicked.
+At viewer initialization, the adapter refreshes the product listing and requires a unique composite row. Exact-free or active manual-grant evidence uses the existing non-consuming direct path. Normal Batch quota candidates use `piccoma_ticket_auto`; grant-only candidates use `work_ticket` or `binge_ticket`, each restricted to its corresponding fresh native kind. `all` checks both resources together per Work and runs two explicit passes there, replanning and refreshing the remaining Work pool after earlier entry attempts; an unsupported kind does not silently switch passes. The adapter arms a Piccoma-local request/navigation guard, observes the matching native `/web/user/access` exchange, and accepts only one visible confirmation with the selected kind's observed class and exact label. Login, source/product identity, resource balance, modal data and exact control are revalidated before the one affirmative click. It blocks other owner-page mutations and unapproved frame/popup/document navigation, while unrelated shared-browser pages fall through. Confirmed same-target grant evidence is saved through the existing grant observer before capture; the logical resource consumption and concrete kind are recorded separately. Missing or inconsistent debit, route, grant or identity proof is unknown and cannot trigger another click. Direct purchase redirects and paid/gift/ad/time-saving controls are never followed or clicked.
 
 On the 2026-10-09 snapshot, product 28600 exposed 432/432 exact-free rows. Product 28606 exposed 12 exact-free rows, 167 wait/binge-free rows, and 39 point-priced rows. These are observations, not constants. Seeds 28600/1910027, 28600/4142286, and 28606/2001009 appeared at native DOM indices 0, 421, and 1 respectively.
 

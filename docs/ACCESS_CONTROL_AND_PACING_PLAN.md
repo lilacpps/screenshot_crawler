@@ -9,7 +9,8 @@ Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PAR
 Piccoma normal Batch and grant-only ticket execution are implemented as a
 site-specific integration, not as a new generic resource policy phase. Normal
 Batch uses `piccoma_ticket_auto`; grant-only uses `work_ticket` (waitfree/¥0+)
-and `binge_ticket` (binge-free) as distinct ordered passes for `all`. Both use
+and `binge_ticket` (binge-free) as distinct ordered passes within each Work for
+`all`, with one combined initial listing/home check per Work. Both use
 existing `quota_resource` /
 `AccessConsumption` contracts plus the site-neutral candidate-sequence and
 durable access-attempt observer hooks. Generic behavior remains unchanged for
@@ -25,6 +26,19 @@ single-target deferred/prepared flows keep their contracts. Acceptance covers
 waitfree/¥0+/Binge stock bounds, unknown balances, next-Work advancement,
 shared limits, pass exhaustion, failure stops and Page cleanup. This revision's
 stock-selection checks are synthetic; no additional live ticket use is claimed.
+
+The 2026-11-21 Work-first revision adds default-false
+`grant_only_all_per_work()` and a guarded combined-resource resolver. Piccoma
+opts in; zero stock in both pools requires one listing navigation and one home
+GET. Earlier entry attempts invalidate the next resource's initial selection:
+the Catalog is replanned and only the current Work's remaining original pool is
+refreshed. The global attempt limit, resource-wide exhaustion, Work-local
+unavailability, unknown stop, pacing and cleanup retain their contracts.
+Normal Batch and single-resource grant-only also remove the redundant listing
+GET during stock preselection; entry/debit proof is unchanged. Acceptance covers
+cross-Work order, shared limits, mutations, exact resource/source coverage,
+AccessGuard cleanup, zero-stock request counts and actual Runner entry for
+grant-only all and normal Batch. This revision's live behavior remains unverified.
 
 Normal Piccoma Batch now also opts into `resolve_batch_quota_per_work()`.
 The shared orchestration resolves a Work/resource lazily, caches its selected

@@ -3018,6 +3018,79 @@ async def test_prepared_guard_cleanup_preserves_interruption_or_primary_failure(
                 raise RuntimeError("primary entry failure")
 
 
+@pytest.mark.parametrize("outcome", [
+    "success", "missing_resource", "wrong_source", "overlap", "missing_coverage",
+    "wrong_work", "wrong_resource", "guard_stop",
+])
+async def test_combined_resource_resolver_binds_all_pools_and_keeps_guard_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    service = CatalogService(tmp_path / "combined.sqlite")
+    candidate = replace(
+        add_candidate(service, access_mode="quota", consumes_quota=True, site="piccoma"),
+        quota_resource="work_ticket",
+    )
+    other = replace(candidate, quota_resource="binge_ticket")
+    if outcome == "wrong_work":
+        other = replace(other, work_id=candidate.work_id + 1)
+    if outcome == "wrong_resource":
+        other = replace(other, quota_resource="work_ticket")
+    calls = []
+    lifecycle = []
+
+    class Adapter:
+        def get_access_profile(self):
+            return None
+
+        async def resolve_access_resource_pools(self, _page, pools, **_kwargs):
+            calls.append(tuple(pools))
+            results = {resource: AccessResourceResolution((candidate.source_id,)) for resource in pools}
+            if outcome == "missing_resource":
+                results.pop("binge_ticket")
+            if outcome == "wrong_source":
+                results["binge_ticket"] = AccessResourceResolution((candidate.source_id + 99,))
+            if outcome == "overlap":
+                results["binge_ticket"] = AccessResourceResolution(
+                    (candidate.source_id,), ((candidate.source_id, "no_stock"),),
+                )
+            if outcome == "missing_coverage":
+                results["binge_ticket"] = AccessResourceResolution()
+            return results
+
+    class Guard:
+        def start(self, _page):
+            lifecycle.append("start")
+
+        def raise_if_stopped(self):
+            pass
+
+        async def wait_for_stop(self):
+            if outcome == "guard_stop":
+                return AccessStopError(reason="http_403", site="piccoma", url="https://example.invalid")
+            await asyncio.Event().wait()
+
+        async def close(self):
+            lifecycle.append("close")
+
+    executor = make_executor(service, piccoma_adapter_factory=Adapter)
+    monkeypatch.setattr(batch_executor_module.AccessGuard, "from_profile", lambda **_kwargs: Guard())
+    pools = {"work_ticket": [candidate], "binge_ticket": [other]}
+    if outcome == "success":
+        result = await executor.resolve_access_resource_pools(object(), pools)
+        assert all(resolution.selected_source_ids == (candidate.source_id,) for resolution in result.values())
+    else:
+        with pytest.raises(AccessStopError if outcome == "guard_stop" else BatchExecutionError):
+            await executor.resolve_access_resource_pools(object(), pools)
+    if outcome in {"wrong_work", "wrong_resource"}:
+        assert calls == lifecycle == []
+    else:
+        assert calls == [("work_ticket", "binge_ticket")]
+        assert lifecycle == ["start", "close"]
+    assert service.list_crawl_runs() == service.list_artifacts() == []
+    assert service.get_source(candidate.source_id).quota_started_at is None
+    assert service.get_source(candidate.source_id).access_granted_until is None
+
+
 async def test_resolver_timeout_is_bounded_for_cancellation_resistant_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2,14 +2,20 @@
 
 ## Implemented scope
 
-Piccoma Discovery and the horizontal viewer/Capture adapter support exact-free access, active manual unlocks, and the three observed free-ticket kinds. Normal Batch uses available waitfree, ¥0+, and binge-free tickets in the site's row and stock order without a Piccoma-only flag or checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` runs both as explicit ordered passes. Each pass confirms grants without Capture, packaging, or Item completion. See the [ticket runbook progress](../../../../runbooks/piccoma-ticket-auto/PROGRESS.md) for historical Stage 02 live evidence and current synthetic verification. The viewer adapter rechecks the target's current listing state before entry. The ordinary 1:1 display profiles first attempt the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
+Piccoma Discovery and the horizontal viewer/Capture adapter support exact-free access, active manual unlocks, and the three observed free-ticket kinds. Normal Batch uses available waitfree, ¥0+, and binge-free tickets in the site's row and stock order without a Piccoma-only flag or checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) followed by `binge_ticket` (binge-free); `all` checks both together and runs explicit ordered passes within each Work. Each pass confirms grants without Capture, packaging, or Item completion. See the [ticket runbook progress](../../../../runbooks/piccoma-ticket-auto/PROGRESS.md) for historical Stage 02 live evidence and current synthetic verification. The viewer adapter rechecks the target's current listing state before entry. The ordinary 1:1 display profiles first attempt the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
 
 `piccoma_ticket_auto` is the normal Batch logical resource. Grant-only has
 two explicit resources: `work_ticket` allows waitfree / ¥0+, and `binge_ticket`
-allows binge-free. `--grant-only all` runs Work first, replans, then runs Binge;
+allows binge-free. `--grant-only all` checks both pools together per Work, then
+runs Work followed by Binge there before advancing to the next Work. After
+earlier entry attempts, it replans Catalog and refreshes the next pool for only
+that Work. Shared-stock allocation can differ from the previous all-Works
+Work pass followed by all-Works Binge pass;
 each pass is restricted to its resource's kinds and does not silently fallback.
 Normal Batch checks each Work's stock once before its first quota entry and
-selects at most the available daily plus supported secondary stock. Zero stock
+selects at most the available daily plus supported secondary stock. All stock
+preselection paths now load the listing once and fetch home once; they do not
+repeat the listing GET. Entry/debit proof still fetches both. Zero stock
 skips the Work's quota pool without opening each episode. Later unavailability
 also skips the remaining selected quota rows; free/active-grant direct rows
 keep their original order. Selected entries still recheck live state and debit.
@@ -1047,14 +1053,14 @@ The registered `PiccomaSitePolicy` admits available exact-free sources as
 Normal Batch admits otherwise-eligible quota through `piccoma_ticket_auto`
 with `after_observed_consumption`, selecting among waitfree, ¥0+ and binge-free
 from fresh site state by the preserved candidate sequence. Grant-only uses the
-two resources: `work_ticket` (waitfree / ¥0+) and `binge_ticket` (binge-free). `all` uses these as ordered explicit passes with a replan between them; a pass never falls back to another kind.
+two resources: `work_ticket` (waitfree / ¥0+) and `binge_ticket` (binge-free). `all` checks both together per Work and executes ordered explicit passes there, replanning and refreshing the next Work pool after earlier entry attempts; a pass never falls back to another kind.
 Explicit grant-only first resolves one Work at a time using the full product
 listing and a read-only product-home stock snapshot. It selects no more than
 one charged waitfree use plus matching ¥0+ stock, or matching per-product
 Binge stock. Zero availability skips the Work without per-episode eligibility
 requests. Each selected entry retains the exact live checks; later expected
 unavailability skips the rest of that Work, while unknown outcomes stop the
-run. Balances are refreshed for the next Work/pass and are not persisted.
+run. The initial check reads listing/home once for both pools; balances are refreshed at the next Work or after earlier entry attempts and are not persisted.
 Binge account stock is still checked in its native modal. A Work snapshot
 currently requires one unambiguous Piccoma product; mixed-product Works fail
 closed. Snapshot and entry Pages are separately guarded and closed; no viewer

@@ -109,6 +109,11 @@ class SitePolicy(ABC):
 
         return False
 
+    def grant_only_all_per_work(self) -> bool:
+        """Check resource pools together and execute explicit passes within each Work."""
+
+        return False
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int | None:
         """Return local quota slots, or ``None`` for policies without quota."""
 

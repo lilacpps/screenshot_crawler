@@ -2016,6 +2016,86 @@ async def _execute_work_grants(
     return attempts, True
 
 
+async def _execute_work_resource_grants(
+    args: argparse.Namespace, session: BrowserSession, executor: BatchExecutor,
+    planner: BatchPlanner, plans: dict[str, BatchPlan], *,
+    inter_candidate_delay_ms: int, metrics: BatchMetricsWriter,
+    warning_seen: set[str], attempt_limit: int | None = None,
+) -> int:
+    """Visit each Work once, with explicit ordered resource passes inside it."""
+
+    works: dict[int, dict[str, list[BatchCandidate]]] = {}
+    for resource, plan in plans.items():
+        metrics.record_planned_skips(plan.skipped)
+        for group in group_grant_candidates(plan.candidates):
+            works.setdefault(group[0].work_id, {})[resource] = group
+    attempts = 0
+    exhausted: set[str] = set()
+    previous_site_access = False
+    for work_id, work_pools in works.items():
+        _execution_checkpoint(args)
+        if attempt_limit is not None and attempts >= attempt_limit:
+            break
+        pools = {
+            resource: eligible
+            for resource, pool in work_pools.items()
+            if resource not in exhausted
+            and (eligible := _filter_local_grant_candidates(executor, pool, metrics=metrics))
+        }
+        if not pools:
+            continue
+        if previous_site_access:
+            await asyncio.sleep(inter_candidate_delay_ms / 1000)
+        page = await session.new_page()
+        print(f"Batch grant-only work={work_id}: checking resources={','.join(pools)}")
+        try:
+            resolutions = await executor.resolve_access_resource_pools(page, pools)
+        finally:
+            await _best_effort_cleanup(session.close_page(page))
+        previous_site_access = True
+        work_attempts = 0
+        for resource, original_pool in pools.items():
+            _execution_checkpoint(args)
+            if attempt_limit is not None and attempts >= attempt_limit:
+                break
+            if work_attempts:
+                # Earlier entry can change charge, shared stock and grants.
+                # Replan locally and refresh only this Work, never rescan all
+                # Works on the site or reuse its pre-consumption selection.
+                fresh_plan = _planner_plan(
+                    planner, args, quota_resource=resource, output_mode="grant_only",
+                )
+                _print_batch_warnings(fresh_plan, warning_seen=warning_seen)
+                allowed_ids = {candidate.source_id for candidate in original_pool}
+                pool = [candidate for candidate in fresh_plan.candidates
+                        if candidate.work_id == work_id and candidate.source_id in allowed_ids]
+                selected = await _resolve_access_resource_candidates(
+                    session, executor, pool, resource=resource,
+                    delay_before_first_ms=inter_candidate_delay_ms, metrics=metrics,
+                    execution_args=args,
+                ) if pool else []
+            else:
+                selected = _apply_access_resolution(
+                    original_pool, resolutions[resource], metrics=metrics,
+                    execution_args=args,
+                )
+            print(f"Batch grant-only work={work_id} resource={resource}: selected={len(selected)}")
+            if not selected:
+                continue
+            processed, keep_going = await _execute_batch_candidates(
+                args, session, executor, selected, phase=f"grant-only:{resource}",
+                inter_candidate_delay_ms=inter_candidate_delay_ms,
+                delay_before_first_ms=inter_candidate_delay_ms, metrics=metrics,
+                grant_only=True, stop_work_on_unavailable=True,
+                attempt_limit=None if attempt_limit is None else attempt_limit - attempts,
+            )
+            attempts += processed
+            work_attempts += processed
+            if not keep_going:
+                exhausted.add(resource)
+    return attempts
+
+
 def _completed_candidate_count(
     catalog: CatalogService, candidates: list[BatchCandidate]
 ) -> int:
@@ -2091,6 +2171,9 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     defer_quota = _policy_defers_quota_access(policy)
     resolve_per_work = getattr(policy, "resolve_grant_only_per_work", lambda: False)()
     resolve_batch_quota = getattr(policy, "resolve_batch_quota_per_work", lambda: False)()
+    work_first_all = grant_only_all and getattr(policy, "grant_only_all_per_work", lambda: False)()
+    if work_first_all and (not resolve_per_work or defer_quota):
+        raise BatchPlanningError("Work-first resource passes require non-deferred Work resolution")
     execute_grants = _execute_work_grants if resolve_per_work else _execute_batch_candidates
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
@@ -2169,7 +2252,9 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     print(
         f"  planned: {len(plan.candidates) if plan is not None else 'policy resource passes'}"
     )
-    if grant_only_all and defer_quota:
+    if work_first_all:
+        print("  executing: resource=all, one work at a time, checking resources together")
+    elif grant_only_all and defer_quota:
         print("  executing: policy resource passes")
     elif defer_quota and grant_only is not None:
         print("  deferred candidate pool:")
@@ -2276,7 +2361,19 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             executor.runtime_settings = runtime_settings
         if hasattr(executor, "access_event_sink"):
             executor.access_event_sink = metrics.record_access_event
-        if grant_only_all:
+        if work_first_all:
+            attempts = await _execute_work_resource_grants(
+                args, session, executor, planner, grant_only_all_preflight,
+                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                metrics=metrics, warning_seen=warning_seen, attempt_limit=limit,
+            )
+            grant_attempts = attempts
+            if attempts == 0:
+                metrics.finish(stop_reason="no_candidates")
+            if args.keep_open:
+                print("Browser is open. Press Enter here to disconnect.")
+                await asyncio.to_thread(input)
+        elif grant_only_all:
             attempts = 0
             previous_phase_had_site_access = False
             for resource in grant_only_resources:

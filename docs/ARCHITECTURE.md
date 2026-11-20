@@ -1,5 +1,20 @@
 # Architecture
 
+## Work-first explicit grant resources (2026-11-21)
+
+SitePolicy's default-false `grant_only_all_per_work()` lets an integration
+select Work-first grant-only `all`. CLI groups preflight pools by Work, obtains
+all resource selections through `BatchExecutor.resolve_access_resource_pools`,
+and executes explicit policy-ordered passes within that Work. The Executor
+validates all Catalog/selection bindings before calling the optional site-owned
+combined resolver under its existing bounded AccessGuard lifecycle. Every
+resource result must cover exactly its own pool. Piccoma shares one initial
+listing/home read, then replans and refreshes the remaining current-Work pool
+after earlier entry attempts. Entry still uses its existing fresh Page/Adapter;
+no stock or browser document is persisted. Normal Batch keeps its candidate
+order and removes only a redundant preselection listing GET. Other policies
+keep the existing resource-first paths. No Catalog schema or Core Runner change.
+
 ## Work deletion (current implementation, Stage 04, 2026-11-14)
 
 Management gate refinement (2026-11-15): management/jobs.pyのterminal stateをauthorityとし、

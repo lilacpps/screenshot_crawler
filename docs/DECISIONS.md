@@ -1,5 +1,17 @@
 # Design Decisions
 
+## Piccomaのgrant-only allは作品ごとに両種別を確認する（2026-11-21）
+
+作品チケット系で全作品を巡回してから一気読み系で再巡回していた処理を、
+作品ごとの一覧・作品ページの確認と、その作品内の明示的な種別passへ変更する。
+同じ作品の初回確認では一覧navigation一回と作品home GET一回で両poolを選ぶ。
+先行passで入口を試行した場合はCatalogを再planし、次の種別の当該作品poolだけ
+再確認する。使用直前・直後の権利と残数の証明は維持する。
+共通残数の配分は従来の全作品横断の種別優先から作品優先へ変わり得る。
+Policyのdefault-false hookによる選択とし、他サイトの順序は変えない。
+通常Batchと単一種別grant-onlyでも初回事前確認の一覧再GETを除くが、
+各話の入口Page共有は導入せず既存のfresh entry・guard・消費確認を保つ。
+
 ## BookWalkerの同一ページ再描画では旧artifactを破棄して一度だけnativeを取り直す（2026-11-17）
 
 retained final joinでraw current anchorが同一CID/counter/canvas/世代/安全flagを保ち、

@@ -1980,9 +1980,10 @@ def _ticket_home_html(
         ("piccoma_ticket_auto", "binge_free", False, 2, 0, True),
     ],
 )
+@pytest.mark.parametrize("combined", [False, True], ids=["single", "combined"])
 async def test_piccoma_work_grant_snapshot_bounds_pool_without_episode_attempts(
     browser_page: Page, resource: str, kind: str, daily: bool, stock: int,
-    expected: int, malformed: bool,
+    expected: int, malformed: bool, combined: bool,
 ) -> None:
     listing = _ticket_listing_html(kind)
     marker = {
@@ -2021,14 +2022,25 @@ async def test_piccoma_work_grant_snapshot_bounds_pool_without_episode_attempts(
         for index, episode in enumerate(("101", "102", "103", "104"), start=1)
     )
     adapter = PiccomaAdapter()
+
+    async def resolve():
+        if not combined:
+            return await adapter.resolve_access_resource_candidates(browser_page, candidates, resource)
+        pools = {name: tuple(SimpleNamespace(**{**vars(c), "quota_resource": name}) for c in candidates)
+                 for name in dict.fromkeys((resource, "work_ticket", "binge_ticket"))}
+        results = await adapter.resolve_access_resource_pools(browser_page, pools)
+        assert results.keys() == pools.keys()
+        return results[resource]
+
     if malformed:
         with pytest.raises(UnknownPageStateError, match="balance"):
-            await adapter.resolve_access_resource_candidates(browser_page, candidates, resource)
+            await resolve()
     else:
-        result = await adapter.resolve_access_resource_candidates(browser_page, candidates, resource)
+        result = await resolve()
         assert result.selected_source_ids == tuple(range(1, expected + 1))
         assert len(result.skipped_source_reasons) == 4 - expected
     assert requests.count(("GET", f"/web/product/{PRODUCT_ID}")) == 1
+    assert requests.count(("GET", f"/web/product/{PRODUCT_ID}/episodes")) == 1
     assert all(method == "GET" and "/viewer/" not in path for method, path in requests)
 
 
@@ -4024,10 +4036,11 @@ async def test_piccoma_quota_batch_blocks_external_tracking_then_captures_one_ep
         assert catalog.get_item(item.id).status == "completed"
 
 
-@pytest.mark.parametrize("grant_only", [True, False], ids=["grant-only", "normal-batch"])
+@pytest.mark.parametrize("mode", ["grant-only", "normal-batch", "grant-all"])
 async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
-    browser_page: Page, tmp_path: Path, grant_only: bool,
+    browser_page: Page, tmp_path: Path, mode: str,
 ) -> None:
+    grant_only = mode != "normal-batch"
     catalog, _work, item, source, _target, policies, adapters, candidate = (
         _piccoma_batch_setup(
             tmp_path, quota_resource="work_ticket" if grant_only else "piccoma_ticket_auto"
@@ -4053,16 +4066,33 @@ async def test_piccoma_work_grant_resolves_stock_before_actual_runner_entry(
             assert page is browser_page
             lifecycle.append("close")
 
-    execute = cli._execute_work_grants if grant_only else cli._execute_batch_candidates
-    processed, keep_going = await execute(
-        SimpleNamespace(
+    args = SimpleNamespace(
+            site="piccoma",
             output_root=tmp_path / "batch-output", max_pages=3,
             library_dir=tmp_path / "library", max_same_content=3, keep_open=False,
-        ),
-        Session(), executor, [candidate], phase="grant-only:work_ticket",
-        inter_candidate_delay_ms=0,
-        **({} if grant_only else {"resolve_quota_per_work": True}),
     )
+    if mode == "grant-all":
+        planner = BatchPlanner(catalog, policies, watchlist=executor.watchlist,
+                               library_dir=tmp_path / "library")
+        resources = ("work_ticket", "binge_ticket")
+        plans = {resource: planner.plan(site="piccoma", quota_resource=resource,
+                                       output_mode="grant_only") for resource in resources}
+        metrics = SimpleNamespace(record_planned_skips=lambda _skips: None,
+                                  record_local_skip=lambda *_args, **_kwargs: None,
+                                  start_candidate=lambda _candidate: None,
+                                  finish_candidate=lambda **_kwargs: None)
+        processed = await cli._execute_work_resource_grants(
+            args, Session(), executor, planner, plans, inter_candidate_delay_ms=0,
+            metrics=metrics, warning_seen=set(),
+        )
+        keep_going = True
+    else:
+        execute = cli._execute_work_grants if grant_only else cli._execute_batch_candidates
+        processed, keep_going = await execute(
+            args, Session(), executor, [candidate], phase="grant-only:work_ticket",
+            inter_candidate_delay_ms=0,
+            **({} if grant_only else {"resolve_quota_per_work": True}),
+        )
     assert (processed, keep_going) == (1, True)
     assert lifecycle == ["new", "close", "new", "close"]
     assert counts["access_posts"] == counts["viewer_gets"] == 1

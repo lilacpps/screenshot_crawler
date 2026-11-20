@@ -739,21 +739,40 @@ class PiccomaAdapter(SiteAdapter):
     ) -> AccessResourceResolution:
         """Read one product's stock before selecting ticket-backed episodes."""
 
-        if quota_resource not in _TICKET_KINDS_BY_RESOURCE or not candidates:
+        resolutions = await self.resolve_access_resource_pools(
+            page, {quota_resource: candidates}, timeout_ms=timeout_ms,
+        )
+        return resolutions[quota_resource]
+
+    async def resolve_access_resource_pools(
+        self, page: Page, pools: dict[str, tuple[object, ...]],
+        *, timeout_ms: int = 15_000,
+    ) -> dict[str, AccessResourceResolution]:
+        """Read listing/home once for all requested resources of one product."""
+
+        if not pools or any(
+            resource not in _TICKET_KINDS_BY_RESOURCE or not pool
+            for resource, pool in pools.items()
+        ):
             raise UnsupportedAccessStrategyError("Piccoma stock resolver requires a supported resource")
+        candidates = tuple(candidate for pool in pools.values() for candidate in pool)
         identities = [parse_piccoma_viewer_url(candidate.locator) for candidate in candidates]
         if (
             any(identity is None for identity in identities)
             or len({identity.product_id for identity in identities if identity is not None}) != 1
             or len({candidate.work_id for candidate in candidates}) != 1
             or candidates[0].work_id is None
-            or len({candidate.source_id for candidate in candidates}) != len(candidates)
+            or any(len({candidate.source_id for candidate in pool}) != len(pool)
+                   for pool in pools.values())
             or any(
                 candidate.site != "piccoma"
                 or candidate.external_id != identity.external_id
-                or candidate.quota_resource != quota_resource
                 for candidate, identity in zip(candidates, identities, strict=True)
             )
+            or any(candidate.quota_resource != resource
+                   for resource, pool in pools.items() for candidate in pool)
+            or len({(candidate.source_id, candidate.external_id, candidate.locator)
+                    for candidate in candidates}) != len({candidate.source_id for candidate in candidates})
         ):
             raise UnknownPageStateError("Piccoma grant resolver requires one bound product/work")
         identity = identities[0]
@@ -767,9 +786,26 @@ class PiccomaAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Piccoma grant snapshot redirected outside its product")
         await page.locator(LISTING_SELECTOR).wait_for(state="visible", timeout=timeout_ms)
-        rows = await self._read_ticket_states(page, identities)
-        snapshot = await self._fetch_ticket_state_snapshot(page, identity)
+        unique_candidates = tuple({candidate.source_id: candidate for candidate in candidates}.values())
+        rows = await self._read_ticket_states(
+            page, [parse_piccoma_viewer_url(candidate.locator) for candidate in unique_candidates],
+        )
+        # Rows already come from this freshly loaded full listing. Only home
+        # stock needs another GET; entry and debit proof still fetch both pages.
+        snapshot = await self._fetch_ticket_state_snapshot(page, identity, include_listing=False)
         home = snapshot["home"]
+        rows_by_source = dict(zip((candidate.source_id for candidate in unique_candidates), rows, strict=True))
+        return {
+            resource: self._select_ticket_pool(
+                pool, [rows_by_source[candidate.source_id] for candidate in pool], home, resource,
+            )
+            for resource, pool in pools.items()
+        }
+
+    def _select_ticket_pool(
+        self, candidates: tuple[object, ...], rows: list[dict[str, Any]],
+        home: dict[str, Any], quota_resource: str,
+    ) -> AccessResourceResolution:
         daily = waitfree_charge_ready(home.get("charge"))
         if daily is None:
             raise UnknownPageStateError("Piccoma work charge is missing or malformed")
@@ -1117,7 +1153,7 @@ class PiccomaAdapter(SiteAdapter):
         return values
 
     async def _fetch_ticket_state_snapshot(
-        self, page: Page, identity: PiccomaEpisodeIdentity
+        self, page: Page, identity: PiccomaEpisodeIdentity, *, include_listing: bool = True,
     ) -> dict[str, Any]:
         value = await page.evaluate(
             r"""async target => {
@@ -1213,12 +1249,14 @@ class PiccomaAdapter(SiteAdapter):
                 };
               };
               const [listing, home] = await Promise.all([
-                read(`/web/product/${target.product}/episodes`, true),
+                target.includeListing
+                  ? read(`/web/product/${target.product}/episodes`, true) : Promise.resolve({}),
                 read(`/web/product/${target.product}`, false)
               ]);
               return listing && home ? {listing, home} : null;
             }""",
-            {"product": identity.product_id, "episode": identity.episode_id},
+            {"product": identity.product_id, "episode": identity.episode_id,
+             "includeListing": include_listing},
         )
         if not isinstance(value, dict):
             raise UnknownPageStateError("Piccoma fresh post-entry state was unavailable")

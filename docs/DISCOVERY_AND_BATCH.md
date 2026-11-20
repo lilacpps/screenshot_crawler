@@ -261,9 +261,15 @@ otherwise-eligible quota sources. Eligible quota candidates use the logical
 `piccoma_ticket_auto` resource and site-owned live checks to choose one exact
 free ticket kind; the default Batch does not require a Piccoma-only flag or
 checkbox. Grant-only exposes `work_ticket` (waitfree / ¥0+) and
-`binge_ticket` (binge-free). `--grant-only all` runs these as explicit ordered
-passes with a Catalog replan between them; neither pass falls back to another
-kind. It confirms
+`binge_ticket` (binge-free). `--grant-only all` visits each Work once, checking
+both resource pools together, then executing explicit Work-ticket followed by
+Binge-ticket passes within that Work. After an earlier pass attempted entry,
+the next pass replans against current Catalog and refreshes only this Work's
+remaining original candidates. Its pre-entry selection is never reused after
+an attempt. Work order is first appearance in the policy-ordered planned pools;
+shared balances can therefore be allocated differently from the former
+all-Works Work-ticket pass followed by all-Works Binge-ticket pass. Neither
+pass falls back to another kind. It confirms
 the target grant and leaves the Item pending without capture, packaging, or
 completion. Normal Batch preserves the selected candidate ID sequence; the
 Planner does not regroup direct and quota candidates. Explicit grant-only
@@ -278,16 +284,33 @@ state stops closed. Selected rows retain their planned order within the Work.
 Confirmed entry still rechecks live eligibility, the native modal and debit;
 if a selected row becomes unavailable, remaining rows in that Work are skipped
 and execution continues with the next Work. An unknown result stops the run.
-Stock is refreshed for each Work and each explicit resource pass, never stored
-as a Catalog quota estimate. The account-wide Binge balance remains checked
+The initial full listing is loaded once and the product home fetched once for
+all requested resource pools. Without earlier entry attempts, these selections
+are shared within this Work only; all-zero stock skips both pools after that
+one check. Snapshots never become Catalog quota estimates. The account-wide Binge balance remains checked
 in the native confirmation modal; product-home stock alone does not prove it.
 Resource kind and
 availability are revalidated by the Piccoma adapter immediately before use.
 Other policies keep their existing ordering and resource contracts.
 
+The optional `grant_only_all_per_work()` policy hook selects this orchestration;
+its default is false. `BatchExecutor.resolve_access_resource_pools()` validates
+every pool's Catalog/selection scope before network access and calls the site's
+optional combined resolver under one AccessGuard and bounded operation. Each
+resource result must cover exactly its own candidates once, with disjoint
+selected/skipped IDs. Explicit resource exhaustion disables that resource for
+later Works; ordinary unavailability ends only the current Work/resource.
+UNKNOWN stops the run. The attempt limit is shared across resources and Works;
+read-only snapshots do not count. Snapshot/entry and Work transitions retain
+configured pacing, cleanup and cancellation checks. No all-Work live pre-scan
+is performed. Each selected entry retains its separate fresh guarded Page and
+the existing pre/post-consumption proof.
+
 Normal Batch also opts into `resolve_batch_quota_per_work()`: immediately
 before the first quota candidate for a Work/resource, it resolves that Work's
 remaining quota pool once using the same non-consuming listing/home snapshot.
+It also loads the listing once and fetches only home stock during preselection,
+removing the former second listing GET. Entry/debit checks still fetch both.
 For `piccoma_ticket_auto`, the pool is bounded by one charged waitfree use
 plus the supported secondary stock (¥0+ or per-product Binge) on the observed
 rows. An empty pool skips all those quota candidates without individual entry

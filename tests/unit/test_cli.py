@@ -2487,6 +2487,10 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
                 stop_reason="entry_confirmed",
             )
 
+        async def resolve_access_resource_pools(self, page, pools):
+            return {resource: await self.resolve_access_resource_candidates(page, pool, resource)
+                    for resource, pool in pools.items()}
+
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     def create_policy(_site: str) -> object:
         if site_name == "piccoma":
@@ -2533,8 +2537,9 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     cli.main()
 
     output = capsys.readouterr()
-    # Preflight all resource passes before CDP, then replan each pass at execution.
-    assert plans == [resource_a, resource_b, resource_a, resource_b]
+    # Preflight before CDP; Work-first only replans the next resource after entry.
+    assert plans == ([resource_a, resource_b, resource_b] if site_name == "piccoma"
+                     else [resource_a, resource_b, resource_a, resource_b])
     assert executions == [(resource_a, 1), (resource_a, 2), (resource_b, 3)]
     assert "resource=all" in output.out
     assert "item=4" not in output.out
@@ -2634,6 +2639,10 @@ def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
                 resource_consumed=True,
                 stop_reason="entry_confirmed",
             )
+
+        async def resolve_access_resource_pools(self, page, pools):
+            return {resource: await self.resolve_access_resource_candidates(page, pool, resource)
+                    for resource, pool in pools.items()}
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     def create_policy(_site: str) -> object:
@@ -2766,6 +2775,132 @@ def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
         "success": 6, "already_accessible": 6, "unavailable": 5,
         "unknown": 2, "pass_exhausted": 2, "limit": 2,
     }[outcome]
+
+
+@pytest.mark.parametrize("outcome", [
+    "success", "zero", "unavailable", "exhausted", "unknown", "limit", "snapshot_failure",
+])
+def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boundaries(
+    outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps = []
+
+    async def no_wait(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", no_wait)
+    resources = ("first", "second")
+    pages, closed, snapshots, refreshes, executed, skipped = [], [], [], [], [], []
+    granted = set()
+
+    def candidate(work, number, resource):
+        return SimpleNamespace(
+            site="fixture", item_id=work * 10 + number, source_id=work * 10 + number,
+            work_id=work, quota_resource=resource, access_strategy="quota", metadata={},
+            discovery_key=f"work-{work}", consumes_quota=True,
+        )
+
+    def pool(work, resource):
+        return [candidate(work, number, resource) for number in (1, 2)
+                if work * 10 + number not in granted]
+
+    plans = {resource: SimpleNamespace(
+        candidates=[c for work in (1, 2, 3) for c in pool(work, resource)], skipped=[],
+    ) for resource in resources}
+
+    def resolution(candidates, resource):
+        selected = [c.source_id for c in candidates
+                    if outcome != "zero" and (resource == "second" or c.source_id % 10 == 1)]
+        return SimpleNamespace(
+            selected_source_ids=tuple(selected),
+            skipped_source_reasons=tuple((c.source_id, "no_stock")
+                                         for c in candidates if c.source_id not in selected),
+        )
+
+    class Session:
+        async def new_page(self):
+            page = object()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+
+    class Executor:
+        def grant_only_skip_reason(self, _candidate):
+            return None
+
+        async def resolve_access_resource_pools(self, _page, pools):
+            work = next(iter(pools.values()))[0].work_id
+            snapshots.append((work, tuple(pools)))
+            if outcome == "snapshot_failure":
+                raise cli.BatchExecutionError("snapshot failed")
+            return {resource: resolution(candidates, resource) for resource, candidates in pools.items()}
+
+        async def resolve_access_resource_candidates(self, _page, candidates, resource):
+            refreshes.append((candidates[0].work_id, resource))
+            assert resource == "second"
+            # A grant from the earlier resource must be removed by the replan.
+            assert not granted.intersection(c.source_id for c in candidates)
+            return resolution(candidates, resource)
+
+        async def execute_grant_only_candidate(self, _page, candidate, **_kwargs):
+            executed.append((candidate.work_id, candidate.quota_resource, candidate.source_id))
+            if candidate.quota_resource == "first":
+                if outcome == "unknown":
+                    raise UnknownPageStateError("unknown consumption")
+                if outcome in {"unavailable", "exhausted"}:
+                    raise cli.AccessResourceUnavailableError(
+                        "no_stock", stop_resource_pass=outcome == "exhausted",
+                    )
+            granted.add(candidate.source_id)
+            return SimpleNamespace(resource=candidate.quota_resource, resource_consumed=True)
+
+    class Planner:
+        def plan(self, *, quota_resource, **_kwargs):
+            return SimpleNamespace(
+                candidates=[c for work in (1, 2, 3) for c in pool(work, quota_resource)],
+                skipped=[],
+            )
+
+    metrics = SimpleNamespace(
+        record_planned_skips=lambda _skips: None,
+        record_local_skip=lambda c, **_kwargs: skipped.append((c.source_id, c.quota_resource)),
+        start_candidate=lambda _candidate: None, finish_candidate=lambda **_kwargs: None,
+    )
+    args = SimpleNamespace(
+        site="fixture", output_root=tmp_path / "output", library_dir=tmp_path / "Books",
+        max_pages=2, max_same_content=2, keep_open=False,
+    )
+
+    async def run():
+        return await cli._execute_work_resource_grants(
+            args, Session(), Executor(), Planner(), plans, inter_candidate_delay_ms=3000,
+            metrics=metrics, warning_seen=set(), attempt_limit=1 if outcome == "limit" else None,
+        )
+
+    if outcome in {"unknown", "snapshot_failure"}:
+        with pytest.raises(cli.BatchExecutionError, match="unknown consumption|snapshot failed"):
+            asyncio.run(run())
+    else:
+        assert asyncio.run(run()) == len(executed)
+    assert pages == closed
+    assert len(skipped) == len(set(skipped))
+    if outcome == "zero":
+        assert snapshots == [(work, resources) for work in (1, 2, 3)]
+        assert executed == refreshes == []
+        assert len(pages) == 3 and sleeps == [3.0, 3.0]
+    elif outcome == "success":
+        assert executed == [(work, resource, work * 10 + number)
+                            for work in (1, 2, 3) for resource, number in zip(resources, (1, 2))]
+        assert refreshes == [(work, "second") for work in (1, 2, 3)]
+    elif outcome == "exhausted":
+        assert snapshots == [(1, resources), (2, ("second",)), (3, ("second",))]
+        assert [row for row in executed if row[1] == "first"] == [(1, "first", 11)]
+    elif outcome in {"limit", "unknown", "snapshot_failure"}:
+        assert snapshots == [(1, resources)]
+        assert executed == ([] if outcome == "snapshot_failure" else [(1, "first", 11)])
+        assert refreshes == []
 
 
 @pytest.mark.parametrize(
