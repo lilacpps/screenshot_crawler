@@ -747,9 +747,11 @@ async def test_comicdays_production_hook_handles_front_prefix_and_two_back_tail(
         assert [row["areaIndex"] for row in state["rows"]] == [expected_indices[id] for id in ids]
 
 
-@pytest.mark.parametrize("half_back_only", [False, True])
+@pytest.mark.parametrize("half_back_only,odd_body", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("lazy_unmount", [False, True])
 async def test_comicdays_front_prefix_normalizes_without_clicking_links_and_reaches_end(
-    browser_page, monkeypatch: pytest.MonkeyPatch, half_back_only: bool
+    browser_page, monkeypatch: pytest.MonkeyPatch, half_back_only: bool, odd_body: bool,
+    lazy_unmount: bool,
 ) -> None:
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
@@ -760,7 +762,7 @@ async def test_comicdays_front_prefix_normalizes_without_clicking_links_and_reac
     await browser_page.reload()
     await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
     if half_back_only:
-        await _use_dummy_two_front_leading_tail(browser_page)
+        await _use_dummy_two_front_leading_tail(browser_page, odd_body=odd_body)
     await _paint_sources(browser_page, "canvas.page-image")
     await browser_page.evaluate(
         """() => {
@@ -771,13 +773,16 @@ async def test_comicdays_front_prefix_normalizes_without_clicking_links_and_reac
         }"""
     )
 
+    adapter.page_change_timeout_ms = 500
     await adapter.initialize(browser_page)
     identity = await adapter.get_content_identity(browser_page)
     assert identity.page_number == 2
     assert identity.page_id == "3"
     assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+    if lazy_unmount:
+        await browser_page.evaluate("document.querySelector('#body-one canvas').remove()")
 
-    for expected_id in ("4,5", "6"):
+    for expected_id in (("4,5",) if odd_body else ("4,5", "6")):
         previous = identity
         await adapter.go_next(browser_page)
         await adapter.wait_for_change(browser_page, previous)
@@ -795,7 +800,7 @@ async def test_comicdays_front_prefix_normalizes_without_clicking_links_and_reac
     assert await adapter.detect_state(browser_page) is PageState.END
 
 
-async def _use_dummy_two_front_leading_tail(page):
+async def _use_dummy_two_front_leading_tail(page, *, odd_body=False):
     await page.evaluate("""() => {
       document.querySelector('#back-full').remove();
       document.querySelector('.js-viewer-slider-pagenum-last').textContent = '9';
@@ -812,8 +817,25 @@ async def _use_dummy_two_front_leading_tail(page):
         groups[next].forEach(id => document.getElementById(id).style.display = 'block');
       };
     }""")
+    if odd_body:
+        await page.evaluate("""() => {
+          document.querySelector('#body-four').remove();
+          document.querySelector('.js-viewer-slider-pagenum-last').textContent = '8';
+          document.querySelector('.js-slide-forward').onclick = () => {
+            window.prefixForwardClicks++;
+            const now = document.querySelector('.js-viewer-slider-pagenum-now');
+            const next = ({1:2, 2:4, 4:6, 6:8})[Number(now.textContent)];
+            now.textContent = String(next);
+            document.querySelector('.js-slide-backward').disabled = false;
+            const groups = {2:['body-one'], 4:['body-two','body-three'],
+                            6:['back-half','tail-ad'], 8:['viewer-colophon']};
+            document.querySelectorAll('.page-area').forEach(a => a.style.display = 'none');
+            groups[next].forEach(id => document.getElementById(id).style.display = 'block');
+          };
+        }""")
 
 
+@pytest.mark.parametrize("odd_body", [False, True])
 @pytest.mark.parametrize("mutation", [None,
     "document.querySelector('#dummy .page-dummy').appendChild(document.createElement('button'))",
     "document.querySelector('#front-two img').remove()",
@@ -822,7 +844,7 @@ async def _use_dummy_two_front_leading_tail(page):
     "document.querySelector('.js-viewer-slider-pagenum-last').textContent = '10'",
 ])
 async def test_comicdays_dummy_two_front_leading_tail_requires_exact_structure(
-    browser_page, monkeypatch, mutation,
+    browser_page, monkeypatch, mutation, odd_body,
 ):
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
@@ -831,7 +853,7 @@ async def test_comicdays_dummy_two_front_leading_tail_requires_exact_structure(
     await adapter.prepare_page(browser_page)
     await browser_page.goto("data:text/html,<html></html>")
     await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
-    await _use_dummy_two_front_leading_tail(browser_page)
+    await _use_dummy_two_front_leading_tail(browser_page, odd_body=odd_body)
     await _paint_sources(browser_page, "canvas.page-image")
     if mutation:
         await browser_page.evaluate(mutation)
@@ -839,7 +861,8 @@ async def test_comicdays_dummy_two_front_leading_tail_requires_exact_structure(
         # Preserve structural identity across lazy unmount and shared-profile rewind.
         await browser_page.evaluate("""() => {
           document.querySelector('#body-two canvas').remove();
-          document.querySelector('.js-viewer-slider-pagenum-now').textContent = '9';
+          document.querySelector('.js-viewer-slider-pagenum-now').textContent =
+            document.querySelector('.js-viewer-slider-pagenum-last').textContent;
           document.querySelectorAll('.page-area').forEach(a => a.style.display = 'none');
           document.querySelector('#viewer-colophon').style.display = 'block';
           document.querySelector('.js-slide-backward').disabled = false;

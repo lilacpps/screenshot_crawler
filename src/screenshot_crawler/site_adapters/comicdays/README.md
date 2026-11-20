@@ -141,7 +141,8 @@ initialized in 1.43 seconds and traversed areas 2..16 exactly once through END.
 An isolated production Runner/direct crawl also saved all 15 pages and packaged
 a CRC-validated 15-entry ZIP without resource consumption or Catalog writes.
 The `dummy-two-front-single` mode covers the observed combination of an empty
-dummy, two exact full front links, an even contiguous body run and the same
+dummy, two exact full front links, a contiguous body run of at least two areas
+(either parity) and the same
 half-back/ad/Colophon leading tail. It requires exact area/slider counts and
 validated prefix, body shells and half-back structure. One validated forward
 action moves from slider 1 to slider 2 and requires the first single body canvas
@@ -150,7 +151,14 @@ existing leading-tail rules. This fixes item 19316's normalization timeout;
 shared-CDP metadata-only verification initialized in 1.15 seconds, observed all
 22 body areas (3..24) in order, and reached END. No timeout increase, new
 configuration, front-link click or access-resource consumption is involved.
-Actual Batch capture/packaging for this episode has not been rerun.
+Actual Batch capture/packaging for item 19316 has not been rerun. On 2026-11-20,
+item/source 22377 (episode 2551460909617418619) exposed the same layout with
+19 body areas (3..21), half-back 22, ad 23 and Colophon/sliderLast 24. The former
+even-body restriction prevented prefix recognition and reproduced the 10-second
+normalization timeout. Removing only that restriction preserved all structural
+and readiness checks. Production direct initialization then completed in 1.12
+seconds, traversed all 19 body areas once and reached END with no resource
+consumption. See `note/08_comicdays.md` for isolated capture and test results.
   A spread is ready only when every logically expected
 body area is visible and has exactly one render-ready canvas; a missing or
 hidden second area stays `LOADING`.
