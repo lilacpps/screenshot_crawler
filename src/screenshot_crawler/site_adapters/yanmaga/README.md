@@ -279,9 +279,18 @@ countdown can promote an unknown/point-only row to `quota` and set the observed 
 expiry. This recovers previously absent or unknown Catalog sources without
 inferring a consumption time or cooldown. Active evidence without a finite
 bound, missing or duplicate cards, and identity mismatches do not promote a
-row; `owned` rows are never imported. For otherwise unknown rows, a previously trusted future grant keeps
-its existing mode and expiry when active history confirms it; Discovery does
-not extend that expiry. The lookup is metadata-only and does not open an
+row; `owned` rows are never imported. Rental History refresh expands the bounded
+native GET/Turbo More pages, including for positive-only direct-entry checks.
+Discovery uses complete active/inactive observations: confirmed absence/expiry
+explicitly clears the grant. A previously known quota Source remains quota on
+an otherwise unknown row after verified expiry; prior free/paid/unknown rows
+are not promoted by inactive history. This restores ticket candidacy, not proof
+that a new ticket is currently usable. Incomplete/ambiguous history cannot clear
+grants. Refresh never consumes a resource or changes Item/Run/Artifact state.
+For otherwise unknown free/paid rows, a previously trusted future grant keeps
+its existing mode and expiry when active history confirms it. Known quota
+Sources refresh their grant from each fresh finite history observation. The
+lookup is metadata-only and does not open an
 episode or invoke an access control.
 
 On 2026-11-16, an isolated validation and the authorized normal-Catalog full
@@ -494,7 +503,7 @@ canvas segments and encodes each segment as JPEG at quality 0.9 before creating
 the body-image Blob. The saved page is therefore not an unchanged original
 server image or the original segment bytes.
 
-For the verified 36-page reader layout, the observer runs only in the top-level
+For the verified 1125- and 1127-pixel logical-page profiles, the observer runs only in the top-level
 Yanmaga viewer document and copies RGBA pixels only immediately before the
 observed JPEG encoding call. It associates a copy with a visible segment only
 when the generated JPEG payload, the `Blob` bytes, and the `blob:` image source
@@ -511,13 +520,22 @@ hook conflicts, budget overflow, non-opaque pixels, or unverified styles
 reject the native group. The hook preserves the viewer's original call,
 arguments, return value, and exceptions and is removed on adapter cleanup.
 
-The logical `.pt-img` box and first-party metadata establish a 1125×1600 page
-at 1.125 CSS scale. The verified nested DOM is one `.pt-img` containing three
-absolute clipped segment hosts, each with one image. Their source images are
-1127×536, 1127×536, and 1127×538 at logical Y offsets 0, 532, and 1064. They
+The logical `.pt-img` box must match exactly one of two live-verified profiles
+at 1.125 CSS scale (logical box tolerance 0.03 CSS px):
+
+| Logical page | Source segments | Verified sample |
+| --- | --- | --- |
+| 1125×1600 | 1127×536, 1127×536, 1127×538 | Existing 36-page and 62-page samples |
+| 1127×1600 | 1129×536, 1129×536, 1129×538 | Parallel Paradise Chapter 345 |
+
+Unknown widths and mixed page/segment profiles remain unsupported; dimensions
+are not guessed from an image width alone. The encoder and final Adapter guard
+also validate the selected profile. The verified nested DOM is one `.pt-img`
+containing three absolute clipped segment hosts, each with one image, at
+logical Y offsets 0, 532, and 1064. They
 overlap in DOM paint order, and the outer viewer may add a 0 or 2 CSS px right
 gutter. The adapter composites the verified pre-JPEG pixels in that order and
-crops to the logical 1125×1600 page, excluding the viewer gutter. It permits
+crops to the selected logical page, excluding the viewer gutter. It permits
 only the observed normal inner/host/image styles and pure horizontal wrapper
 translation. The observed host `::after` is accepted only with an exact empty,
 fully transparent, non-painting computed style; other generated paint is
@@ -531,14 +549,21 @@ segment bindings, with zero PNG fallback. The isolated genuine Manifest, ZIP,
 and audit are under `output/yanmaga-png-investigation/fixed/`. This confirms the
 observed chapter/layout only; missing historical pixels still require fallback.
 
-If pre-JPEG binding is specifically `segment_source_not_exactly_bound`, the
-next level uses the actual selected DOM images at intrinsic resolution. Each
+If pre-JPEG capture reports `segment_source_not_exactly_bound` or
+`capture_buffer_overflow`, the next level uses the actual selected DOM images
+at intrinsic resolution. Each
 browser-owned Blob must have bounded JPEG MIME/signature/Content-Length/body
 (at most 1 MiB); current image references, immutable URLs, complete geometry
 and style proof, opaque sRGB pixels, and final atomic group proof are required.
-The group is composed at the same 1125×1600 native offsets/crop and saved as
+The group is composed at the same profile-specific native offsets/crop and saved as
 lossless WebP after exact RGBA round-trip verification. No remote resource is
 fetched and no pre-JPEG attribution is inferred. Other failures retain PNG.
+Buffer exhaustion disables further observer copies without raising any cap;
+only this specific overflow permits the independently proven decoded path.
+Hook conflicts and other overflow reasons remain rejected. The cumulative
+32 MiB encoded-history cap includes retained payload keys even after a page's
+raw pixels are released. A long chapter can therefore exhaust it with low
+current raw-pixel usage; the 256 MiB raw-pixel cap is independent.
 This path records `decoded_viewer_segment_lossless_webp`,
 `decoded_visible_image_composition`, and `pre_jpeg_pixels_used=false`; ordinary
 pre-JPEG successes set the last flag true. Both pixel paths keep
@@ -557,22 +582,32 @@ Catalog apply or archive replacement was performed during this fix.
 The page is encoded as single-frame lossless WebP (`VP8L`). The encoder checks
 opaque pixels and verifies that decoding the WebP reproduces the composed RGBA
 pixels exactly. Successful captures use `image/webp` / `.webp`, dimensions
-1125×1600, and metadata distinguishes reconstructed pre-JPEG viewer pixels
+1125×1600 or 1127×1600, and metadata distinguishes reconstructed pre-JPEG viewer pixels
 from original bytes (`source_native_bytes_used=false`,
 `source_native_pixels_used=true`). Failed proof or encoding uses the existing
-rendered locator PNG fallback, except the exact-binding failure that can first
+rendered locator PNG fallback, except the binding/buffer failures that can first
 use the decoded-image level described above. Groups stay at one capture level,
 and the explicit fallback reason is retained. PNG is 1266/1268×1800 for the verified
 2560×1800 viewport; it is not described as source-native bytes.
 
-The supported reader shape is the observed 36-page episode: a native `1/36`
-counter and direct `#content-pN` body wrappers, with two consecutive pages
+The supported reader shape, verified in 36- and 62-page episodes, has a native
+page counter and direct `#content-pN` body wrappers, with two consecutive pages
 visible as a spread. The adapter uses a bounded normal-keyboard rewind to page
 1 and captures unseen native page IDs in order. Every segment must span the
 wrapper from left to right within a 3 CSS-pixel rounding tolerance; the final
 segment must end between 4 pixels above and 3 pixels below the wrapper bottom.
 This matches measured rendered-layout overlap and rejects narrow or oversized
 segments; it does not infer arbitrary crops.
+
+At native counter 1, initialization may encounter the observed previous-episode
+prompt. A single visible `#wrap-popup` must contain the direct header with exact
+`前の話を読みますか？` and one enabled visible direct footer button
+`button#popup-cancel-btn` with exact `キャンセル`. The Adapter clicks Cancel
+once, waits at most two seconds for dismissal, and revalidates the unchanged
+route, first-page counter and total. It then requires the existing stable
+hidden-menu/body-ownership proof. It never follows the popup's Read link.
+Unknown/duplicate/changed prompts fail closed. Metadata records
+`previous_episode_prompt_cancelled`.
 
 The counter can advance before the slide layout. While waiting for the same
 turn, a still-stable old captured frame is treated as pending within the
@@ -734,10 +769,13 @@ Root later verified the exact native ticket notice, Viewer, and active history f
 Wait countdown parsing accepts the observed exact `残りH時間` or `残りD日`
 field only when the explicit wait/trusted-history bound permits it (up to 72
 hours); ordinary first-free history remains capped at 23 hours and does not
-accept day fields. A day countdown of D>=2 yields the conservative
-`site_day_countdown_lower_bound` at observation start plus (D-1) days minus 5
-seconds; D=1 proves active access but gives no finite expiry. Hour and day
-evidence remain distinct, and no fixed grant duration is synthesized.
+accept day fields. A day countdown D=1..3 yields `site_day_countdown_estimate`
+at observation start plus D days minus one hour and five seconds. This is an
+eligibility estimate in the existing `access_granted_until`, not an exact
+deadline or proven lower bound. Even with a future stored estimate, the exact
+active rental must be reconfirmed before Source entry. Unknown/expired history
+does not authorize entry or ticket fallback. Hour evidence remains distinct;
+H=1 still has no finite lower bound. No fixed grant duration is synthesized.
 Entry-only writes no page Manifest or Progress state, captures no image,
 creates no ZIP, and leaves the Item pending; failure diagnostics are
 metadata-only. Normal capture, positive END, and packaging checks remain strict.
@@ -783,8 +821,9 @@ accepted only when it matches the immediate next wait-marked listing row and no
 next/read or signup CTA is present. No further ticket action is authorized.
 
 Wait/trusted history accepts exact `残りH時間` or `残りD日` within the explicit
-72-hour bound. D>=2 uses observation start plus (D-1) days minus 5 seconds as
-`site_day_countdown_lower_bound`; D=1 and H=1 are active without finite expiry.
+72-hour bound. Day fields use observation start plus D days minus one hour and
+five seconds as `site_day_countdown_estimate`, including D=1. Source entry
+still requires fresh active history. H=1 remains active without finite expiry.
 First-free remains limited to 23-hour hour notation; no fixed grant period is
 invented.
 

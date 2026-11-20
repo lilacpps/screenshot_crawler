@@ -24,7 +24,8 @@ from screenshot_crawler.registration.models import UrlResolution, resolved_url
 from screenshot_crawler.site_adapters.yanmaga.rental_history import (
     MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
     RentalCountdown,
-    fetch_rental_history_countdowns,
+    RentalHistoryObservation,
+    fetch_rental_history_observations,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
@@ -632,6 +633,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         self._grant_candidates: dict[str, DiscoverySourceSnapshot] = {}
         self._source_snapshots: dict[str, DiscoverySourceSnapshot] = {}
         self._fresh_active_grants: set[str] = set()
+        self._fresh_inactive_grants: set[str] = set()
         self._fresh_history_grants: dict[str, datetime] = {}
         self._grant_work_slug: str | None = None
 
@@ -643,6 +645,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         self._grant_candidates = {}
         self._source_snapshots = {}
         self._fresh_active_grants = set()
+        self._fresh_inactive_grants = set()
         self._fresh_history_grants = {}
         work = parse_yanmaga_work_url(target.url)
         self._grant_work_slug = work.slug if work is not None else None
@@ -680,7 +683,14 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
             or previous_parts[0] != self._grant_work_slug
             or previous.discovery_key != target.key
             or previous.access_mode not in {"free", "quota", "paid"}
-            or not _has_future_catalog_grant(previous, datetime.now(UTC))
+        ):
+            return observed_access_mode
+        if previous.access_mode == "quota" and previous.external_id in self._fresh_inactive_grants:
+            # Keep the underlying ticket category after verified rental expiry.
+            # The record explicitly clears the now-inactive direct grant.
+            return "quota"
+        if (
+            not _has_future_catalog_grant(previous, datetime.now(UTC))
             or previous.external_id not in self._grant_candidates
             or previous.external_id not in self._fresh_active_grants
         ):
@@ -696,6 +706,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         del mode  # DiscoveryService owns its shared latest-first known-streak rule.
         self.last_snapshot = None
         self._fresh_active_grants = set()
+        self._fresh_inactive_grants = set()
         self._fresh_history_grants = {}
         work = parse_yanmaga_work_url(target.url)
         if work is None:
@@ -801,13 +812,13 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 final_snapshot, work, self._grant_candidates
             )
             if history_targets and final_snapshot.authenticated and final_snapshot.mypage_href:
-                fresh = await fetch_rental_history_countdowns(
+                fresh = await fetch_rental_history_observations(
                     page,
                     observed_mypage_href=final_snapshot.mypage_href,
                     targets=history_targets,
                     max_countdown_hours=MAX_WAIT_RENTAL_COUNTDOWN_HOURS,
                 )
-                self._apply_history_countdowns(final_snapshot, work, fresh)
+                self._apply_history_observations(final_snapshot, work, fresh)
                 post_history_snapshot = await self._snapshot(page, work, telemetry)
                 if post_history_snapshot != final_snapshot:
                     raise DiscoveryIncompleteError(
@@ -818,7 +829,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError("Yanmaga promotional popup did not close") from popup_error
             self.last_snapshot = final_snapshot
             records = self._records_from_snapshot(
-                final_snapshot, target, work, self._fresh_history_grants
+                final_snapshot, target, work, self._fresh_history_grants,
+                self._fresh_inactive_grants,
             )
             # DiscoveryService mutates Catalog as each item is yielded. All
             # paging, row identity, access evidence and stability checks have
@@ -1661,6 +1673,33 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 episode_ids.append(parsed[1])
         return tuple(YanmagaEpisodeParts(work.slug, episode_id) for episode_id in episode_ids)
 
+    def _apply_history_observations(
+        self,
+        snapshot: YanmagaListingSnapshot,
+        work: YanmagaWorkParts,
+        observations: tuple[RentalHistoryObservation, ...] | None,
+    ) -> None:
+        if not snapshot.authenticated or observations is None:
+            return
+        expected = {
+            f"{target.slug}:{target.episode_id}"
+            for target in self._history_targets(snapshot, work, self._grant_candidates)
+        }
+        if (
+            any(not isinstance(item, RentalHistoryObservation) for item in observations)
+            or len(observations) != len(expected)
+            or {item.external_id for item in observations} != expected
+        ):
+            return
+        self._fresh_inactive_grants.update(
+            item.external_id for item in observations if item.countdown is None
+        )
+        self._apply_history_countdowns(
+            snapshot, work,
+            tuple((item.external_id, item.countdown) for item in observations
+                  if item.countdown is not None),
+        )
+
     def _apply_history_countdowns(
         self,
         snapshot: YanmagaListingSnapshot,
@@ -1681,7 +1720,8 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 continue
             if external_id in self._grant_candidates:
                 self._fresh_active_grants.add(external_id)
-                continue
+                if self._source_snapshots[external_id].access_mode != "quota":
+                    continue
             previous = self._source_snapshots.get(external_id)
             if previous is not None and previous.access_mode == "owned":
                 continue
@@ -1692,7 +1732,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                 and expiry.utcoffset() is not None
                 and expiry.astimezone(UTC) > now
                 and countdown.expiry_evidence
-                in {"site_countdown_lower_bound", "site_day_countdown_lower_bound"}
+                in {"site_countdown_lower_bound", "site_day_countdown_estimate"}
             ):
                 episode_id = external_id.rsplit(":", 1)[-1]
                 self._fresh_history_grants[episode_id] = expiry
@@ -1703,6 +1743,7 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         work: YanmagaWorkParts,
         history_grants: Mapping[str, datetime] | None = None,
+        inactive_grants: set[str] | frozenset[str] = frozenset(),
     ) -> list[DiscoveredRecord]:
         observed_at = datetime.now(UTC).isoformat()
         total = len(snapshot.rows)
@@ -1736,7 +1777,9 @@ class YanmagaDiscoveryAdapter(DiscoveryAdapter):
                         access_mode=access_mode,
                         free_until=None,
                         access_granted_until=history_grant,
-                        access_granted_until_observed=history_grant is not None,
+                        access_granted_until_observed=(
+                            history_grant is not None or external_id in inactive_grants
+                        ),
                         available=True,
                         access_checked_at=observed_at,
                         last_seen_at=observed_at,

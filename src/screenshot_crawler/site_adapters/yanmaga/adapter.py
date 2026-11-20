@@ -48,6 +48,7 @@ from screenshot_crawler.site_adapters.yanmaga.discovery import (
     parse_yanmaga_work_url,
 )
 from screenshot_crawler.site_adapters.yanmaga.native_capture import (
+    SUPPORTED_PAGE_WIDTHS,
     NativeCaptureOutcome,
     activate_yanmaga_native_observer,
     capture_yanmaga_decoded_segment_webp,
@@ -641,6 +642,7 @@ class YanmagaAdapter(SiteAdapter):
         self._first_free_entry_attempted = False
         self._first_free_release_state = "not_attempted"
         self._history_grant_recovery_state = "not_attempted"
+        self._previous_episode_prompt_cancelled = False
         self._first_free_grant: ConfirmedAccessGrant | None = None
         self._first_free_completion_notice_seen = False
         self._quota_resource: str | None = None
@@ -1253,7 +1255,7 @@ class YanmagaAdapter(SiteAdapter):
         access_granted_until = countdown.access_granted_until
         if (
             countdown.expiry_evidence
-            not in {"site_countdown_lower_bound", "site_day_countdown_lower_bound"}
+            not in {"site_countdown_lower_bound", "site_day_countdown_estimate"}
             or access_granted_until is None
             or access_granted_until.tzinfo is None
             or access_granted_until.utcoffset() is None
@@ -2320,6 +2322,14 @@ class YanmagaAdapter(SiteAdapter):
             self._validate_viewer_route(page)
             snapshot = await self._read_snapshot(page)
             if snapshot is not None:
+                if (
+                    allow_known_menu_overlay and snapshot.current == 1
+                    and not self._captured_indices and not snapshot.menu_hidden
+                    and await self._cancel_previous_episode_prompt(page, snapshot)
+                ):
+                    last_signature = None
+                    stable_reads = 0
+                    continue
                 try:
                     self._validate_snapshot(
                         snapshot,
@@ -2345,6 +2355,44 @@ class YanmagaAdapter(SiteAdapter):
         raise PageChangeTimeoutError(
             f"Yanmaga rendered body pages did not stabilize{reason}"
         )
+
+    async def _cancel_previous_episode_prompt(
+        self, page: Page, snapshot: _ReaderSnapshot
+    ) -> bool:
+        """Dismiss only the observed first-page previous-episode confirmation."""
+        self._validate_viewer_route(page)
+        if snapshot.current != 1 or self._captured_indices:
+            return False
+        popup = page.locator("#wrap-popup")
+        if await popup.count() == 0:
+            return False
+        if await popup.count() != 1:
+            raise UnknownPageStateError("Yanmaga previous-episode popup is ambiguous")
+        if not await popup.is_visible():
+            return False
+        header = popup.locator(":scope > #popup-header")
+        cancel = popup.locator(":scope > #popup-footer > button#popup-cancel-btn")
+        if (
+            self._previous_episode_prompt_cancelled
+            or await header.count() != 1 or await cancel.count() != 1
+            or await page.locator("#popup-cancel-btn").count() != 1
+            or (await header.inner_text()).strip() != "前の話を読みますか？"
+            or (await cancel.inner_text()).strip() != "キャンセル"
+            or not await cancel.is_visible() or not await cancel.is_enabled()
+        ):
+            raise UnknownPageStateError("Yanmaga first-page popup is not the known cancel prompt")
+        before_url = page.url
+        await cancel.click(timeout=2_000)
+        await popup.wait_for(state="hidden", timeout=2_000)
+        self._validate_viewer_route(page)
+        after = await self._read_snapshot(page)
+        if (
+            page.url != before_url or after is None
+            or after.current != 1 or after.total != snapshot.total
+        ):
+            raise UnknownPageStateError("Yanmaga previous-episode cancel changed body identity")
+        self._previous_episode_prompt_cancelled = True
+        return True
 
     async def _wait_for_positive_terminal(
         self, page: Page, *, timeout_ms: int
@@ -2867,7 +2915,7 @@ class YanmagaAdapter(SiteAdapter):
 
         decoded_group = False
         decoded_failure_reason: str | None = None
-        if fallback_reason == "segment_source_not_exactly_bound":
+        if fallback_reason in {"segment_source_not_exactly_bound", "capture_buffer_overflow"}:
             decoded_outcomes = [
                 await capture_yanmaga_decoded_segment_webp(page, f"content-p{index}")
                 for index in target_indices
@@ -2911,7 +2959,8 @@ class YanmagaAdapter(SiteAdapter):
                 raise UnknownPageStateError("Yanmaga native capture group is incomplete")
             natural_width = max(segment.natural_width for segment in proof.segments)
             valid_dimensions = (
-                result.width == 1125 and result.height == 1600
+                result.width in SUPPORTED_PAGE_WIDTHS and result.height == 1600
+                and all(segment.natural_width == result.width + 2 for segment in proof.segments)
                 if native_group
                 else result.width is not None
                 and result.height == 1800
@@ -3157,6 +3206,7 @@ class YanmagaAdapter(SiteAdapter):
             ),
             "first_free_release_state": self._first_free_release_state,
             "history_grant_recovery_state": self._history_grant_recovery_state,
+            "previous_episode_prompt_cancelled": self._previous_episode_prompt_cancelled,
             "native_counter": snapshot.counter_text if snapshot is not None else None,
             "terminal_only": snapshot.terminal_only if snapshot is not None else False,
             "visible_body_indices": [item.index for item in visible],

@@ -5,9 +5,10 @@ bridge from a visible image back to the canvas pixels copied immediately
 before the viewer's own JPEG encoding. They are never saved as original page
 images.
 
-When pre-JPEG binding is ambiguous, a lower capture level may use the actual
-selected DOM image objects at intrinsic resolution. It validates static JPEG
-Blobs and the same geometry/style proofs, and records distinct provenance.
+When pre-JPEG binding is ambiguous or its bounded buffer is exhausted, a lower
+capture level may use the actual selected DOM image objects at intrinsic
+resolution. It validates static JPEG Blobs and the same geometry/style proofs,
+and records distinct provenance.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from playwright.async_api import Page
 from screenshot_crawler.core.capture import CaptureResult
 
 PAGE_WIDTH = 1125
+SUPPORTED_PAGE_WIDTHS = (PAGE_WIDTH, 1127)
 PAGE_HEIGHT = 1600
 PAGE_PIXELS = PAGE_WIDTH * PAGE_HEIGHT
 MAX_SEGMENT_BYTES = 1_048_576
@@ -165,7 +167,7 @@ _OBSERVER_SCRIPT = r"""(() => {
 
   function candidatePixels(canvas) {
     const width = canvas.width, height = canvas.height;
-    if (width !== 1127 || (height !== 536 && height !== 538)) return null;
+    if (![1127,1129].includes(width) || (height !== 536 && height !== 538)) return null;
     const ctx = canvas.getContext('2d');
     if (!ctx || typeof ctx.getImageData !== 'function') return null;
     const attributes = typeof ctx.getContextAttributes === 'function'
@@ -346,7 +348,7 @@ _OBSERVER_SCRIPT = r"""(() => {
       let copied = null;
       const expectedCall = args[0] === 'image/jpeg' && args[1] === 0.9 &&
         state.active && !state.overflow;
-      if (expectedCall && this.width === 1127 &&
+      if (expectedCall && [1127,1129].includes(this.width) &&
           (this.height === 536 || this.height === 538)) {
         const nextPixelBytes = this.width * this.height * 4;
         if (state.candidates.length >= candidateLimit ||
@@ -440,7 +442,11 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
   const fail = reason => ({ok:false,reason});
   if (!state || state.version !== 1 || state.disposed) return fail('observer_unavailable');
   if (state.hookConflict) return fail('hook_conflict');
-  if (state.overflow) return fail(state.overflowReason || 'capture_buffer_overflow');
+  // Decoded DOM pixels do not depend on the optional pre-JPEG history buffer.
+  // Keep that buffer capped/disabled; all source, geometry and group proofs below still apply.
+  if (state.overflow && !(decodedSegments && state.overflowReason === 'capture_buffer_overflow')) {
+    return fail(state.overflowReason || 'capture_buffer_overflow');
+  }
   const rootNodes = [...document.querySelectorAll('.pages#content')];
   const wrapperNodes = [...document.querySelectorAll('#'+CSS.escape(pageId))];
   if (rootNodes.length !== 1 || wrapperNodes.length !== 1 ||
@@ -528,7 +534,13 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
   if (Math.abs(box.x-outerBox.x) > 0.03 || Math.abs(box.y-outerBox.y) > 0.03 ||
       Math.abs(outerBox.width-box.width-rightPadding) > 0.03 ||
       Math.abs(outerBox.height-box.height) > 0.03) return fail('unsupported_logical_page_geometry');
-  const scaleX = box.width / 1125, scaleY = box.height / 1600;
+  // Two live-verified profiles only. Match logical geometry before accepting
+  // any segment; source width alone is not logical-page dimension authority.
+  const pageWidths = [1125,1127].filter(width =>
+    Math.abs(box.width-width*1.125) <= 0.03 && Math.abs(box.height-1600*1.125) <= 0.03);
+  if (pageWidths.length !== 1) return fail('unsupported_native_geometry');
+  const pageWidth = pageWidths[0];
+  const scaleX = box.width / pageWidth, scaleY = box.height / 1600;
   if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) ||
       Math.abs(scaleX-1.125) > 0.001 || Math.abs(scaleY-1.125) > 0.001 ||
       Math.abs(scaleX-scaleY) > 0.0001) return fail('unsupported_native_geometry');
@@ -539,9 +551,9 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
     return fail('segment_count_mismatch');
   }
   const expected = [
-    {width:1127,height:536,top:0},
-    {width:1127,height:536,top:532},
-    {width:1127,height:538,top:1064}
+    {width:pageWidth+2,height:536,top:0},
+    {width:pageWidth+2,height:536,top:532},
+    {width:pageWidth+2,height:538,top:1064}
   ];
   for (let i=0;i<images.length;i++) {
     const host=segmentHosts[i], hostStyle=getComputedStyle(host), hostBox=host.getBoundingClientRect();
@@ -698,7 +710,7 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
     }
   }
   const canvas = document.createElement('canvas');
-  canvas.width=1125; canvas.height=1600;
+  canvas.width=pageWidth; canvas.height=1600;
   const context = canvas.getContext('2d', {alpha:false,colorSpace:'srgb'});
   const contextAttributes=context?.getContextAttributes?.();
   if (!context || !contextAttributes || contextAttributes.alpha !== false ||
@@ -713,7 +725,7 @@ _CAPTURE_PAGE_SCRIPT = r"""async args => {
     imageData.data.set(record.pixels);
     context.putImageData(imageData,0,expected[index].top);
   }
-  const outputPixels=context.getImageData(0,0,1125,1600);
+  const outputPixels=context.getImageData(0,0,pageWidth,1600);
   for (let offset=3;offset<outputPixels.data.length;offset+=4) {
     if (outputPixels.data[offset] !== 255) return fail('composite_contains_transparency');
   }
@@ -886,31 +898,33 @@ def _encode_lossless_webp(png: bytes) -> CaptureResult:
     with Image.open(io.BytesIO(png)) as decoded_png:
         if (
             decoded_png.format != "PNG"
-            or decoded_png.size != (PAGE_WIDTH, PAGE_HEIGHT)
+            or decoded_png.width not in SUPPORTED_PAGE_WIDTHS
+            or decoded_png.height != PAGE_HEIGHT
             or getattr(decoded_png, "n_frames", 1) != 1
         ):
             raise ValueError("native PNG format or dimensions are invalid")
         decoded_png.load()
         original = decoded_png.convert("RGBA")
+    page_width = original.width
     rgba = original.tobytes()
-    if len(rgba) != PAGE_PIXELS * 4 or original.getchannel("A").getextrema() != (255, 255):
+    if len(rgba) != page_width * PAGE_HEIGHT * 4 or original.getchannel("A").getextrema() != (255, 255):
         raise ValueError("native page pixels are not fully opaque RGBA")
     output = io.BytesIO()
     original.save(output, format="WEBP", lossless=True, method=4)
     encoded = output.getvalue()
-    if not _single_vp8l(encoded, width=PAGE_WIDTH, height=PAGE_HEIGHT):
+    if not _single_vp8l(encoded, width=page_width, height=PAGE_HEIGHT):
         raise ValueError("Pillow did not emit one lossless VP8L frame")
     with Image.open(io.BytesIO(encoded)) as decoded_webp:
         if (
             decoded_webp.format != "WEBP"
-            or decoded_webp.size != (PAGE_WIDTH, PAGE_HEIGHT)
+            or decoded_webp.size != (page_width, PAGE_HEIGHT)
             or getattr(decoded_webp, "n_frames", 1) != 1
         ):
             raise ValueError("encoded WebP format or dimensions changed")
         decoded_webp.load()
         if decoded_webp.convert("RGBA").tobytes() != rgba:
             raise ValueError("lossless WebP did not preserve exact page pixels")
-    return CaptureResult(encoded, PAGE_WIDTH, PAGE_HEIGHT, "image/webp", ".webp")
+    return CaptureResult(encoded, page_width, PAGE_HEIGHT, "image/webp", ".webp")
 
 
 def _single_vp8l(data: bytes, *, width: int, height: int) -> bool:

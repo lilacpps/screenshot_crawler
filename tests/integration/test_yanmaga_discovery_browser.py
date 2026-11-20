@@ -14,7 +14,11 @@ from screenshot_crawler.discovery.models import DiscoverySourceSnapshot
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.yanmaga import YanmagaDiscoveryAdapter
 from screenshot_crawler.site_adapters.yanmaga import discovery as yanmaga_discovery
-from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
+from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    RentalCountdown,
+    RentalHistoryObservation,
+)
+from screenshot_crawler.site_policies import YanmagaSitePolicy
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -782,7 +786,9 @@ async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
         mypage=True,
     )
     now = datetime.now(UTC)
-    expiry = now + timedelta(days=2)
+    expiry = now + timedelta(hours=71, seconds=-5)
+    history_days = 3
+    history_hours = 0
     history_calls = 0
 
     async def history_countdowns(
@@ -797,23 +803,24 @@ async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
         assert observed_mypage_href == f"{BASE}/mypage"
         assert targets == (yanmaga_discovery.YanmagaEpisodeParts(SLUG, episode_id),)
         assert max_countdown_hours == 72
-        if history_calls == 1:
-            return ()
+        if history_calls in {1, 3}:
+            return (RentalHistoryObservation(external_id, None),)
         return (
-            (
+            RentalHistoryObservation(
                 external_id,
                 RentalCountdown(
                     observed_at=now,
-                    remaining_hours=0,
-                    remaining_days=3,
+                    remaining_hours=history_hours,
+                    remaining_days=history_days,
                     access_granted_until=expiry,
-                    expiry_evidence="site_day_countdown_lower_bound",
+                    expiry_evidence=("site_day_countdown_estimate" if history_days is not None
+                                     else "site_countdown_lower_bound"),
                 ),
             ),
         )
 
     monkeypatch.setattr(
-        yanmaga_discovery, "fetch_rental_history_countdowns", history_countdowns
+        yanmaga_discovery, "fetch_rental_history_observations", history_countdowns
     )
     catalog, first, service, _state = await _run_discovery(browser_page, tmp_path, html)
     source = catalog.find_source("yanmaga", external_id)
@@ -844,6 +851,11 @@ async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
     )
     completed_at = completed_item.completed_at
 
+    # A formerly expired grant must not prevent importing the current rental.
+    catalog.record_confirmed_access_grant(
+        source.id, site="yanmaga", external_id=external_id,
+        observed_at=now - timedelta(days=3), access_granted_until=now - timedelta(days=2),
+    )
     refreshed = await service.discover(browser_page, target, "full")
     current = catalog.find_source("yanmaga", external_id)
     current_item = catalog.get_item(item.id)
@@ -861,7 +873,39 @@ async def test_yanmaga_imports_exact_active_rental_for_existing_unknown_source(
     assert catalog.get_quota_resource_state(
         item.work_id, site="yanmaga", resource="work_ticket"
     ) is None
-    assert history_calls == 2
+    policy = YanmagaSitePolicy()
+    assert policy.evaluate(current, now=now, quota_available=None).access_strategy == "direct"
+
+    # Verified inactive history removes even a still-future old bound and
+    # restores ticket candidacy. It does not consume or invent a ticket.
+    expired = await service.discover(browser_page, target, "full")
+    inactive = catalog.find_source("yanmaga", external_id)
+    assert expired.complete is True and inactive.access_mode == "quota"
+    assert inactive.access_granted_until is None
+    assert policy.evaluate(inactive, now=now, quota_available=None).access_strategy == "quota"
+
+    history_days, history_hours = None, 3
+    expiry = now + timedelta(hours=2, seconds=-5)
+    renewed = await service.discover(browser_page, target, "full")
+    active_again = catalog.find_source("yanmaga", external_id)
+    assert renewed.complete is True and active_again.access_mode == "quota"
+    assert datetime.fromisoformat(active_again.access_granted_until) == expiry
+    assert policy.evaluate(active_again, now=now, quota_available=None).access_strategy == "direct"
+    assert active_again.quota_started_at is None
+    assert catalog.get_item(item.id).completed_at == completed_at
+    assert [saved.id for saved in catalog.list_artifacts(item_id=item.id)] == [artifact.id]
+    assert catalog.get_quota_resource_state(
+        item.work_id, site="yanmaga", resource="work_ticket"
+    ) is None
+    # A current quota rental refreshes an existing future bound as well.
+    history_days, history_hours = 1, 0
+    expiry = now + timedelta(hours=23, seconds=-5)
+    refreshed_again = await service.discover(browser_page, target, "full")
+    latest = catalog.find_source("yanmaga", external_id)
+    assert refreshed_again.complete is True and latest.access_mode == "quota"
+    assert datetime.fromisoformat(latest.access_granted_until) == expiry
+    assert latest.quota_started_at is None
+    assert history_calls == 5
 
 
 async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
@@ -914,7 +958,7 @@ async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
         )
         now = datetime.now(UTC)
         return (
-            (
+            RentalHistoryObservation(
                 external_id,
                 RentalCountdown(
                     observed_at=now,
@@ -926,7 +970,7 @@ async def test_yanmaga_revalidates_listing_after_async_grant_history_probe(
         )
 
     monkeypatch.setattr(
-        yanmaga_discovery, "fetch_rental_history_countdowns", mutate_during_history_fetch
+        yanmaga_discovery, "fetch_rental_history_observations", mutate_during_history_fetch
     )
     emitted = []
     with pytest.raises(DiscoveryIncompleteError):

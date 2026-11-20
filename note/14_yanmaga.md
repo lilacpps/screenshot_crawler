@@ -1,5 +1,204 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## 日表示のgrant期限と他サイトとの整合（2026-11-21）
+
+妹は知っている第10話（Item 50769 / Source 51076）は、実サイトの正確な同話Rental Historyが
+active・残り1日であった一方、旧計算の`(D-1)日`ではD=1が期限なしとなりunknownに留まった。
+この1日控除は日表示の丸めを未確認のまま置いた保守的仮定で、ヤンマガでその丸め方を
+実測した根拠はなかった。現行cardには正確な終了日時のattribute/time/scriptは確認できない。
+マガポケの表示残り時間→既存grant field、はなゆめの表示期間−1時間の実装を参照し、
+ユーザー指定に従って日表示を`観測開始 + D日 - 1時間 - 5秒`へ変更した。
+
+`access_granted_until`は日表示の場合には取得可否の目安であり、正確な終了日時や証明済みの
+lower boundではない。evidenceも`site_day_countdown_estimate`として時間表示と区別する。
+D=1..3はそれぞれ約23/47/71時間となり、既知quotaの期限がまだ未来でも、fresh有限観測で
+更新する。以前のfree/paidのtrusted-grant保存契約は維持する。期限内の候補は既存Policyでdirect。
+保存期限が未来でもSource entry前にexact active Rental Historyを再確認し、不在/失効なら入場しない。
+Discoveryがcomplete inactiveを確認したら期限をclearし、既知quotaはquotaへ戻す。
+チケットへの暗黙fallback、消費の推測、既存quota履歴の書換えは行わない。
+H時間の既存lower-bound計算・H=1の契約、first-freeのhour-only証明、共有の
+`ConfirmedAccessGrant`証明型・Core/Policy、他サイトの実装は変更しない。
+
+ignored証拠は`output/yi10/`。初回の`current-evidence.json`はactive days=1で有限期限なし、
+`history-attributes.json`は正確な期限metadataがないことを記録する。宣伝popupがMoreを遮った
+最初の手動probeは失敗したが、productionと同じinnermost close selectorで×を1回押し、
+`listing-evidence.json`でpopup非表示・同話のbadgeなし一覧を確認した。
+調査中に実サイト表示が残り1日から残り23時間へ変わったことを`post-estimate-history.json`で確認。
+したがって現在の実サイト更新は23時間表示の経路であり、変更後のD=1計算は人工browser testで検証する。
+standalone backupと隔離CLI Full（98件complete/exhausted）でunknown→quota・future grant・
+追加消費なしのdirect判定を確認した。別途fresh backupを作成した通常CLI Fullも98件complete/
+exhaustedで成功し、free 6 / quota 90 / paid 2 / unknown 0となった。
+Source 51076の保存期限は11月22日03:41 JST（現在の残り23時間表示からの下限）へ更新された。
+既存有効grantでの実サイトdirect確認は本文1枚を保存し、max_pages=1で意図的に停止。
+全話完走/ZIP成功は主張しない。前後話・first-party non-GETの試行は0、チケット消費なし。
+`reader-check-report.json`、`day-estimate-audit.json`が結果で、WorkのItem status、Run/Artifact、
+quota_started_atは通常反映前と一致する。正確な終了日時が公開されないという制約は残り、
+日表示の期限だけで入場許可は出さず、直前のlive active proofを維持する。
+
+テストはD=1/2/3の1時間控除、既存quotaのfuture期限更新、失効時clear、未知/重複履歴の拒否を
+含むDiscovery/Policy UnitとDiscovery/Rental History browser Integrationが258件成功、skip 0。
+Adapterのhistory/existing-grant/day-grant/grant-only選択は33件成功（231 deselected）、skip 0。
+日数1/2の新規消費確定後のdeadline保存と、期限が未来でも実サイトinactiveならSourceへ入らない
+hour/day両方の境界を確認した。targeted 12件も成功。既存asyncio deprecation warningのみ。
+`ruff check src tests`、変更ファイルの`git diff --check`は成功。
+full pytest、他サイトIntegration、既存Research suiteはYanmaga局所変更のため未実行。
+マガポケ・はなゆめは参照のみで、実装を変更していない。
+
+## 再レンタルの再確認・閲覧期限更新・quota復帰（2026-11-20）
+
+パラレルパラダイス第10話（Item 50004 / Source 50311）はCatalog上の旧期限が
+11月19日05:16 JSTで切れ、一覧もbadgeなしのためunknownだった。しかし、現行の実サイトでは
+後続のレンタル履歴ページにexact targetの「残り6時間」があり、閲覧可能だった。
+修正前のpositive-only `fetch_rental_history_countdowns()`は先頭ページだけを見て`absent`とし、
+全ページを扱う既存`fetch_rental_history_observations()`はactive 6時間を正しく返した。
+古い期限だけを原因とした説明では不十分で、現在の権利の取りこぼしが実際の原因だった。
+
+現在はpositive-onlyのdirect-entry確認もnative Moreがあれば既存の有界GET/Turbo pagingを行う。
+native collection、index/offset、全URLの一意性、stream形、fresh response headers、
+50ページ/1000行/4MiB等の上限は維持する。画像・話・Viewerへ遷移して権利を得る処理ではない。
+Moreなしの従来positive-only card proofは維持する。
+Discoveryはcomplete active/inactive observationsを使用し、期限切れ/未保存の古いgrantがあっても
+exact active rentalの有限期限を取り込み、quota Sourceと期限付きdirect判定へ更新する。
+完全な履歴で対象の不在/期限切れを確認した場合は、`access_granted_until_observed=true`とnullを
+明示して旧grantを消す。既知quota Sourceが一覧上unknownであればquota分類を維持する。
+過去のfree/paid/unknownをinactive根拠だけでquotaへ変えず、実際のticket利用可否・消費確認は
+従来のlive wait-marker/entry proofを要求する。unknown/partial/重複履歴では期限切れを推測しない。
+新しいCLI/設定・Catalog schema・共通Policy/Coreの変更はなく、Item status/Run/Artifact/
+quota_started_at/Work resource stateは更新しない。
+
+証拠はignored `output/yr10/`。`history.json`に修正前positive-onlyとcomplete APIの比較を保存。
+通常Catalogのstandalone backupを作成し、隔離Catalogの50311だけを実際の旧unknown/旧期限へ
+戻した入力で通常CLI Full Discoveryを検証した。348件complete/exhausted、free 7 / quota 339 /
+paid 2 / unknown 0、Source 50311はquotaと11月21日03:38 JSTまでの保守的な有限grantへ回復した。
+これは読取時の残り時間から計算した下限で、実際の正確な終了時刻ではない。
+別の実サイトdirect確認では保存済み有効grantを使用し、本文1枚の保存まで到達、
+max_pages=1で意図的に終了した。完走/ZIP成功の主張ではない。新しいresource消費・前後話アクセスは0。
+通常Catalogも再Discovery済みで、同Sourceはquotaと11月21日03:32 JSTまでのgrantへ更新されている。
+この作業で通常Catalogへ直接SQLを書いたり、旧quota消費履歴を消したりはしていない。
+
+テストはDiscovery/Policy Unit + Discovery/Rental History browser Integrationが249件成功、
+追加したinactive/unknown/重複履歴と既知quota/paid/unknownの境界を含むDiscovery Unit全67件も成功。
+Adapter入口のhistory/existing-grant選択は27件成功（233 deselected）。全実行でskip 0。
+targeted 68件も成功。既存のpytest-asyncio/Python deprecation warningのみ残る。
+`ruff check src tests`と今回変更ファイルの`git diff --check`は成功。
+full pytest・他サイトIntegration・既存Research suiteはYanmaga局所のmetadata/権利確認変更のため未実行。
+第10話の実サイトは上記read-only history、通常Discovery CLIの隔離検証、direct本文1枚で確認した。
+全話capture/packagingはこの変更の検証範囲に含めない。`stale-live-audit.json`はunknown/旧期限からの
+再取得分類、grant更新、追加消費なしとItem status/Run/Artifact/quota履歴の不変を確認している。
+残り1時間等で安全な有限下限が得られない場合の既存の保留契約は維持する。
+期限切れ後のquota復帰と再レンタルの状態遷移は人工browser/Policy境界で確認済み。
+
+## パラレルパラダイス345話：1127幅profileと先頭確認（2026-11-20）
+
+Item 49668 / Source 49975の通常Batch保存途中Manifestは、全保存ページで
+`unsupported_native_geometry`によるPNGだった。前節のbuffer overflowとは異なる。
+実サイトの隔離probeでpage 1のlogical box 1267.875×1800 CSS px、倍率1.125、
+source segment 1129×536 / 1129×536 / 1129×538、Y位置0/598.5/1197 CSS pxを確認した。
+論理ページは1127×1600で、既存1125×1600 / segment幅1127の固定profileに適合しなかった。
+observerも幅1129のcanvasを対象外としており、candidate数は0だった。
+
+現在は明示的な二つのprofileだけを許可する。logical widthは1125または1127、height=1600、
+CSS倍率1.125、logical boxの許容差0.03 CSS px、segment幅はlogical width+2を要求する。
+segment高さ536/536/538、native Y offset 0/532/1064、末尾crop、opaque/style/ownership、
+exact byte binding、画素履歴、最終group proofは従来どおり。未知の幅、縦横比、混在profileは拒否。
+observer、browser compositor、Pythonのlossless WebP encoder、Adapterの最終寸法検査を
+同じ対応幅へ更新した。上限、navigation timing、他サイト・共通Core・Catalogの契約は変えない。
+
+最初のprobeではcounter 1/19で`前の話を読みますか？`が表示され、menu hiddenを証明できず
+保存0枚で停止した。ユーザー確認とnative「キャンセル」の実操作で、この表示が先頭位置であり、
+キャンセル後も同じ話・同じcounterのまま通常captureできることを確認した。
+初期化中、保存前のcounter 1かつ既知menu表示時に限り、単一のvisible `#wrap-popup`、
+direct `#popup-header`のexact文言、direct footer配下の単一enabled/visible
+`button#popup-cancel-btn`のexact `キャンセル`を検証し、一度だけクリックする。
+2秒以内のpopup非表示とroute/counter/total不変を確認し、その後も既存menu非表示・全周ownership・
+本文安定性を要求する。「読む」リンクは辿らない。不明/重複popupや再出現はfail-closed。
+metadataに`previous_episode_prompt_cancelled`を追加。新しいCLI/設定はない。
+
+証拠・QA scriptはignored `output/yp345/`。`baseline/`は確認popupで停止した初回、
+`baseline2/`はQAによるCancel後の2ページPNGと実測layout（max_pages=2で意図的停止）。
+`fixed/`は最終Adapter寸法guardの更新前に止まった途中runであり、完了証拠ではない。
+最終の`fixed-final/`はQAによるCancel代行なしのproduction Adapterで全19ページを保存し、
+positive ENDに到達した。全19枚が1127×1600 native pre-JPEG lossless WebP、PNG 0枚。
+最初のMetadataで`previous_episode_prompt_cancelled=true`、最終ページで完全な19枚sequence、
+native counter、同話route、隠れたmenuとfresh immediate-next signup cardのEND証明を確認した。
+57 segmentのcanvas copy / exact binding、曖昧候補・miss・read failure・overflowは0。
+各ページで、選択されたbound observerのimmutable pre-JPEG配列を別QA compositorで合成した
+referenceと保存WebPのRGBA全byteが一致した。これは同じobserver配列の合成結果の検証であり、
+observerのprovenanceを別の独立observerで証明したという主張ではない。
+`native-checks.json`、`report.json`、`audit.json`に結果を保存した。
+19枚のVP8L/opaque decode、1127×1600、unique hash、Manifest順序/identity/hash、
+調査用ZIPのCRC/全member/hashが一致。ZIP SHA-256は
+`0f41ba551f8a0971b4b9e0ca0c17882772de703d315342fda0d52e5308320cb0`。
+ZIPは`fixed-final/parallel-paradise-345-verified.zip`。
+通常Catalogのinterrupted/running履歴や既存ZIPは変更しない。
+
+テストは幅1125/1127のencoder・native・再生成・decoded経路（pixel collision、binding欠落、
+非JPEG、buffer上限）、既知popupのCancel・不明文言/誤button/重複buttonの拒否を含むtargeted
+23件が成功。Unit全11件も成功。全幅を任意に受け入れる変更や判定の迂回は行っていない。
+完了時のaffected selection（同Unit + Adapter browser Integration、
+`-k 'native or decoded or capture or previous_episode_prompt'`）は93件成功、178件deselected、
+skip 0（311.94秒）。既存のpytest-asyncio/Python deprecation warning 5件のみ。
+`ruff check src tests`と今回の6ファイルの`git diff --check`は成功。
+full pytest、他サイトIntegration、既存Research suiteはsite-local capture/初期化変更のため未実行。
+実サイトは当該無料公開話の共有CDP隔離runで確認済み。通常CatalogへのBatch書込み、
+既存ZIPの置換、前後話への遷移や新しい権利消費は実施していない。
+
+## 長い話のcapture buffer上限とdecoded-source経路（2026-11-20）
+
+通常Catalog Item 50361 / Source 50668、サタノファニ第1話（62ページ）の
+Run 26990のZIPはWebP 1〜35、PNG 36〜62だった。既存ZIPにはManifestが含まれず、
+当時のobserver内部イベントは保存されていない。共有CDPの同じ無料公開話への隔離probeで、
+同じ36ページ目から`capture_buffer_overflow`になることを再現した。
+36ページ目前の累積encoded保持量は33,535,112 bytes（上限33,554,432 bytes）、
+totalCandidates=123、raw pixels=43,547,280 bytes、pending/inFlight=0、
+hook conflict・ambiguity・read failureなし。次のJPEG payloadを追加すると
+32 MiBのencoded上限を超える。raw-pixel上限256 MiBやcandidate上限192ではない。
+encoded counterは`seenPayloads`のpayload key保持も含む累積budgetなので、
+capture済みページのpixel解放後にも減らない。単純なcounter減算は保持量を過小評価する。
+
+現在は`segment_source_not_exactly_bound`に加え、`capture_buffer_overflow`でも
+既存のdecoded-source経路をvisible group全体で試す。Observerの上限・停止状態は維持し、
+pre-JPEG証明には使わない。decoded経路だけが当該buffer overflowを許可し、
+表示中の実img、bounded JPEG Blob、元解像度、opaque sRGB、geometry/style、
+最終atomic group proofとlossless WebP round-tripを従来どおり検証する。
+hook conflict・他種overflow・不明source/styleではこの例外を認めない。
+decode経路不成立は引き続きPNG、本文identity変化は停止する。
+metadataは`decoded_viewer_segment_lossless_webp` / `pre_jpeg_pixels_used=false`、
+元の`fallback_reason=capture_buffer_overflow`を残す。新しい設定/CLIはない。
+
+調査出力とQA scriptはignored `output/yanmaga-satanofani-investigation/`。
+`baseline/observations.json`と`baseline/capture/manifest.json`が修正前証拠。
+baselineは38ページの上限で意図的に停止しEND/packagingは行っていない。
+通常Catalog・既存ZIPは変更せず、ZIP hashの一致も確認している。
+
+修正後の隔離`CrawlerRunner`は全62ページ、PNGなし、positive ENDに到達。
+この再訪は初期reading position/先読みによりraw-pixel上限へ先に到達し、
+page 1時点で110 candidate / 266,116,256 raw bytes / 29,885,660 encodedだった。
+capture前のcap到達でも同じ例外経路が働き、全62枚がdecoded-source WebPとなった。
+元の35/27境界が常に再現するとは限らず、native pre-JPEG画素を全62枚回収したという意味ではない。
+各ページで別の直接DOM-image合成referenceとの全RGBA一致を確認し、全62枚の
+1125×1600、opaque single-frame VP8L、unique fingerprint、Manifest順序/identity/hashを検証した。
+調査用`fixed/satanofani-chapter-01-verified.zip`はManifestの62ファイルだけを含み、
+CRC・順序・hashが一致。SHA-256は
+`ee6c9d8cf12fd1312060ca72ab82015fc4afb99b0a08a2e6ecdf8cfc8f7199f1`。
+`fixed/decoded-checks.json`、`fixed/report.json`、`fixed/audit.json`が検証結果。
+通常Item completed、2 Run、2 Artifactと既存ZIP hashは変わっていない。
+
+テストは修正前に追加したencoded-buffer上限の既存browser case拡張が期待どおり失敗し、
+修正後はdecoded画素一致・native pixel上限のtargeted 5件が成功。
+`tests/unit/test_yanmaga_adapter.py`全10件も成功。
+同Unitと`tests/integration/test_yanmaga_adapter_browser.py`の
+`-k 'native or decoded or capture'`では78件成功、178件deselected。
+残るgrant-onlyの1件は調査用長いbasetempで`entry_trace.json`の絶対pathが262文字となり
+ファイル保存検査で失敗した。同一testを短い`output/ysfgrant`へ変更して再実行し1件成功。
+production codeの追加変更は不要だった。全実行でskipは0。
+`ruff check src tests`、今回の5ファイルの`git diff --check`は成功。
+全worktreeのdiff checkには既存ユーザー変更の`watchlist.yaml:1856`の末尾空白が残る。
+既存pytest-asyncio/Pythonのdeprecation warningのみ継続。
+全体pytest、他サイトIntegration、既存Research suiteはsite-local capture変更のため未実行。
+実サイトは当該無料公開話の共有CDP隔離runで確認済み。通常Catalog/ZIPを再取得版へ置換する
+操作は行っておらず、既存Archiveの`FALLBACK_INCLUDED`判定自体は残る。
+
 ## リンクのない公開予定行を含む一覧（2026-11-19）
 
 妹は知っている第95話（Item 50683 / Source 50990）は、Viewer前の作品一覧preflightで
@@ -469,7 +668,8 @@ was retained and valid; this was an actual pre-JPEG pixel collision, not missing
 history or a memory cap. The strict pre-JPEG matcher correctly rejected it and
 remains unchanged for this case; no tolerance or newest-candidate guess is used.
 
-When the pre-JPEG attempt specifically reports `segment_source_not_exactly_bound`,
+When the pre-JPEG attempt reports `segment_source_not_exactly_bound` or
+`capture_buffer_overflow`,
 the adapter now tries the actual currently selected DOM image objects for the
 whole visible group. It reuses the complete geometry/style/ownership proof,
 validates each Blob as a bounded static JPEG (Content-Length and body size at
@@ -645,14 +845,18 @@ start capture, reset rights, or change the site's live access semantics.
 
 ## Existing-unknown Rental History recovery (2026-11-16)
 
-Authenticated full Discovery now joins unknown/point-only listing rows and same-work
-trusted-grant targets to one bounded native Rental History observation. An
-exact active card with a fresh finite countdown promotes an unknown/point-only row to
+Authenticated full Discovery joins unknown/point-only rows and same-work trusted
+grant targets to one complete bounded native Rental History observation. Fresh verified
+absence/expiry explicitly clears the stored direct grant; an otherwise unknown
+previously known quota row retains quota after this proof. No prior free/paid/
+unknown row is promoted by inactive history. Partial/ambiguous history cannot
+clear a grant. The positive-only direct-entry helper also follows native More.
+An exact active card with a fresh finite countdown promotes an unknown/point-only row to
 `quota` and stores the conservative observed expiry; it does not infer
 `quota_started_at` or a cooldown. Active history without a finite bound,
 missing/duplicate evidence, and identity mismatches do not promote a row, and
-`owned` rows are excluded. For otherwise unknown rows, a still-valid trusted grant preserves its existing
-mode and expiry when active; the new history bound never extends it. The join
+`owned` rows are excluded. For otherwise unknown free/paid rows, a still-valid trusted grant preserves its existing
+mode and expiry when active. Known quota rows refresh from fresh finite history. The join
 does not enter a Source or Viewer or consume a right.
 
 Root's normal-Catalog full Discovery repair changed only the three exact
@@ -860,9 +1064,9 @@ last-consumed time are `2026-11-16T09:35:16.467066+09:00`. The report is
 no more ticket action is authorized.
 
 Wait and trusted-history parsing accepts exact `残りH時間` or `残りD日` within the
-explicit 72-hour bound. For D>=2 the lower bound is observation start plus
-(D-1) days minus 5 seconds with evidence `site_day_countdown_lower_bound`;
-D=1 and H=1 prove active access but have no finite expiry. No fixed 72-hour
+explicit 72-hour bound. D=1..3 uses observation start plus D days minus one hour
+and five seconds with evidence `site_day_countdown_estimate`; fresh active
+history remains required before entry. H=1 has no finite expiry. No fixed 72-hour
 grant is created. Ordinary first-free remains capped at 23 hours and rejects
 day notation.
 
@@ -1036,20 +1240,20 @@ matchで結びつける。同payload再生成時には下記の画素履歴証�
 確認済み。詳細な判定とlive evidenceは本note冒頭を参照。
 
 確認済みのnested DOMは`#content-pN > .pt-img > 3 absolute clipped segment host > img`
-である。first-party page metadataとlogical `.pt-img` boxがnative pageを1125×1600と
-定め、CSS scaleは1.125。source segmentsは1127×536、1127×536、1127×538で、native
-Y offsetは0、532、1064。DOM順に重ねてlogical 1125×1600 boundsへclipすることで4-row
+である。logical `.pt-img` boxは倍率1.125・0.03 CSS pxの許容差で、明示的な1125×1600または
+1127×1600のprofile一つと一致する必要がある。source segment幅はそれぞれ1127または1129、
+高さは536/536/538、native Y offsetは0、532、1064。DOM順に重ねて選択profileのboundsへclipすることで4-row
 overlapと最終segment下の2-row overrunを処理する。wrapperのright paddingは0または2 CSS px
 の観測形だけ許可し、viewer gutterは出力へ含めない。wrapperはpure horizontal translation
 だけ許可する。segment host `::after`はcomputed styleが正確なempty content・fully transparent
 で、border/shadow/filter/backdrop-filter/transform/blend/mask等のpaintがない観測形のみ許可し、
 style proofはcapture後・spread全体でも再検証する。
 
-再構成画素をsingle-frame lossless WebP (`VP8L`)へencodeし、opaque RGBA、1125×1600
+再構成画素をsingle-frame lossless WebP (`VP8L`)へencodeし、opaque RGBA、1125×1600または1127×1600
 dimensions、Pillow decode後のpixel equalityを確認する。Manifestは`image/webp` / `.webp`
 を記録し、metadataは`source_native_bytes_used=false`、
 `source_native_pixels_used=true`とする。source/geometry/style/group proofまたはencode検証が
-不成立なら理由を記録する。`segment_source_not_exactly_bound`に限り、表示中の実img参照から
+不成立なら理由を記録する。`segment_source_not_exactly_bound`または`capture_buffer_overflow`では、表示中の実img参照から
 上記decoded-source pathをgroup全体で試す。こちらも証明できなければrendered locator PNGへ
 fail-closed fallbackする。decoded経路はJPEG decode後の画素でありpre-JPEG画素とは区別する。
 Fallbackは検証viewport 2560×1800で1266/1268×1800であり、source-native bytesとは呼ばない。
@@ -1058,6 +1262,7 @@ Readerはnative counter `1/36`、direct `#content-pN` wrappers、見開き時の
 初期位置が末尾でもbounded normal keyboard turnでpage 1へ戻す。capture前にはfirst page menuを
 通常keyboard 1→2→1で隠し、stable hidden-menuと8-point perimeter proofを要求する。全body indexの
 順次capture、route/counter/index/source/styleの安定性も必須。
+先頭で既知の前話確認が表示された場合は、本note冒頭の厳密な確認とCancelを先に行う。
 
 positive ENDは全body indexのcapture完了、同じepisode route、stable final counter/body wrapperに加え、
 別領域の単一`#rental` cardがviewport内に全体表示され、visibleで他elementに覆われていないことを要求する。
@@ -1155,7 +1360,7 @@ Yanmaga sends `free_until=None` on each refresh because no free-expiry value was
 observed; under the existing Catalog refresh contract this clears a stale
 free-expiry value. A public listing does not assert a new grant expiry, so
 `access_granted_until_observed=False` and Catalog preserves an existing grant.
-For otherwise unknown rows, fresh exact-target Rental History evidence retains a previous mode only while
+For otherwise unknown free/paid rows, fresh exact-target Rental History evidence retains a previous mode only while
 its trusted stored expiry remains future; it does not extend that expiry. For
 unknown/point-only rows, a fresh exact active card with a finite countdown imports a
 new `quota` classification and observed expiry. Missing, duplicate, mismatched,
@@ -1163,6 +1368,10 @@ or active-without-finite-expiry evidence leaves the raw classification
 unchanged; `owned` is excluded. The general Catalog contract still treats an
 explicitly observed null as authoritative. Lead's isolated regression run
 confirmed preservation and clear behavior.
+Known quota additionally remains quota after complete exact-target inactive
+history proof, and that proof explicitly clears its old grant. Incomplete
+history is not inactive proof. This is the underlying ticket category; actual
+availability and consumption still require the live entry checks.
 
 The Stage 01 authenticated sample had no wait marker classification and kept
 those rows unknown at that checkpoint. Stage 03 added the observed image marker

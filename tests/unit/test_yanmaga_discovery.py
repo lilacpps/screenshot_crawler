@@ -21,7 +21,10 @@ from screenshot_crawler.site_adapters.yanmaga import (
     parse_yanmaga_work_url,
 )
 from screenshot_crawler.site_adapters.yanmaga import discovery as yanmaga_discovery
-from screenshot_crawler.site_adapters.yanmaga.rental_history import RentalCountdown
+from screenshot_crawler.site_adapters.yanmaga.rental_history import (
+    RentalCountdown,
+    RentalHistoryObservation,
+)
 from screenshot_crawler.watchlist import WatchlistTarget
 
 BASE = "https://yanmaga.jp"
@@ -340,6 +343,40 @@ def test_yanmaga_imports_only_fresh_finite_history_for_unknown_rows() -> None:
     duplicate = (external_id(1), countdown(14, expiry, "site_countdown_lower_bound"))
     adapter._apply_history_countdowns(snapshot, work, (duplicate, duplicate))
     assert adapter._fresh_history_grants == {}
+
+
+@pytest.mark.parametrize("previous_mode", ["quota", "paid", "unknown"])
+@pytest.mark.parametrize("history", ["inactive", "unknown", "duplicate"])
+def test_yanmaga_inactive_history_clears_grant_but_only_restores_known_quota(
+    previous_mode, history
+) -> None:
+    target = WatchlistTarget("test", "work", "yanmaga", WORK_URL, "test")
+    work = YanmagaWorkParts(SLUG)
+    external_id = f"{SLUG}:{EPISODE_ID}"
+    previous = DiscoverySourceSnapshot(
+        external_id, target.key, previous_mode, True,
+        datetime.now(UTC) + timedelta(hours=2),
+    )
+    row = yanmaga_discovery.YanmagaListingRow(
+        EPISODE_ID, "test", f"{WORK_URL}/{EPISODE_ID}", False, False, False,
+    )
+    snapshot = yanmaga_discovery.YanmagaListingSnapshot(
+        "test", False, (row,), None, authenticated=True, mypage_href=f"{BASE}/mypage",
+    )
+    adapter = YanmagaDiscoveryAdapter()
+    adapter.configure_source_snapshots(target, (previous,))
+    observation = RentalHistoryObservation(external_id, None)
+    observations = None if history == "unknown" else (
+        (observation, observation) if history == "duplicate" else (observation,)
+    )
+    adapter._apply_history_observations(snapshot, work, observations)
+    record = adapter._records_from_snapshot(
+        snapshot, target, work, adapter._fresh_history_grants, adapter._fresh_inactive_grants,
+    )[0].source
+    expected = "quota" if previous_mode == "quota" and history == "inactive" else "unknown"
+    assert adapter.reconcile_access_mode(record.access_mode, previous, target) == expected
+    assert record.access_granted_until is None
+    assert record.access_granted_until_observed is (history == "inactive")
 
 
 @pytest.mark.parametrize(

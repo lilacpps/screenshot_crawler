@@ -387,7 +387,7 @@ async def parse_rental_history_html(
         observed_at=observed_at.astimezone(UTC),
         remaining_hours=hours if valid_hours else 0,
         # A parsed card alone has no response-freshness proof. Only the bounded
-        # runtime fetch below may derive a finite grant lower bound.
+        # runtime fetch below may derive a finite grant observation/estimate.
         access_granted_until=None,
         expiry_evidence=None,
         remaining_days=days if valid_days else None,
@@ -553,10 +553,10 @@ async def _fetch_rental_history_observations(
       if (!historyHref) return {{ok:false}};
       let historyHtml = await readDocument(historyHref.href);
       if (!historyHtml) return {{ok:false}};
-      if (args.requireCompleteCollection) {{
+      const doc = new DOMParser().parseFromString(historyHtml, 'text/html');
+      if (args.requireCompleteCollection || doc.querySelector('#content_more_button')) {{
         // Expand only the observed native GET/Turbo shape, entirely in detached
         // DOM. No script execution, live DOM replacement or episode entry.
-        const doc = new DOMParser().parseFromString(historyHtml, 'text/html');
         const exactAttrs = (node, names) => node &&
           sameSet(node.getAttributeNames(), new Set(names));
         const exactClasses = (node, names) => node &&
@@ -642,7 +642,7 @@ async def _fetch_rental_history_observations(
           parentClasses:args.parentClasses,ancestorClasses:args.ancestorClasses,
           anchorClasses:args.anchorClasses,hideClass:args.hideClass,
           maxHours:args.maxHours,allowDays:args.allowDays,
-          collectionClasses:args.collectionClasses}});
+          collectionClasses:args.requireCompleteCollection ? args.collectionClasses : null}});
         if (args.requireCompleteCollection && snapshot.collectionValid !== true)
           return {{ok:false}};
         if (snapshot.targetAnchorCount === 0) {{
@@ -677,11 +677,7 @@ async def _fetch_rental_history_observations(
                 "mypageHref": observed_mypage_href,
                 "targets": target_args,
                 "requireCompleteCollection": require_complete_collection,
-                "collectionClasses": (
-                    sorted(_RENTAL_COLLECTION_CLASSES)
-                    if require_complete_collection
-                    else None
-                ),
+                "collectionClasses": sorted(_RENTAL_COLLECTION_CLASSES),
                 "maxBytes": _MAX_HISTORY_BYTES,
                 "maxPages": _MAX_HISTORY_PAGES,
                 "maxRows": _MAX_HISTORY_ROWS,
@@ -741,7 +737,7 @@ async def _fetch_rental_history_observations(
         if status != "active" or valid_hours == valid_days:
             return None
         if valid_hours:
-            lower_bound = (
+            grant_until = (
                 observed_at
                 - timedelta(seconds=_MAX_DATE_SKEW_SECONDS)
                 + timedelta(hours=hours - 1)
@@ -752,24 +748,26 @@ async def _fetch_rental_history_observations(
             remaining_days = None
             expiry_evidence = "site_countdown_lower_bound"
         else:
-            lower_bound = (
+            # Day-only text does not expose its exact rounding or deadline.
+            # Store an eligibility estimate with a one-hour margin; the Adapter
+            # must still reconfirm the exact active rental before Source entry.
+            grant_until = (
                 observed_at
                 - timedelta(seconds=_MAX_DATE_SKEW_SECONDS)
-                + timedelta(days=days - 1)
-                if days > 1
-                else None
+                + timedelta(days=days)
+                - timedelta(hours=1)
             )
             remaining_hours = 0
             remaining_days = days
-            expiry_evidence = "site_day_countdown_lower_bound"
+            expiry_evidence = "site_day_countdown_estimate"
         observations.append(
             RentalHistoryObservation(
                 external_id,
                 RentalCountdown(
                     observed_at=observed_at,
                     remaining_hours=remaining_hours,
-                    access_granted_until=lower_bound,
-                    expiry_evidence=expiry_evidence if lower_bound is not None else None,
+                    access_granted_until=grant_until,
+                    expiry_evidence=expiry_evidence if grant_until is not None else None,
                     remaining_days=remaining_days,
                 ),
             )
@@ -805,7 +803,7 @@ async def fetch_rental_history_countdowns(
     targets: tuple[YanmagaEpisodeParts, ...],
     max_countdown_hours: int = _MAX_COUNTDOWN_HOURS,
 ) -> tuple[tuple[str, RentalCountdown], ...]:
-    """Preserve the positive-only API used by trusted direct-grant refreshes."""
+    """Return positive grants, including targets behind bounded native More pages."""
 
     observations = await _fetch_rental_history_observations(
         page,
