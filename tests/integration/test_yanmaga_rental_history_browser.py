@@ -190,6 +190,7 @@ async def _run_runtime_history_observation_probe(
     stream_pages: dict[int, str] | None = None,
     stale_stream: bool = False,
     stream_content_type: str = "text/vnd.turbo-stream.html; charset=utf-8",
+    positive_only: bool = False,
 ):
     requests: list[str] = []
 
@@ -231,12 +232,15 @@ async def _run_runtime_history_observation_probe(
 
     await page.route("**/*", route_handler)
     await page.goto("https://yanmaga.jp/comics/work?sort=older", wait_until="domcontentloaded")
-    observations = await fetch_rental_history_observations(
+    fetch = fetch_rental_history_countdowns if positive_only else fetch_rental_history_observations
+    observations = await fetch(
         page,
         observed_mypage_href="https://yanmaga.jp/mypage",
         targets=(TARGET,),
         max_countdown_hours=max_countdown_hours,
     )
+    if positive_only:
+        observations = tuple(RentalHistoryObservation(key, value) for key, value in observations)
     return observations, requests
 
 
@@ -259,7 +263,10 @@ def _history_stream(rows: str, more: str = "") -> str:
 
 
 @pytest.mark.parametrize("status", ["absent", "expired", "active", "multiple_pages"])
-async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target(browser_page, status):
+@pytest.mark.parametrize("positive_only", [False, True])
+async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target(
+    browser_page, status, positive_only
+):
     initial = ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(20))
     value_options = {"value": "期限切れ", "value_classes": TEST_EXPIRED_VALUE_CLASSES} if status == "expired" else {}
     card = _card(episode_id=f'{100:032x}') if status == "absent" else _card(**value_options)
@@ -270,12 +277,16 @@ async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target
         pages = {20: _history_stream(middle, _history_more(40)),
                  40: _history_stream(f'<li data-index="40">{_card()}</li>')}
     observations, requests = await _run_runtime_history_observation_probe(
-        browser_page, history_cards=initial, pagination=_history_more(20), stream_pages=pages)
-    assert observations is not None and len(observations) == 1
-    assert observations[0].external_id == f"{TARGET.slug}:{TARGET.episode_id}"
-    if status in {"absent", "expired"}:
+        browser_page, history_cards=initial, pagination=_history_more(20), stream_pages=pages,
+        positive_only=positive_only)
+    if positive_only and status in {"absent", "expired"}:
+        assert observations == ()
+    elif status in {"absent", "expired"}:
+        assert observations is not None and len(observations) == 1
         assert observations[0].countdown is None
     else:
+        assert observations is not None and len(observations) == 1
+        assert observations[0].external_id == f"{TARGET.slug}:{TARGET.episode_id}"
         assert observations[0].countdown is not None and observations[0].countdown.active
     assert requests[1:] == ["/mypage", "/mypagetab=rental", "/api/mypage/rentalsoffset=20"] + (
         ["/api/mypage/rentalsoffset=40"] if status == "multiple_pages" else [])
@@ -387,7 +398,7 @@ async def test_yanmaga_wait_rental_history_allows_observed_72_hour_countdown_onl
 
 
 @pytest.mark.parametrize("days", (1, 2, 3))
-async def test_yanmaga_wait_rental_history_parses_native_days_with_day_lower_bound(
+async def test_yanmaga_wait_rental_history_parses_native_days_with_one_hour_margin(
     browser_page: Page, days: int
 ) -> None:
     day_text = f"\u6b8b\u308a{days}\u65e5"
@@ -406,14 +417,10 @@ async def test_yanmaga_wait_rental_history_parses_native_days_with_day_lower_bou
     assert countdown.active is True
     assert countdown.remaining_hours == 0
     assert countdown.remaining_days == days
-    if days == 1:
-        assert countdown.access_granted_until is None
-        assert countdown.expiry_evidence is None
-    else:
-        assert countdown.access_granted_until == (
-            countdown.observed_at + timedelta(days=days - 1) - timedelta(seconds=5)
-        )
-        assert countdown.expiry_evidence == "site_day_countdown_lower_bound"
+    assert countdown.access_granted_until == (
+        countdown.observed_at + timedelta(days=days) - timedelta(hours=1, seconds=5)
+    )
+    assert countdown.expiry_evidence == "site_day_countdown_estimate"
 
 
 async def test_yanmaga_wait_rental_history_rejects_days_beyond_requested_bound(

@@ -47,6 +47,7 @@ from screenshot_crawler.site_adapters.yanmaga.discovery import (
     YanmagaListingSnapshot,
 )
 from screenshot_crawler.site_adapters.yanmaga.native_capture import (
+    MAX_CAPTURE_ENCODED_BYTES,
     MAX_CAPTURE_PIXELS,
     capture_yanmaga_native_webp,
     dispose_yanmaga_native_observer,
@@ -128,6 +129,7 @@ def _viewer_html(
     adjacent_overlap: bool = False,
     terminal_control: str = "valid_next",
     native_capture: bool = False,
+    native_page_width: int = 1125,
     native_style_unsupported: bool = False,
     native_layer_unsupported: bool = False,
     native_transparent: bool = False,
@@ -516,7 +518,7 @@ def _viewer_html(
         if quota_completion_notice
         else ""
     )
-    return f'''<!doctype html><html><head><meta charset="utf-8"><title>Test | YanmagaWeb</title>
+    html = f'''<!doctype html><html><head><meta charset="utf-8"><title>Test | YanmagaWeb</title>
     <style>
       html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
       .pages#content{{position:absolute;top:0;left:0;width:2560px;height:1800px;overflow:hidden}}
@@ -670,6 +672,13 @@ def _viewer_html(
         if(!accessProofNeverReady) setTimeout(()=>show({initial_page}),accessProofDelayMs);
       }} else show({initial_page});
     </script></body></html>'''
+    if native_capture and native_page_width != 1125:
+        html = (html.replace('canvas.width=1127;', f'canvas.width={native_page_width + 2};')
+                .replace('1267.864624px', f'{(native_page_width + 2) * 1.125}px')
+                .replace('1267.875px', f'{(native_page_width + 2) * 1.125}px')
+                .replace('1265.625px', f'{native_page_width * 1.125}px')
+                .replace('14.375px', f'{1280 - native_page_width * 1.125}px'))
+    return html
 
 
 def _work_listing_html(
@@ -849,6 +858,7 @@ async def _set_routes(
     adjacent_overlap: bool = False,
     terminal_control: str = "valid_next",
     native_capture: bool = False,
+    native_page_width: int = 1125,
     native_style_unsupported: bool = False,
     native_layer_unsupported: bool = False,
     native_transparent: bool = False,
@@ -1018,6 +1028,7 @@ async def _set_routes(
                     adjacent_overlap=adjacent_overlap,
                     terminal_control=terminal_control,
                     native_capture=native_capture,
+                    native_page_width=native_page_width,
                     native_style_unsupported=native_style_unsupported,
                     native_layer_unsupported=native_layer_unsupported,
                     native_transparent=native_transparent,
@@ -1233,11 +1244,9 @@ def _install_wait_history_observations(
         observed_at = datetime.now(UTC)
         if remaining_days is not None:
             expiry = (
-                observed_at + timedelta(days=remaining_days - 1) - timedelta(seconds=5)
-                if remaining_days > 1
-                else None
+                observed_at + timedelta(days=remaining_days) - timedelta(hours=1, seconds=5)
             )
-            evidence = "site_day_countdown_lower_bound" if expiry is not None else None
+            evidence = "site_day_countdown_estimate"
         else:
             expiry = (
                 observed_at + timedelta(hours=remaining_hours - 1) - timedelta(seconds=5)
@@ -1489,8 +1498,9 @@ async def test_yanmaga_wait_ticket_batch_grant_only_persists_use_without_capture
     assert not list((tmp_path / "library").rglob("*.zip"))
 
 
+@pytest.mark.parametrize("remaining_days", [1, 2])
 async def test_yanmaga_wait_ticket_day_grant_survives_capture_failure(
-    browser_page, tmp_path, monkeypatch
+    browser_page, tmp_path, monkeypatch, remaining_days
 ) -> None:
     requested = await _set_routes(
         browser_page,
@@ -1501,7 +1511,7 @@ async def test_yanmaga_wait_ticket_day_grant_survives_capture_failure(
     )
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 350)
     history_calls = _install_wait_history_observations(
-        monkeypatch, remaining_days=2
+        monkeypatch, remaining_days=remaining_days
     )
     catalog, policies, adapters, candidate, item, source, _target, watchlist = (
         _seed_batch_candidate(tmp_path, access_mode="quota")
@@ -1525,8 +1535,10 @@ async def test_yanmaga_wait_ticket_day_grant_survives_capture_failure(
     assert saved_source.quota_started_at is not None
     assert saved_source.access_granted_until is not None
     expiry = datetime.fromisoformat(saved_source.access_granted_until).astimezone(UTC)
-    assert datetime.now(UTC) + timedelta(hours=23) < expiry
-    assert expiry < datetime.now(UTC) + timedelta(days=1)
+    assert expiry == (
+        datetime.fromisoformat(saved_source.quota_started_at).astimezone(UTC)
+        + timedelta(days=remaining_days) - timedelta(hours=1, seconds=5)
+    )
     state = catalog.get_quota_resource_state(
         item.work_id, site="yanmaga", resource="work_ticket"
     )
@@ -1669,13 +1681,16 @@ async def test_yanmaga_inline_rental_card_does_not_block_final_body_or_end(
 
 @pytest.mark.parametrize("native_wrapper_transform", [None, "translateX(24px)"])
 @pytest.mark.parametrize("regenerate_last_page", [False, True])
+@pytest.mark.parametrize("native_page_width", [1125, 1127])
 async def test_yanmaga_captures_exact_pre_jpeg_page_pixels_as_lossless_webp(
-    browser_page, tmp_path, monkeypatch, native_wrapper_transform, regenerate_last_page
+    browser_page, tmp_path, monkeypatch, native_wrapper_transform, regenerate_last_page,
+    native_page_width
 ) -> None:
     await _set_routes(
         browser_page,
         monkeypatch,
         native_capture=True,
+        native_page_width=native_page_width,
         native_wrapper_transform=native_wrapper_transform,
     )
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
@@ -1721,7 +1736,7 @@ async def test_yanmaga_captures_exact_pre_jpeg_page_pixels_as_lossless_webp(
     assert len(result.pages) == 4
     assert all(
         (capture.mime_type, capture.file_extension, capture.width, capture.height)
-        == ("image/webp", ".webp", 1125, 1600)
+        == ("image/webp", ".webp", native_page_width, 1600)
         for capture in result.pages
     )
     assert all(
@@ -1757,7 +1772,7 @@ async def test_yanmaga_captures_exact_pre_jpeg_page_pixels_as_lossless_webp(
         assert rgba.getpixel((10, 100)) == (71, 54, 68, 255)
         assert rgba.getpixel((10, 532)) == (88, 83, 81, 255)
         assert rgba.getpixel((10, 1064)) == (105, 112, 94, 255)
-        assert rgba.getpixel((1124, 1599)) == (105, 112, 94, 255)
+        assert rgba.getpixel((native_page_width - 1, 1599)) == (105, 112, 94, 255)
     with Image.open(tmp_path / "isolated-output" / "page-0004.webp") as image:
         assert image.convert("RGBA").getpixel((10, 100)) == (164, 111, 137, 255)
     assert await browser_page.evaluate(
@@ -2220,6 +2235,11 @@ async def test_yanmaga_native_group_revalidation_rejects_prior_page_style_drift(
 @pytest.mark.parametrize(
     ("options", "expected_reasons", "expected_types"),
     [
+        (
+            {"native_page_width": 1126},
+            ("unsupported_native_geometry", "unsupported_native_geometry"),
+            ("image/png", "image/png", "image/png", "image/png"),
+        ),
         (
             {"native_style_unsupported": True},
             ("unsupported_compositing_style", "unsupported_compositing_style"),
@@ -2685,18 +2705,29 @@ async def test_yanmaga_rejects_same_geometry_source_replacement_during_capture(
     assert not list((tmp_path / "isolated-output").glob("page-*.png"))
 
 
-@pytest.mark.parametrize("reason", ["pixel_collision", "missing_binding", "non_jpeg_blob"])
+@pytest.mark.parametrize(
+    "reason", ["pixel_collision", "missing_binding", "non_jpeg_blob", "buffer_overflow"]
+)
+@pytest.mark.parametrize("native_page_width", [1125, 1127])
 async def test_yanmaga_decoded_segments_match_current_dom_pixels_for_the_whole_group(
-    browser_page, tmp_path, monkeypatch, reason
+    browser_page, tmp_path, monkeypatch, reason, native_page_width
 ) -> None:
-    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    await _set_routes(
+        browser_page, monkeypatch, native_capture=True, native_page_width=native_page_width
+    )
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
     adapter = YanmagaAdapter()
     capture = adapter.capture_page
     references = {}
-    affected = [4] if reason == "pixel_collision" else [2, 3]
+    affected = (
+        [4] if reason == "pixel_collision"
+        else [2, 3, 4] if reason == "buffer_overflow"
+        else [2, 3]
+    )
+    overflow_copies = None
 
     async def capture_with_missing_pre_jpeg_proof(page):
+        nonlocal overflow_copies
         if len(adapter._captured_indices) == affected[0] - 1:
             if reason == "pixel_collision":
                 assert await page.evaluate(
@@ -2719,6 +2750,19 @@ async def test_yanmaga_decoded_segments_match_current_dom_pixels_for_the_whole_g
                       return same && !state.byUrl.has(image.currentSrc);
                     }"""
                 )
+            elif reason == "buffer_overflow":
+                overflow_copies = await page.evaluate(
+                    """limit => {
+                      const state=window.__yanmagaNativeCaptureV1;
+                      state.storedEncodedBytes=limit-1;
+                      const canvas=document.createElement('canvas');
+                      canvas.width=1127;canvas.height=536;
+                      canvas.getContext('2d').fillRect(0,0,1127,536);
+                      canvas.toDataURL('image/jpeg',0.9);
+                      return state.stats.canvasCopies;
+                    }""",
+                    MAX_CAPTURE_ENCODED_BYTES,
+                )
             elif reason == "non_jpeg_blob":
                 await page.evaluate(
                     """async () => {
@@ -2737,16 +2781,24 @@ async def test_yanmaga_decoded_segments_match_current_dom_pixels_for_the_whole_g
                 )
             for index in affected:
                 references[index] = await page.evaluate(
-                    """index => {
-                      const canvas=document.createElement('canvas');canvas.width=1125;canvas.height=1600;
+                    """([index,width]) => {
+                      const canvas=document.createElement('canvas');canvas.width=width;canvas.height=1600;
                       const context=canvas.getContext('2d',{alpha:false,colorSpace:'srgb'});
                       [...document.querySelectorAll('#content-p'+index+' img')].forEach((image,n)=>
                         context.drawImage(image,0,[0,532,1064][n]));
                       return canvas.toDataURL('image/png').split(',')[1];
                     }""",
-                    index,
+                    [index, native_page_width],
                 )
-        return await capture(page)
+        result = await capture(page)
+        if overflow_copies is not None:
+            assert await page.evaluate(
+                """() => {
+                  const state=window.__yanmagaNativeCaptureV1;
+                  return [state.overflowReason,state.storedEncodedBytes,state.stats.canvasCopies];
+                }"""
+            ) == ["capture_buffer_overflow", MAX_CAPTURE_ENCODED_BYTES - 1, overflow_copies]
+        return result
 
     monkeypatch.setattr(adapter, "capture_page", capture_with_missing_pre_jpeg_proof)
     result = await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
@@ -2767,11 +2819,14 @@ async def test_yanmaga_decoded_segments_match_current_dom_pixels_for_the_whole_g
         assert captured.metadata["capture_method"] == "decoded_viewer_segment_lossless_webp"
         assert captured.metadata["capture_provenance"] == "decoded_visible_image_composition"
         assert captured.metadata["pre_jpeg_pixels_used"] is False
-        assert captured.metadata["capture_group"]["fallback_reason"] == "segment_source_not_exactly_bound"
+        assert captured.metadata["capture_group"]["fallback_reason"] == (
+            "capture_buffer_overflow" if reason == "buffer_overflow"
+            else "segment_source_not_exactly_bound"
+        )
         with Image.open(tmp_path / "isolated-output" / captured.file) as saved, Image.open(
             io.BytesIO(base64.b64decode(references[index]))
         ) as reference:
-            assert saved.size == (1125, 1600)
+            assert saved.size == (native_page_width, 1600)
             assert saved.convert("RGBA").tobytes() == reference.convert("RGBA").tobytes()
 
 
@@ -2810,6 +2865,59 @@ async def test_yanmaga_native_capture_rejects_same_geometry_source_replacement(
     assert changed
     assert not list((tmp_path / "isolated-output").glob("page-*.webp"))
     assert not list((tmp_path / "isolated-output").glob("page-*.png"))
+
+
+@pytest.mark.parametrize("prompt", ["valid", "wrong_title", "wrong_cancel", "duplicate_cancel"])
+async def test_yanmaga_cancels_only_the_observed_first_page_previous_episode_prompt(
+    browser_page, tmp_path, monkeypatch, prompt
+) -> None:
+    requested = await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    adapter = YanmagaAdapter()
+    normal_wait = adapter._wait_for_stable_snapshot
+    inserted = False
+
+    async def wait_with_previous_prompt(page, **kwargs):
+        nonlocal inserted
+        if not inserted and await page.locator("#content-p1").is_visible():
+            inserted = True
+            await page.evaluate(
+                """args => {
+                  const popup=document.createElement('div');popup.id='wrap-popup';
+                  popup.className='active show-animation';
+                  popup.style.cssText='position:fixed;top:200px;left:200px;z-index:100;background:white';
+                  popup.innerHTML='<div id="popup-header"></div><div id="popup-footer">'+
+                    '<div id="popup-footer-other"><a class="btn-ok">読む</a></div>'+
+                    '<button id="popup-cancel-btn"></button></div>';
+                  popup.querySelector('#popup-header').textContent=args.prompt==='wrong_title'
+                    ? '次の話を読みますか？' : '前の話を読みますか？';
+                  const cancel=popup.querySelector('button');
+                  cancel.textContent=args.prompt==='wrong_cancel'?'読む':'キャンセル';
+                  popup.querySelector('a').href=args.other;
+                  window.__previousPromptCancels=0;
+                  cancel.addEventListener('click',()=>{
+                    window.__previousPromptCancels++;popup.style.display='none';
+                    document.getElementById('menu').style.display='none';
+                  });
+                  if(args.prompt==='duplicate_cancel')popup.lastChild.append(cancel.cloneNode(true));
+                  document.body.append(popup);document.getElementById('menu').style.display='block';
+                }""",
+                {"prompt": prompt, "other": f"{WORK_URL}/{NEXT_EPISODE_ID}"},
+            )
+        return await normal_wait(page, **kwargs)
+
+    monkeypatch.setattr(adapter, "_wait_for_stable_snapshot", wait_with_previous_prompt)
+    if prompt == "valid":
+        result = await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
+        assert result.stop_state is PageState.END and len(result.pages) == 4
+        assert all(p.metadata["previous_episode_prompt_cancelled"] for p in result.pages)
+        assert await browser_page.evaluate("window.__previousPromptCancels") == 1
+    else:
+        with pytest.raises(UnknownPageStateError, match="not the known cancel prompt"):
+            await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
+        assert await browser_page.evaluate("window.__previousPromptCancels") == 0
+    assert inserted
+    assert not any(urlsplit(url).path.endswith(NEXT_EPISODE_ID) for url in requested)
 
 
 @pytest.mark.parametrize("arrow_mode", ["absent", "visible"])
@@ -3511,8 +3619,9 @@ async def test_yanmaga_first_free_guard_stop_during_timeout_confirmation_is_fata
         pytest.param(False, 1, False, id="expired-catalog-grant-does-not-enter"),
     ],
 )
+@pytest.mark.parametrize("countdown_unit", ["hours", "days"])
 async def test_yanmaga_existing_grant_recheck_uses_catalog_expiry_and_active_countdown(
-    browser_page, monkeypatch, grant_is_future, remaining_hours, expected_entry
+    browser_page, monkeypatch, grant_is_future, remaining_hours, expected_entry, countdown_unit
 ) -> None:
     requested, adapter = await _adapter_at_work(
         browser_page,
@@ -3542,7 +3651,8 @@ async def test_yanmaga_existing_grant_recheck_uses_catalog_expiry_and_active_cou
                 f"{SLUG}:{EPISODE_ID}",
                 RentalCountdown(
                     observed_at=observed_at,
-                    remaining_hours=remaining_hours,
+                    remaining_hours=remaining_hours if countdown_unit == "hours" else 0,
+                    remaining_days=remaining_hours if countdown_unit == "days" else None,
                     access_granted_until=None,
                     expiry_evidence=None,
                 ),

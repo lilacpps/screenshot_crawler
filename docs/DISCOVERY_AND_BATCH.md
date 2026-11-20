@@ -1,5 +1,29 @@
 # Discovery / Catalog / Batch Design
 
+## Yanmaga rental refresh (2026-11-20)
+
+Authenticated Discovery observes the complete bounded native Rental History,
+including GET/Turbo More pages, before classifying markerless rented episodes.
+A fresh exact active rental with a finite bound may replace an expired or
+missing stored grant and classify the Source as `quota`; Site Policy selects
+`direct` while the confirmed grant is active. A complete exact absent/expired
+history observation explicitly clears the stored grant. A previously known
+`quota` Source retains that underlying category when its current listing is
+otherwise unknown, so Policy can select quota after the grant ends. Previous
+free/paid/unknown states are not guessed into quota from inactive history.
+Unknown, incomplete or ambiguous history neither proves expiry nor clears a
+grant. Actual ticket availability and consumption remain live Adapter proofs;
+refresh does not consume a ticket, refund quota, or alter Item/Run/Artifact state.
+
+Yanmaga's day-only countdown uses observation start plus `D*24-1` hours,
+minus five seconds of response-clock margin, as an eligibility estimate in
+`access_granted_until` (including D=1). It is not a proven exact expiry or
+lower bound: the display's rounding is not exposed. Before Source entry the
+Adapter must reconfirm that exact rental is currently active, even while the
+stored estimate remains future. Fresh finite observations refresh an existing
+quota Source's grant as well; fresh verified inactivity clears it. Hour
+countdowns retain their existing one-hour-margin lower-bound contract.
+
 ## Hanayume read-only Catalog repair
 
 Stage 01 repair is independent of normal Discovery reconciliation and the

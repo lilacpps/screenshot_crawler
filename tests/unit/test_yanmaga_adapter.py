@@ -106,23 +106,24 @@ def test_page_counter_is_bounded_and_consistent() -> None:
         assert parse_yanmaga_page_counter(value) is None
 
 
-def test_native_page_encoder_emits_exact_single_frame_lossless_webp() -> None:
-    rgba = bytearray(bytes((11, 22, 33, 255)) * (PAGE_WIDTH * PAGE_HEIGHT))
+@pytest.mark.parametrize("page_width", [1125, 1127])
+def test_native_page_encoder_emits_exact_single_frame_lossless_webp(page_width) -> None:
+    rgba = bytearray(bytes((11, 22, 33, 255)) * (page_width * PAGE_HEIGHT))
     rgba[0:4] = bytes((21, 84, 139, 255))
     rgba[-4:] = bytes((212, 103, 47, 255))
-    image = Image.frombytes("RGBA", (PAGE_WIDTH, PAGE_HEIGHT), bytes(rgba))
+    image = Image.frombytes("RGBA", (page_width, PAGE_HEIGHT), bytes(rgba))
     png_buffer = io.BytesIO()
     image.save(png_buffer, format="PNG")
 
     result = _encode_lossless_webp(png_buffer.getvalue())
 
     assert (result.width, result.height, result.mime_type, result.file_extension) == (
-        PAGE_WIDTH,
+        page_width,
         PAGE_HEIGHT,
         "image/webp",
         ".webp",
     )
-    assert _single_vp8l(result.data, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    assert _single_vp8l(result.data, width=page_width, height=PAGE_HEIGHT)
     with Image.open(io.BytesIO(result.data)) as decoded:
         decoded.load()
         assert decoded.convert("RGBA").tobytes() == bytes(rgba)
