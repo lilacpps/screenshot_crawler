@@ -74,9 +74,72 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-11-17
+最終同期: 2026-11-21
 
-## Single-part retained final-join redraw recovery (2026-11-17)
+## Two-part retained redraw recovery / Source 1916 (2026-11-21)
+
+現行のretained final-join再描画回復はsingle-partとexact-two-partを対象とする。
+既存のraw atomic joinが全selected tupleと共通frameの安全性を証明し、
+geometry/content両versionの増加だけを確認できた場合、100ms後に一度だけ
+旧artifactを全て捨ててnativeを取り直す。左右を共に再選択し、各partの同一source/layout、
+fresh draw/source/target version・新snapshot ID、および新しい共通frameの両ROIを
+検証してから読書順で返す。JPEG解析は繰り返さず、既存のlossless WebPを使用する。
+片側だけの再描画、source/layout/identity変更、pixel-only mismatch、証拠欠落、
+2回目のrace、initial-selectionで既存retryを消費済みの場合はUNKNOWNで停止する。
+待機だけでは旧artifactを承認しない。変更は既存のretry開始条件のpart数だけで、
+raw atomic join、freshness、最終共通ROI proofとresource cleanupは既存処理を再利用する。
+
+Source1916の2026-11-20 22:52:45 JST開始Batchは、診断
+`output/diagnostics/bookwalker/run-ca9d6fe3c5ef433cb08a053cab50c26b.jsonl`
+で`1/337`（original JPEG）と`2/337`（native lossless WebP）の成功を確認した。
+次の`4/337`は2-part見開きで、最終join時に`geometryVersion`が5→7、
+`targetContentVersion`が42→57へ変化した。同一CID/counter/canvas/reset epochのまま
+左右それぞれに新しいdrawが記録され、`capture window common anchor changed`
+（mismatch=`geometryVersion`）で停止した。診断の`returned_path=reconstructed_jpeg`
+は選択経路であり、`failure_reason`があるこの見開きの保存成功を意味しない。
+2枚保存後の停止だが、viewer counterの`2/337`自体は成功している。
+metricsの停止理由は`UnknownPageStateError`で、403/429/challengeは0件。
+
+翌2026-11-21 06:52のBatchは別の`ResumeError`で、再開初期化中の
+CID/総数/layout比較で停止した。現行エラー文はどのfieldが違ったかを含まない。
+利用者が復元した`catalog.sqlite.resume/bookwalker/data/8e293e225d5e42c5bfda029f8bf6fd63/`
+のmanifestと06:52失敗時の保存HTML/metadataを照合し、layout不一致を特定した。
+保存済みcheckpointは`current=2, total=337, layout=[1904,985,1904,985]`。
+失敗時HTMLの同一CID/counter `4/337`ではcurrentScreen canvasの内部寸法が
+`2859x1479`、inline CSS表示寸法が`1906x986`だった。内部/表示寸法比は1.5で、
+保存時の1.0から変わっている。利用者から実行間のズーム変更の申告があった。
+devicePixelRatio自体の値は保存証拠に無い。内部寸法だけでも既存の
+厳密layout比較に確実に不一致となる。位置2→4はこのエラーの比較対象ではなく、
+既存の有界位置復元に入る前にlayout比較が停止させている。
+
+復元データはCoreの`read_session_manifest()`で検証済み。2画像ともSHA-256、decode、
+960x1280寸法が正しく、Catalog/Work/Item/Source/Targetのbindingもread-only照合で一致した。
+調査前後に再開参照・manifest・画像・diagnosticsのSHA-256が不変であることを確認した。
+要約は`output/diagnostics/bw1916-resume-investigation-20261121/summary.json`。
+現行resumeでは内部解像度とCSS表示寸法の両方が保存時と一致する必要がある。
+画面条件が異なるまま再開する対応は実装していない。再開参照の削除後は新規取得となるが、
+削除自体は上記capture修正の代替にならない。quota履歴は復元しない。
+本調査は保存済みmetrics/Catalog（read-only）/capture診断/codeの照合だけで行い、
+実サイトのreaderは開いていない。保存時の見開き停止は修正前の実サイト証拠であり、
+修正後の実サイト回復成功を意味しない。
+synthetic browserで同じmutable sourceを左右へ再利用し、旧JPEGを両方破棄して
+fresh nativeを読書順で返すこと、片側再描画・source/layout/identity/window/reset変更・
+fresh source snapshot欠落・再race・片側pixel mutation・retry使用済み・cancel時の
+fail-closed/cleanupを検証する。ズーム変更時のresume停止規則は維持する。
+復元データ調査ではCID/total/layout不一致を移動前に拒否する既存Unitを再実行し、
+3 passed、0 skipped（resume調査のみの時点）。
+
+修正後の関連Unitとbrowser Integration（adapter/original/native capture、native source、
+purchased mapping、lossless JPEG、terminal、resume、および2つのBookWalker browser
+Integration file）は596 passed、0 skipped（183.61秒）。最後にcleanup検証を強化した
+見開き13ケースを再実行し13 passed、0 skipped。`ruff check src tests`と変更fileの
+`git diff --check`は成功。warningは既存のpytest-asyncio/Pillow等の非推奨警告。
+BookWalker固有のretry開始条件だけの変更で共通Core/Batch/Browser変更は無いため、
+full suiteと`note/00_core.md`更新は不要と判断した。Research/Probe helperは未変更で、
+Research suiteも未実行。実サイトは保存診断を証拠として使用し、追加quotaを使うlive
+再実行はしていない。修正後の実まる読みでの回復成功と全巻取得は未確認。
+
+## Retained final-join redraw recovery mechanics (2026-11-17 / 2026-11-21)
 
 Source1927の18:09 Batchは2画像保存後、counter `3/374` のcaptureで停止した。
 保存diagnosticsはCID、counter、renderer canvas、trace/reset epoch、寸法が同じで、
@@ -85,7 +148,7 @@ operation4917→8576、source canvas4のcontent versionが4805→8408へ変化�
 古いreconstructed JPEGの最終照合を拒否した停止であり、チケット入口・403・429の問題ではない。
 別Workのarchive maintenance warningはこの停止原因ではなく、過去ZIP/statusを変更していない。
 
-現在はsingle-partのretained final joinに限り、完全なraw atomic anchorで両versionの増加と
+現在はsingle-partまたはexact-two-partのretained final joinで、完全なraw atomic anchorで両versionの増加と
 全fixed field/安全flag/旧selected tupleの一致が確認できれば、失敗した画像を全て破棄して
 100ms後に1回だけfresh native captureを試す。sanitized diagnostic JSONはretry authorityにしない。
 新しい選択でも同一CID/counter/canvas object/window token/geometry generation/trace/reset epoch/
@@ -94,7 +157,8 @@ draw・source content・target content versionが進み、source/target snapshot
 retryは新しいROI baselineをpinし、fresh drawのretained flagがfalseでも完全なfinal atomic ROI joinを
 必須にする。JPEG解析は繰り返さず新しいnative PNGを既存のlossless WebPへencodeして返す。
 古いJPEG/PNGを再利用しない。pixel-only mismatch、source/layout/identity変更、証拠欠落、
-2回目のrace、既存redraw retry使用済みはUNKNOWN。exact-twoの挙動は変更しない。
+2回目のrace、既存redraw retry使用済みはUNKNOWN。exact-twoも上記の全part取り直しを使い、
+既存の共通frame/両ROIの証明条件は維持する。
 cancelを含めnative ledger/snapshots/ROI handlesとretry用pinned renderer handleは終了時に解放する。
 CLI/config/output naming、navigation、max_pages、same-content guard、quota ruleは変更しない。
 diagnosticsの`retained_redraw_retry`にattempt数・first failure・output_verifiedを保存する。
@@ -4366,7 +4430,7 @@ PNG. It rechecks the unique current capture-window token, current page/CID and
 counter against the selected native calls, the same connected renderer canvas,
 the selected source tuple, and an exact current-ROI atomic proof. A stale,
 missing, one-pixel-different, or otherwise unavailable final join rejects the
-old result. The single-part same-page redraw exception above permits only one
+old result. The single-part or exact-two-part same-page redraw exception above permits only one
 fresh native attempt with new snapshots and complete final proof; other cases
 raise UNKNOWN rather than returning an older native PNG. This final renderer proof is
 separate from the JPEG-vs-native-PNG RGBA comparison; the latter remains a

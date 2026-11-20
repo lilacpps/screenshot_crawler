@@ -12,13 +12,17 @@ Policyのdefault-false hookによる選択とし、他サイトの順序は変�
 通常Batchと単一種別grant-onlyでも初回事前確認の一覧再GETを除くが、
 各話の入口Page共有は導入せず既存のfresh entry・guard・消費確認を保つ。
 
-## BookWalkerの同一ページ再描画では旧artifactを破棄して一度だけnativeを取り直す（2026-11-17）
+## BookWalkerの同一ページ再描画では旧artifactを破棄して一度だけnativeを取り直す（2026-11-21更新）
 
 retained final joinでraw current anchorが同一CID/counter/canvas/世代/安全flagを保ち、
-geometry/contentの両versionだけが進むsingle-partのraceに限り、新しいdraw/source/target
+geometry/contentの両versionだけが進むsingle-partまたはexact-two-partのraceに限り、新しいdraw/source/target
 snapshotを選び直せる。旧JPEG/PNGの承認条件は緩めない。fresh current ROIのpinとfinal atomic
 joinを全て通過したnative pixelsだけを返し、JPEG解析を繰り返さない。source/layout変更、
-証拠欠落、pixel-only mismatch、2回目のraceはUNKNOWN。quota/nav/既存exact-twoは変更しない。
+証拠欠落、pixel-only mismatch、2回目のraceはUNKNOWN。11月20日のSource1916で見開きの
+同一ページ再描画を観測したため、従来のsingle-part限定回復を見開きへ拡張する。
+両partの旧画像を破棄し、各partのfresh draw/snapshotと共通frameの両ROIを全て検証する。
+片側だけの再描画や既存retry使用済みでは停止する。旧画像のproof、quota/nav/resumeの
+表示条件一致規則は変更しない。
 詳細authorityは`CAPTURE_STRATEGY.md`、実サイト確認範囲と未確認事項は`note/01_bookwalker.md`。
 
 ## 未操作のquota入口失敗では仮の再閲覧grantを取り消す（2026-11-17）

@@ -3036,6 +3036,149 @@ async def test_retained_capture_page_final_join_is_atomic(
             assert result[0].mime_type == "image/webp"
 
 
+@pytest.mark.parametrize("mode", [
+    "redraw", "partial_right", "partial_left", "source_change", "geometry_change",
+    "identity_change", "window_change", "reset", "redraw_twice", "pixel_mutation",
+    "missing_source_snapshot", "retry_already_used", "cancel",
+])
+async def test_retained_spread_redraw_discards_both_old_parts(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """A reused mutable source must yield two fresh parts or fail as a whole."""
+    await _setup_synthetic_terminal_page(browser_page)
+    await browser_page.evaluate(
+        """
+        async () => {
+          window.__bookwalkerResetTransformTrace('retained_spread_redraw');
+          window.__bookwalkerNativeDrawCalls = [];
+          document.querySelector('#renderer .currentScreen').innerHTML =
+            '<canvas width="1200" height="800" style="width:1200px;height:800px"></canvas>';
+          const renderer = document.querySelector('#renderer canvas');
+          renderer.width = 1200; renderer.height = 800;
+          const target = document.createElement('canvas');
+          target.width = 600; target.height = 800;
+          target.getContext('2d').clearRect(0, 0, 600, 800);
+          window.__bookwalkerBeginCaptureWindow('geometry_cleanup');
+          window.__bookwalkerBeginCaptureWindow('native_capture_arm');
+          window.__spreadDraw = async (fresh, mode) => {
+            if (mode === 'reset') window.__bookwalkerResetTransformTrace('spread_reset');
+            for (let index = 0; index < 2; index += 1) {
+              if (mode === 'partial_right' && index === 1) continue;
+              if (mode === 'partial_left' && index === 0) continue;
+              const source = document.createElement('canvas');
+              source.width = 600; source.height = 800;
+              const color = fresh
+                ? ['rgb(11,22,33)', 'rgb(44,55,66)'][index]
+                : ['rgb(42,63,84)', 'rgb(84,63,42)'][index];
+              source.getContext('2d').fillStyle = color;
+              source.getContext('2d').fillRect(0, 0, 600, 800);
+              const bitmap = await createImageBitmap(source);
+              let currentTarget = target;
+              if (mode === 'source_change' && index === 1) {
+                currentTarget = document.createElement('canvas');
+                currentTarget.width = 600; currentTarget.height = 800;
+              }
+              const context = currentTarget.getContext('2d');
+              // The initial right part uses the retained empty boundary.
+              if (fresh || index > 0) context.clearRect(0, 0, 600, 800);
+              context.drawImage(bitmap, 0, 0, 600, 800);
+              renderer.getContext('2d').drawImage(
+                currentTarget, 0, 0, 600, 800,
+                index === 0 ? 600 : (mode === 'geometry_change' ? 1 : 0), 0, 600, 800,
+              );
+            }
+            if (mode === 'identity_change') {
+              document.querySelector('#pageSliderCounter').textContent = '3/3';
+            }
+            if (mode === 'window_change') window.__bookwalkerCaptureWindowToken = 'changed';
+          };
+          await window.__spreadDraw(false, 'initial');
+        }
+        """
+    )
+    calls = await browser_page.evaluate("window.__bookwalkerNativeDrawCalls.slice(-2)")
+    assert len(calls) == 2 and calls[0]["captureWindowRetained"] is True
+    assert calls[0]["sourceId"] == calls[1]["sourceId"]
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic"
+    adapter.enable_original_jpeg_capture = True
+    materialize = adapter._materialize_native_source_crops
+    attempts = []
+    original_attempts = []
+    old_jpegs = []
+    for color in [(42, 63, 84), (84, 63, 42)]:
+        buffer = BytesIO()
+        Image.new("RGB", (600, 800), color).save(buffer, format="JPEG")
+        old_jpegs.append(CaptureResult(buffer.getvalue(), 600, 800, "image/jpeg", ".jpg"))
+
+    async def old_original_capture(_page, native):
+        original_attempts.append(True)
+        assert len(native) == 2
+        return tuple(old_jpegs)
+
+    async def redraw_after_materialize(page, selected):
+        result = await materialize(page, selected)
+        attempts.append(selected)
+        if len(attempts) == 1 or mode == "redraw_twice":
+            await page.evaluate("mode => window.__spreadDraw(true, mode)", mode)
+            if mode == "retry_already_used":
+                adapter._p4b_redraw_attempted = True
+            if mode == "missing_source_snapshot":
+                await page.evaluate(
+                    """() => {
+                      const call = window.__bookwalkerNativeDrawCalls.at(-1);
+                      window.__bookwalkerNativeSnapshots.delete(String(call.snapshotId));
+                    }"""
+                )
+        elif mode == "pixel_mutation":
+            await page.locator("#renderer canvas").evaluate(
+                "canvas => canvas.getContext('2d').fillRect(0, 0, 1, 1)"
+            )
+        return result
+
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", old_original_capture)
+    monkeypatch.setattr(adapter, "_materialize_native_source_crops", redraw_after_materialize)
+    if mode == "cancel":
+        wait = browser_page.wait_for_timeout
+
+        async def cancel_settle(milliseconds):
+            if milliseconds == 100:
+                raise asyncio.CancelledError
+            await wait(milliseconds)
+
+        monkeypatch.setattr(browser_page, "wait_for_timeout", cancel_settle)
+    if mode == "redraw":
+        result = await adapter.capture_page(browser_page)
+        assert result is not None and len(result) == 2, json.dumps(adapter._capture_debug)
+        assert len(attempts) == 2
+        for index, color in enumerate([(11, 22, 33), (44, 55, 66)]):
+            assert result[index].mime_type == "image/webp"
+            image = Image.open(BytesIO(result[index].data)).convert("RGB")
+            assert image.size == (600, 800)
+            assert image.getextrema() == tuple((channel, channel) for channel in color)
+            assert attempts[1][index]["traceOperationIndex"] > attempts[0][index]["traceOperationIndex"]
+        debug = adapter._capture_debug["bookwalker_capture"]
+        assert debug["retained_redraw_retry"]["attempt_count"] == 1
+        assert debug["retained_redraw_retry"]["output_verified"] is True
+        assert debug["capture_window_final_join"]["exact"] is True
+        assert all(call["captureWindowRetained"] is False for call in attempts[1])
+    else:
+        error = asyncio.CancelledError if mode == "cancel" else UnknownPageStateError
+        with pytest.raises(error):
+            await adapter.capture_page(browser_page)
+        assert len(attempts) <= 2
+        if mode in {"redraw_twice", "pixel_mutation"}:
+            assert len(attempts) == 2
+    assert len(original_attempts) == 1
+    assert await browser_page.evaluate("window.__bookwalkerNativeDrawCalls.length") == 0
+    assert await browser_page.evaluate(
+        "window.__bookwalkerNativeSnapshots.size + window.__bookwalkerNativeSourceObjects.size"
+    ) == 0
+    assert not adapter._capture_snapshot_handles
+
+
 async def test_retained_capture_page_original_jpeg_return_still_runs_final_join(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,

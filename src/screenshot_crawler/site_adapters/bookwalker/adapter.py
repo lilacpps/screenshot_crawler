@@ -10870,7 +10870,10 @@ class BookWalkerAdapter(SiteAdapter):
                     if (
                         retained_retry is None
                         and not self._p4b_redraw_attempted
-                        and len(selected_draw_calls) == 1
+                        # The raw atomic join witnesses every selected tuple.
+                        # A spread retries as a whole; both fresh parts must
+                        # pass reselection and the final common-frame ROI join.
+                        and 1 <= len(selected_draw_calls) <= 2
                         and isinstance(observed, dict)
                         and isinstance(p4b_initial_anchor, dict)
                     ):
