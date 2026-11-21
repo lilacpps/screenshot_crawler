@@ -8,6 +8,92 @@ Discovery, manual Crawl/Runner, Batch adapter, and Batch policy. Existing
 Planner, Executor, packager, Artifact, and Completed services are reused.
 Shared Core exposes only site-neutral access-grant and entry-only hooks.
 
+## Direct episode entry (2026-11-21)
+
+`YanmagaAdapter` validates the saved public episode URL against the configured
+`<decoded-work-slug>:<episode-id>` and enters it directly. Capture initialization
+never opens the work listing, expands More, or invokes Full Discovery. The
+reader's unique menu title fields and same-work `detail_story` link supply
+Adapter metadata; Batch's explicit Catalog metadata retains its normal priority.
+
+A public episode GET may itself start first-free rental. This is an intentional
+entry operation, including for manual `auto`/`direct`. The Adapter never retries
+that GET or selects another resource. When the exact first-free completion notice
+is present, the existing same-viewer/body/counter/no-gate proof is required.
+With a Batch grant observer, a fresh exact finite hourly Rental History grant is
+saved synchronously before capture. Without an observer the readable episode may
+complete, and the diagnostic state is `discovery_required`; no expiry is invented.
+If the initial Runner navigation fails before initialization, no post-navigation
+metadata retry is started. Run explicit Full Discovery to refresh changed site
+state and recover a finite active rental before replanning the failed Item.
+Internal Full-Discovery-based markerless grant recovery has been removed.
+
+An existing stored grant retains its stronger pre-entry contract: the initial
+safe account document is `/mypage`; the saved expiry must still be future and
+fresh exact Rental History must be active before one Source GET. Expired,
+missing, duplicate, conflicting, or unknown evidence stops before Source entry.
+This account check never expands a work's episode listing or extends the grant.
+
+`quota/work_ticket`, including grant-only, also starts with the safe account
+document and complete bounded Rental History. An active target rental without
+a trusted saved grant stops and requires Discovery. After proven absence or an
+expired rental, one Source GET displays the native modal. Its exact same-target
+POST form, authentication, charge, period and enabled submitter are the live
+resource authority; no listing-row marker is needed. Only one normal click is
+allowed. The distinct work-ticket notice, fresh active history, consumption
+recording and grant-only no-capture contracts remain unchanged. `direct` never
+clicks a wait-ticket or paid form.
+
+Completion requires every body index to be captured, the same requested
+reader route, the known final counter or exact terminal-only layout, a hidden
+menu, and the existing stable viewport/ownership/geometry and exact CTA checks.
+The final card must additionally match the reader's own native response for
+this current episode. No next-episode control is activated.
+
+`terminal.py` observes only the main frame's native GET/XHR or fetch to
+`/viewer/rental_episode`. It requires exactly `jdcn`, `random_identification`,
+`viewer_type=comics`, and the observed `vm=2`; the episode ID must match the
+requested target and the 20-character content code must match the viewer's cid
+when present. A nonredirected 200 HTML response, at most 512 KiB, must contain
+one top-level `#rental`. A shared detached/live DOM projection compares the
+title, work title, control href/data-viewer-path, wait text/clock asset,
+form action/method/content code/rental type, required cost and share-control
+count. Geometry, CSRF, account balances and analytics are excluded. The reader
+fills the share URL after insertion; the existing engagement proof separately
+validates its current-source URL. Raw HTML and tokens are not retained.
+
+Only the newest eligible request in the current main document can provide
+proof. Navigation invalidates old evidence; processing is bounded to four
+pending requests/tasks and ten seconds per response. The same endpoint also
+serves the native popup iframe document (`popup=true`): that separate surface
+neither supplies nor invalidates main-reader evidence. Page close/next prepare
+detaches listeners and cancels tasks. Pixel-observer disposal keeps terminal
+evidence available for final metadata.
+
+Signup additionally matches its strict `forward` ID to the reader menu's
+same-work next link. Wait-countdown, ready-wait and point-rental cards retain
+their exact native structure/action/label checks, with the source-bound response
+replacing listing-title adjacency. The author-follow-only branch requires no
+native next link; engagement retains its current-episode forms/share proof.
+Missing responses, altered titles/forms, wrong IDs/codes, duplicate roots,
+unknown request shapes, wrong MIME/status, oversize HTML, hidden or obstructed
+cards, access gates and incomplete body sequences cannot prove END.
+
+Live verification used dedicated shared-CDP Pages and isolated output. Parallel
+Paradise 345 completed 19 native 1127x1600 WebP pages and END with one Source
+entry and no listing expansion. Manifest identity/order/hashes, same-observer
+native-pixel references and production ZIP members/CRC/hashes passed
+(`output/ydirect/audit.json`). An existing-rental Chapter 10 completed 20 native
+WebP pages with no listing GET or first-party non-GET, unchanged grant and no
+normal Catalog writes (`output/ydirect/grant-full2/`). A native next/read card
+also matched its same-episode response in a UI-only probe; that probe is not a
+40-page capture claim. Fresh first-free or Work Ticket consumption was not
+repeated live in this change; those paths are covered by synthetic browser tests.
+The final six-file Yanmaga Unit/browser suite passed 529 tests with zero skips;
+`ruff check src tests` and the changed-file diff check passed. Full pytest,
+other-site Integration and existing Research suites were not rerun for this
+site-local change. Verification details are in `note/14_yanmaga.md`.
+
 ## Final-body favorite / like / share card (2026-11-18)
 
 The observed native engagement card is an additional positive END boundary,
@@ -69,7 +155,7 @@ a diagnostic hook stopped before that navigation. No Source/Viewer request,
 ticket POST, resource consumption or normal Catalog mutation occurred. Actual
 ticket re-consumption/capture/ZIP was not rerun for this fix.
 
-## Stage 02 current state (2026-11-16; C8 verified, Stage 02 PASS with independent BLOCKING 0)
+## Stage 02 historical verification (2026-11-16; C8 verified, Stage 02 PASS with independent BLOCKING 0)
 
 The C sort and canonical/og corrections and the BODY pre-live review passed
 independent review with BLOCKING 0. A metadata-only probe verified the Rental
@@ -198,11 +284,12 @@ further popup action was attempted. The ignored QA popup helper, including this
 observed DIV shape, has only passed compile checks and has not been live tested.
 The Stage 02 final gate is PASS. Stage 03 is accepted with qualified composite live evidence and independent BLOCKING 0: wait classification, work-scoped Policy, automatic ticket persistence, grant-only, same-grant capture, positive END, ZIP, and Completed were verified across the bounded runs. Two ticket uses were recorded: dual chapter 29 from frozen exact-history evidence and novel chapter 10 through automatic grant-only persistence. A5 completed the dual chapter-29 same-grant capture with 14 pages and positive END; Root audited the genuine Manifest and ZIP. The grant and work cooldown remained unchanged and A5 used no ticket POST. Post-capture full/incremental Discovery completed and preserved the target, grant, and artifacts with zero Source, Viewer, or native rental POST activity. Stage 04 A6 existing-grant capture on work-novel chapter 10 and A7 public-free capture on work-dual chapter 51 both completed with positive END, ZIP, and Completed; neither changed grant/quota state or used a new right. Independent Tester audits and 261 affected tests passed (0 skipped, 305 deselected). The final Reviewer gate passed with independent BLOCKING 0; the full-suite run was controlled-stopped and is not a full pass.
 
-### Latest-listed terminal follow-up (2026-11-16)
+### Historical latest-listed terminal verification (2026-11-16)
 
 The latest-listed terminal branch was exercised on an isolated copy for chapter
 53. It captured 16 pages and reached `stop_reason=end` with the observed
-author-follow card matching the unique final row of the complete fresh listing.
+author-follow card. The historical listing-final check has been replaced by
+the source-bound response and absence of a native next link.
 Source=1, Viewer=1, ticket POST=0. Root audited the 16-page Manifest and ZIP.
 The user's normal Catalog and original failed output were left unchanged.
 
@@ -449,39 +536,39 @@ capture and immediate grant persistence remain incomplete.
 
 ## Viewer and capture
 
-`YanmagaAdapter` binds the configured `<decoded-work-slug>:<episode-id>` to
-the original Catalog `source_url` and freshly validates the exact requested
-source. The normal public-free path still requires the exact visible red-free
-marker. Stage 02 also permits one public-episode GET for a fresh authenticated
-exact first-free row; that route may grant access automatically, and the
-adapter requires the exact Viewer, the exact first-free notice
-`無料レンタルが完了しました`, and finite target-bound Rental History evidence
-before synchronously saving the grant. A trusted
-stored grant can authorize direct retry only when its Catalog expiry is still
-future and a fresh same-target countdown is active. A markerless raw-unknown
-row may also recover an already-active hourly grant when the internal full
-Discovery supplies an explicitly observed future bound. The adapter reconfirms
-exactly that target through fresh authenticated Rental History, validates the
-current listing/entry DOM, and synchronously saves the earlier of the two
-bounds through the Batch grant observer before Source entry. This recovers a
-rental whose earlier first-free confirmation failed before Catalog persistence.
-It never infers a use timestamp, consumes a resource, or extends an existing
-future Catalog grant. Missing/unbounded/day-only/changed evidence or a failed
-observer stops before entry. Day countdowns retain the existing full-Discovery
-import and trusted-Catalog-grant path; automatic Adapter recovery uses the
-existing observer's hourly-countdown evidence contract. All other unknown,
-conflicting, expired, or unsupported access states fail closed. For wait-free
-rows, the adapter also requires the exact image marker, charged signal, and
-verified absence of an active target rental (absent or exact expired card) from
-complete Rental History; it validates the observed
-same-episode modal and POST form before one normal click. Its exact completion
-notice is `レンタルが完了しました`; it does not accept the first-free notice
-as a substitute. Novel chapter 10 grant-only verified the exact post-click
-Viewer, notice, active history, and automatic persistence. Dual chapter 29 Run
-10 required later frozen-history recovery; its same-grant capture succeeded in
-a separate run. `direct`, `auto`, and the bounded `work_ticket` strategy are
-supported. This does not establish the
-site's daily-cap scope beyond the observed samples.
+`YanmagaAdapter` validates the saved public episode URL against the configured
+`<decoded-work-slug>:<episode-id>` and enters it directly. Capture initialization
+never opens the work listing, expands More, or invokes Full Discovery. The
+reader's unique menu title fields and same-work `detail_story` link supply
+Adapter metadata; Batch's explicit Catalog metadata retains its normal priority.
+
+A public episode GET may itself start first-free rental. This is an intentional
+entry operation, including for manual `auto`/`direct`. The Adapter never retries
+that GET or selects another resource. When the exact first-free completion notice
+is present, the existing same-viewer/body/counter/no-gate proof is required.
+With a Batch grant observer, a fresh exact finite hourly Rental History grant is
+saved synchronously before capture. Without an observer the readable episode may
+complete, and the diagnostic state is `discovery_required`; no expiry is invented.
+If the initial Runner navigation fails before initialization, no post-navigation
+metadata retry is started. Run explicit Full Discovery to refresh changed site
+state and recover a finite active rental before replanning the failed Item.
+Internal Full-Discovery-based markerless grant recovery has been removed.
+
+An existing stored grant retains its stronger pre-entry contract: the initial
+safe account document is `/mypage`; the saved expiry must still be future and
+fresh exact Rental History must be active before one Source GET. Expired,
+missing, duplicate, conflicting, or unknown evidence stops before Source entry.
+This account check never expands a work's episode listing or extends the grant.
+
+`quota/work_ticket`, including grant-only, also starts with the safe account
+document and complete bounded Rental History. An active target rental without
+a trusted saved grant stops and requires Discovery. After proven absence or an
+expired rental, one Source GET displays the native modal. Its exact same-target
+POST form, authentication, charge, period and enabled submitter are the live
+resource authority; no listing-row marker is needed. Only one normal click is
+allowed. The distinct work-ticket notice, fresh active history, consumption
+recording and grant-only no-capture contracts remain unchanged. `direct` never
+clicks a wait-ticket or paid form.
 
 The public episode route normally redirects to
 `/viewer/comics/<same-slug>/<same-episode-id>`. Live navigation also showed the
@@ -613,9 +700,11 @@ The counter can advance before the slide layout. While waiting for the same
 turn, a still-stable old captured frame is treated as pending within the
 original deadline, without another key press. A new uncaptured body must pass
 the usual stable/identity/geometry checks; a layout that never arrives times
-out. Diagnostics include the counter, visible/captured indices, and
-`history_grant_recovery_state` (`not_attempted`, `candidate`, `reconfirmed`,
-`persisted`). This observation was recorded on Chapter 17 after grant recovery.
+out. Initial load and rewind now require the counter's body wrapper to be
+visible too, before accepting a stable snapshot or the restored first page.
+Diagnostics include the counter, visible/captured indices, entry mode and
+terminal-response state. The legacy `history_grant_recovery_state` field stays
+`not_attempted`; internal Discovery recovery is no longer performed.
 
 The final spread can lead to a separate terminal-only screen: Chapter 15's
 15 body pages were followed by native `-/15`, with every body offscreen to the
@@ -625,7 +714,7 @@ N=1 or N>=3 within the existing bound, the loaded final N wrapper's geometry, ze
 visible bodies, and the observed 1272×1800 rental slot in the viewport's right
 half. The whole card must be unobstructed at its center and eight perimeter
 points. All 1..N body pages and a verified terminal branch remain mandatory;
-next/read titles must also match the unique immediate next listing row.
+next/read title/control fields must also match the current-episode native response.
 The internal terminal position N+1 never becomes a content identity or image.
 Initialization can rewind this known shape through the existing bounded normal
 UI path; the dash alone never authorizes completion. The same bounded wait
@@ -661,71 +750,46 @@ zero first-party non-GET attempts or new first-free entry.
 That terminal also verified a ready-wait CTA: exact label `「待つと無料....！」で読む`,
 native `form.ga-viewer-rental-free-wait` with same-origin POST `/viewer/rental`,
 one hidden 20-alphanumeric episode code and `free_rental_if_wait` type, a loaded
-same-code thumbnail and no required point cost. Its unique title must match
-the immediate fresh listing row carrying only the known wait marker. Other
+same-code thumbnail and no required point cost. Its title and form fields must match
+the same-episode native response described below. Other
 terminal controls or malformed/conflicting proof stop. The CTA is only read;
 the adapter neither clicks it nor changes ticket/Policy behavior. Diagnostics
 include `ready_wait_rental_exact`. Evidence: `.tmp/yanmaga-single-page/`.
 
-At completion, every body index must have been captured and the stable final
-counter and native wrapper must match the requested episode. A single sibling
-`#rental` card must be fully inside the viewport, visible, and center-owned by
-that element (or one of its descendants). Next/read, signup, wait, and
-point-rental branches require one unique presented rental title. Signup and wait
-proofs also match that title to the corresponding fresh listing row. A card
-can qualify through either exactly one presented `次の話を読む` control and
-no signup control, or exactly one presented
-`無料登録して読む` signup control at the same-origin
-`/customers/sign-up` path and no valid-next control. That signup URL must use
-HTTPS, have no credentials or fragment, and contain exactly one raw query field:
-`forward=<32 lowercase hex episode ID>`. The token must identify the unique
-immediately following episode row in the fresh, validated listing for the same
-work, and the whitespace-normalized rental title must exactly match that row's
-title. The token is compared only; it is never used to construct or navigate a
-route, and the signup control is never activated. Hidden, off-screen, clipped,
-obstructed, conflicting, duplicate, foreign, non-adjacent, title-mismatched, or
-malformed preloaded-card signals fail closed. These presentation checks and the
-final-body proof must remain stable across repeated snapshots within the bounded
-page-change window. The reader next arrow is retained as diagnostic metadata
-only because its visibility is transient during normal traversal. If the card
-has no next/read or signup control, one exact visible
-`.aspect-ratio-2-27.mt-wait > div.episode-modal-wait.content` block can be the
-terminal signal when it contains the observed clock image followed by one span
-matching `あとH:MMで無料` (H 0–23, minutes 00–59). Its title must match the unique
-immediate next row in the fresh listing, and that row must carry the exact wait
-marker without a conflicting free marker. The timer is not activated. For a
-complete fresh listing whose exact current episode is the unique final row, a
-fourth terminal branch accepts only the observed author-follow card: one
-visible `a.author-info` under `#rental > #js-rental-box.rental-bg.ga-viewer-rental
-> #js-modal-content.rental-modal > .wrapper-rental-button
-> #js-modal-button.wrapper-mod-modal.background-transparent`, with the exact
-label `作者をフォローして次の更新を待つ！`, the observed X and arrow image
-assets, and an HTTPS `x.com` link. In this branch there must be no rental title,
-next/read, signup, or wait marker. The link is observed only and is never
-activated. All existing route, captured-body, ownership, access-gate, and
-stable-END checks still apply. Unknown layouts, missing halves, page/source
-drift, gates, or an unproven terminal state fail closed.
+Completion requires every body index to be captured, the same requested
+reader route, the known final counter or exact terminal-only layout, a hidden
+menu, and the existing stable viewport/ownership/geometry and exact CTA checks.
+The final card must additionally match the reader's own native response for
+this current episode. No next-episode control is activated.
 
-The observed point-rental card is a fifth END branch. It requires one presented
-exact `レンタルして読む` anchor and its direct native point-rental POST form to
-same-origin HTTPS `/viewer/rental`, one 20-character alphanumeric content code,
-one hidden `rental_type=point_rental`, a positive displayed cost, and the exact
-code in the observed CDN thumbnail. Its unique normalized title must match the
-unique immediately following same-work listing row. Other terminal controls
-conflict; point identity and geometry are stable-snapshot fields. No control
-is activated. This fixes Chapter 29's all-body-saved `go_next` timeout when the
-next chapter is offered for points. A final isolated same-grant run completed
-14 WebP pages with zero PNG (13 pre-JPEG and one decoded-source page); page 14
-matched an independent DOM-image reference byte-for-byte in RGBA. The genuine
-Manifest/ZIP/audits are under `output/yanmaga-png-investigation/fixed-point29-final/`.
-No new right or normal Catalog update was used in this verification.
+`terminal.py` observes only the main frame's native GET/XHR or fetch to
+`/viewer/rental_episode`. It requires exactly `jdcn`, `random_identification`,
+`viewer_type=comics`, and the observed `vm=2`; the episode ID must match the
+requested target and the 20-character content code must match the viewer's cid
+when present. A nonredirected 200 HTML response, at most 512 KiB, must contain
+one top-level `#rental`. A shared detached/live DOM projection compares the
+title, work title, control href/data-viewer-path, wait text/clock asset,
+form action/method/content code/rental type, required cost and share-control
+count. Geometry, CSRF, account balances and analytics are excluded. The reader
+fills the share URL after insertion; the existing engagement proof separately
+validates its current-source URL. Raw HTML and tokens are not retained.
 
-The latest-listed branch was verified on an isolated copy using chapter 53.
-The run captured all 16 pages and ended on the exact final listing row with the
-observed author-follow card. It completed with no ticket POST and left the
-user's normal Catalog and original failed output untouched. Root audited the
-16-page Manifest/ZIP; this evidence does not claim a repair of the normal
-Catalog.
+Only the newest eligible request in the current main document can provide
+proof. Navigation invalidates old evidence; processing is bounded to four
+pending requests/tasks and ten seconds per response. The same endpoint also
+serves the native popup iframe document (`popup=true`): that separate surface
+neither supplies nor invalidates main-reader evidence. Page close/next prepare
+detaches listeners and cancels tasks. Pixel-observer disposal keeps terminal
+evidence available for final metadata.
+
+Signup additionally matches its strict `forward` ID to the reader menu's
+same-work next link. Wait-countdown, ready-wait and point-rental cards retain
+their exact native structure/action/label checks, with the source-bound response
+replacing listing-title adjacency. The author-follow-only branch requires no
+native next link; engagement retains its current-episode forms/share proof.
+Missing responses, altered titles/forms, wrong IDs/codes, duplicate roots,
+unknown request shapes, wrong MIME/status, oversize HTML, hidden or obstructed
+cards, access gates and incomplete body sequences cannot prove END.
 
 A fresh reader can show the native full-screen `#menu` over its first page. The
 adapter tolerates only the observed menu/header/controller/transparent-overlay
@@ -756,16 +820,11 @@ ineligible. The shared Planner parses free timestamps before calling Policy,
 so a malformed persisted timestamp can fail the whole plan with
 `BatchPlanningError`; the shared Planner keeps its existing fail-closed behavior.
 
-The normal Batch Executor creates a fresh Yanmaga adapter and validates the
-exact target before opening its public episode URL. Public-free, first-free,
-and trusted-grant checks remain in place. The wait-ticket path requires an
-authenticated exact row, one observed wait image marker, visible charged state,
-verified absence of an active target rental (absent or exact expired card) from
-the complete Rental History collection, and the
-observed exact modal form. The POST is initiated only by one normal click; no
-resource fallback is used. The source modal and pre-click history shapes were
-observed read-only on `work-dual` chapter 29 and `work-novel` chapter 10. The
-Root later verified the exact native ticket notice, Viewer, and active history from retained evidence; the production run itself did not latch or persist the use.
+The normal Batch Executor creates a fresh Adapter and binds the exact saved
+target. Entry uses the direct Source/account checks above, with no work listing
+or Full Discovery. The Source modal supplies the exact work-ticket authority.
+Source GET may consume first-free access; initial navigation failure is recovered
+through explicit Full Discovery, without an automatic second entry.
 Wait countdown parsing accepts the observed exact `残りH時間` or `残りD日`
 field only when the explicit wait/trusted-history bound permits it (up to 72
 hours); ordinary first-free history remains capped at 23 hours and does not
@@ -817,8 +876,8 @@ now excludes the exact `.episode-modal-point`,
 `dl.episode-modal-point--necessary`, and `.episode-modal-short` nodes there.
 Semantic dialogs remain gates, and the existing body ownership, pixel, and END
 checks are unchanged. The observed inline wait countdown terminal variant is
-accepted only when it matches the immediate next wait-marked listing row and no
-next/read or signup CTA is present. No further ticket action is authorized.
+accepted only with the current-episode native response binding and no
+next/read or signup CTA present. No further ticket action is authorized.
 
 Wait/trusted history accepts exact `残りH時間` or `残りD日` within the explicit
 72-hour bound. Day fields use observation start plus D days minus one hour and

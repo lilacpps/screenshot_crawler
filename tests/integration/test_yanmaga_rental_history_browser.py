@@ -191,6 +191,7 @@ async def _run_runtime_history_observation_probe(
     stale_stream: bool = False,
     stream_content_type: str = "text/vnd.turbo-stream.html; charset=utf-8",
     positive_only: bool = False,
+    initial_url: str = "https://yanmaga.jp/comics/work?sort=older",
 ):
     requests: list[str] = []
 
@@ -231,7 +232,7 @@ async def _run_runtime_history_observation_probe(
         await route.fulfill(status=200, headers=headers, body=body)
 
     await page.route("**/*", route_handler)
-    await page.goto("https://yanmaga.jp/comics/work?sort=older", wait_until="domcontentloaded")
+    await page.goto(initial_url, wait_until="domcontentloaded")
     fetch = fetch_rental_history_countdowns if positive_only else fetch_rental_history_observations
     observations = await fetch(
         page,
@@ -264,8 +265,9 @@ def _history_stream(rows: str, more: str = "") -> str:
 
 @pytest.mark.parametrize("status", ["absent", "expired", "active", "multiple_pages"])
 @pytest.mark.parametrize("positive_only", [False, True])
+@pytest.mark.parametrize("account_entry", [False, True])
 async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target(
-    browser_page, status, positive_only
+    browser_page, status, positive_only, account_entry
 ):
     initial = ''.join(f'<li data-index="{i}">{_card(episode_id=f"{i+1:032x}")}</li>' for i in range(20))
     value_options = {"value": "期限切れ", "value_classes": TEST_EXPIRED_VALUE_CLASSES} if status == "expired" else {}
@@ -278,7 +280,9 @@ async def test_yanmaga_history_pagination_proves_inactive_or_active_exact_target
                  40: _history_stream(f'<li data-index="40">{_card()}</li>')}
     observations, requests = await _run_runtime_history_observation_probe(
         browser_page, history_cards=initial, pagination=_history_more(20), stream_pages=pages,
-        positive_only=positive_only)
+        positive_only=positive_only,
+        initial_url="https://yanmaga.jp/mypage" if account_entry
+        else "https://yanmaga.jp/comics/work?sort=older")
     if positive_only and status in {"absent", "expired"}:
         assert observations == ()
     elif status in {"absent", "expired"}:

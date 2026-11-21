@@ -422,7 +422,7 @@ async def _fetch_rental_history_observations(
         f"/viewer/comics/{quote(target.slug, safe='')}/{target.episode_id}"
         for target in targets
     }
-    current_document_ok = (
+    current_document_ok = (current.path == "/mypage" and not current.query) or (
         current.path == expected_work_path
         and current_query in ([], [("sort", "older")])
     ) or (

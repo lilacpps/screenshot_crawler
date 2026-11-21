@@ -1,5 +1,25 @@
 # Discovery / Catalog / Batch Design
 
+## Yanmaga saved episode entry (2026-11-21)
+
+Normal acquisition uses the saved canonical public episode URL, without internal
+Full Discovery or work-list expansion. An ordinary direct episode GET may start
+first-free rental intentionally. Confirmed finite grants are still saved through
+the existing observer before capture where available. Initial navigation failure
+does not trigger another entry/metadata retry: explicit Full Discovery refreshes
+changed access state and can recover a finite active rental for replanning.
+Catalog `free` does not distinguish ordinary-free from first-free and is not
+converted into a new persisted subtype.
+
+Existing grants still require future saved expiry and fresh exact active Rental
+History before Source entry, using the safe account page rather than a work list.
+Work Ticket also keeps complete history preflight and one exact Source modal
+submission. The target-bound live modal replaces work-row markers as the resource
+proof. No implicit resource fallback, quota-rule change, new Catalog schema,
+automatic Discovery or Item/Artifact success on failure is introduced.
+Viewer terminal evidence comes from the main reader's current-episode native
+rental-card response and exact displayed controls, not saved Catalog ordering.
+
 ## Yanmaga rental refresh (2026-11-20)
 
 Authenticated Discovery observes the complete bounded native Rental History,

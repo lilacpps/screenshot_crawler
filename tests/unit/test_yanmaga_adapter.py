@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-from urllib.parse import quote
 
 import pytest
 from PIL import Image
@@ -66,9 +65,9 @@ async def test_composite_identity_is_configured_and_source_url_is_retained() -> 
     adapter = YanmagaAdapter()
     await adapter.configure_target_identity(f"{SLUG}:{EPISODE_ID}", "watchlist-main")
 
-    work_url = adapter.resolve_initial_navigation_url(SOURCE_URL)
+    entry_url = adapter.resolve_initial_navigation_url(SOURCE_URL)
 
-    assert work_url == f"https://yanmaga.jp/comics/{quote(SLUG, safe='')}"
+    assert entry_url == SOURCE_URL
     assert adapter._source_url == SOURCE_URL
     assert adapter._expected_external_id == f"{SLUG}:{EPISODE_ID}"
 
