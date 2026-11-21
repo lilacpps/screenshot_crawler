@@ -609,7 +609,11 @@ The M1 access mapping is:
 
 Conflicting recognized state classes are incomplete. `--get-point` may coexist
 with `--free` because both express free access; its numeric reward is not
-parsed as a purchase price. It never overrides a quota or paid badge. Missing
+parsed as a purchase price. The user confirmed on 2026-11-22 that `5p` means
+「今日読むと5ポイント獲得」, a reading reward rather than a cost or access
+requirement. The crawler ignores the reward amount for access classification;
+collecting reward points is not part of Discovery or crawl success criteria.
+It never overrides a quota or paid badge. Missing
 and unrecognized badges remain `unknown`.
 
 Live verification on 2026-11-22 found `--get-point` with `5p` on episode
