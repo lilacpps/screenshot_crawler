@@ -265,8 +265,9 @@ def test_gui_mixed_batch_signs_piccoma_consent_for_piccoma_only(
     ("resource", "consent_required"),
     [("all", True), ("work_ticket", False), ("binge_ticket", True)],
 )
+@pytest.mark.parametrize("setting", ["common", "site"])
 def test_gui_piccoma_grant_resources_queue_matching_signed_consent(
-    tmp_path, qt_app, monkeypatch, resource, consent_required
+    tmp_path, qt_app, monkeypatch, resource, consent_required, setting
 ):
     window = _window(tmp_path, qt_app)
     original = window.model.snapshot
@@ -285,10 +286,29 @@ def test_gui_piccoma_grant_resources_queue_matching_signed_consent(
     )
     window.set_snapshot(snapshot)
     window.model.set_checked_keys({"piccoma-example"})
-    combo = window._site_grant_resource_combos["piccoma"]
+    assert window.site_resource_scroll.isHidden()
+    assert not window.site_resource_toggle.isChecked()
+    if setting == "site":
+        window.site_resource_toggle.click()
+        assert not window.site_resource_scroll.isHidden()
+    combo = (
+        window.grant_resource_combo if setting == "common"
+        else window._site_grant_resource_combos["piccoma"]
+    )
     index = combo.findData(resource)
     assert index >= 0
     combo.setCurrentIndex(index)
+    if setting == "site":
+        window.site_resource_toggle.click()
+        assert window.site_resource_scroll.isHidden()
+        assert "1件指定" in window.site_resource_toggle.text()
+    window.set_snapshot(snapshot)
+    assert window.site_resource_scroll.isHidden()
+    refreshed = (
+        window.grant_resource_combo if setting == "common"
+        else window._site_grant_resource_combos["piccoma"]
+    )
+    assert refreshed.currentData() == resource
 
     captured = []
     monkeypatch.setattr(window, "_start_execution", captured.append)
@@ -313,6 +333,86 @@ def test_gui_piccoma_grant_resources_queue_matching_signed_consent(
         else service.input_fingerprint(request)
     )
     assert request.plan_fingerprint == fingerprint
+    window.close()
+
+
+def test_common_grant_resource_inherits_with_site_overrides_and_rejects_unsupported(
+    tmp_path, qt_app, monkeypatch
+):
+    from dataclasses import replace
+
+    window = _window(tmp_path, qt_app)
+    original = window.model.snapshot
+    WatchlistService(original.watchlist_path).add(
+        key="piccoma-example", work_key="piccoma-example", site="piccoma",
+        url="https://piccoma.com/web/product/23222/episodes", label="Piccoma example",
+    )
+    snapshot = InventoryService().load(
+        original.catalog_path, original.watchlist_path, runtime_path=window.runtime_path,
+    )
+    window.set_snapshot(snapshot)
+    window.model.set_checked_keys({"sample-0001", "piccoma-example"})
+    assert set(window._site_grant_resource_combos) == {"magapoke", "piccoma"}
+    common = window.grant_resource_combo
+    assert {common.itemData(i) for i in range(common.count())} == {"all", "work_ticket"}
+    common.setCurrentIndex(common.findData("work_ticket"))
+    captured = []
+    monkeypatch.setattr(window, "_start_execution", captured.append)
+    window.execution_limit_spin.setValue(3)
+    window._show_execution_preview("grant_only")
+    assert captured[-1].resources_by_site == (
+        ("magapoke", "work_ticket"), ("piccoma", "work_ticket"),
+    )
+    assert captured[-1].limit == 3
+    assert captured[-1].allow_quota_access is False
+
+    window.site_resource_toggle.click()
+    override = window._site_grant_resource_combos["magapoke"]
+    override.setCurrentIndex(override.findData("premium_ticket"))
+    window.site_resource_toggle.click()
+    window.set_snapshot(snapshot)
+    window._show_execution_preview("grant_only")
+    assert captured[-1].resources_by_site == (
+        ("magapoke", "premium_ticket"), ("piccoma", "work_ticket"),
+    )
+    assert "1件指定" in window.site_resource_toggle.text()
+    common.setCurrentIndex(common.findData("all"))
+    window._show_execution_preview("grant_only")
+    assert captured[-1].resources_by_site == (
+        ("magapoke", "premium_ticket"), ("piccoma", "all"),
+    )
+    assert captured[-1].allow_quota_access is True
+
+    # Reload must preserve removed overrides as unsupported, even while collapsed.
+    resources = dict(snapshot.resources)
+    resources["magapoke"] = replace(resources["magapoke"], grant_resources=("work_ticket",))
+    window.set_snapshot(replace(snapshot, resources=resources))
+    assert window.site_resource_scroll.isHidden()
+    assert window._site_grant_resource_combos["magapoke"].currentText() == (
+        "premium_ticket (unsupported)"
+    )
+    count = len(captured)
+    window._show_execution_preview("grant_only")
+    assert len(captured) == count
+    assert "no longer supported" in window.error_label.text()
+    override = window._site_grant_resource_combos["magapoke"]
+    override.setCurrentIndex(override.findData(None))
+    window._show_execution_preview("grant_only")
+    assert len(captured) == count + 1
+    assert captured[-1].resources_by_site == (("magapoke", "all"), ("piccoma", "all"))
+
+    # An unsupported inherited value also blocks; it cannot silently become all.
+    common.setCurrentIndex(common.findData("work_ticket"))
+    resources["piccoma"] = replace(resources["piccoma"], grant_resources=("binge_ticket",))
+    window.set_snapshot(replace(snapshot, resources=resources))
+    assert common.currentText() == "work_ticket (unsupported)"
+    window._show_execution_preview("grant_only")
+    assert len(captured) == count + 1
+    assert "not supported" in window.error_label.text()
+    window._show_execution_preview("batch")
+    assert captured[-1].action == "batch"
+    assert captured[-1].resources_by_site == ()
+    assert captured[-1].limit == 3
     window.close()
 
 

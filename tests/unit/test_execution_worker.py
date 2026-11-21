@@ -298,24 +298,28 @@ def test_worker_runs_multi_site_request_with_per_site_resources(
 @pytest.mark.parametrize(
     ("limit", "first_outcome", "expected_sites", "expected_limits", "fails"),
     [
-        (1, "started", ["mangaone"], [1], False),
-        (2, "started", ["mangaone", "piccoma"], [2, 1], False),
-        (1, "local_skip", ["mangaone", "piccoma"], [1, 1], False),
-        (1, "empty", ["mangaone", "piccoma"], [1, 1], False),
-        (2, "failure", ["mangaone"], [2], True),
+        (1, "started", ["magapoke", "piccoma"], [1, 1], False),
+        (2, "started", ["magapoke", "piccoma"], [2, 2], False),
+        (1, "local_skip", ["magapoke", "piccoma"], [1, 1], False),
+        (1, "empty", ["magapoke", "piccoma"], [1, 1], False),
+        (2, "failure", ["magapoke"], [2], True),
+        (1, "multiple_phases", ["magapoke", "piccoma"], [1, 1], False),
+        (None, "started", ["magapoke", "piccoma"], [None, None], False),
     ],
     ids=[
-        "limit-exhausted", "remaining-shared-limit", "local-skip-not-counted",
-        "empty-not-counted", "failure-stops-later-site",
+        "first-site-at-limit", "same-limit-each-site", "local-skip",
+        "empty-plan", "failure-stops-later-site", "multiple-phases", "unlimited",
     ],
 )
-def test_worker_mixed_batch_shares_limit_by_started_candidate(
+@pytest.mark.parametrize("action", ["batch", "grant_only"])
+def test_worker_mixed_batch_applies_limit_independently_per_site(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    limit: int,
+    action: str,
+    limit: int | None,
     first_outcome: str,
     expected_sites: list[str],
-    expected_limits: list[int],
+    expected_limits: list[int | None],
     fails: bool,
 ) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
@@ -323,8 +327,8 @@ def test_worker_mixed_batch_shares_limit_by_started_candidate(
     watchlist_path = tmp_path / "watchlist.yaml"
     watchlist = WatchlistService(watchlist_path)
     watchlist.add(
-        key="manga-key", work_key="manga-work", site="mangaone",
-        url="https://manga-one.com/manga/1/chapter/2", label="Manga",
+        key="manga-key", work_key="manga-work", site="magapoke",
+        url="https://example.invalid/magapoke/work", label="Manga",
     )
     watchlist.add(
         key="piccoma-key", work_key="piccoma-work", site="piccoma",
@@ -334,9 +338,13 @@ def test_worker_mixed_batch_shares_limit_by_started_candidate(
 
     async def fake_batch(args, _catalog) -> None:
         calls.append((args.site, args.limit, args.allow_quota_access))
-        if args.site == "mangaone":
+        if args.site == "magapoke":
             if first_outcome == "started":
-                args.event_sink("candidate_started", item_id=1)
+                for item_id in range(args.limit or 2):
+                    args.event_sink("candidate_started", item_id=item_id + 1)
+            elif first_outcome == "multiple_phases":
+                args.event_sink("candidate_started", item_id=1, phase="grant")
+                args.event_sink("candidate_started", item_id=1, phase="capture")
             elif first_outcome == "local_skip":
                 args.event_sink("candidate_finished", result="skipped", reason="local_skip")
             elif first_outcome == "failure":
@@ -349,11 +357,12 @@ def test_worker_mixed_batch_shares_limit_by_started_candidate(
 
     monkeypatch.setattr("screenshot_crawler.cli._run_batch_run_locked", fake_batch)
     request: dict[str, object] = {
-        "action": "batch",
+        "action": action,
         "selected_keys": ["manga-key", "piccoma-key"],
-        "sites": ["mangaone", "piccoma"],
-        "keys_by_site": {"mangaone": ["manga-key"], "piccoma": ["piccoma-key"]},
-        "resources_by_site": {},
+        "sites": ["magapoke", "piccoma"],
+        "keys_by_site": {"magapoke": ["manga-key"], "piccoma": ["piccoma-key"]},
+        "resources_by_site": {"magapoke": "all", "piccoma": "all"}
+        if action == "grant_only" else {},
         "catalog_path": str(catalog_path),
         "watchlist_path": str(watchlist_path),
         "runtime_path": str(tmp_path / "runtime.yaml"),
@@ -387,7 +396,7 @@ def test_worker_mixed_batch_shares_limit_by_started_candidate(
     assert [site_limit for _site, site_limit, _consent in calls] == expected_limits
     assert calls[0][2] is False
     if len(calls) == 2:
-        assert calls[1][0] == "piccoma" and calls[1][2] is True
+        assert calls[1][0] == "piccoma" and calls[1][2] is (action == "batch")
 
 
 def test_worker_does_not_treat_incomplete_discovery_as_success(

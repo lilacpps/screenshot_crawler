@@ -350,9 +350,9 @@ async def _run(
         )
     if allow_quota_access and not piccoma_request_needs_consent:
         raise RuntimeError("Piccoma ticket consent does not match selected grant resources")
-    remaining_limit = original_request.get("limit")
-    if action in {"batch", "grant_only"} and remaining_limit is not None and (
-        type(remaining_limit) is not int or remaining_limit < 1
+    limit = original_request.get("limit")
+    if action in {"batch", "grant_only"} and limit is not None and (
+        type(limit) is not int or limit < 1
     ):
         raise RuntimeError("Batch limit must be a positive integer")
 
@@ -526,14 +526,12 @@ async def _run(
                 raise RuntimeError("Catalog/Watchlist changed after confirmation")
         catalog = CatalogService(catalog_path)
         for site, keys in sorted(keys_by_site.items()):
-            if remaining_limit == 0:
-                break
             checkpoint()
             emit("task_started", phase="site", payload={"site": site, "keys": list(keys)})
             site_request = {
                 **request,
                 "resource": resources.get(site),
-                "limit": remaining_limit,
+                "limit": limit,
             }
             args = _request_namespace(
                 site_request,
@@ -541,18 +539,14 @@ async def _run(
                 keys=tuple(keys),
             )
             batch_summary: dict[str, object] = {}
-            site_attempts = 0
 
             def batch_event(
                 event_type: str,
                 _summary: dict[str, object] = batch_summary,
                 **fields: object,
             ) -> None:
-                nonlocal site_attempts
                 if event_type == "batch_finished":
                     _summary.update(fields)
-                elif event_type == "candidate_started":
-                    site_attempts += 1
                 emit(event_type, **fields)
 
             args.event_sink = batch_event
@@ -577,8 +571,6 @@ async def _run(
                 emit("task_failed", phase="site", result="failed", error_type=type(exc).__name__,
                      reason=str(exc)[:1000], payload={"site": site})
                 raise
-            if remaining_limit is not None:
-                remaining_limit = max(0, remaining_limit - site_attempts)
             summary_payload = {"site": site}
             if isinstance(batch_summary.get("payload"), dict):
                 summary_payload.update(batch_summary["payload"])

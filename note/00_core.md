@@ -1076,17 +1076,40 @@ compact target/warning Yes/No confirmation, with no candidate count/hash display
 Metrics writer paths are emitted as
 structured events and stored on the site task; a zero-candidate task carries a
 `no_candidates` reason rather than implying acquisition success. Grant-only is
-shown as potentially entitlement-consuming beside the execution controls. The GUI exposes one Resource selector
-per selected site and serializes the exact mapping in the request; there is no
-global selector that can override a heterogeneous site selection. If a reload no
-longer supports the previously chosen Resource, the old value remains visible as
-unsupported and submission is blocked until the operator explicitly chooses a
-supported value. Queued jobs never auto-resume after
+shown as potentially entitlement-consuming beside the execution controls. The GUI
+normally exposes one common Grant-only Resource selector (`all` plus resources
+supported by every selected site). Expand `サイト別` for per-site overrides;
+`共通設定` inherits the common value. Overrides take precedence, survive common
+changes/reloads and remain active when collapsed; the toggle shows their count.
+If a reload no longer supports a chosen value, it remains visible as unsupported
+and blocks Grant-only when used, with no automatic fallback. The resolved exact
+per-site mapping is serialized and fingerprinted as before. These controls do not
+affect Discover or normal Batch. `最大件数/サイト` applies the full requested
+limit independently to every selected site (0 means unlimited); normal Batch
+counts crawl slots and Grant-only counts attempts within that site's CLI flow.
+Candidate events never consume another site's capacity. Failure/interruption
+still stops later sites. Queued jobs never auto-resume after
 GUI restart; a cooperative stop is distinct from force termination, and an
 interrupted worker leaves resource consumption unknown without automatic retry.
 The history detail shows request mode/max-count, per-site Resource, and event
 site/key/item/source fields with Resource consumption as yes/no/unknown.
 Re-run creates a new job with the current selection and configuration.
+
+2026-11-21 GUI/worker validation: 301 passed, zero failed/skipped, across the
+execution worker, execution inputs, management jobs, CLI job events, selected-key
+Batch, CLI, GUI execution inputs and GUI smoke test files. Worker cases cover
+independent limits for normal/grant-only runs, unlimited runs, empty/local skips,
+multiple preparation/capture starts and failure stops. Qt cases cover common
+inheritance, collapsed overrides, reloads, unsupported choices and signed Piccoma
+consent. Synthetic offscreen renders with a Japanese font checked collapsed and
+expanded controls at 980px/1400px; all execution controls fit. Evidence is under
+ignored `output/diagnostics/limit-ui-*`. The earlier broad run had one isolated
+CLI work-deletion backup failure under a long temporary output path; the final
+301-case selection passed unchanged with `--basetemp .tmp/limit-ui-final`.
+`ruff check src tests` and diff checks on the changed files passed. Full suite,
+browser-backed site Integration, Research and Live were not run: the change is
+limited to GUI controls and per-site worker argument transport, with no Runner,
+Site Policy, Adapter/DOM or Catalog schema changes. No live tickets were used.
 
 The fixed header now has a red `緊急停止` button outside the scrollable Inventory
 and monitor. Active jobs enable it; idle/queued-only states leave it disabled.
@@ -4011,14 +4034,13 @@ removed. GUI-created normal Piccoma requests and grant-only `all` /
 explicit `work_ticket` requests may remain v1/false. Old Piccoma `all` requests
 without the bit are rejected before execution so an older non-binge request
 cannot silently gain binge-ticket use after upgrade. Mixed-site requests carry
-the bit only in the Piccoma namespace. Across sites, normal Batch `--limit`
-caps crawl slots, while grant-only `--limit` caps selected grant attempts. The worker passes remaining
-capacity using actual `candidate_started` events. Deferred normal sites emit
-candidate starts for both preparation and capture phases; conservative
-accounting keeps the crawl-slot cap but may leave capacity unused, so filling
-the requested limit is not guaranteed. Local skips before candidate start and
-empty plans do not use a slot; a skip after candidate start does. A failure
-stops later sites.
+the bit only in the Piccoma namespace. The GUI worker applies `--limit`
+independently to each selected site: normal Batch caps that site's crawl slots,
+while grant-only caps its selected grant attempts across resource passes.
+Preparation/capture candidate events remain observable without reducing the next
+site's limit. A failure stops later sites. The 2026-11-21 GUI transport change
+restores the earlier per-site limit and adds common Resource inheritance with
+expandable per-site overrides; site-native ticket selection remains unchanged.
 
 The 2026-11-18 default/grant revision's 9473-case full-suite result remains
 historical. This Work/Binge revision used no real-site/CDP actions and no new

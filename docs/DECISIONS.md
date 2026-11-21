@@ -810,6 +810,22 @@ tickets, or access resources. Archive-number predictions require an immutable
 source-joined Artifact/collision snapshot and the shared full-stem naming
 primitive; missing or ambiguous facts are reported as UNKNOWN.
 
+## GUI per-site limits and common Grant-only settings (2026-11-21)
+
+Restore the operator-requested per-site maximum count. The 2026-11-19 Piccoma
+ticket change introduced subtraction of candidate starts across sites; this
+changed the earlier GUI semantics and was not required by site ticket behavior.
+Pass the same requested limit independently to each site. Keep each site's
+existing crawl-slot/grant-attempt meaning, resource-pass sharing and failure stop.
+
+Reduce the default GUI controls to one common Grant-only Resource selector, with
+expandable site overrides. Common choices are `all` and resources supported by
+every selected site. Site overrides remain active when collapsed, with their
+count visible, and take precedence over later common changes. Unsupported saved
+choices remain visible and block their use; no fallback is introduced. Sign the
+resolved mapping in the existing request format. Normal Batch and Discover do
+not use these Resource controls.
+
 ## GUI direct execution with configuration-bound requests (2026-10-29)
 
 The operator does not need the detailed candidate-confirmation screen. Normal

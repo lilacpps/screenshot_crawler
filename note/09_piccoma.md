@@ -1639,6 +1639,14 @@ On the 2026-10-09 snapshot, product 28600 exposed 432/432 exact-free rows. Produ
 
 ## Batch policy
 
+GUI transport uses the same requested limit independently for each selected site;
+earlier sites' attempts do not reduce Piccoma's limit. Within Piccoma, existing
+crawl-slot/grant-attempt counting and resource-pass sharing remain authoritative.
+The common Grant-only Resource defaults to `all`, with expandable site overrides;
+its resolved Piccoma value still determines the existing v1/v2 signed consent.
+Normal Batch does not use these Resource controls. This transport/UI change is
+locally verified without new live-site access or ticket consumption.
+
 Normal Piccoma Batch admits available free sources, active grants and otherwise-eligible quota sources as appropriate; a locked quota candidate uses logical resource `piccoma_ticket_auto` with `after_observed_consumption`. Grant-only accepts `work_ticket` (waitfree / ¥0+) and `binge_ticket` (binge-free) as separate ordered resources, with no per-Work episode limit. Paid/unavailable/unknown/owned/rental states are not upgraded. The policy preserves the pre-quota candidate sequence for both flows. Same-Source prior running, failed or unrecognized quota CrawlRuns conservatively hold another consuming attempt; a fresh active grant still permits a non-consuming path. Completed/external/skipped Item status retains precedence. No site-specific selector, URL, resource name or quota limit is added to generic Core.
 
 The standard `BatchExecutor` revalidates Catalog state and uses the same candidate-bound observer for normal and grant-only execution. The executor verifies site/external ID/logical resource and requires a durable sink before any affirmative action. Batch metrics JSONL stores the observed concrete kind and `attempting` / `confirmed` / `unknown` / `not_attempted` status, without request bodies, signed URLs or credentials. A positively observed grant is persisted to the same validated Source immediately, including if later entry or capture fails. Grant-only does not capture or complete Items. GUI-created normal Piccoma requests and grant-only `all`/`binge_ticket` requests sign the exact internal consent bit using `inputs-v2`; explicit grant-only `work_ticket` requests may remain v1/false. Older queued `all` requests without the bit and the obsolete resource alias are rejected rather than silently gaining binge-ticket behavior. Mixed-site consent remains scoped to the Piccoma namespace. Completed/external/skipped Items remain excluded by the generic Planner.

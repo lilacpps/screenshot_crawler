@@ -181,6 +181,17 @@ earlier queued jobs alone do not invalidate new requests. Legacy persisted
 plan-bound requests keep their original verification path. Configuration changes
 while waiting still stop execution; there is no automatic retry.
 
+The maximum count is per site, with the full requested limit passed independently
+to each selected site. Normal Batch uses crawl slots; Grant-only uses attempts,
+shared across that site's resource passes. A failure still stops later sites.
+Grant-only normally shows one common Resource selector; its options are `all`
+plus the intersection of the selected sites' supported grant resources. Expand
+the site controls to override individual sites or restore inheritance. Overrides
+remain active when collapsed, with their count shown on the toggle. Reloads keep
+values, including unsupported values that block their use instead of falling
+back. The resolved per-site mapping is signed in the request. Neither Discover
+nor normal Batch uses these Resource controls.
+
 Normal Piccoma Batch may use its free waitfree, ¥0+ and binge-free tickets; the
 Run button tooltip describes this possibility, and clicking it queues the job
 without an execution-confirmation dialog. There is no Piccoma-only checkbox or

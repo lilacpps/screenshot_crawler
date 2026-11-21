@@ -141,6 +141,10 @@ Catalog job locks, shared CLI Scope/Quota/ZIP checks, and fail-closed configurat
 drift checks remain authoritative. New requests do not hash Catalog contents or
 rebuild Inventory at launch: the shared CLI plans from the latest Catalog under
 the lock. Previously persisted plan-bound requests retain their legacy validation.
+The worker passes the request's limit independently to each site; candidate events
+never reduce the next site's capacity. The GUI resolves its common Grant-only
+Resource and expandable site overrides into the existing exact per-site request
+mapping before fingerprinting. No queue schema or Site Policy change is required.
 Cooperative stop, force interruption with unknown consumption,
 heartbeat/OS-start identity checks, and explicit post-restart Resume are distinct
 operations. See [GUI contract](GUI_INVENTORY.md),

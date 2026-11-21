@@ -120,7 +120,7 @@ Grant-onlyは `work_ticket`（待てば¥0 / ¥0+）と `binge_ticket`（爆読�
 - Grant-onlyはtarget grant確認とdurable Catalog/metrics記録で終了する。Capture、package/ZIP、Artifact作成、Item completionは行わず、Itemはpendingのままにする。
 - Plan後にfree/active grantへ変わったGrant-only候補は、追加ticket操作とviewer entryなしでno-action skipする。fresh grantはskip前にpersistする。
 - GUI queueでは通常Piccoma Batchと Grant-only の `all` / `binge_ticket` にinternal signed consent bitを含む`inputs-v2`を使う。明示的な `work_ticket` は従来どおり `inputs-v1` / falseでよい。旧Piccoma `all` requestや未対応aliasは実行前に拒否し、保存済みjobがupgrade後にbinge券を黙って使うことを防ぐ。mixed-site runではbitをPiccoma namespaceだけに適用し、grant-only子CLIにはquota accessを渡さない。
-- 通常multi-site Batchの `--limit` は全site合計のcrawl slot上限であり、`--grant-only` はselected grant attemptの上限である。Workerは`candidate_started`を使って残数を保守的にsite間へ渡す。deferred siteでは準備grantとcaptureの各phaseがcandidate startを出すため、通常Batchはslot上限を超えない一方、上限まで候補を埋めないことがある。候補開始前のlocal skip/empty planは枠を使わず、開始後のno-action/unavailableもcandidate start済みなら枠を使う。failureは後続siteを開始しない。
+- GUIのmulti-site Batch/Grant-onlyの最大件数はサイト別上限である（2026-11-21に従来仕様へ復元）。Workerは同じ`--limit`を各siteへ独立に渡し、先行siteの`candidate_started`を後続siteの枠から引かない。通常Batchのcrawl slot、Grant-onlyのselected grant attempt、および同siteのresource pass間の共有という意味は維持する。failureは後続siteを開始しない。Resource欄は共通設定を通常表示し、サイト別上書きは展開して指定する。
 - Same-Source unresolved quota history guard、candidate-bound attempt/grant observer、native row/modal/control/debit proof、AccessGuard、normal Batch Capture → END → ZIP は維持する。未確認/ambiguous状態はfail-closed。今回のrevisionでは追加ticket/CDP/live actionは行わない。
 
 このrevisionの合成browser sequence、targeted/affected results、全repository suiteの最新結果とレビューは `PROGRESS.md` に更新する。Stage 02の旧4 ticket uses、direct-recovery E2E、9456 historical validationは新revisionの証拠に加算しない。

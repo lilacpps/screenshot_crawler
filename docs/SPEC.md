@@ -99,6 +99,10 @@ options remain bound to the queued request; the worker checks them under the
 Catalog job lock. Candidate planning uses the latest Catalog through the common
 CLI implementation, without GUI-only Inventory reloads or whole-Catalog hashes.
 Scope, quota, numbering, output safety and cancellation checks remain in force.
+The GUI execution limit applies independently to each selected site, using the
+same value for each site's normal crawl slots or grant-only attempts. Grant-only
+shows a common Resource by default; expandable per-site overrides take precedence.
+Resource settings do not affect normal Batch Run.
 Watchlist-save Full Discovery retains one compact target/warning Yes/No prompt.
 Legacy persisted plan-bound jobs retain their previous verification.
 The main-window emergency button force-stops the active worker without a second

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionViewItem,
     QToolBar,
+    QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -420,13 +421,38 @@ class MainWindow(QMainWindow):
         self.discover_mode_combo.addItem("Discover Incremental", "incremental")
         self.discover_mode_combo.setToolTip("Discoverのモード")
         bottom.addWidget(self.discover_mode_combo)
-        bottom.addWidget(QLabel("最大件数:"))
+        bottom.addWidget(QLabel("最大件数/サイト:"))
         self.execution_limit_spin = QSpinBox()
         self.execution_limit_spin.setObjectName("execution_limit_spin")
         self.execution_limit_spin.setRange(0, 1_000_000)
         self.execution_limit_spin.setSpecialValueText("無制限")
-        self.execution_limit_spin.setToolTip("Batch / Grant-only の最大候補数。0は無制限")
+        self.execution_limit_spin.setToolTip(
+            "サイトごとの上限。Batchは取得スロット、Grant-onlyは試行数。0は無制限"
+        )
         bottom.addWidget(self.execution_limit_spin)
+        grant_settings = QHBoxLayout()
+        grant_settings.addWidget(QLabel("Grant-only共通:"))
+        self.grant_resource_combo = QComboBox()
+        self.grant_resource_combo.setObjectName("grant_resource_combo")
+        self.grant_resource_combo.addItem("all", "all")
+        self.grant_resource_combo.setToolTip(
+            "Grant-onlyの全サイト共通Resource。Batch Runには適用しません"
+        )
+        self.grant_resource_combo.currentIndexChanged.connect(self._on_common_resource_changed)
+        grant_settings.addWidget(self.grant_resource_combo)
+        self.site_resource_toggle = QToolButton()
+        self.site_resource_toggle.setObjectName("site_resource_toggle")
+        self.site_resource_toggle.setCheckable(True)
+        self.site_resource_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.site_resource_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.site_resource_toggle.setText("サイト別")
+        self.site_resource_toggle.setToolTip(
+            "展開してGrant-only Resourceをサイト別に上書き。折りたたんでも指定は保持します"
+        )
+        self.site_resource_toggle.setEnabled(False)
+        self.site_resource_toggle.toggled.connect(self._toggle_site_resources)
+        grant_settings.addWidget(self.site_resource_toggle)
+        grant_settings.addStretch(1)
         self.site_resource_controls = QWidget()
         self.site_resource_layout = QHBoxLayout(self.site_resource_controls)
         self.site_resource_layout.setContentsMargins(0, 0, 0, 0)
@@ -436,10 +462,10 @@ class MainWindow(QMainWindow):
         self.site_resource_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.site_resource_scroll.setWidget(self.site_resource_controls)
         self.site_resource_scroll.setMinimumWidth(180)
-        self.site_resource_scroll.setMaximumWidth(420)
         self.site_resource_scroll.setFixedHeight(42)
         self.site_resource_scroll.setToolTip("選択中サイトごとのGrant-only Resource（横スクロール可）")
-        bottom.addWidget(self.site_resource_scroll, 1)
+        self.site_resource_scroll.hide()
+        bottom.addStretch(1)
         self.discover_button = QPushButton("Discover")
         self.discover_button.setObjectName("discover_button")
         self.discover_button.setToolTip("選択keyをDiscover")
@@ -460,6 +486,8 @@ class MainWindow(QMainWindow):
         for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
             button.setEnabled(False)
         outer.addLayout(bottom)
+        outer.addLayout(grant_settings)
+        outer.addWidget(self.site_resource_scroll)
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet("color:#a33; padding:3px;")
@@ -1008,7 +1036,7 @@ class MainWindow(QMainWindow):
             upper.setMinimumHeight(hint)
 
     def _refresh_site_resource_controls(self) -> None:
-        """Show resource selectors only for currently selected sites."""
+        """Refresh common choices and optional per-site overrides without fallback."""
 
         previous = {
             site: combo.currentData()
@@ -1037,6 +1065,7 @@ class MainWindow(QMainWindow):
             label = QLabel(f"{site}:")
             combo = QComboBox()
             combo.setObjectName(f"grant_resource_{site}")
+            combo.addItem(f"共通設定 ({self.grant_resource_combo.currentData()})", None)
             combo.addItem("all", "all")
             for resource in overview.grant_resources:
                 combo.addItem(resource, resource)
@@ -1045,8 +1074,8 @@ class MainWindow(QMainWindow):
                 if combo.findData(prior) >= 0:
                     combo.setCurrentIndex(combo.findData(prior))
                 elif prior:
-                    combo.insertItem(0, f"{prior} (unsupported)", prior)
-                    combo.setCurrentIndex(0)
+                    combo.addItem(f"{prior} (unsupported)", prior)
+                    combo.setCurrentIndex(combo.findData(prior))
                     self._site_resource_invalid[site] = str(prior)
             combo.currentIndexChanged.connect(
                 lambda _index, selected_site=site: self._on_site_resource_changed(selected_site)
@@ -1054,6 +1083,41 @@ class MainWindow(QMainWindow):
             self.site_resource_layout.addWidget(label)
             self.site_resource_layout.addWidget(combo)
             self._site_grant_resource_combos[site] = combo
+
+        common_resources: set[str] = set()
+        for index, site in enumerate(selected_sites):
+            overview = snapshot.resources.get(site)
+            supported = set(overview.grant_resources) if overview is not None else set()
+            common_resources = supported if index == 0 else common_resources & supported
+        prior_common = self.grant_resource_combo.currentData()
+        self.grant_resource_combo.blockSignals(True)
+        self.grant_resource_combo.clear()
+        self.grant_resource_combo.addItem("all", "all")
+        for resource in sorted(common_resources):
+            self.grant_resource_combo.addItem(resource, resource)
+        if self.grant_resource_combo.findData(prior_common) < 0:
+            self.grant_resource_combo.addItem(f"{prior_common} (unsupported)", prior_common)
+        self.grant_resource_combo.setCurrentIndex(self.grant_resource_combo.findData(prior_common))
+        self.grant_resource_combo.blockSignals(False)
+        self._on_common_resource_changed()
+
+    def _on_common_resource_changed(self) -> None:
+        for combo in getattr(self, "_site_grant_resource_combos", {}).values():
+            combo.setItemText(0, f"共通設定 ({self.grant_resource_combo.currentData()})")
+        self._update_site_resource_toggle()
+
+    def _update_site_resource_toggle(self) -> None:
+        combos = getattr(self, "_site_grant_resource_combos", {})
+        count = sum(combo.currentData() is not None for combo in combos.values())
+        self.site_resource_toggle.setText(f"サイト別 ({count}件指定)" if count else "サイト別")
+        self.site_resource_toggle.setEnabled(bool(combos))
+        self.site_resource_scroll.setVisible(self.site_resource_toggle.isChecked() and bool(combos))
+
+    def _toggle_site_resources(self, expanded: bool) -> None:
+        self.site_resource_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self._update_site_resource_toggle()
 
     def _on_site_resource_changed(self, site: str) -> None:
         """Clear a stale-resource blocker only after an explicit new choice."""
@@ -1064,6 +1128,7 @@ class MainWindow(QMainWindow):
         invalid = self._site_resource_invalid.get(site)
         if invalid is not None and combo.currentData() != invalid:
             self._site_resource_invalid.pop(site, None)
+        self._update_site_resource_toggle()
 
     def _expanded_node_ids(self) -> set[str]:
         expanded: set[str] = set()
@@ -1222,8 +1287,14 @@ class MainWindow(QMainWindow):
                     )
                     continue
                 value = combo.currentData()
+                if value is None:
+                    value = self.grant_resource_combo.currentData()
                 if not isinstance(value, str) or not value:
                     blockers.append(f"{site}: Grant-only Resource is not selected")
+                    continue
+                overview = snapshot.resources.get(site)
+                if value != "all" and (overview is None or value not in overview.grant_resources):
+                    blockers.append(f"{site}: selected Resource {value!r} is not supported")
                     continue
                 resources.append((site, value))
             resources_by_site = tuple(resources)

@@ -4,6 +4,13 @@
 **更新日:** 2026-11-19
 **契約:** [README.md](README.md)
 
+GUI transport follow-up (2026-11-21): the requested maximum count is restored to
+an independent per-site limit. Common Grant-only Resource settings are normally
+visible; per-site overrides are expandable. The older global-limit description
+in the historical 2026-11-18 revision below describes that revision only. Current
+transport behavior is documented in `docs/GUI_README.md` and `note/00_core.md`;
+no new live-site operation or ticket consumption is involved.
+
 ## Current revision — grant-only Work and Binge resources (2026-11-19)
 
 **Phase status:** complete; independent final review PASS / BLOCKING 0. No real-site/CDP action or additional ticket use was performed for this revision.
