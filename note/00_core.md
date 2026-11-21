@@ -1,3 +1,27 @@
+## Empty stock exhaustion and additional passes (2026-11-21)
+
+`AccessResourceResolution.stop_resource_pass` is a default-false, validated bool.
+It can be true only with an empty selected pool. CLI records stock resolver
+skips, closes the Page and ends that explicit resource pass without opening an
+entry Page, counting an attempt, creating a CrawlRun or sleeping before another
+Work. Empty Work-local pools retain the previous continue behavior. Unknown
+observations still stop closed. The normal additional resource phase now passes
+the same `resolve_batch_quota_per_work()` opt-in as the initial phase; sites
+without the opt-in keep the existing path. Resource names/selectors and concrete
+stock remain in site integrations. No schema, CLI option or Runner change.
+
+Comic DAYS uses this for account-wide Premium exhaustion and one stock-bound
+selection per Work. Piccoma/Magapoke default behavior remains unchanged.
+Validation: 276 targeted cases, 337 affected component cases and 243 relevant
+browser Integration cases passed (856 related cases total; zero skips). Ruff
+passed. The complete three-part regression covered 9,952 cases / 204 files:
+9,945 passed, 7 failed, 0 skipped. Two failures reflect existing custom
+`crawler.yaml` settings versus distributed defaults. The remaining five
+browser/wall-clock failures passed standalone; baseline and quiet-rerun evidence
+are detailed in `note/08_comicdays.md`. Full regression is not claimed all-green.
+The stock extension's bounded live verification used four Comic DAYS Premium
+Tickets, completed four chapters/86 pages and retained the Work Ticket timestamp.
+
 ## Work-first grant-only all (2026-11-21)
 
 `SitePolicy.grant_only_all_per_work()` defaults to false; Piccoma opts in.

@@ -33,6 +33,7 @@ from screenshot_crawler.discovery.models import (
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.maintenance.work_deletion import WorkDeletionPreviewService
 from screenshot_crawler.site_adapters.base import AccessAttemptObservation
+from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
@@ -1626,10 +1627,12 @@ def test_batch_run_continues_after_work_ticket_unavailable(
 
 
 @pytest.mark.parametrize("last_ticket_completed", [False, True])
+@pytest.mark.parametrize("site_name", ["magapoke", "comicdays"])
 def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     last_ticket_completed: bool,
+    site_name: str,
 ) -> None:
     monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     initial = [
@@ -1650,13 +1653,17 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     ]
     calls: list[int] = []
     plans: list[str | None] = []
+    for c in initial + premium:
+        c.site, c.work_id, c.discovery_key = site_name, 1, None
+        c.consumes_quota = c.access_strategy == "quota"
+    resolutions = []
 
     class FakePlanner:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
-            assert site == "magapoke"
+            assert site == site_name
             plans.append(quota_resource)
             return SimpleNamespace(
                 candidates=initial if quota_resource is None else premium,
@@ -1681,6 +1688,13 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
+        async def resolve_access_resource_candidates(self, _page, candidates, resource):
+            resolutions.append(resource)
+            return SimpleNamespace(
+                selected_source_ids=tuple(c.source_id for c in candidates[:1]),
+                skipped_source_reasons=tuple((c.source_id, "stock_limit") for c in candidates[1:]),
+            )
+
         async def execute_candidate(
             self, _page: object, candidate: object, **_kwargs: object
         ) -> object:
@@ -1699,8 +1713,10 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
         cli,
         "_batch_policy_registry",
         lambda: SimpleNamespace(
-            create=lambda _site: SimpleNamespace(
-                additional_quota_resources=lambda: ("premium_ticket",)
+            create=lambda _site: (
+                ComicDaysSitePolicy() if site_name == "comicdays" else SimpleNamespace(
+                    additional_quota_resources=lambda: ("premium_ticket",)
+                )
             )
         ),
     )
@@ -1714,7 +1730,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["screenshot-crawler", "batch", "run", "--site", "magapoke"],
+        ["screenshot-crawler", "batch", "run", "--site", site_name],
     )
 
     cli.main()
@@ -1722,6 +1738,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     output = capsys.readouterr()
     assert plans == [None, "premium_ticket"]
     assert calls == [1, 2, 3]
+    assert resolutions == (["work_ticket", "premium_ticket"] if site_name == "comicdays" else [])
     if last_ticket_completed:
         assert "completed: item-3.zip" in output.out
         assert "Stopping this resource pass after successful completion." in output.out
@@ -2402,8 +2419,9 @@ async def test_explicit_deferred_grant_only_paces_resolver_before_grant(
     [
         ("magapoke", "resource_a", "resource_b"),
         ("piccoma", "work_ticket", "binge_ticket"),
+        ("comicdays", "work_ticket", "premium_ticket"),
     ],
-    ids=["generic-resource-order", "piccoma-work-before-binge"],
+    ids=["generic-resource-order", "piccoma-work-before-binge", "comicdays-work-before-premium"],
 )
 def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     monkeypatch: pytest.MonkeyPatch,
@@ -2497,6 +2515,8 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             from screenshot_crawler.site_policies.piccoma import PiccomaSitePolicy
 
             return PiccomaSitePolicy()
+        if site_name == "comicdays":
+            return ComicDaysSitePolicy()
         return SimpleNamespace(
             ordered_access_resource_passes=lambda: (resource_a, resource_b),
             grant_only_supported_access_resources=lambda: (resource_a, resource_b),
@@ -2685,7 +2705,7 @@ def test_grant_only_all_advances_after_exhaustion_and_stops_on_unknown(
 
 
 @pytest.mark.parametrize(
-    "outcome", ["success", "unavailable", "already_accessible", "unknown", "pass_exhausted", "limit"]
+    "outcome", ["success", "unavailable", "already_accessible", "unknown", "pass_exhausted", "limit", "snapshot_exhausted"]
 )
 def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
     outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -2727,6 +2747,7 @@ def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
             return SimpleNamespace(
                 selected_source_ids=tuple(c.source_id for c in pool[:(0 if work == 1 else 2)]),
                 skipped_source_reasons=(),
+                stop_resource_pass=outcome == "snapshot_exhausted",
             )
 
         async def execute_grant_only_candidate(self, _page, candidate, **_kwargs):
@@ -2762,23 +2783,23 @@ def test_work_grants_resolve_once_skip_empty_and_bound_attempts(
     else:
         attempts, keep_going = asyncio.run(run())
         assert attempts == len(executed)
-        assert keep_going == (outcome != "pass_exhausted")
-    assert resolved == ([1, 2] if outcome in {"unknown", "pass_exhausted", "limit"} else [1, 2, 3])
+        assert keep_going == (outcome not in {"pass_exhausted", "snapshot_exhausted"})
+    assert resolved == ([1] if outcome == "snapshot_exhausted" else [1, 2] if outcome in {"unknown", "pass_exhausted", "limit"} else [1, 2, 3])
     assert executed == {
         "success": [21, 22, 31, 32], "unavailable": [21, 31, 32],
         "already_accessible": [21, 22, 31, 32],
-        "unknown": [21], "pass_exhausted": [21], "limit": [21],
+        "unknown": [21], "pass_exhausted": [21], "limit": [21], "snapshot_exhausted": [],
     }[outcome]
     assert pages == closed
-    assert sleeps[:2] == [3.0, 3.0]  # Empty Work snapshot → next snapshot → entry.
+    assert sleeps[:2] == ([] if outcome == "snapshot_exhausted" else [3.0, 3.0])
     assert len(sleeps) == {
         "success": 6, "already_accessible": 6, "unavailable": 5,
-        "unknown": 2, "pass_exhausted": 2, "limit": 2,
+        "unknown": 2, "pass_exhausted": 2, "limit": 2, "snapshot_exhausted": 0,
     }[outcome]
 
 
 @pytest.mark.parametrize("outcome", [
-    "success", "zero", "unavailable", "exhausted", "unknown", "limit", "snapshot_failure",
+    "success", "zero", "unavailable", "exhausted", "unknown", "limit", "snapshot_failure", "refresh_exhausted", "snapshot_exhausted",
 ])
 def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boundaries(
     outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -2810,11 +2831,12 @@ def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boun
 
     def resolution(candidates, resource):
         selected = [c.source_id for c in candidates
-                    if outcome != "zero" and (resource == "second" or c.source_id % 10 == 1)]
+                    if outcome not in {"zero", "snapshot_exhausted"} and (resource == "second" or c.source_id % 10 == 1)]
         return SimpleNamespace(
             selected_source_ids=tuple(selected),
             skipped_source_reasons=tuple((c.source_id, "no_stock")
                                          for c in candidates if c.source_id not in selected),
+            stop_resource_pass=outcome == "snapshot_exhausted",
         )
 
     class Session:
@@ -2842,6 +2864,11 @@ def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boun
             assert resource == "second"
             # A grant from the earlier resource must be removed by the replan.
             assert not granted.intersection(c.source_id for c in candidates)
+            if outcome == "refresh_exhausted":
+                return SimpleNamespace(
+                    selected_source_ids=(), stop_resource_pass=True,
+                    skipped_source_reasons=tuple((c.source_id, "no_stock") for c in candidates),
+                )
             return resolution(candidates, resource)
 
         async def execute_grant_only_candidate(self, _page, candidate, **_kwargs):
@@ -2890,6 +2917,14 @@ def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boun
         assert snapshots == [(work, resources) for work in (1, 2, 3)]
         assert executed == refreshes == []
         assert len(pages) == 3 and sleeps == [3.0, 3.0]
+    elif outcome == "snapshot_exhausted":
+        assert snapshots == [(1, resources)]
+        assert executed == refreshes == []
+        assert len(pages) == 1 and sleeps == []
+    elif outcome == "refresh_exhausted":
+        assert snapshots == [(1, resources), (2, ("first",)), (3, ("first",))]
+        assert refreshes == [(1, "second")]
+        assert executed == [(work, "first", work * 10 + 1) for work in (1, 2, 3)]
     elif outcome == "success":
         assert executed == [(work, resource, work * 10 + number)
                             for work in (1, 2, 3) for resource, number in zip(resources, (1, 2))]
@@ -2904,7 +2939,7 @@ def test_work_first_all_combines_checks_refreshes_after_entry_and_preserves_boun
 
 
 @pytest.mark.parametrize(
-    "outcome", ["success", "all_zero", "unavailable", "already_accessible", "unknown", "pass_exhausted"]
+    "outcome", ["success", "all_zero", "unavailable", "already_accessible", "unknown", "pass_exhausted", "snapshot_exhausted"]
 )
 def test_normal_batch_resolves_work_stock_once_without_reordering_direct_candidates(
     outcome: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
@@ -2962,6 +2997,7 @@ def test_normal_batch_resolves_work_stock_once_without_reordering_direct_candida
                 skipped_source_reasons=tuple(
                     (c.source_id, "no_stock") for c in pool if unavailable
                 ),
+                stop_resource_pass=outcome == "snapshot_exhausted",
             )
 
         async def execute_candidate(self, _page, candidate, **_kwargs):
@@ -3002,15 +3038,15 @@ def test_normal_batch_resolves_work_stock_once_without_reordering_direct_candida
     else:
         processed, keep_going = asyncio.run(run())
         assert processed == len(executed)
-        assert keep_going == (outcome != "pass_exhausted")
+        assert keep_going == (outcome not in {"pass_exhausted", "snapshot_exhausted"})
     assert executed == {
         "success": [13, 21, 22, 23, 24, 15, 31],
         "all_zero": [13, 23, 15],
         "unavailable": [13, 21, 23, 15, 31],
         "already_accessible": [13, 21, 22, 23, 24, 15, 31],
-        "unknown": [13, 21], "pass_exhausted": [13, 21],
+        "unknown": [13, 21], "pass_exhausted": [13, 21], "snapshot_exhausted": [],
     }[outcome]
-    assert resolved == ([1, 2] if outcome in {"unknown", "pass_exhausted"} else [1, 2, 3])
+    assert resolved == ([1] if outcome == "snapshot_exhausted" else [1, 2] if outcome in {"unknown", "pass_exhausted"} else [1, 2, 3])
     assert skipped == {
         "all_zero": [11, 12, 14, 21, 22, 24, 31],
         "unavailable": [11, 12, 14, 22, 24],
@@ -3024,7 +3060,8 @@ def test_normal_batch_resolves_work_stock_once_without_reordering_direct_candida
     assert len(pages) == len(resolved) + len(executed)
     assert sleeps == [3.0] * (len(resolved) + len(executed) - 1)
     output = capsys.readouterr().out
-    assert "work=1: quota selected=0 skipped=3" in output
+    assert ("Stopping this resource pass: no_stock" if outcome == "snapshot_exhausted"
+            else "work=1: quota selected=0 skipped=3") in output
     assert "SKIPPED item=11" not in output
 
 

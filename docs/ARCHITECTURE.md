@@ -1,5 +1,14 @@
 # Architecture
 
+## Empty stock result and additional passes (2026-11-21)
+
+The site-neutral `AccessResourceResolution` can signal positive exhaustion of an
+empty pool through `stop_resource_pass`. CLI stops the current explicit pass
+after resolver cleanup, with no entry attempt. Both initial and additional
+normal resource phases honor `resolve_batch_quota_per_work()`. Comic DAYS uses
+these existing guarded stock/entry boundaries for Premium, keeping homepage,
+balance parsing, native series membership and all ticket controls site-local.
+
 ## Work-first explicit grant resources (2026-11-21)
 
 SitePolicy's default-false `grant_only_all_per_work()` lets an integration

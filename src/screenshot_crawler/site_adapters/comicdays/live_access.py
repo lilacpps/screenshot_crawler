@@ -81,6 +81,7 @@ class ComicDaysLiveAccessState:
     normal_viewer_json: str | None = None
     ticket_control_count: int = 0
     dom_snapshot: dict[str, object] | None = None
+    premium_control_count: int = 0
 
 
 def _safe_diagnostic_url(value: object) -> str:
@@ -395,6 +396,7 @@ async def _observe_target_dom_snapshot(page: Page, *, timeout_ms: int) -> dict[s
         normal: Array.from(document.querySelectorAll('section.viewer.js-viewer[data-json-url]')).map(viewer),
         aggregate, contract,
         ticket: Array.from(document.querySelectorAll('section.private-viewer.js-viewer[data-json-url] button[data-test-id="use-series-ticket-button"][data-ticket-type="series"], section.viewer.js-viewer[data-json-url] button[data-test-id="use-series-ticket-button"][data-ticket-type="series"]')).map(control),
+        premium: Array.from(document.querySelectorAll('section.private-viewer.js-viewer[data-json-url] [data-test-id="use-premium-ticket-button"], section.viewer.js-viewer[data-json-url] [data-test-id="use-premium-ticket-button"]')).map(control),
         purchase: Array.from(document.querySelectorAll('section.private-viewer.js-viewer[data-json-url] [data-test-id="purchase-button"]')).map(control),
       };
     }
@@ -573,6 +575,7 @@ def _classify_comicdays_target_dom(
         else None,
         ticket_count,
         dom_trace,
+        len(dom.get("premium", [])),
     )
 
 

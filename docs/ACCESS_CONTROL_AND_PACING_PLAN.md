@@ -1,5 +1,16 @@
 # Access Control / Pacing Implementation Plan
 
+## Comic DAYS Premium extension (2026-11-21)
+
+Implemented: policy-ordered Work → Premium passes, stock-bounded per-Work
+selection in normal/additional Batch and grant-only, and empty-pool positive
+exhaustion stopping before any entry or next Work. Required coverage includes
+explicit Work-only isolation, native Work priority, N-stock/N-target selection,
+zero/unknown stock, exact one-unit debit plus target unlock, no click retry,
+last-ticket completion, shared limits/order and no Premium cooldown writes.
+Current validation and bounded live evidence are in `note/08_comicdays.md`;
+shared contract changes are summarized in `note/00_core.md`.
+
 This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the site-specific access specifications.
 
 Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.

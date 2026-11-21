@@ -1,11 +1,41 @@
 # Comic DAYS adapter
 
+## Premium Ticket / いつでもチケット
+
+Normal Batch follows Work Ticket with the explicit `premium_ticket` pass;
+grant-only `all` also runs Work → replan → Premium. `--grant-only work_ticket`
+never uses Premium. `--grant-only premium_ticket` is available explicitly.
+Existing Catalog order and acquisition scope determine the targets.
+
+Before selecting Premium targets for a Work, the guarded stock resolver visits
+the home, waits three seconds, reads that Work page's account stock and Work
+Ticket state, and validates native series membership. It selects at most N
+quota targets in existing order without opening them individually. Each next
+Work refreshes shared account stock. Zero stops the pass; unknown stops closed;
+a charged Work Ticket prevents Premium selection. No daily timer or saved
+balance is added. Work Ticket stock resolution is a local pass-through.
+
+Selected entries use only the exact normal `いつでもチケットで読む（無料）`
+button, with target/contract/priority and current positive balance rechecked.
+Exactly one debit, unchanged Work Ticket state and the same episode's unlocked
+viewer confirm use. A click is never repeated. Grant-only leaves the Item
+pending without an Artifact; normal Batch captures/packages on the same Page.
+The final ticket completes before pass termination. See `note/08_comicdays.md`
+for current tests, live evidence and limits.
+
+Already-readable selected Premium targets do not spend again: normal entry
+continues with the existing viewer; grant-only skips only that target. Shared-CDP
+verification used four Premium Tickets on 宇宙兄弟 #147–150 and left stock 3;
+all four normal crawls reached END and packaged 86 pages in isolated output.
+
+## Viewer and Discovery
+
 The adapter supports canonical `comic-days.com/episode/<id>` pages. Discovery
 validates the complete official Atom feed against the site's pagination total,
 the complete paginated readable-product listing, and the `free_only=1`
 subset. It preserves the latest-first site order and classifies each row from
 first-party state: `free`, a positively eligible Work Ticket candidate
-(`quota`), an active Work Ticket grant (`quota` plus the native
+(`quota`), an active ticket grant (`quota` plus the native
 `rental_end_at`), `paid`, or fail-closed `unknown`. All identities, counts,
 orders, and access rows are validated before the first record is yielded.
 Current readable-product state identifies a coherent, non-rented free row even
@@ -361,20 +391,19 @@ viewer observation, rewind control inspection/clicks, transition waits, and the
   two-area first spread. Both forms use the validated forward control exactly
   once and never click a front-link anchor.
 
-Discovery, Policy, and the exact Work Ticket entry path are implemented and
+Discovery, Policy, and the exact ticket entry paths are implemented and
 synthetic-browser verified. The current policy uses `work_ticket` with work
 scope, `quota_limit=1`, non-deferred quota execution, a 23-hour resource
 cooldown, and observed-consumption commits. Generic observed-consumption
 commit uses the policy's conservative 71-hour value; a later fresh Discovery
 refreshes the source with the exact native `rental_end_at` when available.
-Batch Planner selects one Catalog candidate per work. Batch opens that target
+Batch Planner selects one Work Ticket Catalog candidate per work. Batch opens that target
 once, validates target-local identity/contract/control state, clicks exactly
 once, confirms consumption from target-local unlock plus the work ticket debit,
 and continues on the same Page for normal quota crawling. Grant-only leaves
-the Item pending and creates no Artifact. There is no Comic DAYS live
-candidate resolver in the production path; the generic resolver framework
-remains for sites such as Zebrack whose Discovery cannot classify each native
-ticket state. For live verification, the supplied episode URL seeds full
+the Item pending and creates no Artifact. The stock resolver passes Work Ticket
+candidates through locally, retaining the existing target entry contract.
+For live verification, the supplied episode URL seeds full
 Discovery for its native work; the natural Planner candidate may be another
 episode in that work, while Catalog classifications and ordering remain
 authoritative. Entry accepts only the unique visible
@@ -397,7 +426,7 @@ rental) stops the resource pass. Work Ticket cooldown remains work-scoped
 (`work_id × site × resource`) and is based only on confirmed native
 consumption.
 
-Paid and premium controls are never fallback paths; the live Work5 guard
+Paid and Premium controls are never Work Ticket fallback paths; the live Work5 guard
 observed the purchase control separately with a 90pt price. Consumption is latched
 once after positive native rental and work-ticket debit/recharge evidence. A
 transiently hidden exact Work Ticket control is re-observed for a bounded,

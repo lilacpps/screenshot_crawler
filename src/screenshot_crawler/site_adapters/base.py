@@ -91,6 +91,14 @@ class AccessResourceResolution:
 
     selected_source_ids: tuple[int, ...] = ()
     skipped_source_reasons: tuple[tuple[int, str], ...] = ()
+    # An empty, positively exhausted pool may stop this explicit resource pass.
+    stop_resource_pass: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.stop_resource_pass) is not bool:
+            raise ValueError("resource resolution stop flag must be boolean")
+        if self.stop_resource_pass and self.selected_source_ids:
+            raise ValueError("exhausted resource resolution must be empty")
 
 
 class SiteAdapter(ABC):

@@ -26,10 +26,10 @@ def _registry(site: str, policy) -> SitePolicyRegistry:
     return registry
 
 
-def _plan(catalog: CatalogService, site: str, policy, *, now: datetime):
+def _plan(catalog: CatalogService, site: str, policy, *, now: datetime, **kwargs):
     watchlist = synchronized_legacy_watchlist(catalog)
     return BatchPlanner(catalog, _registry(site, policy), watchlist=watchlist).plan(
-        site=site, now=now
+        site=site, now=now, **kwargs
     )
 
 
@@ -67,6 +67,16 @@ def _episode(
         source_id=source.id,
     )
     return item, source
+
+
+def test_premium_plan_preserves_quota_order_without_work_ticket_limit(tmp_path):
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="comicdays:series:1", title="Stock"))
+    for external, order in [("3", "03"), ("1", "01"), ("2", "02")]:
+        _episode(catalog, work=work, external_id=external, order=order, access_mode="quota")
+    plan = _plan(catalog, "comicdays", ComicDaysSitePolicy, now=NOW, quota_resource="premium_ticket")
+    assert [c.external_id for c in plan.candidates] == ["1", "2", "3"]
+    assert all(c.quota_limit is None and c.quota_resource == "premium_ticket" for c in plan.candidates)
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
-"""Comic DAYS access policy for free episodes and Work Tickets."""
+"""Comic DAYS access policy for free episodes and explicit native ticket resources."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
@@ -18,13 +19,19 @@ class ComicDaysSitePolicy(SitePolicy):
         return "catalog"
 
     def supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def ordered_access_resource_passes(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
+
+    def resolve_grant_only_per_work(self) -> bool:
+        return True
+
+    def resolve_batch_quota_per_work(self) -> bool:
+        return True
 
     def resource_state_scope(self, resource: str) -> str | None:
         if resource == "work_ticket":
@@ -89,6 +96,19 @@ class ComicDaysSitePolicy(SitePolicy):
         if started_at.tzinfo is None or started_at.utcoffset() is None:
             raise SitePolicyError("started_at must be timezone-aware")
         return started_at + timedelta(hours=71)
+
+    def evaluate_for_quota_resource(
+        self, source: Source, *, now: datetime, quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        self.validate_access_resource(quota_resource)
+        decision = self.evaluate(source, now=now, quota_available=quota_available)
+        if quota_resource == "premium_ticket" and decision.consumes_quota:
+            return replace(
+                decision, reason="premium_ticket_candidate", quota_resource=quota_resource,
+                quota_limit=None,
+            )
+        return decision
 
     @staticmethod
     def _parse_grant_until(value: datetime | str | None) -> datetime | None:

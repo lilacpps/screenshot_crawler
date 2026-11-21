@@ -1758,7 +1758,7 @@ async def _resolve_access_resource_candidates(
     finally:
         await _best_effort_cleanup(session.close_page(page))
 
-    return _apply_access_resolution(
+    selected = _apply_access_resolution(
         candidates,
         resolution,
         metrics=metrics,
@@ -1766,6 +1766,14 @@ async def _resolve_access_resource_candidates(
         selected_keys=selected_keys,
         execution_args=execution_args,
     )
+    if getattr(resolution, "stop_resource_pass", False):
+        if selected:
+            raise BatchPlanningError("Exhausted resource resolution selected candidates")
+        reasons = [reason for _source_id, reason in resolution.skipped_source_reasons]
+        raise AccessResourceUnavailableError(
+            reasons[0] if reasons else "access_resource_exhausted", stop_resource_pass=True,
+        )
+    return selected
 
 
 def _apply_access_resolution(
@@ -1993,10 +2001,16 @@ async def _execute_work_grants(
         eligible = _filter_local_grant_candidates(executor, group, metrics=metrics)
         if not eligible:
             continue
-        selected = await _resolve_access_resource_candidates(
-            session, executor, eligible, resource=eligible[0].quota_resource,
-            delay_before_first_ms=delay_before_first_ms, metrics=metrics,
-        )
+        try:
+            selected = await _resolve_access_resource_candidates(
+                session, executor, eligible, resource=eligible[0].quota_resource,
+                delay_before_first_ms=delay_before_first_ms, metrics=metrics,
+            )
+        except AccessResourceUnavailableError as exc:
+            if not exc.stop_resource_pass:
+                raise
+            print(f"  Stopping this resource pass: {exc.reason}")
+            return attempts, False
         # Even an empty snapshot contacted the site. Pace the next Work.
         delay_before_first_ms = inter_candidate_delay_ms
         print(f"Batch grant-only work={group[0].work_id}: selected={len(selected)}")
@@ -2058,6 +2072,12 @@ async def _execute_work_resource_grants(
             _execution_checkpoint(args)
             if attempt_limit is not None and attempts >= attempt_limit:
                 break
+            if getattr(resolutions[resource], "stop_resource_pass", False):
+                exhausted.add(resource)
+                _apply_access_resolution(
+                    original_pool, resolutions[resource], metrics=metrics, execution_args=args,
+                )
+                continue
             if work_attempts:
                 # Earlier entry can change charge, shared stock and grants.
                 # Replan locally and refresh only this Work, never rescan all
@@ -2069,11 +2089,18 @@ async def _execute_work_resource_grants(
                 allowed_ids = {candidate.source_id for candidate in original_pool}
                 pool = [candidate for candidate in fresh_plan.candidates
                         if candidate.work_id == work_id and candidate.source_id in allowed_ids]
-                selected = await _resolve_access_resource_candidates(
-                    session, executor, pool, resource=resource,
-                    delay_before_first_ms=inter_candidate_delay_ms, metrics=metrics,
-                    execution_args=args,
-                ) if pool else []
+                try:
+                    selected = await _resolve_access_resource_candidates(
+                        session, executor, pool, resource=resource,
+                        delay_before_first_ms=inter_candidate_delay_ms, metrics=metrics,
+                        execution_args=args,
+                    ) if pool else []
+                except AccessResourceUnavailableError as exc:
+                    if not exc.stop_resource_pass:
+                        raise
+                    exhausted.add(resource)
+                    print(f"  Stopping this resource pass: {exc.reason}")
+                    continue
             else:
                 selected = _apply_access_resolution(
                     original_pool, resolutions[resource], metrics=metrics,
@@ -2584,6 +2611,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     executor,
                     resource_candidates,
                     phase=quota_resource,
+                    resolve_quota_per_work=resolve_batch_quota,
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     metrics=metrics,
                     delay_before_first_ms=(
@@ -2755,11 +2783,17 @@ async def _execute_batch_candidates(
         if key is not None:
             if key not in resolved_pools:
                 pool = [future for future in candidates[index - 1:] if pool_key(future) == key]
-                selected = await _resolve_access_resource_candidates(
-                    session, executor, pool, resource=candidate.quota_resource,
-                    delay_before_first_ms=delay_before_first_ms if attempts == 0 else None,
-                    metrics=metrics, grant_only=False, execution_args=args,
-                )
+                try:
+                    selected = await _resolve_access_resource_candidates(
+                        session, executor, pool, resource=candidate.quota_resource,
+                        delay_before_first_ms=delay_before_first_ms if attempts == 0 else None,
+                        metrics=metrics, grant_only=False, execution_args=args,
+                    )
+                except AccessResourceUnavailableError as exc:
+                    if not exc.stop_resource_pass:
+                        raise
+                    print(f"  Stopping this resource pass: {exc.reason}")
+                    return attempts, False
                 delay_before_first_ms = None
                 resolved_pools[key] = {item.source_id for item in selected}
                 print(

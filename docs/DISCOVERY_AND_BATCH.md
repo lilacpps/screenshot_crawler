@@ -1,5 +1,37 @@
 # Discovery / Catalog / Batch Design
 
+## Comic DAYS Premium stock passes (2026-11-21)
+
+Comic DAYS exposes `work_ticket` followed by `premium_ticket` (native label:
+いつでもチケット). Normal Batch and grant-only `all` replan between these explicit
+passes. Explicit `--grant-only work_ticket` never selects Premium. Within each
+pass, existing Catalog ordering and acquisition scope remain authoritative.
+Work Ticket keeps its one-per-Work limit, 23-hour cooldown and exact entry path.
+
+Both execution modes use guarded per-Work selection. Work Ticket selection is
+a local pass-through; Premium visits the official home, waits three seconds,
+then reads one Work page's `userAccount.eventTicketCount` and Work Ticket state.
+The home visit happens on each Premium Work stock resolution; no daily timer or
+durable balance/cache is used. Only the first N quota candidates are selected,
+bounded further by the shared execution limit. The native full Atom feed binds
+their episode IDs to the observed series without opening them individually.
+Zero ends the Premium pass before entry or later Work checks. Unknown stock
+stops closed. A charged Work Ticket selects no Premium candidate for that Work.
+
+Each selected entry still rechecks the exact target, 72-hour contract, native
+Work Ticket priority, positive stock and unique visible Premium control. One
+normal UI click is confirmed by exactly one account ticket debit, unchanged
+Work Ticket recharge state and the same episode's unlocked viewer with both
+ticket controls absent. No click is retried. The existing read-only recovery
+window handles a possibly dispatched click. Last-ticket success finishes its
+capture/package or entry-only persistence before stopping the pass. Premium
+does not update Work Ticket cooldown; grants use the existing conservative
+71-hour fallback and fresh Discovery may replace it with native expiry.
+Paid actions and implicit resource fallback remain forbidden. No schema change.
+An already-readable selected Premium target is non-consuming: normal entry
+continues to the existing capture flow, while grant-only skips only that target
+with `already_accessible`/`stop_work=False` and does not invent a grant or debit.
+
 ## Yanmaga saved episode entry (2026-11-21)
 
 Normal acquisition uses the saved canonical public episode URL, without internal

@@ -1,4 +1,4 @@
-"""Comic DAYS horizontal free viewer adapter."""
+"""Comic DAYS horizontal viewer and explicit native ticket entry."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from screenshot_crawler.core.models import AccessStrategy, ContentContext, Conte
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import (
     AccessConsumption,
+    AccessResourceResolution,
     SiteAdapter,
 )
 from screenshot_crawler.site_adapters.comicdays.access import comicdays_access_profile
@@ -41,6 +42,10 @@ from screenshot_crawler.site_adapters.comicdays.live_access import (
     ComicDaysTargetIdentityMismatch,
     observe_comicdays_live_access,
     observe_comicdays_target_access,
+)
+from screenshot_crawler.site_adapters.comicdays.premium_access import (
+    ComicDaysAlreadyAccessibleError,
+    resolve_ticket_candidates,
 )
 
 
@@ -63,7 +68,7 @@ _FORBIDDEN = re.compile(r"(?:購入|ポイント|チケット|レンタル|ロ�
 
 
 class ComicDaysAdapter(SiteAdapter):
-    """Capture currently free Comic DAYS episodes, failing closed on ambiguity."""
+    """Capture readable Comic DAYS episodes, failing closed on ambiguous ticket entry."""
 
     page_change_timeout_ms = 10_000
     viewer_selector = "section.viewer.js-viewer"
@@ -103,6 +108,8 @@ class ComicDaysAdapter(SiteAdapter):
         self._last_ticket_poll_signature: tuple[object, ...] | None = None
         self._last_ticket_observe_error: str | None = None
         self._entry_error_recorded = False
+        self._premium_before_count: int | None = None
+        self._premium_before_charged_at: datetime | None = None
         self._transition_trace: list[dict[str, Any]] = []
         self._transition_trace_started = time.monotonic()
         self._transition_trace_samples: dict[str, dict[str, Any]] = {}
@@ -127,7 +134,7 @@ class ComicDaysAdapter(SiteAdapter):
     def _record_ticket_trace(
         self, page: Page | object, phase: str, **fields: object
     ) -> None:
-        """Append bounded, metadata-only Work Ticket diagnostics."""
+        """Append bounded, metadata-only ticket diagnostics."""
 
         raw_page_url = getattr(page, "url", "")
         page_url = self._safe_trace_url(raw_page_url)
@@ -168,6 +175,8 @@ class ComicDaysAdapter(SiteAdapter):
             viewer_unlocked=state.viewer_unlocked,
             rental_term_hours=state.rental_term_hours,
             ticket_control_count=state.ticket_control_count,
+            premium_ticket_count=state.ticket.event_ticket_count,
+            resource=self._quota_resource,
             decision=decision,
             observed_episode_id=state.episode_id,
             observed_series_id=state.series_id,
@@ -210,6 +219,8 @@ class ComicDaysAdapter(SiteAdapter):
         self._last_ticket_poll_signature = None
         self._last_ticket_observe_error = None
         self._entry_error_recorded = False
+        self._premium_before_count = None
+        self._premium_before_charged_at = None
         self._access_strategy = access_strategy
         self._quota_resource = None
         self._access_consumption = AccessConsumption()
@@ -228,7 +239,7 @@ class ComicDaysAdapter(SiteAdapter):
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
-        if quota_resource not in {None, "work_ticket"}:
+        if quota_resource not in {None, "work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
                 f"ComicDaysAdapter does not support quota_resource={quota_resource!r}"
             )
@@ -236,11 +247,19 @@ class ComicDaysAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "ComicDays quota_resource requires access_strategy='quota'"
             )
-        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+        if self._access_strategy == "quota" and quota_resource not in {"work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
-                "ComicDays quota access requires quota_resource='work_ticket'"
+                "ComicDays quota access requires an explicit ticket resource"
             )
         self._quota_resource = quota_resource
+
+    async def resolve_access_resource_candidates(
+        self, page: Page, candidates: tuple[object, ...], quota_resource: str,
+        *, timeout_ms: int = 15_000,
+    ) -> AccessResourceResolution:
+        return await resolve_ticket_candidates(
+            page, candidates, quota_resource, timeout_ms=timeout_ms,
+        )
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         self._target_url = canonical_comicdays_episode_url(source_url)
@@ -351,7 +370,7 @@ class ComicDaysAdapter(SiteAdapter):
             raise PageChangeTimeoutError("Comic DAYS viewer normalization exceeded its time bound") from exc
 
     async def initialize_entry_only(self, page: Page) -> None:
-        """Perform only the bounded Work Ticket entry and confirmation."""
+        """Perform only the bounded requested-ticket entry and confirmation."""
 
         self._record_ticket_trace(page, "initialize_entry_only_start")
         try:
@@ -362,9 +381,9 @@ class ComicDaysAdapter(SiteAdapter):
                         "comicdays_discovery_refresh_required"
                     )
                 raise ValueError("Comic DAYS entry page did not match the target episode")
-            if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            if self._access_strategy != "quota" or self._quota_resource not in {"work_ticket", "premium_ticket"}:
                 raise UnsupportedAccessStrategyError(
-                    "Comic DAYS entry-only execution requires quota/work_ticket"
+                    "Comic DAYS entry-only execution requires an explicit quota ticket"
                 )
             self._initial_url = canonical_comicdays_episode_url(page.url)
             self._episode_id = episode_id
@@ -397,6 +416,17 @@ class ComicDaysAdapter(SiteAdapter):
             self._record_ticket_trace(page, "pre_click_decision", decision="unknown")
             raise UnknownPageStateError(str(exc)) from exc
         self._live_access = state
+        if (
+            self._quota_resource == "premium_ticket"
+            and state.access_mode == "free" and state.viewer_unlocked
+            and state.private_viewer_count == 0
+            and state.ticket_control_count == state.premium_control_count == 0
+        ):
+            self._preexisting_accessible = True
+            self._record_pre_click_decision(page, state, "already_accessible")
+            if entry_only:
+                raise ComicDaysAlreadyAccessibleError()
+            return
         if state.access_mode == "unknown":
             self._record_pre_click_decision(page, state, "unknown")
             raise UnknownPageStateError(
@@ -421,7 +451,19 @@ class ComicDaysAdapter(SiteAdapter):
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required", stop_resource_pass=True
             )
-        if not state.ticket.is_charged:
+        premium = self._quota_resource == "premium_ticket"
+        if premium:
+            if state.ticket.is_charged is not False:
+                self._record_pre_click_decision(page, state, "work_ticket_priority")
+                raise AccessResourceUnavailableError("work_ticket_priority")
+            count = state.ticket.event_ticket_count
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise UnknownPageStateError("Comic DAYS Premium balance is unknown")
+            if count == 0:
+                raise AccessResourceUnavailableError("premium_ticket_exhausted", stop_resource_pass=True)
+            self._premium_before_count = count
+            self._premium_before_charged_at = state.ticket.charged_at
+        elif not state.ticket.is_charged:
             self._record_pre_click_decision(page, state, "cooldown")
             raise AccessResourceUnavailableError("work_ticket_cooldown")
         remaining = self._remaining_ms(deadline)
@@ -516,11 +558,6 @@ class ComicDaysAdapter(SiteAdapter):
         charged_at = state.ticket.charged_at
         positive = (
             state.viewer_unlocked
-            and state.ticket.is_charged is False
-            and charged_at is not None
-            and charged_at > now
-            and previous_charged_at is not None
-            and charged_at > previous_charged_at
             and (self._target_url is None or state.canonical_url == self._target_url)
             and state.series_id == self._work_id
             and state.episode_id == self._episode_id
@@ -534,6 +571,22 @@ class ComicDaysAdapter(SiteAdapter):
             and state.private_viewer_count == 0
             and state.ticket_control_count == 0
         )
+        if self._quota_resource == "premium_ticket":
+            count = state.ticket.event_ticket_count
+            positive = (
+                positive
+                and self._premium_before_count is not None
+                and type(count) is int and count == self._premium_before_count - 1
+                and state.ticket.is_charged is False
+                and charged_at == self._premium_before_charged_at
+                and state.premium_control_count == 0
+            )
+        else:
+            positive = (
+                positive and state.ticket.is_charged is False
+                and charged_at is not None and charged_at > now
+                and previous_charged_at is not None and charged_at > previous_charged_at
+            )
         if not positive:
             return False
         # Latch the first positive native debit/grant observation exactly once.
@@ -541,7 +594,11 @@ class ComicDaysAdapter(SiteAdapter):
         # reset the timestamp used by generic Batch resource accounting.
         if not self._access_consumption.consumed:
             self._access_consumption = AccessConsumption(
-                consumed=True, resource="work_ticket", consumed_at=datetime.now(UTC)
+                consumed=True, resource=self._quota_resource, consumed_at=datetime.now(UTC),
+                stop_resource_pass=(
+                    self._quota_resource == "premium_ticket"
+                    and state.ticket.event_ticket_count == 0
+                ),
             )
         return True
 
@@ -584,6 +641,7 @@ class ComicDaysAdapter(SiteAdapter):
                 "ticket_control_count": (
                     state.ticket_control_count if state is not None else 0
                 ),
+                "premium_ticket_count": state.ticket.event_ticket_count if state else None,
             }
             if state is not None:
                 fields.update(
@@ -649,8 +707,11 @@ class ComicDaysAdapter(SiteAdapter):
         container = viewer.locator("div.read-button-container")
         if await container.count() != 1:
             raise AccessResourceUnavailableError("work_ticket_access_container_ambiguous")
+        premium_requested = self._quota_resource == "premium_ticket"
+        test_id = "use-premium-ticket-button" if premium_requested else "use-series-ticket-button"
+        ticket_type = "premium" if premium_requested else "series"
         ticket = container.locator(
-            'button[data-test-id="use-series-ticket-button"][data-ticket-type="series"]'
+            f'button[data-test-id="{test_id}"][data-ticket-type="{ticket_type}"]'
         )
         if await ticket.count() != 1:
             raise AccessResourceUnavailableError("work_ticket_control_ambiguous")
@@ -659,7 +720,8 @@ class ComicDaysAdapter(SiteAdapter):
             raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound")
         if not await ticket.is_visible(timeout=remaining) or not await ticket.is_enabled(timeout=remaining):
             raise AccessResourceUnavailableError("work_ticket_control_not_actionable")
-        if " ".join((await ticket.inner_text(timeout=remaining)).split()) != "\u4f5c\u54c1\u30c1\u30b1\u30c3\u30c8\u3067\u8aad\u3080\uff08\u7121\u6599\uff09":
+        expected_label = "いつでもチケットで読む（無料）" if premium_requested else "作品チケットで読む（無料）"
+        if " ".join((await ticket.inner_text(timeout=remaining)).split()) != expected_label:
             raise AccessResourceUnavailableError("work_ticket_control_label_mismatch")
         if await ticket.get_attribute("data-ticket-rental-id") != self._episode_id:
             raise AccessResourceUnavailableError(
@@ -702,14 +764,17 @@ class ComicDaysAdapter(SiteAdapter):
             raise AccessResourceUnavailableError("work_ticket_control_handler_ambiguous")
         # A visible premium ticket control in the same page is a distinct
         # resource and makes this entry ambiguous; it is never a fallback.
-        premium = container.locator('[data-test-id="use-premium-ticket-button"]')
+        other_id = "use-series-ticket-button" if premium_requested else "use-premium-ticket-button"
+        premium = container.locator(f'[data-test-id="{other_id}"]')
         if await premium.count() > 1:
             raise AccessResourceUnavailableError("premium_ticket_control_ambiguous")
         remaining = min(1_000, self._remaining_ms(deadline))
         if remaining <= 0:
             raise PageChangeTimeoutError("Comic DAYS premium control inspection exceeded its time bound")
         if await premium.count() == 1 and await premium.is_visible(timeout=remaining):
-            raise AccessResourceUnavailableError("premium_ticket_control_visible")
+            raise AccessResourceUnavailableError(
+                "work_ticket_priority" if premium_requested else "premium_ticket_control_visible"
+            )
         purchase = container.locator('[data-test-id="purchase-button"]')
         if await purchase.count() > 1:
             raise AccessResourceUnavailableError("purchase_control_ambiguous")

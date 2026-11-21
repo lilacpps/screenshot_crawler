@@ -40,12 +40,31 @@ def test_comicdays_policy_selects_work_ticket_and_active_grant_direct() -> None:
 
 def test_comicdays_policy_resource_contract_and_cooldown_boundaries() -> None:
     policy = ComicDaysSitePolicy()
-    assert policy.supported_access_resources() == ("work_ticket",)
-    assert policy.ordered_access_resource_passes() == ("work_ticket",)
-    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert policy.ordered_access_resource_passes() == ("work_ticket", "premium_ticket")
+    assert policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert policy.resolve_grant_only_per_work()
+    assert policy.resolve_batch_quota_per_work()
+    assert policy.resource_state_scope("premium_ticket") is None
+    assert policy.additional_access_resource_passes() == ("premium_ticket",)
     assert policy.resource_state_scope("work_ticket") == "work"
     assert policy.defer_quota_access_to_grant_phase() is False
     consumed = datetime(2026, 10, 3, 0, tzinfo=JST)
     assert policy.grant_only_skip_reason(resource="work_ticket", last_consumed_at=consumed, now=consumed + timedelta(hours=23) - timedelta(seconds=1), cooldown_hours=None) == "work_ticket_cooldown"
     assert policy.grant_only_skip_reason(resource="work_ticket", last_consumed_at=consumed, now=consumed + timedelta(hours=23), cooldown_hours=None) is None
     assert policy.access_grant_until(consumed) == consumed + timedelta(hours=71)
+
+
+def test_premium_resource_has_no_work_limit_and_does_not_reconsume_active_grants():
+    policy = ComicDaysSitePolicy()
+    now = datetime.now(JST)
+    result = policy.evaluate_for_quota_resource(
+        _source("quota"), now=now, quota_available=None, quota_resource="premium_ticket",
+    )
+    assert result.consumes_quota and result.quota_resource == "premium_ticket"
+    assert result.quota_limit is None
+    active = replace(_source("quota"), access_granted_until=now + timedelta(hours=1))
+    direct = policy.evaluate_for_quota_resource(
+        active, now=now, quota_available=None, quota_resource="premium_ticket",
+    )
+    assert direct.access_strategy == "direct" and not direct.consumes_quota

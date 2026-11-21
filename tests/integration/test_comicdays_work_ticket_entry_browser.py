@@ -1495,7 +1495,7 @@ async def test_comicdays_unsupported_resource_is_rejected(browser_page) -> None:
     adapter = ComicDaysAdapter()
     await adapter.configure_run(browser_page, "quota")
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_quota_resource(browser_page, "premium_ticket")
+        await adapter.configure_quota_resource(browser_page, "unsupported_ticket")
 
 
 @pytest.mark.parametrize(

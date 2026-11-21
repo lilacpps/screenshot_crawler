@@ -1,3 +1,173 @@
+## Premium / いつでもチケット (2026-11-21)
+
+Status: **IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED**.
+
+`ComicDaysSitePolicy` exposes `work_ticket`, then `premium_ticket`. Normal
+Batch executes the existing direct/Work Ticket phase and replans for Premium;
+`--grant-only all` uses the same resource-first order with one shared limit.
+`--grant-only work_ticket` never selects or consumes Premium. Existing Catalog
+ordering, acquisition scope, exclusions and Work Ticket cooldown remain intact.
+Premium has no one-per-Work quota limit and no persistent resource balance or
+cooldown. Both resources retain observed-consumption commits and the 71-hour
+conservative grant fallback; fresh Discovery can supply exact native expiry.
+
+The site-local `premium_access.py` resolver validates one Work's Catalog pool.
+Work Ticket is a local pass-through, without homepage or Premium stock access.
+Premium visits `https://comic-days.com/`, waits 3 seconds, then reads the first
+candidate's Work page and `Viewer_SeriesTicketQuery`. It requires a nonnegative
+integer `userAccount.eventTicketCount` and a positively uncharged Work Ticket.
+The home visit is repeated at each Premium Work stock check; no daily timer or
+collection ledger is introduced. A charged Work Ticket selects no Premium
+targets. Zero returns empty/pass-exhausted and prevents later Work/entry visits;
+unknown state stops closed. One full native Atom response checks pool membership
+in that series. The first N quota candidates in existing order are selected
+before individual entry, also bounded by the shared execution limit. Candidates
+beyond N are never opened merely to test eligibility. Stock is refreshed for
+the next Work, never copied as a new independent budget for each Work.
+A target becoming free/already-granted can reduce spending below N; the selected
+pool is not expanded to compensate. Fresh Discovery remains the Catalog access
+classification authority. No additional per-episode eligibility exploration is
+introduced for such a race.
+
+Entry shares the existing normal/entry-only ticket path. It requires the exact
+canonical episode/series/viewer binding, the observed 72-hour contract, a
+positive live stock, uncharged Work Ticket and a unique visible/enabled
+`use-premium-ticket-button` with `data-ticket-type=premium`, matching rental ID,
+normal button behavior and label `いつでもチケットで読む（無料）`. A visible Work
+Ticket or paid/cost/inline-handler attributes prevent the Premium click.
+Only one click is dispatched. Confirmation requires exactly one stock debit,
+unchanged Work Ticket recharge state and a visible matching normal viewer with
+neither ticket control remaining. The existing bounded read-only recovery polls
+can confirm an interrupted click without retrying it. Capture failure after a
+confirmed debit preserves the grant. Last-ticket success signals pass exhaustion
+only after this candidate's normal capture/package or grant-only finalization.
+Grant-only produces no content Artifact and keeps the Item pending.
+If a selected Premium target is already visibly readable with both ticket
+controls absent, normal initialization continues without spending. Entry-only
+returns `already_accessible` with `stop_work=False`, so another selected target
+may proceed without fabricating consumption. The existing Work Ticket mismatch
+behavior is unchanged.
+
+Initial shared-CDP investigation observed 宇宙兄弟 native series
+`10834108156628504270`, Work Ticket uncharged and Premium stock 7. The native
+page calls this resource **いつでもチケット** (the user initially called it
+どこでもチケット). A bounded one-click probe on pending Catalog-first #147,
+episode `10834108156628527176`, invoked `Viewer_PurchaseViaEventTicket` once.
+Immediate observation was interrupted by navigation; a separate non-consuming
+read confirmed stock 6 and the same episode's normal viewer. No second click
+was made. Fresh isolated Full Discovery observed all 432 episodes and the
+native rental grant. Evidence is under `output/comicdays-premium-20261121/`.
+Operational Catalog/Watchlist and existing archives are not modified by the
+verification; its snapshot Catalog, Watchlist, output and library are isolated.
+The authorized total verification budget was at most five tickets; exactly
+four were used, leaving **3**. No further consuming verification is planned.
+
+Production CLI evidence in that isolated scope:
+
+- `--grant-only work_ticket --limit 1`: local `work_ticket_cooldown`, no Premium
+  selection or consumption, no entry Page.
+- `--grant-only all --limit 1`: Work Ticket cooldown skipped, then Premium
+  snapshot selected 6 of 264 quota candidates before entry. Exactly one Premium
+  was used on #148 (`10834108156628527246`). CrawlRun 27348 succeeded with zero
+  pages and `entry_confirmed`; no Artifact belongs to it. The subsequent normal
+  run consumed neither #147 nor #148 again.
+- Normal `batch run --limit 4`: direct #148 and #147 each reached END with 22
+  pages; Work Ticket remained on cooldown. The subsequent Premium pass planned
+  263 quota rows, passed only its two remaining execution slots into the stock
+  resolver, selected #149 (`10834108156628527352`) and #150
+  (`10834108156628528275`), and used exactly two Premium Tickets. They reached
+  END with 20 and 22 pages. All four Items became completed with present ZIP
+  Artifacts. Native balance was 7 → 6 (probe) → 5 (grant-only) → 3 (normal).
+- Audit verified all four ZIP CRCs, image decoding/dimensions, per-image SHA256,
+  and the Catalog Artifact ZIP SHA256/byte sizes: **86 pages** (81 JPEG, 5 PNG).
+  The capture/format logic was not changed. Work Ticket resource timestamp
+  remained `2026-11-21T05:52:47.223095+09:00`; no Premium resource-state row exists.
+- Non-consuming reentry on #147 with explicit quota/Premium reached normal
+  content readiness; entry-only skipped `already_accessible`. Both left the
+  balance at 3 and reported no resource use. A real Work Ticket → Premium
+  transition was not exercised because this Work's ticket was already used;
+  native priority and ordered switching are covered by synthetic/CLI tests.
+
+Evidence files: `work-only.log`, `grant-all.log`, `normal-batch.log`, the
+grant-only `diagnostics/entry_trace.json`, `probe-after-first-ticket.json`,
+`probe-report.json`, `reentry.json`, and `audit.json`; archives are in the
+isolated `library/漫画/宇宙兄弟/` directory. Production operational Catalog and
+archives were not changed. Daily replenishment itself could not be distinguished
+because today's ticket had already been collected; the normal home visit/wait
+was exercised and no replenishment amount/reset rule was inferred.
+
+Local validation: 276 passed across CLI, Policy, Batch, live access parser,
+stock selection and synthetic Work/Premium browser entry tests. Zero/unknown
+stock, 1,000-candidate stock bounds, Work priority, exact debit, last ticket,
+no retry, explicit resource order/isolation and shared limits are covered.
+The initial long-basetemp CLI run hit Windows path length in a work-deletion
+fixture; rerunning with a short isolated basetemp passed the suite. Final
+targeted run: 276 passed, zero skips, `targeted-final.log`. Ruff passed.
+Additional affected Unit/Batch/Browser checks: **337 passed**, zero skips,
+`affected-tests.log`. Relevant Comic DAYS/Magapoke viewer and Piccoma stock-entry
+Integration: **243 passed**, zero skips, `integration-affected.log`. These are
+disjoint from the 276 targeted cases, for **856 related passing cases**.
+
+Complete regression was executed in three isolated file partitions, covering
+all **204 files / 9,952 collected cases** with no overlapping or missing files:
+**9,945 passed, 7 failed, 0 errors, 0 skipped**. `full-summary.json`, the three
+`part-*-plan.json` files, logs and JUnit XML retain exact scope and failures.
+Full regression is therefore **not all-green**. Its failures were investigated
+without weakening unrelated capture guards or changing user settings:
+
+- Two `test_runtime_settings.py` assertions expect distributed defaults. The
+  user's pre-existing `crawler.yaml` customizations set Magapoke pacing to
+  1500/6000 ms and Hanayume Discovery pacing to 10000 ms, so those assertions
+  differ. Both pass against HEAD's original config in the isolated baseline.
+  User settings were retained; `settings-baseline.log` records the comparison.
+- Two Hanayume counter checks exceeded their 0.4-second wall-clock assertion
+  (about 0.50/0.45 seconds), while observing the expected error. The isolated
+  HEAD baseline passed both. After all full-suite workers exited, both passed
+  in a current-code quiet rerun.
+- ComicFUZ's verified-spread Runner test timed out. The same failure was
+  reproduced against unmodified HEAD in an isolated source snapshot. Its final
+  quiet current-code rerun passed.
+- Two Yanmaga `non_jpeg_blob` pixel-group cases failed. Both passed in the
+  current-code standalone rerun, while both reproduced a body-sequence guard
+  failure against unmodified HEAD. `yanmaga-rerun.log` and
+  `yanmaga-baseline.log` preserve those outcomes.
+
+The final quiet run covering ComicFUZ and both Hanayume cases was **3 passed**
+(`quiet-rerun.log`); with the two Yanmaga reruns, all five browser failures
+passed standalone. The earlier single-process attempt also had one transient
+Comic DAYS leading-tail failure; it passed standalone and in the subsequent
+243-case Integration group/full partition. That initial run was superseded by
+the complete partitions and is not counted as a completed full run. Its soft
+termination did not exit immediately; the verified old pytest PID was force-
+terminated later, before final quiet reruns. No unrelated capture changes or
+test-threshold relaxations were made on this evidence.
+
+Not exercised live: newly available Work Ticket → Premium switching (this Work
+was already on cooldown), depletion to zero (the authorized budget left stock
+3), and the actual daily replenishment transition (today was already claimed).
+Synthetic/CLI tests cover priority, exhaustion and pass orchestration. Other
+sites' live ticket flows were not exercised because their behavior was not
+changed. Source-format/capture behavior was left intact. No skipped tests.
+
+Changed files for this extension:
+
+- Implementation: `src/screenshot_crawler/cli.py`,
+  `src/screenshot_crawler/site_adapters/base.py`,
+  `src/screenshot_crawler/site_adapters/comicdays/adapter.py`,
+  `src/screenshot_crawler/site_adapters/comicdays/live_access.py`,
+  new `src/screenshot_crawler/site_adapters/comicdays/premium_access.py`, and
+  `src/screenshot_crawler/site_policies/comicdays.py`.
+- Tests: `tests/unit/test_cli.py`, `tests/unit/test_comicdays_policy.py`,
+  `tests/unit/test_comicdays_batch.py`, new
+  `tests/unit/test_comicdays_premium_access.py`,
+  `tests/integration/test_comicdays_work_ticket_entry_browser.py`, and new
+  `tests/integration/test_comicdays_premium_ticket_browser.py`.
+- Documentation: the Comic DAYS adapter `README.md`,
+  `docs/ARCHITECTURE.md`, `docs/DISCOVERY_AND_BATCH.md`,
+  `docs/ACCESS_CONTROL_AND_PACING.md`, `docs/ACCESS_CONTROL_AND_PACING_PLAN.md`,
+  `note/00_core.md` and this note. Existing user changes in `crawler.yaml`,
+  `watchlist.yaml` and `.gitignore` are retained, not part of this extension.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
@@ -798,15 +968,18 @@ accepts that observed colophon as terminal; it does not issue another forward
 action after it, since a read-only live check showed that such an action can
 leave the canonical viewer scope.
 
-The current Comic DAYS policy supports one named resource, `work_ticket`, with
+The current Comic DAYS policy supports `work_ticket` and `premium_ticket`.
+The Work Ticket retains
 work-scoped state, `quota_limit=1`, non-deferred quota execution, a 23-hour
 cooldown, and `after_observed_consumption` commits. Discovery records the
 site's observed 72-hour `rental_end_at` when a grant is active. Generic
 observed-consumption commit uses the conservative 71-hour
 `access_grant_until()`; a later fresh Discovery refreshes the exact native
 expiry. Planner ordering remains the existing Catalog ordering, with at most
-one quota candidate per work. Comic DAYS no longer has a production live
-candidate resolver: Discovery full is the candidate-state authority.
+one Work Ticket candidate per work. Premium candidates have no local per-Work
+limit; their live account stock bounds the selected pool before individual
+entry. The stock resolver passes Work Ticket pools through without network
+access. Discovery full remains the candidate-state authority.
 An episode URL supplied for live verification is the seed for full Discovery
 of its native work; the natural Planner candidate may be another episode in
 that work. The Catalog classification and existing Planner ordering are kept
@@ -862,7 +1035,7 @@ candidate-local Catalog/live identity mismatch skips only that candidate with
 is attempted for that candidate. A changed or unknown Work Ticket contract is
 the pass-wide stop case. Positive `isCharged=false` is a separate
 `work_ticket_cooldown` outcome. The dated live evidence below predates this
-current resolver-free flow; resolver/replan references there are historical.
+then-current Work Ticket flow; resolver/replan references there are historical.
 Current isolated Test A evidence (2026-10-04) used seed
 `12207421984217275863` and the natural Planner quota episode
 `12207421983943213206` in work `comicdays:series:12207421983893924879`.

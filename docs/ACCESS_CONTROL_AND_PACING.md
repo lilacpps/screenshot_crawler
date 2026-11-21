@@ -394,6 +394,17 @@ Existing operator `--limit` remains available for intentionally bounded runs. Co
 
 ## 9. Access Resource Selection contract
 
+### Empty-pool exhaustion (2026-11-21)
+
+`AccessResourceResolution.stop_resource_pass` defaults to false and may be true
+only for an empty selection with positively observed resource exhaustion. The
+CLI records the resolver's skips, closes its Page, and stops that explicit
+resource pass before creating any entry Page or visiting another Work. The
+snapshot does not count as an attempt or create a CrawlRun/grant/Artifact.
+Work-local unavailability continues to use an empty selection without the flag.
+Normal additional resource passes honor the same optional per-Work stock
+resolution policy as the initial phase. Defaults and existing sites are unchanged.
+
 ### 9.1 Terminology
 
 Use **access resource** as the generic concept.
