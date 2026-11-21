@@ -8,8 +8,15 @@ Batch and `--grant-only all` replan after Work Ticket;
 per-Work stock selection, with no per-Work limit or durable stock/cooldown.
 Work Ticket retains its original local 23-hour skip and 72-hour grant cap.
 
-The site-local `premium_access.py` visits home, conditionally closes a unique
-campaign popup, and optionally performs one daily native gacha spin. Missing/
+The site-local `premium_access.py` visits home, closes the unique open campaign
+dialog with its scoped `popClose` submit button (including a delayed popup while
+the gacha link is waiting), and optionally performs one daily native gacha spin.
+The close is attempted once and the temporary locator handler is always removed.
+`Hanayume home popup:` lines in GUI job `stdout.log` record detection/dismissal
+and structural evidence on home-navigation failure: bounded dialog/control tags,
+classes, `data-e2e`, types, link count and the element covering the link. They
+exclude text, HTML, URLs, images and account values. Unknown or repeated dialogs
+stop with diagnostics. Missing/
 hidden entry continues to stock selection; no daily ledger, share or uncertain
 action replay is used. Preparation is bounded to 65 seconds with a 35-second
 result wait. Natural account `bonusValue` is ticket stock and `paidCoin` remains
@@ -33,8 +40,10 @@ Bounded live verification used three real Premium tickets total: one probe,
 one production grant-only, one production normal Batch on 高嶺と花. Grant-only
 saved the native expiry with Item pending; normal Batch reached END and created
 a six-page ZIP with Item completed. The daily gacha was spun once (result 1),
-with no share/retry. Production unused-gacha and popup-close branches have
-synthetic coverage; they were not independently re-executed live today. Existing
+with no share/retry. The 2026-11-22 popup correction has synthetic browser
+coverage. A read-only shared-CDP home check saw no popup; downloaded site code
+confirmed the `popClose` submit-button shape, but an actual close was not
+re-executed live. No new spin or ticket was used. Existing
 Work Ticket verification below is historical and its resource counts are separate.
 
 ## Existing Work Ticket checkpoint

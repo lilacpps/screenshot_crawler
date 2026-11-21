@@ -38,8 +38,17 @@ opts into per-Work stock selection. Work Ticket retains its Catalog-only 23-hour
 cooldown, one-per-Work limit and original entry path. Premium has account-wide
 live stock, no per-Work consumption limit and no durable resource balance/state.
 
-Premium's guarded resolver visits home, closes the unique campaign popup if
-present, and follows the visible daily gacha link if present. A positively ready
+Premium's guarded resolver visits home and closes the unique open
+`dialog.dialog.mode-campaign[data-e2e="pop"]` through its scoped
+`button.dialog-btn.mode-campaign[data-e2e="popClose"][type="submit"]`.
+The handler also covers a campaign that appears while the gacha link waits
+for actionability; it is removed on exit. The close is attempted at most once,
+and duplicate, repeated or unknown controls fail closed. Worker stdout records
+`Hanayume home popup:` structural diagnostics on detection and home-navigation
+failure, and a dismissal result: bounded dialog/control tag, class, `data-e2e`,
+type, link count and the element covering its center. No text, HTML, account
+values, URLs or images are logged. The resolver follows the visible daily gacha
+link if present. A positively ready
 account with no visible link continues to stock selection. On the gacha page,
 only native `canRollGacha=true, gachaTimes=0` permits one normal spin. A matching
 0..2 result and visible result panel complete the operation; no daily ledger,

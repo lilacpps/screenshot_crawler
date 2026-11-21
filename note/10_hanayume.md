@@ -81,8 +81,15 @@ limit remain authoritative. No Catalog schema/configuration change is required.
 `site_adapters/hanayume/premium_access.py` owns bounded same-main-frame native
 observations, optional daily-gacha preparation, stock selection and two-step
 entry. Before each Premium Work's stock resolution it visits home, waits for
-account/stock hydration, closes a unique campaign `closeCpPop` if visible, and
-follows the unique visible `.home-gacha-btn[href="/gacha"]` if present. A missing
+account/stock hydration, closes the unique open campaign
+`dialog.dialog.mode-campaign[data-e2e="pop"]` with its scoped
+`button.dialog-btn.mode-campaign[data-e2e="popClose"][type="submit"]`, and
+follows the unique visible `.home-gacha-btn[href="/gacha"]` if present. A
+temporary Playwright locator handler also handles an advertisement appearing
+after hydration while the link waits for actionability, and is removed on every
+exit. The close is dispatched at most once; duplicate, repeated or unknown
+dialogs/controls stop without force-clicking. The close/hide waits remain bounded
+to two seconds each and navigation uses the supplied timeout. A missing
 or hidden entrance after readiness simply proceeds to stock selection. No daily
 ledger is kept. Only natural `/api/gacha` `canRollGacha=true,gachaTimes=0` allows
 one `gachaExecBtn` click. A matching native 0..2 result and visible
@@ -90,6 +97,46 @@ one `gachaExecBtn` click. A matching native 0..2 result and visible
 No share/retry/uncertain-spin replay is implemented. A 65-second resolver budget
 includes at most 35 seconds for the result; per-observation bounds and AccessGuard
 remain separate. Gacha does not create a candidate attempt, grant or Artifact.
+
+Home popup diagnostics (2026-11-22): `Hanayume home popup:` JSON lines are
+flushed to worker stdout (GUI: `output/management/logs/<job_id>/stdout.log`).
+`campaign_detected` and `campaign_dismissed` identify the observed close flow;
+`home_gacha_navigation_failed` captures failure structure before cleanup.
+Evidence is capped at four open dialogs and eight controls each, with bounded
+tag/class/`data-e2e`/type values, gacha-link count and the element over its center.
+Page text, HTML, input/account values, URLs, images, API bodies and credentials
+are excluded. Inspection has a separate one-second bound and a diagnostic
+inspection error does not replace the original navigation failure. These are
+operator stdout diagnostics, not a new metrics/event or Catalog contract.
+
+The 2026-11-22 06:43 JST production job failed before any gacha spin because
+the open campaign intercepted the home link. The old once-only lookup for
+`closeCpPop` did not cover the current control or delayed display. A bounded
+read-only shared-CDP check on 2026-11-22 did not encounter an open popup.
+Downloaded current site JavaScript declares `closeCpPop` and `popClose`, then
+applies both marker spreads to the same campaign button (the latter wins),
+with `type="submit"`, `dialog-btn mode-campaign` and the close icon. This
+supports the corrected control without claiming an observed live close.
+Sanitized structure/source evidence: `.tmp/hy-popup-20261122/evidence.json`.
+Non-read requests were blocked; no gacha/spin, rental or ticket action was
+attempted and no operational Catalog/Watchlist was modified. Popup closing,
+delayed display and failure diagnostics are verified with artificial browser
+fixtures; actual popup dismissal remains unverified live for this revision.
+
+Validation for the popup correction: the focused gacha/popup browser selection
+passed 12 cases (30 unrelated cases deselected), then the complete Hanayume and
+Younganimal Premium browser files plus Hanayume Adapter/Policy Unit files passed
+**223 cases, 0 failed / 0 skipped / 0 deselected** in 67.16 seconds. The 297
+warnings are existing Python/pytest-asyncio deprecations. Coverage includes
+immediate/delayed/absent popup, absent/hidden/already-used gacha, once-only spin,
+missing/duplicate/wrong-type close, unknown dialog, no unrelated clicks and
+diagnostic content exclusion. `ruff check src tests` and whitespace checks for
+the five changed paths passed. Repository-wide whitespace checking also sees
+an unrelated existing trailing space in user-edited `watchlist.yaml`; it was
+left intact. Research/Probe test suites and full pytest were not run because
+this revision is site-local; relevant Unit/browser Integration and bounded
+read-only live observation were performed. New live spins, ticket entry,
+capture/END/ZIP and the actual popup close were not exercised by this fix.
 
 `/api/userPoint.bonusValue` is account-wide ticket stock; `paidCoin` is separate.
 Home zero ends the pass without an episode visit. Positive home stock permits

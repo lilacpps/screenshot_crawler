@@ -7,6 +7,7 @@ resource fallback, daily ledger, or replay of a possibly dispatched action.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -178,25 +179,75 @@ async def _goto(page: Page, url: str, timeout_ms: int) -> None:
         raise UnknownPageStateError("Hanayume Premium prerequisite route changed")
 
 
+async def _log_home_popup(page: Page, event: str) -> None:
+    """Bounded structural evidence for worker stdout; never log page content/URLs."""
+    try:
+        async with asyncio.timeout(1):
+            details = await page.evaluate("""() => {
+                const meta = n => n && ({tag: n.tagName,
+                    classes: String(n.className).slice(0, 120),
+                    e2e: n.getAttribute('data-e2e')?.slice(0, 80),
+                    type: n.getAttribute('type')?.slice(0, 20)});
+                const dialogs = [...document.querySelectorAll('dialog[open]')];
+                const links = document.querySelectorAll('div.home-gacha > a.home-gacha-btn[href="/gacha"]');
+                const rect = links[0]?.getBoundingClientRect();
+                return {open_dialog_count: dialogs.length,
+                    dialogs: dialogs.slice(0, 4).map(n => ({...meta(n),
+                        controls: [...n.querySelectorAll('button,a')].slice(0, 8).map(meta)})),
+                    gacha_link_count: links.length,
+                    link_cover: rect ? meta(document.elementFromPoint(
+                        rect.x + rect.width / 2, rect.y + rect.height / 2)) : null};
+            }""")
+    except (PlaywrightError, TimeoutError) as exc:
+        details = {"inspection_error": type(exc).__name__}
+    print("Hanayume home popup: " + json.dumps({"event": event, **details}), flush=True)
+
+
 async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_ms: int) -> None:
     await _goto(page, HOME, timeout_ms)
     await observer.wait("stock")  # Account hydration, not mere absence of a button.
     await page.locator('#xHeader [data-e2e="signoutBtn"]').wait_for(state="attached", timeout=timeout_ms)
-    close = page.locator('[data-e2e="closeCpPop"]')
-    if await close.count():
-        if await close.count() != 1:
+    campaign = page.locator('dialog.dialog.mode-campaign[data-e2e="pop"][open]')
+    dismissed = False
+    handler_added = False
+
+    async def dismiss_campaign() -> None:
+        nonlocal dismissed
+        await _log_home_popup(page, "campaign_detected")
+        if dismissed or await campaign.count() != 1:
+            raise UnknownPageStateError("Hanayume campaign popup is ambiguous or repeated")
+        # The current site applies POPUP_CLOSE after its legacy campaign marker,
+        # so the rendered close button uses popClose rather than closeCpPop.
+        close = campaign.locator('button.dialog-btn.mode-campaign[data-e2e="popClose"]')
+        if await close.count() != 1 or await close.get_attribute("type") != "submit":
             raise UnknownPageStateError("Hanayume campaign close is ambiguous")
-        if await close.is_visible():
-            await close.click(timeout=2_000)
-    link = page.locator('div.home-gacha > a.home-gacha-btn[href="/gacha"]')
-    if await link.count() == 0 or (await link.count() == 1 and not await link.is_visible()):
-        return
-    if await link.count() != 1:
-        raise UnknownPageStateError("Hanayume daily gacha link is ambiguous")
-    await link.click(timeout=2_000)
-    await page.wait_for_url(GACHA, timeout=timeout_ms)
-    if page.url != GACHA:
-        raise UnknownPageStateError("Hanayume daily gacha route changed")
+        dismissed = True
+        await close.click(timeout=2_000)
+        await campaign.wait_for(state="hidden", timeout=2_000)
+        print('Hanayume home popup: {"event": "campaign_dismissed"}', flush=True)
+
+    try:
+        if await campaign.count() and await campaign.first.is_visible():
+            await dismiss_campaign()
+        # A campaign can appear after account hydration, while the link waits
+        # for actionability. Never force-click through an unknown overlay.
+        await page.add_locator_handler(campaign, dismiss_campaign)
+        handler_added = True
+        link = page.locator('div.home-gacha > a.home-gacha-btn[href="/gacha"]')
+        if await link.count() == 0 or (await link.count() == 1 and not await link.is_visible()):
+            return
+        if await link.count() != 1:
+            raise UnknownPageStateError("Hanayume daily gacha link is ambiguous")
+        await link.click(timeout=timeout_ms, no_wait_after=True)
+        await page.wait_for_url(GACHA, timeout=timeout_ms)
+        if page.url != GACHA:
+            raise UnknownPageStateError("Hanayume daily gacha route changed")
+    except (PlaywrightError, UnknownPageStateError):
+        await _log_home_popup(page, "home_gacha_navigation_failed")
+        raise
+    finally:
+        if handler_added:
+            await page.remove_locator_handler(campaign)
     _, native = await observer.wait("gacha")
     if not native["can"] or native["times"] != 0:
         return  # Never use a share/retry entitlement.
