@@ -394,6 +394,20 @@ Existing operator `--limit` remains available for intentionally bounded runs. Co
 
 ## 9. Access Resource Selection contract
 
+Hanayume and Younganimal Premium use the existing guarded per-Work resolver and bounded
+preparation budget for an optional native daily gacha before live stock
+selection. This specifically authorized free-stock acquisition is not ticket
+consumption, a selected-candidate attempt, or a grant. It never shares publicly,
+retries a possibly dispatched spin, or records a daily ledger. AccessGuard,
+cancellation and timeout bounds remain active through preparation. The total
+65-second site budget is separate from individual observation timeouts.
+
+Grant expiry fallback/caps may vary by requested resource via
+`access_grant_until_for_resource(started_at, resource)`. The default delegates to
+the existing policy expiry. None supplies no fallback/cap, allowing a confirmed
+native expiry; Hanayume and Younganimal Premium require that positive expiry before reporting
+consumption. Other resources retain their previous fallback/cap behavior.
+
 ### Empty-pool exhaustion (2026-11-21)
 
 `AccessResourceResolution.stop_resource_pass` defaults to false and may be true
@@ -438,7 +452,10 @@ pre-consumption exhaustion still uses `AccessResourceUnavailableError` with
 
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
-The optional policy hook `resolve_grant_only_per_work()` defaults to false.
+The optional policy hook `resolve_grant_only_per_work(resource=None)` defaults
+to false. None selects the default pass; explicit grant-only passes query it
+with their resource, including each resource in `all`. Comic DAYS opts in only
+for Premium, keeping Work Ticket on its original Catalog cooldown/entry path.
 Opted-in explicit grant-only runs group candidates by Work, call the existing
 guarded site resolver once per Work/resource, close the snapshot Page, and
 execute only its selected pool through ordinary fresh entry. This supports
@@ -453,8 +470,11 @@ already-accessible target: this skips that row without declaring the Work's
 resource unavailable. Piccoma retains its durable no-action error identity and
 fresh-grant persistence on that race.
 
-The separate optional `resolve_batch_quota_per_work()` policy hook also
-defaults to false. In normal Batch, it resolves only the remaining consuming
+The separate optional `resolve_batch_quota_per_work(resource=None)` policy hook
+also defaults to false. None selects the initial/default pass; additional
+resource passes query it with their resource. Piccoma retains its existing
+opt-in for all relevant passes; Comic DAYS opts in only for Premium. In normal
+Batch, it resolves only the remaining consuming
 candidates for a `(site, Work, resource)` when that pool is first encountered.
 The existing guarded resolver bounds the pool; its snapshot Page closes before
 entry. Selected IDs are cached within that phase without regrouping the

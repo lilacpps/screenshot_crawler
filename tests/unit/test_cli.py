@@ -1153,13 +1153,13 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "zeblack",
     )
     policy = cli._batch_policy_registry().create("hanayume")
-    assert policy.supported_access_resources() == ("work_ticket",)
-    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
     grant_only = _parser().parse_args(
         ["batch", "run", "--site", "hanayume", "--grant-only", "work_ticket"]
     )
     assert grant_only.grant_only == "work_ticket"
-    assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
+    assert cli._grant_only_resource_passes(policy) == ("work_ticket", "premium_ticket")
     piccoma_policy = cli._batch_policy_registry().create("piccoma")
     assert piccoma_policy.resolve_batch_quota_per_work() is True
     assert piccoma_policy.supported_access_resources() == (
@@ -1174,13 +1174,13 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     assert ebookjapan_policy.supported_access_resources() == ()
     assert ebookjapan_policy.grant_only_supported_access_resources() == ()
     younganimal_policy = cli._batch_policy_registry().create("younganimal")
-    assert younganimal_policy.supported_access_resources() == ("work_ticket",)
-    assert younganimal_policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert younganimal_policy.supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert younganimal_policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
     younganimal_grant_only = _parser().parse_args(
         ["batch", "run", "--site", "younganimal", "--grant-only", "work_ticket"]
     )
     assert younganimal_grant_only.grant_only == "work_ticket"
-    assert cli._grant_only_resource_passes(younganimal_policy) == ("work_ticket",)
+    assert cli._grant_only_resource_passes(younganimal_policy) == ("work_ticket", "premium_ticket")
     kadocomi_policy = cli._batch_policy_registry().create("kadocomi")
     assert kadocomi_policy.supported_access_resources() == ()
     assert kadocomi_policy.grant_only_supported_access_resources() == ()
@@ -1738,7 +1738,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     output = capsys.readouterr()
     assert plans == [None, "premium_ticket"]
     assert calls == [1, 2, 3]
-    assert resolutions == (["work_ticket", "premium_ticket"] if site_name == "comicdays" else [])
+    assert resolutions == (["premium_ticket"] if site_name == "comicdays" else [])
     if last_ticket_completed:
         assert "completed: item-3.zip" in output.out
         assert "Stopping this resource pass after successful completion." in output.out
@@ -2414,6 +2414,102 @@ async def test_explicit_deferred_grant_only_paces_resolver_before_grant(
     ]
 
 
+@pytest.mark.parametrize("grant_only", [None, "work_ticket", "all"])
+@pytest.mark.parametrize("last_available", [False, True])
+def test_comicdays_cooldown_pass_has_no_resolver_pages_or_pacing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys, grant_only: str | None,
+    last_available: bool,
+) -> None:
+    checked: list[int] = []
+    sleeps: list[float] = []
+    pages: list[object] = []
+    closed: list[object] = []
+    executed: list[int] = []
+    candidates = [
+        SimpleNamespace(
+            site="comicdays", work_id=i, item_id=i, source_id=i,
+            metadata={}, access_strategy="quota", quota_resource="work_ticket",
+            consumes_quota=True, discovery_key=None,
+        ) for i in range(1, 5)
+    ]
+
+    class Planner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, *, site, quota_resource=None, **_kwargs):
+            assert site == "comicdays"
+            return SimpleNamespace(
+                candidates=[] if quota_resource == "premium_ticket" else candidates,
+                skipped=[],
+            )
+
+    class Session:
+        @classmethod
+        async def connect(cls, _endpoint):
+            return cls()
+
+        async def new_page(self):
+            assert last_available, "A local cooldown pass must not open Pages"
+            page = object()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+
+        async def close(self):
+            pass
+
+    class Executor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def resource_state_skip_reason(self, candidate):
+            checked.append(candidate.item_id)
+            return None if last_available and candidate.item_id == 4 else "work_ticket_cooldown"
+
+        grant_only_skip_reason = resource_state_skip_reason
+
+        async def resolve_access_resource_candidates(self, *_args):
+            pytest.fail("Work Tickets must not invoke a stock resolver")
+
+        async def execute_candidate(self, _page, candidate, **_kwargs):
+            executed.append(candidate.item_id)
+            return SimpleNamespace(
+                archive_path=Path("item-4.zip"), resource="work_ticket", resource_consumed=True,
+            )
+
+        execute_grant_only_candidate = execute_candidate
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cli, "BatchPlanner", Planner)
+    monkeypatch.setattr(cli, "BatchExecutor", Executor)
+    monkeypatch.setattr(cli, "BrowserSession", Session)
+    monkeypatch.setattr(cli, "_require_selected_scope_sync", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "resolve_cdp_endpoint", lambda **kwargs: "http://example.test:9222")
+    args = _parser().parse_args([
+        "batch", "run", "--site", "comicdays",
+        *([] if grant_only is None else ["--grant-only", grant_only]),
+    ])
+    args.metrics_root = tmp_path / "metrics"
+    args.crawler_config = tmp_path / "crawler.yaml"
+    args.env_file = tmp_path / ".env"
+    args.watchlist = tmp_path / "watchlist.yaml"
+    catalog = SimpleNamespace()
+    asyncio.run(cli._run_batch_run_locked(args, catalog))
+
+    assert checked == [1, 2, 3, 4]
+    assert sleeps == []
+    assert executed == ([4] if last_available else [])
+    assert len(pages) == int(last_available)
+    assert pages == closed
+    assert capsys.readouterr().out.count("work_ticket_cooldown") == 4 - int(last_available)
+
+
 @pytest.mark.parametrize(
     ("site_name", "resource_a", "resource_b"),
     [
@@ -2433,6 +2529,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     plans: list[str | None] = []
     executions: list[tuple[str, int]] = []
+    resolutions: list[str] = []
 
     def candidate(resource: str, item_id: int) -> SimpleNamespace:
         return SimpleNamespace(
@@ -2490,6 +2587,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             return None
 
         async def resolve_access_resource_candidates(self, _page, candidates, _resource):
+            resolutions.append(_resource)
             return SimpleNamespace(
                 selected_source_ids=tuple(c.source_id for c in candidates),
                 skipped_source_reasons=(),
@@ -2561,6 +2659,8 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     assert plans == ([resource_a, resource_b, resource_b] if site_name == "piccoma"
                      else [resource_a, resource_b, resource_a, resource_b])
     assert executions == [(resource_a, 1), (resource_a, 2), (resource_b, 3)]
+    if site_name == "comicdays":
+        assert resolutions == [resource_b]
     assert "resource=all" in output.out
     assert "item=4" not in output.out
     assert "FAILED" not in output.out

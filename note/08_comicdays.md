@@ -11,8 +11,28 @@ Premium has no one-per-Work quota limit and no persistent resource balance or
 cooldown. Both resources retain observed-consumption commits and the 71-hour
 conservative grant fallback; fresh Discovery can supply exact native expiry.
 
-The site-local `premium_access.py` resolver validates one Work's Catalog pool.
-Work Ticket is a local pass-through, without homepage or Premium stock access.
+The resource-aware Policy hooks opt into per-Work stock selection only for
+`premium_ticket`. Work Ticket/the default pass uses the original candidate
+execution path in normal Batch and grant-only (including `all`): Catalog
+cooldown skips run consecutively without sleeps, stock resolution or entry
+Pages; eligible targets use exact entry. The 23-hour cooldown, one-per-Work
+limit and observed-consumption persistence remain unchanged. This removes the
+unnecessary 3-second waits between local-only skips introduced by the earlier
+site-wide opt-in. No CLI/configuration or output format changes are required.
+
+Cooldown routing correction validation: **393 affected Unit cases and 79
+artificial-browser Integration cases passed**, zero skips; Ruff and changed-file
+diff checks passed. Six routing regressions cover normal Batch, Work-only and
+`all` with four cooldown Works or three followed by one eligible Work. Checks
+run consecutively with no sleep or stock resolver, and only eligible entry
+opens a Page. Existing Premium bounds/exhaustion/order/limit and native entry
+safety tests pass. Live verification, Research and the full suite were not
+rerun: this fix changes routing only, without DOM/capture/consumption changes.
+The bounded live evidence below belongs to the earlier Premium extension.
+
+The site-local `premium_access.py` resolver validates one Premium Work's Catalog
+pool. Its Work Ticket pass-through remains available to direct callers but is
+not invoked by normal/grant-only orchestration.
 Premium visits `https://comic-days.com/`, waits 3 seconds, then reads the first
 candidate's Work page and `Viewer_SeriesTicketQuery`. It requires a nonnegative
 integer `userAccount.eventTicketCount` and a positively uncharged Work Ticket.

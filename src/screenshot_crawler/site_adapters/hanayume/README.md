@@ -1,5 +1,44 @@
 # Hanayume Site Adapter
 
+## Premium / すぐ無料チケット (2026-11-21)
+
+Implemented through explicit `work_ticket -> premium_ticket` passes. Normal
+Batch and `--grant-only all` replan after Work Ticket;
+`--grant-only premium_ticket` is also supported. Only Premium uses guarded
+per-Work stock selection, with no per-Work limit or durable stock/cooldown.
+Work Ticket retains its original local 23-hour skip and 72-hour grant cap.
+
+The site-local `premium_access.py` visits home, conditionally closes a unique
+campaign popup, and optionally performs one daily native gacha spin. Missing/
+hidden entry continues to stock selection; no daily ledger, share or uncertain
+action replay is used. Preparation is bounded to 65 seconds with a 35-second
+result wait. Natural account `bonusValue` is ticket stock and `paidCoin` remains
+separate. Zero stops the whole pass before another episode/Work. Positive stock
+allows one first-target check and selects only the first N existing Catalog
+quota candidates; later candidate pages are never explored to find eligibility.
+Every selected entry independently checks its exact native episode/work binding.
+
+`ifRead` opens a second confirmation requiring `1枚`, `15日間`, and
+`レンタルする`. Each button is used at most once. A checkout route gate allows
+only one selected-episode POST with `amount=0,ticketCount=1`. HTTP 200, exactly
+one ticket debit, unchanged coins, continuing Work Ticket recovery and a fresh
+exact `purchased` grant prove consumption. Native request-start plus remaining
+seconds minus one supplies the 15-day expiry through the resource-specific
+policy hook; no Work Ticket cooldown is updated. Normal capture continues on
+the same Page. Grant-only creates no CONTENT/ZIP and keeps Item pending. Last
+ticket completion stops the pass without another Page/sleep. See
+[current site note](../../../../note/10_hanayume.md) for proof details and limits.
+
+Bounded live verification used three real Premium tickets total: one probe,
+one production grant-only, one production normal Batch on 高嶺と花. Grant-only
+saved the native expiry with Item pending; normal Batch reached END and created
+a six-page ZIP with Item completed. The daily gacha was spun once (result 1),
+with no share/retry. Production unused-gacha and popup-close branches have
+synthetic coverage; they were not independently re-executed live today. Existing
+Work Ticket verification below is historical and its resource counts are separate.
+
+## Existing Work Ticket checkpoint
+
 Status at checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`: Phases 01-04 are complete; implementation, tests, and live verification passed independent review. The focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s); the exact observed ungranted `mode-store-item-start` row correction passed independent review with 0 blockers. This is separate from the earlier 342-test snapshot. Full/incremental Discovery and normal direct Batch on the existing 0699 grant preserved its future source expiry, reached END with a 30-page PNG ZIP, and used no new checkout. The final normal consuming Batch on `1d10701c05629` passed the Tester audit: checkout HTTP 200, exact native grant transition, source/work persistence, END, and verified 30-page PNG ZIP. Confirmed live ticket use is four on distinct works; the final independent live Reviewer gate passed with 0 blockers, completing Phase 04. The earlier 1d107 attempt is confirmed pre-click (checkout/read POST 0), not a ticket use. Exact control-label, actionability, ancestry, and one-click gates remain required.
 
 ## Discovery

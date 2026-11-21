@@ -1,11 +1,36 @@
 # Younganimal adapter
 
 The adapter provides Discovery, direct manual episode Crawl, and Batch support
-for free sources, active rentals, and explicit `quota + work_ticket` entry. It
+for free sources, active rentals, and explicit `quota + work_ticket` or
+`quota + premium_ticket` entry. It
 reuses the shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
 manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates, active manual grants, and coin-only paid episodes from naturally
 emitted listing responses; it does not click or consume tickets.
+
+Premium uses the account-wide すぐ無料チケット stock. Its site-owned resolver
+visits home, closes the optional campaign `popClose` (including delayed popup),
+and spins the daily native gacha once when available. Absent/used gacha continues;
+there is no share, replay or daily ledger. It reads stock N and opens only the
+first Catalog candidate for eligibility/wallet verification, selecting the first
+N in unchanged Catalog order. Zero stops the pass before episode navigation;
+unknown state fails closed. No quota-episode search or Work cooldown applies.
+
+The two-step `ifRead` / `rentConf` entry requires one ticket, zero coins and a
+15-day term. Native exact IDs, positive same-account auth, aggregate consistency,
+exact checkout, stock debit and timer confirm consumption; the existing episode
+route guard and Viewer/capture proof remain. Both normal and grant-only passes
+are supported; `all` runs Work then Premium. Existing resource hooks and no-cap
+Younganimal expiry policy preserve the observed native15-day grant without
+shared production edits. Full behavior, limits and verification:
+`note/11_younganimal.md`, `runbooks/younganimal-premium/README.md`.
+
+2026-11-21 isolated live verification consumed two tickets (18 ->16): grant-only
+left Item pending with zero Artifacts; normal captured14 native WebPs through
+END/ZIP. One gacha spin returned はずれ; it was never replayed. Full/Incremental
+Discovery retained both active rentals under the existing conservative display
+expiry. Normal Catalog/library were not modified. Winning gacha and real
+zero/last-stock cases were not exercised; synthetic tests cover those bounds.
 
 Before capture selection, an already-loading offscreen body prefetch is drained
 within five seconds. The same route, seek, frozen roles, wrapper/canvas identities,
@@ -734,7 +759,8 @@ The manual crawl supports only `access_strategy=auto`. Configured Batch
 requires a strict `{13-hex-work-id}:{13-hex-episode-id}` external identity and a
 nonempty opaque `work_key`. `access_strategy=direct` retains the existing
 free/rental behavior and does not consume a ticket. `access_strategy=quota`
-accepts only `quota_resource=work_ticket` and uses the entry contract above.
+accepts explicit `quota_resource=work_ticket` or `premium_ticket` and uses the
+corresponding site-owned entry contract above.
 
 ## Viewer and rendered PNG contract
 
@@ -1076,9 +1102,10 @@ attribution remains UNKNOWN; this does not generalize to every page.
   contradictory timer states, duplicate or absent rows, foreign work, and
   unavailable authentication stay unknown and preserve a stored grant. Native
   observations do not override an exact free label or active rental.
-- `YounganimalSitePolicy` exposes one `work_ticket` pass, scoped to a work with
+- `YounganimalSitePolicy` exposes a `work_ticket` pass, scoped to a work with
   limit one and a local minimum 23-hour post-consumption cooldown. Free and
-  unexpired rental sources remain non-consuming `direct`. The Batch ticket
+  unexpired rental sources remain non-consuming `direct`. The subsequent
+  account-wide Premium pass is described above. The Work Ticket Batch
   click and grant-only entry are implemented and independently reviewed.
   Live grant-only and both-mode local cooldown-before-Page/site verification
   passed. A normal Batch ticket grant was confirmed, but its first Viewer

@@ -61,11 +61,29 @@ def test_younganimal_policy_allows_only_available_free_directly() -> None:
     assert source.quota_started_at is None
     assert source.access_granted_until is None
     assert policy.available_quota((source,), NOW) is None
-    assert policy.supported_access_resources() == ("work_ticket",)
-    assert policy.ordered_access_resource_passes() == ("work_ticket",)
-    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert policy.ordered_access_resource_passes() == ("work_ticket", "premium_ticket")
+    assert policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
     assert policy.resource_state_scope("work_ticket") == "work"
     assert policy.access_grant_until(NOW) is None
+
+
+def test_premium_uses_global_live_stock_without_work_limit_or_cooldown():
+    policy = YounganimalSitePolicy()
+    decision = policy.evaluate_for_quota_resource(
+        _source("quota"), now=NOW, quota_available=None, quota_resource="premium_ticket",
+    )
+    assert decision.eligible and decision.consumes_quota
+    assert decision.quota_resource == "premium_ticket" and decision.quota_limit is None
+    assert decision.quota_commit_mode == "after_observed_consumption"
+    assert policy.resource_state_scope("premium_ticket") is None
+    assert policy.access_grant_until_for_resource(NOW, "premium_ticket") is None
+    assert policy.grant_only_skip_reason(
+        resource="premium_ticket", last_consumed_at=NOW, now=NOW, cooldown_hours=23,
+    ) is None
+    for resource, expected in [(None, False), ("work_ticket", False), ("premium_ticket", True)]:
+        assert policy.resolve_batch_quota_per_work(resource) is expected
+        assert policy.resolve_grant_only_per_work(resource) is expected
 
 
 @pytest.mark.parametrize(

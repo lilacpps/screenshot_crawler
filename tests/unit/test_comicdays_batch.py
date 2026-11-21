@@ -15,6 +15,7 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import SitePolicyRegistry
 from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
 from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
 from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 10, 4, 12, tzinfo=JST)
@@ -69,12 +70,13 @@ def _episode(
     return item, source
 
 
-def test_premium_plan_preserves_quota_order_without_work_ticket_limit(tmp_path):
+@pytest.mark.parametrize("site,policy", [("comicdays", ComicDaysSitePolicy), ("hanayume", HanayumeSitePolicy), ("younganimal", YounganimalSitePolicy)])
+def test_premium_plan_preserves_quota_order_without_work_ticket_limit(tmp_path, site, policy):
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key="comicdays:series:1", title="Stock"))
     for external, order in [("3", "03"), ("1", "01"), ("2", "02")]:
-        _episode(catalog, work=work, external_id=external, order=order, access_mode="quota")
-    plan = _plan(catalog, "comicdays", ComicDaysSitePolicy, now=NOW, quota_resource="premium_ticket")
+        _episode(catalog, work=work, external_id=external, order=order, access_mode="quota", site=site)
+    plan = _plan(catalog, site, policy, now=NOW, quota_resource="premium_ticket")
     assert [c.external_id for c in plan.candidates] == ["1", "2", "3"]
     assert all(c.quota_limit is None and c.quota_resource == "premium_ticket" for c in plan.candidates)
 

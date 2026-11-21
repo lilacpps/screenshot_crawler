@@ -1,10 +1,45 @@
 # Access Control / Pacing Implementation Plan
 
+## Younganimal Premium extension (2026-11-21)
+
+Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.
+Existing per-Work stock hooks, exhaustion/last-ticket flags and native expiry
+commits are used without shared production edits. Younganimal-local auth,
+aggregate conflict and episode route guards accompany the two-step entry.
+Home campaign `popClose`, one native gacha spin (zero / はずれ), grant-only and
+normal END/ZIP were live verified. Two tickets total were consumed (18 -> 16);
+the gacha was never replayed. Synthetic coverage includes absent/delayed popup,
+absent/used gacha, positive/zero/unknown result, 9000-candidate stock bounds,
+last-ticket completion, identity/account conflicts and post-debit failure.
+Current evidence, test counts and live limits: `note/11_younganimal.md`.
+
+## Hanayume Premium extension (2026-11-21)
+
+Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.
+The site uses existing resource-aware per-Work resolver hooks only for Premium,
+existing exhaustion/last-ticket flags, and one optional bounded daily-gacha UI
+preparation. No durable gacha ledger or stock state is added. Resource-specific
+grant expiry defaults to existing policy behavior; Hanayume Premium requires its
+native 15-day expiry while Work Ticket keeps the 72-hour fallback/cap.
+
+Acceptance covers 9000 quota candidates bounded before entry, zero/unknown stock,
+Work Ticket priority, exact zero-coin single-ticket checkout, two distinct UI
+actions without replay, 15-day persistence without Work state, pending grant-only,
+same-Page normal Viewer, last-ticket completion, and debit preservation through
+later failure. Gacha fixtures cover absent/used/0/1/uncertain outcomes and no share.
+Three authorized live tickets total verified probe/grant-only/normal paths;
+the once-daily spin was exercised once. Current evidence and limitations are in
+`note/10_hanayume.md`; the remaining unused-gacha production branch is synthetic
+only today because a second live spin is deliberately not attempted.
+
 ## Comic DAYS Premium extension (2026-11-21)
 
 Implemented: policy-ordered Work → Premium passes, stock-bounded per-Work
 selection in normal/additional Batch and grant-only, and empty-pool positive
 exhaustion stopping before any entry or next Work. Required coverage includes
+resource-specific opt-in (Work Ticket uses the original candidate path), zero
+Page/resolver/sleep for multiple local cooldown skips, continued exact entry
+after those skips in normal/work-only/all runs, and
 explicit Work-only isolation, native Work priority, N-stock/N-target selection,
 zero/unknown stock, exact one-unit debit plus target unlock, no click retry,
 last-ticket completion, shared limits/order and no Premium cooldown writes.

@@ -1,3 +1,75 @@
+## Premium extension (2026-11-21, implemented and bounded live verified)
+
+`premium_ticket` is the account-wide resource. Current native labels are
+すぐ無料チケット / すぐ無料ガチャ. Policy exposes Work -> Premium passes for
+normal Batch and grant-only `all`; explicit `--grant-only premium_ticket` is
+also supported. Work Ticket retains its one-per-Work / 23-hour contract.
+Only Premium opts into the existing per-Work stock resolver. No new CLI flag,
+configuration, durable stock/gacha ledger or shared production change is added.
+
+The resolver visits home, waits for positive account authentication and stock,
+and closes the optional unique campaign dialog using its `popClose` button.
+A scoped locator handler also closes a delayed campaign that obstructs the
+gacha link; unknown or repeated dialogs fail closed. An absent link continues.
+The native gacha permits one click only for `canRollGacha=true,gachaTimes=0`.
+Used state continues without clicking even when the home link is still present.
+Result proof requires the matching native count 0..2 and visible result panel;
+zero is displayed as `はずれ`. No share, replay or daily-use tracking occurs.
+Preparation is bounded at 65 seconds, including 35 seconds for the result.
+
+`/api/userPoint.bonusValue` supplies stock; `paidCoin` stays separate. Home zero
+ends the whole Premium pass before episode entry. Otherwise the first Catalog
+candidate alone verifies exact work/episode/access IDs, native Work recovery
+and episode-wallet stock. Positive recovery is required; a charged Work Ticket
+selects no Premium candidate for that Work. The first N Catalog candidates are
+selected for N tickets, with no quota-episode search or per-Work Premium limit.
+Every selected entry rechecks live stock, identity/auth and current eligibility.
+The next Work refreshes stock; unknown or conflicting state stops closed.
+
+Site-local `premium_access.py` validates `ifRead`, then the open 1枚 / 15日間
+confirmation and retained `rentConf` control. Each action is dispatched once.
+Its checkout gate allows one exact selected-episode POST with integer amount0
+and ticketCount1. Confirmation requires HTTP200, fresh same-account native
+`purchased/hasAccess=true`, a positive <=1296000-second timer, continuing Work
+recovery, precisely one ticket debit and unchanged coins. Existing bounded
+native parsers, aggregate-conflict proof and episode route guard are reused.
+At most two read-only refresh rounds share a five-second recovery bound.
+The request-start + timer -1 second supplies conservative expiry, additionally
+bounded by any agreeing newer series timer. Younganimal's existing no-cap
+policy preserves it. Confirmed debit/expiry remain recorded if Viewer or later
+capture fails. Normal mode continues on the same Page; grant-only creates no
+CONTENT/Manifest/ZIP/Artifact and leaves Item pending. Already-readable entry
+spends nothing. A confirmed last ticket finishes its candidate before stopping.
+Premium does not update Work cooldown or a durable resource balance/state.
+
+Live evidence (isolated Catalog/Watchlist/output under `.tmp/ya-premium/live/`):
+
+- One gacha POST, native zero result and visible はずれ; no replay/share. The
+  initially numeric-only zero-result check stopped closed; the observed label
+  is now covered by the corrected synthetic production contract. No second
+  live spin was used to retest that correction. Home popup close and already-used
+  gacha continuation were verified on the production resolver.
+- あそびあそばせ grant-only source34829 (`2daff889b6c82`) consumed18 ->17,
+  persisted native15-day expiry, kept Item pending and created zero Artifacts.
+- Normal source34828 (`8cf938c20849d`) consumed17 ->16 and completed14 pages
+  through END/ZIP, with one Artifact. All14 WebPs decoded (960x1364), unique
+  hashes; first/middle/final pages were visually inspected. Work state matched
+  the read-only normal Catalog snapshot. Total consumption: **2 tickets**.
+- Full and Incremental Discovery each observed154 known records without error;
+  both grants remained active as paid rentals. Existing display-based parsing
+  conservatively shortened their stored expiry by about two hours, preserving
+  quota_started_at. This extension does not change Discovery rental semantics.
+
+Verification: 418 affected Unit cases; 48 Younganimal Premium browser cases;
+35 existing Younganimal entry/Work/direct/capture cases; 35 Hanayume Premium
+regression cases; 1 rental-history Discovery case, all passed with zero skips.
+Ruff `src tests` passed. Deselected cases are outside the chosen affected groups.
+Full suite and Research/Probe suites were not rerun: production changes are
+site-local and no research helper or shared Core contract was changed.
+Live winning gacha, zero/last stock and error cases remain synthetic-only;
+the real account was not exhausted. Other Works are not live verified.
+Phase contract, file list and evidence paths: `runbooks/younganimal-premium/README.md`.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (5000 ms in
@@ -2287,9 +2359,10 @@ blocked and the normal Catalog was read only. All 62 Younganimal Discovery Unit
 cases passed with zero skips. Evidence:
 `.tmp/younganimal-rental-hours-audit-20261023.json`.
 
-The Younganimal Policy exposes one `work_ticket` resource pass scoped to a work,
+The Younganimal Policy exposes a `work_ticket` resource pass scoped to a work,
 with quota limit one and a local minimum 23-hour cooldown after observed
-consumption. A longer configured cooldown is honored. The adapter supports only
+consumption. A longer configured cooldown is honored. A subsequent account-wide
+Premium pass is described at the top of this note. The Work Ticket path uses
 explicit quota/work_ticket entry: it verifies the canonical target, exact work
 header, positive auth and current native `waitAndFree` state before considering
 one exact free control. Already-active grants are non-consuming direct access

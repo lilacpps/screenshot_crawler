@@ -1,5 +1,82 @@
 # Discovery / Catalog / Batch Design
 
+## Younganimal Premium stock passes (2026-11-21)
+
+Younganimal exposes explicit Work Ticket, then account-wide `premium_ticket`
+passes in normal Batch and grant-only `all`, using the Hanayume stock-selection
+contract below. Premium alone opts into per-Work resolution: read live stock N,
+open only the first candidate to verify eligibility/wallet, select the first N
+Catalog candidates, and refresh stock at the next Work. Zero stops the pass;
+unknown state fails closed. No search through quota episodes, per-Work Premium
+limit, durable balance, Work cooldown update, or implicit resource fallback.
+
+The current native labels are すぐ無料チケット / すぐ無料ガチャ. Home preparation
+closes the unique open campaign dialog with its `popClose` button, including a
+delayed popup that obstructs the gacha link. The native daily action is attempted
+once only when `canRollGacha=true,gachaTimes=0`; an absent home entry or already
+used native state continues to stock selection. A zero result is displayed as
+`はずれ`; positive results display their count. No public share or replay occurs.
+The site uses the existing 65-second resolver budget and 35-second result bound.
+
+Premium entry validates the selected header and three native IDs, positive
+authentication, continuing Work Ticket recovery, exact ticket stock/coins, then
+`ifRead` and `rentConf` (1枚 / 15日間). A page-local gate permits only one exact
+zero-coin, one-ticket POST for that episode. Confirmation requires HTTP 200,
+same-account fresh native `purchased/hasAccess=true`, positive <=15-day timer,
+exactly one stock debit and unchanged coins. Existing bounded native parsers,
+aggregate-conflict checks and episode route guard are retained. Confirmed debit
+and expiry survive later Viewer/capture failure. Younganimal's existing no-cap
+expiry policy preserves the native expiry; no shared production change is added.
+Work Ticket keeps its original one-per-Work / 23-hour path. See
+`note/11_younganimal.md` and `runbooks/younganimal-premium/README.md` for validation.
+
+## Hanayume Premium stock passes (2026-11-21)
+
+Hanayume exposes `work_ticket`, then `premium_ticket` (すぐ無料チケット).
+Normal Batch and grant-only `all` replan between explicit passes. Only Premium
+opts into per-Work stock selection. Work Ticket retains its Catalog-only 23-hour
+cooldown, one-per-Work limit and original entry path. Premium has account-wide
+live stock, no per-Work consumption limit and no durable resource balance/state.
+
+Premium's guarded resolver visits home, closes the unique campaign popup if
+present, and follows the visible daily gacha link if present. A positively ready
+account with no visible link continues to stock selection. On the gacha page,
+only native `canRollGacha=true, gachaTimes=0` permits one normal spin. A matching
+0..2 result and visible result panel complete the operation; no daily ledger,
+share, retry or replay of an uncertain spin is implemented. Existing resolver
+budget configuration supplies a bounded 65-second preparation budget, including
+at most 35 seconds for the result. This prerequisite may acquire free stock but
+does not consume an access resource or create a grant/Artifact.
+
+`GET /api/userPoint.bonusValue` is the account balance; `paidCoin` is separate.
+Home zero ends the pass before episode entry. Otherwise only the first Catalog
+candidate is opened to verify its exact episode/work IDs, current Work Ticket
+recovery and episode wallet stock. Only the first N candidates in the unchanged
+Catalog order are selected. No later candidate is opened to discover eligibility.
+At each next Work the balance is refreshed; zero stops the whole Premium pass,
+and unknown/contradictory state stops closed. Charged Work Ticket state selects
+no Premium target for that Work. Every selected entry independently verifies its
+exact native three-ID binding; no additional listing traversal is introduced.
+
+Entry validates the unique `ifRead` action, then the unique open confirmation
+with `1枚`, `15日間` and `レンタルする`. Each action is dispatched at most once.
+A page-local checkout gate permits exactly one native POST containing only the
+selected `articleIds`, `amount=0`, `ticketCount=1`; other/duplicate checkouts are
+aborted. Confirmation requires HTTP 200, exactly one stock debit, unchanged
+coins, continuing Work Ticket recovery and exact current-episode
+`purchased/hasAccess=true` with 1..1296000 seconds. The native request-start plus
+remaining seconds minus one supplies expiry; it is not capped by the unrelated
+72-hour Work Ticket fallback. Confirmed debit is latched before later viewer/
+capture/packaging failures. Viewer readiness/control disappearance still gate
+successful entry. At most two exact read-only account/current-episode refreshes
+share one five-second reconciliation window; clicks are never retried.
+
+Normal capture continues on the same Page. Grant-only saves the source grant,
+captures no CONTENT/ZIP and leaves Item pending. Premium never updates Work
+Ticket cooldown. A preexisting readable target spends nothing; entry-only skips
+that target without ending the Work or inventing consumption. Confirmed last
+ticket completes its candidate before stopping without another Page or sleep.
+
 ## Comic DAYS Premium stock passes (2026-11-21)
 
 Comic DAYS exposes `work_ticket` followed by `premium_ticket` (native label:
@@ -8,8 +85,11 @@ passes. Explicit `--grant-only work_ticket` never selects Premium. Within each
 pass, existing Catalog ordering and acquisition scope remain authoritative.
 Work Ticket keeps its one-per-Work limit, 23-hour cooldown and exact entry path.
 
-Both execution modes use guarded per-Work selection. Work Ticket selection is
-a local pass-through; Premium visits the official home, waits three seconds,
+Both execution modes use guarded per-Work selection only for Premium. Work
+Ticket uses its original candidate path: Catalog cooldown checks run without
+stock resolver Pages or waits, then eligible targets use exact entry. The
+resource-aware Policy hooks return false for Work Ticket/the default pass and
+true for Premium. Premium visits the official home, waits three seconds,
 then reads one Work page's `userAccount.eventTicketCount` and Work Ticket state.
 The home visit happens on each Premium Work stock resolution; no daily timer or
 durable balance/cache is used. Only the first N quota candidates are selected,
@@ -217,10 +297,11 @@ listing traversal. Discovery checks AccessGuard again after that drain and
 before constructing or yielding records, so a late fatal response cannot make
 an incomplete listing appear complete.
 
-`YounganimalSitePolicy` exposes one `work_ticket` pass with work scope and a
+`YounganimalSitePolicy` exposes a `work_ticket` pass with work scope and a
 limit of one ticket per work. A consumed ticket starts a local minimum 23-hour
 same-work cooldown; a longer configured interval is honored. Free and active
-rental sources remain non-consuming `direct`. The source classification is
+rental sources remain non-consuming `direct`. Its subsequent account-wide
+Premium pass follows the stock contract at the top of this document. The source classification is
 implemented in Discovery and SitePolicy.
 The Younganimal adapter now implements the explicit `quota + work_ticket`
 entry and grant-only path locally: it uses the exact Catalog episode URL,

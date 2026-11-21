@@ -2797,6 +2797,38 @@ async def test_observed_native_grant_expiry_is_capped_by_policy_fallback(
     assert state is not None and state.last_consumed_at == consumed_at.isoformat()
 
 
+@pytest.mark.parametrize("grant_only", [False, True])
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("site,policy", [("hanayume", HanayumeSitePolicy), ("younganimal", YounganimalSitePolicy)])
+async def test_hanayume_premium_keeps_native_15_day_expiry_without_work_state(
+    tmp_path: Path, grant_only: bool, failure: bool, site, policy,
+) -> None:
+    service = CatalogService(tmp_path / "premium.sqlite")
+    candidate = _add_magapoke_candidate(service, site=site, resource="premium_ticket")
+    consumed_at = NOW + timedelta(minutes=1)
+    native_expiry = consumed_at + timedelta(days=15, seconds=-2)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "premium_ticket", consumed_at, native_expiry),
+        site=site, policy=policy,
+        failure=RuntimeError("after confirmed debit") if failure else None,
+    )
+    execute = executor.execute_grant_only_candidate if grant_only else executor.execute_candidate
+    if failure:
+        with pytest.raises(BatchExecutionError, match="after confirmed debit"):
+            await execute(object(), candidate, output_root=tmp_path / "batch", now=NOW)
+    else:
+        await execute(object(), candidate, output_root=tmp_path / "batch", now=NOW)
+    source = service.get_source(candidate.source_id)
+    assert source.access_granted_until == native_expiry.isoformat()
+    assert source.quota_started_at == consumed_at.isoformat()
+    work = service.get_item(candidate.item_id).work_id
+    assert service.get_quota_resource_state(work, site=site, resource="work_ticket") is None
+    assert service.get_quota_resource_state(work, site=site, resource="premium_ticket") is None
+    assert service.get_item(candidate.item_id).status == ("pending" if failure or grant_only else "completed")
+    if grant_only:
+        assert service.list_artifacts() == []
+
+
 @pytest.mark.parametrize(
     "invalid_expiry",
     [datetime(2026, 9, 19, 14, 59), "not-a-datetime"],  # noqa: DTZ001 - exercise naive metadata rejection

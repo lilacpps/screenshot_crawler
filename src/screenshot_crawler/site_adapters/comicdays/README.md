@@ -13,7 +13,10 @@ Ticket state, and validates native series membership. It selects at most N
 quota targets in existing order without opening them individually. Each next
 Work refreshes shared account stock. Zero stops the pass; unknown stops closed;
 a charged Work Ticket prevents Premium selection. No daily timer or saved
-balance is added. Work Ticket stock resolution is a local pass-through.
+balance is added. Work Ticket keeps the original candidate path: Catalog
+cooldown skips run without waits or stock resolver Pages; eligible targets go
+straight to exact entry. Only Premium opts into per-Work stock selection, in
+both normal Batch and grant-only (including `all`).
 
 Selected entries use only the exact normal `いつでもチケットで読む（無料）`
 button, with target/contract/priority and current positive balance rechecked.

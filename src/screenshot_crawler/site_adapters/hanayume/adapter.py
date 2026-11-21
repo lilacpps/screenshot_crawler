@@ -46,6 +46,11 @@ from screenshot_crawler.site_adapters.hanayume.native_capture import (
     decode_capture_images,
     encode_native_webp,
 )
+from screenshot_crawler.site_adapters.hanayume.premium_access import (
+    RESOLUTION_BUDGET_MS,
+    PremiumEntry,
+    resolve_ticket_candidates,
+)
 
 BASE_URL = "https://hanayume.com"
 ALLOWED_HOSTS = frozenset({"hanayume.com", "www.hanayume.com"})
@@ -1152,6 +1157,7 @@ class HanayumeAdapter(SiteAdapter):
         self._access_strategy: AccessStrategy = "auto"
         self._quota_resource: str | None = None
         self._access_consumption = AccessConsumption()
+        self._premium_entry: PremiumEntry | None = None
         self._ticket_observer: _SeriesAccessObserver | None = None
         self._current_ticket_observer: _CurrentEpisodeAccessObserver | None = None
         self._ticket_click_attempted = False
@@ -1197,6 +1203,8 @@ class HanayumeAdapter(SiteAdapter):
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
+        if self._premium_entry is not None:
+            await self._premium_entry.observer.close()
         if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"Hanayume does not support access_strategy={access_strategy!r}"
@@ -1206,6 +1214,7 @@ class HanayumeAdapter(SiteAdapter):
         self._access_strategy = access_strategy
         self._quota_resource = None
         self._access_consumption = AccessConsumption()
+        self._premium_entry = None
         self._ticket_click_attempted = False
         self._ticket_entry_only = False
         self._ticket_click_started_at = None
@@ -1379,11 +1388,11 @@ class HanayumeAdapter(SiteAdapter):
             )
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
-        if quota_resource not in {None, "work_ticket"}:
+        if quota_resource not in {None, "work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
                 f"Hanayume does not support quota_resource={quota_resource!r}"
             )
-        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+        if self._access_strategy == "quota" and quota_resource not in {"work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
                 "Hanayume quota access requires quota_resource='work_ticket'"
             )
@@ -1392,6 +1401,12 @@ class HanayumeAdapter(SiteAdapter):
                 "Hanayume work_ticket requires access_strategy='quota'"
             )
         self._quota_resource = quota_resource
+        if quota_resource == "premium_ticket":
+            if self._episode_id is None or self._expected_work_id is None:
+                raise UnsupportedAccessStrategyError("Hanayume Premium requires Catalog target identity")
+            self._premium_entry = PremiumEntry(page, self._episode_id, self._expected_work_id)
+            await self._premium_entry.install()
+            return
         if self._access_strategy == "quota":
             if self._episode_id is None or self._expected_work_id is None:
                 raise UnsupportedAccessStrategyError(
@@ -1407,7 +1422,29 @@ class HanayumeAdapter(SiteAdapter):
             self._current_ticket_observer = current_observer
 
     def get_access_consumption(self) -> AccessConsumption:
+        if self._premium_entry is not None:
+            return self._premium_entry.consumption
         return self._access_consumption
+
+    def configure_access_resource_resolution(
+        self, *, timeout_ms: int, page_turn_delay_ms: int,
+        blocked_external_ids: frozenset[str] = frozenset(),
+    ) -> int:
+        return max(timeout_ms, RESOLUTION_BUDGET_MS)
+
+    async def resolve_access_resource_candidates(
+        self, page: Page, candidates: tuple[object, ...], quota_resource: str,
+        *, timeout_ms: int = 15_000,
+    ):
+        if candidates:
+            await self.configure_target_identity(candidates[0].external_id, "premium-stock-resolution")
+            self.resolve_initial_navigation_url(candidates[0].locator)
+        resolution = await resolve_ticket_candidates(
+            page, candidates, quota_resource, timeout_ms=timeout_ms,
+            before_episode=self._install_batch_route_guard,
+        )
+        self._raise_if_batch_route_guard_failed()
+        return resolution
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = EXTERNAL_ID_PATTERN.fullmatch(external_id)
@@ -1443,11 +1480,17 @@ class HanayumeAdapter(SiteAdapter):
         if self._expected_work_id is not None and initial_work != self._expected_work_id:
             raise UnknownPageStateError("Hanayume episode belongs to a different Catalog work")
         if self._access_strategy == "quota":
-            if self._expected_work_id is None or self._quota_resource != "work_ticket":
+            if self._expected_work_id is None or self._quota_resource not in {"work_ticket", "premium_ticket"}:
                 raise UnknownPageStateError(
                     "Hanayume Work Ticket requires an identity-bound Catalog candidate"
                 )
-            await self._initialize_work_ticket_entry(page, entry_only=False)
+            if self._premium_entry is not None:
+                await self._premium_entry.enter(
+                    page, entry_only=False, read_identity=self._wait_for_ticket_account,
+                    guard=self._raise_if_batch_route_guard_failed,
+                )
+            else:
+                await self._initialize_work_ticket_entry(page, entry_only=False)
         elif self._expected_work_id is None:
             await self._fresh_free_preflight(page, initial_work)
         elif self._access_strategy == "direct":
@@ -1514,7 +1557,7 @@ class HanayumeAdapter(SiteAdapter):
         """Confirm one Work Ticket entry without starting capture or packaging."""
 
         self._raise_if_batch_route_guard_failed()
-        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+        if self._access_strategy != "quota" or self._quota_resource not in {"work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
                 "Hanayume entry-only execution requires quota/work_ticket"
             )
@@ -1529,7 +1572,13 @@ class HanayumeAdapter(SiteAdapter):
         if work_id != self._expected_work_id:
             raise AccessResourceUnavailableError("hanayume_discovery_refresh_required")
         self._ticket_entry_only = True
-        await self._initialize_work_ticket_entry(page, entry_only=True)
+        if self._premium_entry is not None:
+            await self._premium_entry.enter(
+                page, entry_only=True, read_identity=self._wait_for_ticket_account,
+                guard=self._raise_if_batch_route_guard_failed,
+            )
+        else:
+            await self._initialize_work_ticket_entry(page, entry_only=True)
         await self._wait_for_episode(page, expected_work=work_id)
         await self._wait_for_locator(page, SEEK_SELECTOR, state="attached")
         await self._wait_for_viewer_counter_readiness(page)
@@ -3261,6 +3310,12 @@ class HanayumeAdapter(SiteAdapter):
                 "click_attempted": self._ticket_click_attempted,
                 "consumption_confirmed": self._access_consumption.consumed,
                 "fallback_reads": self._ticket_fallback_reads,
+            },
+            "premium_ticket": {
+                "entry_only": self._ticket_entry_only and self._premium_entry is not None,
+                "action_attempted": self._premium_entry.clicked if self._premium_entry is not None else False,
+                "checkout_dispatched": self._premium_entry.checkout_dispatched if self._premium_entry is not None else False,
+                "consumption_confirmed": self._premium_entry.consumption.consumed if self._premium_entry is not None else False,
             },
             "batch_route_guard": {
                 "enabled": self._batch_route_guard_enabled,

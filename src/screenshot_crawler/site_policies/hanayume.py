@@ -1,7 +1,8 @@
-"""Hanayume free, active rental, and work-ticket Batch access policy."""
+"""Hanayume direct grants and explicit Work/Premium ticket Batch policy."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
@@ -14,7 +15,7 @@ from screenshot_crawler.site_policies.base import (
 
 
 class HanayumeSitePolicy(SitePolicy):
-    """Select free sources, active rentals/grants, and one ticket attempt per work."""
+    """Select direct grants and explicit Work/Premium ticket passes."""
 
     site = "hanayume"
 
@@ -22,13 +23,39 @@ class HanayumeSitePolicy(SitePolicy):
         return "catalog"
 
     def supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def ordered_access_resource_passes(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
+
+    def resolve_grant_only_per_work(self, resource: str | None = None) -> bool:
+        return resource == "premium_ticket"
+
+    def resolve_batch_quota_per_work(self, resource: str | None = None) -> bool:
+        return resource == "premium_ticket"
+
+    def evaluate_for_quota_resource(
+        self, source: Source, *, now: datetime, quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        self.validate_access_resource(quota_resource)
+        decision = self.evaluate(source, now=now, quota_available=quota_available)
+        if quota_resource == "premium_ticket" and decision.consumes_quota:
+            return replace(decision, reason="premium_ticket_candidate",
+                           quota_resource=quota_resource, quota_limit=None)
+        return decision
+
+    def access_grant_until_for_resource(
+        self, started_at: datetime, resource: str | None,
+    ) -> datetime | None:
+        if resource == "premium_ticket":
+            # Premium is an observed 15-day rental, not the 72-hour Work Ticket.
+            # Require the adapter's exact native expiry; do not invent a fallback.
+            return None
+        return self.access_grant_until(started_at)
 
     def resource_state_scope(self, resource: str) -> str | None:
         return "work" if resource == "work_ticket" else None

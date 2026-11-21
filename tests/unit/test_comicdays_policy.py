@@ -43,8 +43,10 @@ def test_comicdays_policy_resource_contract_and_cooldown_boundaries() -> None:
     assert policy.supported_access_resources() == ("work_ticket", "premium_ticket")
     assert policy.ordered_access_resource_passes() == ("work_ticket", "premium_ticket")
     assert policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
-    assert policy.resolve_grant_only_per_work()
-    assert policy.resolve_batch_quota_per_work()
+    for resolve in (policy.resolve_grant_only_per_work, policy.resolve_batch_quota_per_work):
+        assert resolve() is False
+        assert resolve("work_ticket") is False
+        assert resolve("premium_ticket") is True
     assert policy.resource_state_scope("premium_ticket") is None
     assert policy.additional_access_resource_passes() == ("premium_ticket",)
     assert policy.resource_state_scope("work_ticket") == "work"

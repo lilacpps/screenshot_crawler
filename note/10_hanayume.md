@@ -1,3 +1,124 @@
+## Premium / すぐ無料チケット (2026-11-21)
+
+Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.
+`HanayumeSitePolicy` exposes `work_ticket`, then `premium_ticket` in normal
+Batch and `--grant-only all`. `--grant-only premium_ticket` uses only Premium;
+`--grant-only work_ticket` retains its original Catalog cooldown/direct entry.
+Only Premium opts into per-Work stock resolution. Premium has no per-Work
+one-ticket limit, cooldown, persisted balance or resource-state row. Acquisition
+scope, existing Catalog ordering, source identity and the shared total execution
+limit remain authoritative. No Catalog schema/configuration change is required.
+
+`site_adapters/hanayume/premium_access.py` owns bounded same-main-frame native
+observations, optional daily-gacha preparation, stock selection and two-step
+entry. Before each Premium Work's stock resolution it visits home, waits for
+account/stock hydration, closes a unique campaign `closeCpPop` if visible, and
+follows the unique visible `.home-gacha-btn[href="/gacha"]` if present. A missing
+or hidden entrance after readiness simply proceeds to stock selection. No daily
+ledger is kept. Only natural `/api/gacha` `canRollGacha=true,gachaTimes=0` allows
+one `gachaExecBtn` click. A matching native 0..2 result and visible
+`gachaResult/gachaResTicket` complete the result; the stock is then refreshed.
+No share/retry/uncertain-spin replay is implemented. A 65-second resolver budget
+includes at most 35 seconds for the result; per-observation bounds and AccessGuard
+remain separate. Gacha does not create a candidate attempt, grant or Artifact.
+
+`/api/userPoint.bonusValue` is account-wide ticket stock; `paidCoin` is separate.
+Home zero ends the pass without an episode visit. Positive home stock permits
+one first-candidate episode visit, checking exact three-ID native identity,
+Work Ticket recovery and the scoped `epChgWalletTicket` count when present.
+Zero ends the whole pass, unknown/conflicting state stops closed, and a charged
+Work Ticket selects no Premium target for that Work. Only the first N quota
+candidates in existing order are selected. No later quota candidate is opened
+to search for availability, and next Work's fresh stock is never treated as a
+new independent copy of an earlier budget. Every actual entry rechecks its own
+Catalog-bound work/episode. No listing/range traversal is introduced.
+
+The existing selected-episode route guard is installed only when leaving
+home/gacha for that first episode. It blocks/audits nonselected episode/work
+route requests during stock observation as it does during entry. Applying that
+entry-only guard to home was rejected by a read-only live check: ordinary home
+navigation was outside its observed contract. The corrected boundary passed a
+fresh production resolver check: 284 remaining quota candidates, exactly 11
+selected from current stock, no ticket use. No existing guard rule was weakened.
+
+The unique `ifRead` action opens a confirmation. The unique open target-local
+dialog must show exactly `1枚`, `15日間` and `レンタルする` before `rentConf`.
+Unique controls, ancestry, actionability, same-element identity, label, type,
+cost/inline-handler absence and the confirmation cost/term are checked after
+Playwright's trial click. Each action is sent once. A page-local checkout guard
+allows only one `/api/checkout/rental` POST with `articleIds=[selected episode]`,
+`amount=0`, `ticketCount=1`; wrong/duplicate requests are aborted.
+
+Confirmation combines checkout HTTP 200, exactly one stock debit, unchanged
+coins, continuing Work Ticket recovery and exact native `purchased/hasAccess=true`
+with a strict bounded timer up to 1296000 seconds. At most two read-only same-Page
+account/current-episode refreshes share a five-second recovery window, never
+another click. The grant is request-start + remaining seconds - 1. Premium uses
+the policy's resource-specific native-only expiry hook, not Work Ticket's
+72-hour cap. Confirmed consumption is retained before later Viewer/capture/ZIP
+failure; successful entry still requires the matching Viewer and disappearance
+of both ticket controls/confirmation. Normal Batch captures on that same Page.
+Grant-only captures zero CONTENT, creates no ZIP/Artifact and keeps Item pending.
+Last-ticket success completes this candidate before stopping without another
+Page/sleep. Already-readable entry spends nothing; grant-only skips only that
+target (`stop_work=False`) without fabricating consumption or extending the pool.
+
+`adapter_debug.premium_ticket` separately reports entry-only, first-action
+attempt, checkout dispatch and confirmed consumption. The existing `ticket`
+diagnostic object remains Work Ticket-specific; its false values do not describe
+Premium consumption. No account details, response bodies or secrets are recorded
+in these diagnostics.
+
+Live evidence is isolated in `.tmp/hy-premium/`; normal Catalog/Watchlist are
+read-only inputs. On 2026-11-21 the authorized daily gacha was clicked exactly
+once: native `gachaTimes 0 -> 1`, result 1, visible 1-ticket result. No share or
+retry was performed. This proves the spin/result, not a separately attributed
+account-balance increase. The first `ifRead` probe only opened the 15-day/1-ticket
+confirmation and made no checkout. The subsequent bounded exact confirmation
+on 高嶺と花 episode `9d5e222206beb` made one zero-coin/one-ticket checkout, obtained
+the exact native `purchased` grant (1295999 seconds) and matching Viewer.
+Production guarded resolution then selected 13 of 286 quota candidates without
+walking those episodes. Production grant-only on the Catalog-first selected
+`6e0cbd2f259d4` confirmed another debit and persisted the native 15-day source
+expiry, with Item pending and no Artifact. The subsequent production normal Batch
+replanned 285 quota candidates, selected 12 against fresh remaining stock, and
+consumed once on `39315af210304` (番外編 高嶺とJr.と花). It preserved the native
+15-day expiry, reached END, produced six distinct 960x1508 WebP pages in ZIP and
+completed the Item. ZIP decode/count/hash checks and visual inspection of first,
+middle and final pages passed. Grant-only has 0 Artifacts; normal has 1. The
+preexisting Work Ticket timestamp remained unchanged and no Premium resource
+state row was created. Real stock was 14 -> 13 -> 12 -> 11 across the three
+ticket uses. Total consumption is **3 of the authorized maximum 5**, with no
+further consumption planned. Normal Catalog/Watchlist were not modified.
+
+The affected Unit selection (`test_hanayume_policy`, `test_comicdays_batch`,
+`test_batch_executor`, `test_cli`, `test_hanayume_adapter`) passed **417** cases.
+The new Premium plus existing Hanayume Adapter and Comic DAYS Work/Premium
+browser selection passed **246** cases, no failures or skips. Final guard/strict
+checkout-type/transparent-control/diagnostic coverage plus Hanayume Adapter/Policy
+passed **168** cases with zero skips. `ruff check src tests` and changed-path
+whitespace checks passed. The full repository snapshot ran all **10011** cases
+in four file groups: **10003 passed / 8 failed / 0 skipped** initially.
+Five Windows long-output-path cases (four existing Work Ticket and one packaging)
+passed on dedicated short OS-temp paths. The repair-GUI worker timeout passed
+on a standalone rerun and on isolated HEAD/current-code checks; its initial
+timing failure is not conclusively attributed. The two remaining failures compare
+distributed defaults with preexisting user-edited `crawler.yaml`: Hanayume
+Discovery 10000 vs 5000ms, Magapoke page-turn 1500 vs 1000ms and candidate 6000 vs
+3000ms. The same two checks pass using isolated tracked HEAD configuration.
+User settings and those tests were preserved. Full included 3696 Integration,
+6144 Unit and 171 Research cases; final diagnostic/transparent-control tightening
+and the additional opacity case are covered by the final targeted 168 cases.
+The interrupted earlier partial full run is not counted. Exact evidence and
+changed paths are in `runbooks/hanayume-premium/README.md` and
+`.tmp/hy-premium/validation-summary.json`.
+Popup-close and unused-gacha production
+branches cannot both be re-exercised live today; synthetic fixtures cover these
+paths. The once-only gacha probe confirms the site operation, while the production
+unused-gacha branch is synthetic-only today. Exhaustion/last-ticket behavior is
+synthetic-only because draining the remaining 11 tickets exceeds the approved
+research budget. No all-Work live run or independent agent review is claimed.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (5000 ms in

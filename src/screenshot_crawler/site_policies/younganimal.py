@@ -1,7 +1,8 @@
-"""Younganimal free, rental, and work-ticket Batch access policy."""
+"""Younganimal free/rental access and explicit Work/Premium ticket passes."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
@@ -14,7 +15,7 @@ from screenshot_crawler.site_policies.base import (
 
 
 class YounganimalSitePolicy(SitePolicy):
-    """Select free/rental direct sources and one eligible ticket per work."""
+    """Select direct sources, one Work Ticket and live-stock-bounded Premium."""
 
     site = "younganimal"
 
@@ -22,13 +23,30 @@ class YounganimalSitePolicy(SitePolicy):
         return "catalog"
 
     def supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def ordered_access_resource_passes(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
+
+    def resolve_grant_only_per_work(self, resource: str | None = None) -> bool:
+        return resource == "premium_ticket"
+
+    def resolve_batch_quota_per_work(self, resource: str | None = None) -> bool:
+        return resource == "premium_ticket"
+
+    def evaluate_for_quota_resource(
+        self, source: Source, *, now: datetime, quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        self.validate_access_resource(quota_resource)
+        decision = self.evaluate(source, now=now, quota_available=quota_available)
+        if quota_resource == "premium_ticket" and decision.consumes_quota:
+            return replace(decision, reason="premium_ticket_candidate",
+                           quota_resource=quota_resource, quota_limit=None)
+        return decision
 
     def resource_state_scope(self, resource: str) -> str | None:
         return "work" if resource == "work_ticket" else None

@@ -467,7 +467,7 @@ class BatchExecutor:
                       f"saved={len(session.store.pages)} resume_file={capture_manager.marker(source)}", flush=True)
 
             if candidate.consumes_quota and candidate.quota_commit_mode == "before_run":
-                grant_until = policy.access_grant_until(current)
+                grant_until = policy.access_grant_until_for_resource(current, candidate.quota_resource)
                 reservation = self.catalog.record_quota_access(
                     candidate.source_id,
                     quota_started_at=current,
@@ -1646,7 +1646,9 @@ def _record_observed_resource_consumption(
         raise BatchExecutionError("adapter reported resource consumption without a timestamp")
     if consumption.consumed_at.tzinfo is None or consumption.consumed_at.utcoffset() is None:
         raise BatchExecutionError("adapter consumption timestamp must be timezone-aware")
-    policy_grant_until = policy.access_grant_until(consumption.consumed_at)
+    policy_grant_until = policy.access_grant_until_for_resource(
+        consumption.consumed_at, candidate.quota_resource,
+    )
     native_grant_until = consumption.access_granted_until
     metadata_error: str | None = None
     if native_grant_until is not None and (

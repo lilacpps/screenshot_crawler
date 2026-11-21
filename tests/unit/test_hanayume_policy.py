@@ -49,9 +49,9 @@ def test_hanayume_policy_allows_only_available_free_directly() -> None:
     assert decision.quota_resource is None
     assert source.quota_started_at is None
     assert source.access_granted_until is None
-    assert policy.supported_access_resources() == ("work_ticket",)
-    assert policy.ordered_access_resource_passes() == ("work_ticket",)
-    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.supported_access_resources() == ("work_ticket", "premium_ticket")
+    assert policy.ordered_access_resource_passes() == ("work_ticket", "premium_ticket")
+    assert policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
     assert policy.resource_state_scope("work_ticket") == "work"
     assert policy.defer_quota_access_to_grant_phase() is False
 
@@ -135,7 +135,25 @@ def test_hanayume_policy_rejects_unavailable_free_and_unknown_resource_paths() -
     policy.validate_access_resource("work_ticket")
     policy.validate_grant_only_resource("work_ticket")
     with pytest.raises(SitePolicyError, match="Unsupported access resource"):
-        policy.validate_access_resource("premium_ticket")
+        policy.validate_access_resource("coin")
+
+
+def test_premium_is_account_global_and_requires_native_expiry_without_work_cooldown():
+    policy = HanayumeSitePolicy()
+    result = policy.evaluate_for_quota_resource(
+        _source("quota"), now=NOW, quota_available=None, quota_resource="premium_ticket",
+    )
+    assert result.eligible and result.consumes_quota
+    assert result.quota_resource == "premium_ticket" and result.quota_limit is None
+    assert policy.resource_state_scope("premium_ticket") is None
+    assert policy.access_grant_until_for_resource(NOW, "premium_ticket") is None
+    assert policy.access_grant_until_for_resource(NOW, "work_ticket") == NOW + timedelta(hours=72)
+    assert policy.grant_only_skip_reason(
+        resource="premium_ticket", last_consumed_at=NOW, now=NOW, cooldown_hours=23,
+    ) is None
+    for resource, expected in [(None, False), ("work_ticket", False), ("premium_ticket", True)]:
+        assert policy.resolve_batch_quota_per_work(resource) is expected
+        assert policy.resolve_grant_only_per_work(resource) is expected
 
 
 @pytest.mark.parametrize("cooldown_hours", [None, 1, 22, 23])

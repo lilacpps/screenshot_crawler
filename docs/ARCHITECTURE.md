@@ -1,11 +1,29 @@
 # Architecture
 
+## Resource-specific grant expiry (2026-11-21)
+
+`SitePolicy.access_grant_until_for_resource(started_at, resource)` supplies the
+fallback/cap for both pre-run reservations and observed-consumption commits.
+Its default delegates to the existing `access_grant_until`; other sites retain
+their previous behavior. Hanayume Premium returns None and requires the adapter's
+exact native 15-day rental expiry, while Work Ticket retains its 72-hour cap.
+No site/resource names enter Executor or Core. Stock selection, daily-gacha UI
+preparation and exact two-step ticket controls remain in the Hanayume adapter.
+Younganimal reuses these existing hooks with its own policy/adapter module,
+positive auth and aggregate-conflict/route guards. Its existing no-cap expiry
+policy already preserves the exact native Premium expiry. No shared production
+change or cross-site UI abstraction is introduced for this extension.
+
 ## Empty stock result and additional passes (2026-11-21)
 
 The site-neutral `AccessResourceResolution` can signal positive exhaustion of an
 empty pool through `stop_resource_pass`. CLI stops the current explicit pass
 after resolver cleanup, with no entry attempt. Both initial and additional
-normal resource phases honor `resolve_batch_quota_per_work()`. Comic DAYS uses
+normal resource phases honor `resolve_batch_quota_per_work(resource=None)`;
+None selects the default pass. Explicit grant-only passes likewise query
+`resolve_grant_only_per_work(resource)` for each resource. Comic DAYS opts in
+only for Premium; Work Ticket keeps its Catalog cooldown/direct entry path,
+without a stock snapshot or pacing for local-only skips. Comic DAYS uses
 these existing guarded stock/entry boundaries for Premium, keeping homepage,
 balance parsing, native series membership and all ticket controls site-local.
 

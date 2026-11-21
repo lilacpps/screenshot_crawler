@@ -27,11 +27,12 @@ class ComicDaysSitePolicy(SitePolicy):
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
         return ("work_ticket", "premium_ticket")
 
-    def resolve_grant_only_per_work(self) -> bool:
-        return True
+    def resolve_grant_only_per_work(self, resource: str | None = None) -> bool:
+        # Work Tickets use the Catalog cooldown and exact entry, without a stock snapshot.
+        return resource == "premium_ticket"
 
-    def resolve_batch_quota_per_work(self) -> bool:
-        return True
+    def resolve_batch_quota_per_work(self, resource: str | None = None) -> bool:
+        return resource == "premium_ticket"
 
     def resource_state_scope(self, resource: str) -> str | None:
         if resource == "work_ticket":

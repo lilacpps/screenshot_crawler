@@ -67,6 +67,11 @@ from screenshot_crawler.site_adapters.younganimal.native_capture import (
 from screenshot_crawler.site_adapters.younganimal.native_capture import (
     VERIFY_CAPTURE_SCRIPT as VERIFY_NATIVE_CAPTURE_SCRIPT,
 )
+from screenshot_crawler.site_adapters.younganimal.premium_access import (
+    RESOLUTION_BUDGET_MS,
+    PremiumEntry,
+    resolve_ticket_candidates,
+)
 
 BASE_URL = "https://younganimal.com"
 SEEK_SELECTOR = "#xCVSeekBar"
@@ -459,6 +464,7 @@ class YounganimalAdapter(SiteAdapter):
         self._ticket_observer: YounganimalLiveAccessObserver | None = None
         self._ticket_route_guard: YounganimalEpisodeRouteGuard | None = None
         self._ticket_action_attempted = False
+        self._premium_entry: PremiumEntry | None = None
         self._ticket_entry_only = False
         self._access_consumption = AccessConsumption()
 
@@ -469,7 +475,40 @@ class YounganimalAdapter(SiteAdapter):
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
 
     def get_access_consumption(self) -> AccessConsumption:
+        if self._premium_entry is not None:
+            return self._premium_entry.consumption
         return self._access_consumption
+
+    def configure_access_resource_resolution(
+        self, *, timeout_ms: int, page_turn_delay_ms: int,
+        blocked_external_ids: frozenset[str] = frozenset(),
+    ) -> int:
+        return max(timeout_ms, RESOLUTION_BUDGET_MS)
+
+    async def _install_premium_stock_guard(self, page: Page) -> None:
+        self._ticket_route_guard = YounganimalEpisodeRouteGuard(
+            work_id=self._batch_expected_work_id, episode_id=self._batch_expected_episode_id,
+        )
+        await self._ticket_route_guard.attach(page)
+
+    async def resolve_access_resource_candidates(
+        self, page: Page, candidates: tuple[object, ...], quota_resource: str,
+        *, timeout_ms: int = 15_000,
+    ):
+        if candidates:
+            await self.configure_target_identity(candidates[0].external_id, "premium-stock-resolution")
+            self.resolve_initial_navigation_url(candidates[0].locator)
+        result = await resolve_ticket_candidates(
+            page, candidates, quota_resource, timeout_ms=timeout_ms,
+            before_episode=self._install_premium_stock_guard,
+        )
+        self._raise_if_ticket_route_failed(after_action=False)
+        return result
+
+    def _raise_if_premium_stopped(self) -> None:
+        if self._premium_entry is not None and self._premium_entry.clicked:
+            self._ticket_action_attempted = True
+        self._raise_if_access_stopped()
 
     async def prepare_page(self, page: Page) -> None:
         try:
@@ -513,12 +552,12 @@ class YounganimalAdapter(SiteAdapter):
         if self._access_strategy != "quota":
             if quota_resource is not None:
                 raise UnsupportedAccessStrategyError(
-                    "Younganimal work_ticket requires access_strategy='quota'"
+                    "Younganimal ticket entry requires access_strategy='quota'"
                 )
             return
-        if quota_resource != "work_ticket":
+        if quota_resource not in {"work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
-                "Younganimal quota access requires quota_resource='work_ticket'"
+                "Younganimal quota access requires an explicit supported ticket resource"
             )
         if (
             self._batch_expected_work_id is None
@@ -526,13 +565,20 @@ class YounganimalAdapter(SiteAdapter):
             or self._opaque_work_key is None
         ):
             raise UnknownPageStateError(
-                "Younganimal work_ticket requires a configured Catalog target identity"
+                "Younganimal ticket entry requires a configured Catalog target identity"
             )
         if self._ticket_observer is not None or self._ticket_route_guard is not None:
-            raise UnknownPageStateError("Younganimal work_ticket entry is already configured")
+            raise UnknownPageStateError("Younganimal ticket entry is already configured")
         self._quota_resource = quota_resource
         self._access_consumption = AccessConsumption()
         self._ticket_action_attempted = False
+        if quota_resource == "premium_ticket":
+            self._premium_entry = PremiumEntry(
+                page, self._batch_expected_episode_id, self._batch_expected_work_id,
+            )
+            await self._premium_entry.install()
+            await self._install_premium_stock_guard(page)
+            return
         observer = YounganimalLiveAccessObserver(
             work_id=self._batch_expected_work_id,
             episode_id=self._batch_expected_episode_id,
@@ -616,7 +662,13 @@ class YounganimalAdapter(SiteAdapter):
         self._initial_native_redraw = None
         self._prefetch_wait = {"status": "not_started"}
         if self._access_strategy == "quota":
-            await self._initialize_work_ticket_entry(page, entry_only=False)
+            if self._premium_entry is not None:
+                await self._premium_entry.enter(
+                    page, entry_only=False, read_identity=self._verify_episode_header,
+                    guard=self._raise_if_premium_stopped,
+                )
+            else:
+                await self._initialize_work_ticket_entry(page, entry_only=False)
         await self._verify_episode_entry(page)
         observation = await self._wait_for_viewer_ready(page)
         self._frozen_viewer_mapping = self._viewer_mapping(observation)
@@ -726,11 +778,11 @@ class YounganimalAdapter(SiteAdapter):
         self._initial_native_redraw["status"] = "redrawn"
 
     async def initialize_entry_only(self, page: Page) -> None:
-        """Confirm a work-ticket grant without initializing or capturing the Viewer."""
+        """Confirm a ticket grant without initializing or capturing the Viewer."""
 
-        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+        if self._access_strategy != "quota" or self._quota_resource not in {"work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
-                "Younganimal entry-only execution requires quota/work_ticket"
+                "Younganimal entry-only execution requires quota and a supported ticket resource"
             )
         if (
             self._work_id is None
@@ -740,7 +792,13 @@ class YounganimalAdapter(SiteAdapter):
         ):
             raise AccessResourceUnavailableError("younganimal_discovery_refresh_required")
         self._ticket_entry_only = True
-        await self._initialize_work_ticket_entry(page, entry_only=True)
+        if self._premium_entry is not None:
+            await self._premium_entry.enter(
+                page, entry_only=True, read_identity=self._verify_episode_header,
+                guard=self._raise_if_premium_stopped,
+            )
+        else:
+            await self._initialize_work_ticket_entry(page, entry_only=True)
         await self._verify_episode_header(page)
         self._raise_if_ticket_route_failed(after_action=True)
         await self._close_ticket_observer()
@@ -1975,6 +2033,12 @@ class YounganimalAdapter(SiteAdapter):
             "captured_body_slots": list(self._captured_slots),
             "capture_mode": self._capture_diagnostics.get("mode", "not_started"),
             "ticket_action_attempted": self._ticket_action_attempted,
+            "premium_ticket": {
+                "entry_only": self._ticket_entry_only and self._premium_entry is not None,
+                "action_attempted": self._premium_entry.clicked if self._premium_entry is not None else False,
+                "checkout_dispatched": self._premium_entry.checkout_dispatched if self._premium_entry is not None else False,
+                "consumption_confirmed": self._premium_entry.consumption.consumed if self._premium_entry is not None else False,
+            },
             "ticket_route_guard": (
                 self._ticket_route_guard.collect_debug_metadata()
                 if self._ticket_route_guard is not None else None

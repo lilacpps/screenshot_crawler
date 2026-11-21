@@ -1,3 +1,34 @@
+## Younganimal Premium integration (2026-11-21)
+
+Younganimal now uses the existing resource-aware stock resolver and native grant
+commit hooks for Premium. All new production code is site-local; no shared Core,
+Executor, CLI, schema or browser lifecycle change was needed in this extension.
+The existing no-cap Younganimal expiry policy preserves its confirmed native
+15-day rental. Work Ticket state stays independent. Shared contracts are
+synchronized in the access/discovery/architecture docs; current site behavior
+and bounded live/test results are in `11_younganimal.md`.
+
+## Resource-specific grant expiry (2026-11-21)
+
+Executor calls `SitePolicy.access_grant_until_for_resource(started_at, resource)`
+when reserving before-run access or committing observed consumption. The default
+delegates to `access_grant_until`, preserving all existing sites and resources.
+Hanayume Premium returns None so its positively confirmed native 15-day expiry
+is retained; Work Ticket still uses its separate 72-hour policy cap. No Catalog
+schema, CLI flag, Core Runner, browser lifecycle or generic resource-name branch
+is added. Per-Work stock selection and stop flags use the existing guarded
+resolver, including Hanayume's bounded optional daily-gacha preparation. Premium
+has no durable balance or work resource state. Exact implementation and live
+limits are in `note/10_hanayume.md`.
+
+Verification: 417 affected Unit and 246 affected browser cases passed, followed
+by 168 final Hanayume cases. Full snapshot: 10011 run, 10003 passed / 8 failed /
+0 skipped initially. Five Windows test-path failures and one GUI wait failure
+passed isolated reruns; only two preexisting user-config versus distributed-
+default assertions remain. Both checks pass with tracked HEAD configuration.
+No user pacing values or unrelated expectations were changed. Details and final
+site-local tightening are recorded in the Hanayume Premium runbook.
+
 ## Empty stock exhaustion and additional passes (2026-11-21)
 
 `AccessResourceResolution.stop_resource_pass` is a default-false, validated bool.
@@ -6,13 +37,28 @@ skips, closes the Page and ends that explicit resource pass without opening an
 entry Page, counting an attempt, creating a CrawlRun or sleeping before another
 Work. Empty Work-local pools retain the previous continue behavior. Unknown
 observations still stop closed. The normal additional resource phase now passes
-the same `resolve_batch_quota_per_work()` opt-in as the initial phase; sites
-without the opt-in keep the existing path. Resource names/selectors and concrete
-stock remain in site integrations. No schema, CLI option or Runner change.
+the resource to `resolve_batch_quota_per_work(resource=None)` while the initial
+phase uses None (the default pass). Grant-only queries
+`resolve_grant_only_per_work(resource)` separately for each explicit resource,
+including `all`. Sites without the opt-in keep the existing path. Resource
+names/selectors and concrete stock remain in site integrations. No schema,
+CLI option or Runner change.
 
-Comic DAYS uses this for account-wide Premium exhaustion and one stock-bound
-selection per Work. Piccoma/Magapoke default behavior remains unchanged.
-Validation: 276 targeted cases, 337 affected component cases and 243 relevant
+Comic DAYS opts in only for Premium, using account-wide exhaustion and one
+stock-bound selection per Work. Work Ticket uses the original candidate path:
+Catalog cooldown skips run without resolver Pages or waits, followed by exact
+entry for eligible targets. Piccoma/Magapoke behavior remains unchanged.
+Cooldown routing correction validation: **393 affected Unit cases and 79
+artificial-browser Integration cases passed**, zero skips. The regression
+matrix covers normal Batch, Work-only and `all`, with four cooldown Works or
+three cooldown Works followed by one eligible Work; local checks have zero
+sleep, no stock resolver, and only the eligible Work opens an entry Page.
+Existing Premium selection/pass-stop, shared limits/order and Piccoma tests
+pass. Ruff and changed-file diff checks pass. Live/Research/full-suite reruns
+were not performed for this bounded routing change; DOM/capture/consumption
+logic is unchanged. No new live verification or ticket use is claimed.
+
+Earlier Premium extension validation: 276 targeted cases, 337 affected component cases and 243 relevant
 browser Integration cases passed (856 related cases total; zero skips). Ruff
 passed. The complete three-part regression covered 9,952 cases / 204 files:
 9,945 passed, 7 failed, 0 skipped. Two failures reflect existing custom
@@ -1833,7 +1879,7 @@ with the target page. It also evaluates work-scoped local resource cooldown
 state before opening a page for any consuming candidate. These are neutral
 hooks; no site or resource name is interpreted by Core.
 
-Comic DAYS no longer uses a production live candidate resolver. Its adapter
+Comic DAYS Work Ticket does not use a production stock candidate resolver. Its adapter
 opens the selected target once, performs target-local identity and exact Work
 Ticket safety checks, clicks once, confirms positive debit/unlock evidence,
 and continues normal quota crawling on the same Page. Positive Catalog/live
@@ -2912,13 +2958,14 @@ one-Catalog-candidate Work Ticket flow below.
 The older C3 paragraph above describes the former free-only implementation and
 is historical. Current Comic DAYS Discovery full classifies the complete
 first-party listing, and `quota_limit=1` keeps one Work Ticket candidate per
-work in existing Catalog order. Quota execution is non-deferred: the adapter
+work in existing Catalog order. Work Ticket execution is non-deferred: the adapter
 does not run a live candidate resolver, opens the Planner-selected target once,
 validates its target-local identity and exact Work Ticket contract, confirms
 positive debit/unlock evidence, and continues normal crawling on the same Page.
 Catalog/live identity or contract disagreement stops the resource pass with
 `comicdays_discovery_refresh_required`; `isCharged=false` is the separate
-`work_ticket_cooldown` state. The generic resolver remains for Zebrack, whose
+`work_ticket_cooldown` state. Premium alone uses per-Work stock selection. The
+generic resolver also remains for Zebrack, whose
 Discovery cannot classify native per-chapter ticket state.
 
 authority:

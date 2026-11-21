@@ -99,13 +99,13 @@ class SitePolicy(ABC):
 
         return False
 
-    def resolve_grant_only_per_work(self) -> bool:
-        """Select a bounded grant pool from one live snapshot per Work."""
+    def resolve_grant_only_per_work(self, resource: str | None = None) -> bool:
+        """Select a live Work pool for the resource (None means the default pass)."""
 
         return False
 
-    def resolve_batch_quota_per_work(self) -> bool:
-        """Resolve quota pools lazily per Work while preserving Batch order."""
+    def resolve_batch_quota_per_work(self, resource: str | None = None) -> bool:
+        """Resolve Work quota pools for the resource, or the default pass if None."""
 
         return False
 
@@ -125,6 +125,12 @@ class SitePolicy(ABC):
 
         del started_at
         return None
+
+    def access_grant_until_for_resource(
+        self, started_at: datetime, resource: str | None,
+    ) -> datetime | None:
+        """Resource-specific fallback/cap; None permits exact native expiry only."""
+        return self.access_grant_until(started_at)
 
     def supported_access_resources(self) -> tuple[str, ...]:
         """Return all named resources this policy can explicitly select."""

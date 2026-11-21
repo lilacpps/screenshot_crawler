@@ -2196,12 +2196,13 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     limit = getattr(args, "limit", None)
     policy = policies.create(args.site)
     defer_quota = _policy_defers_quota_access(policy)
-    resolve_per_work = getattr(policy, "resolve_grant_only_per_work", lambda: False)()
-    resolve_batch_quota = getattr(policy, "resolve_batch_quota_per_work", lambda: False)()
+    resolve_grant_work = getattr(policy, "resolve_grant_only_per_work", lambda resource=None: False)
+    resolve_batch_work = getattr(policy, "resolve_batch_quota_per_work", lambda resource=None: False)
+    resolve_per_work = resolve_grant_work()
+    resolve_batch_quota = resolve_batch_work()
     work_first_all = grant_only_all and getattr(policy, "grant_only_all_per_work", lambda: False)()
     if work_first_all and (not resolve_per_work or defer_quota):
         raise BatchPlanningError("Work-first resource passes require non-deferred Work resolution")
-    execute_grants = _execute_work_grants if resolve_per_work else _execute_batch_candidates
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
     grant_only_all_preflight: dict[str, BatchPlan] = {}
@@ -2448,6 +2449,10 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                         f"Batch grant-only resource pass ({resource}); "
                         f"planned={len(resource_candidates)}"
                     )
+                resolve_resource_per_work = resolve_grant_work(resource)
+                execute_grants = (
+                    _execute_work_grants if resolve_resource_per_work else _execute_batch_candidates
+                )
                 pass_attempts, _pass_continue = await execute_grants(
                     args,
                     session,
@@ -2468,7 +2473,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 attempts += pass_attempts
                 previous_phase_had_site_access = (
                     previous_phase_had_site_access or pass_attempts > 0
-                    or (resolve_per_work and bool(resource_candidates))
+                    or (resolve_resource_per_work and bool(resource_candidates))
                 )
             if attempts == 0:
                 metrics.finish(stop_reason="no_candidates")
@@ -2488,6 +2493,10 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 )
                 grant_attempts = processed
             else:
+                execute_grants = (
+                    _execute_work_grants
+                    if resolve_grant_work(grant_only) else _execute_batch_candidates
+                )
                 processed, should_continue = await execute_grants(
                     args, session, executor, candidates, phase=f"grant-only:{grant_only}",
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
@@ -2611,7 +2620,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     executor,
                     resource_candidates,
                     phase=quota_resource,
-                    resolve_quota_per_work=resolve_batch_quota,
+                    resolve_quota_per_work=resolve_batch_work(quota_resource),
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     metrics=metrics,
                     delay_before_first_ms=(
