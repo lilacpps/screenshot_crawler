@@ -48,6 +48,7 @@ _EPISODE_PATH = re.compile(
 )
 _ACCESS_CLASSES = {
     "c-episode-item__ico--free": "free",
+    "c-episode-item__ico--get-point": "free",
     "c-episode-item__ico--ticket-free": "quota",
     "c-episode-item__ico--renting": "quota",
     "c-episode-item__ico--point": "paid",
@@ -96,7 +97,11 @@ def map_magapoke_access_mode(icon_classes: str | Iterable[str] | None) -> str:
         for class_name in (value or "").split()
         if class_name in _ACCESS_CLASSES
     }
-    if len(recognized_classes) > 1:
+    # A reading-reward badge may accompany free access; other conflicts stay closed.
+    if len(recognized_classes) > 1 and recognized_classes != {
+        "c-episode-item__ico--free",
+        "c-episode-item__ico--get-point",
+    }:
         raise DiscoveryIncompleteError("Magapoke episode row has conflicting access states")
     if not recognized_classes:
         return "unknown"

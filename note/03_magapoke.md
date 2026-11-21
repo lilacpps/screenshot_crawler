@@ -601,12 +601,31 @@ The M1 access mapping is:
 | DOM class | Catalog `access_mode` |
 | --- | --- |
 | `.c-episode-item__ico--free` | `free` |
+| `.c-episode-item__ico--get-point` (reading reward, e.g. `5p`) | `free` |
 | `.c-episode-item__ico--ticket-free` | `quota` |
 | `.c-episode-item__ico--renting` | `quota` |
 | `.c-episode-item__ico--point` | `paid` |
 | no recognized state suffix | `unknown` |
 
-Conflicting recognized state classes are incomplete. Mapping active rental to
+Conflicting recognized state classes are incomplete. `--get-point` may coexist
+with `--free` because both express free access; its numeric reward is not
+parsed as a purchase price. It never overrides a quota or paid badge. Missing
+and unrecognized badges remain `unknown`.
+
+Live verification on 2026-11-22 found `--get-point` with `5p` on episode
+`00052/883` (エデンの檻, 第1話). The shared crawler Chrome displayed usable
+viewer canvases after direct URL navigation, with no purchase panel and no
+ticket or purchase control clicked. The user's browser instead displayed the
+free badge; the cause of that presentation difference was not established.
+The official explanation of reading-reward points is
+https://pocket.shonenmagazine.com/article/entry/magapoke_20191029 .
+Unit mapping/conflict cases and synthetic browser-backed full Discovery tests
+cover the reward badge alone and together with `--free`. Existing Catalog
+unknown rows require a fresh full Discovery; normal incremental stopping may
+not revisit the oldest episode. Full episode capture/END and reward collection
+were not tested for this classification change.
+
+Mapping active rental to
 `quota` does not create or update `quota_started_at` or
 `access_granted_until`; M1 has no Batch or active-grant operation. Ownership
 remains `unknown` unless a future explicit, non-consuming signal is verified.

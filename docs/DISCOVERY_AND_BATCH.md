@@ -1027,10 +1027,15 @@ Watchlist target. The adapter preserves the URL path identity (`title_id` and
 `episode_id`), scopes the episode list to the matching visible
 `div.p-episode__sec`, expands `button.p-episode__more-btn` with bounded
 progress checks, validates all rows before yielding, and emits rows in the
-observed newest-to-oldest order. `--free` maps to `free`, `--ticket-free` and
+observed newest-to-oldest order. `--free` and the reading-reward badge
+`--get-point` map to `free`, `--ticket-free` and
 `--renting` map to `quota`, `--point` maps to `paid`, and an unrecognized state
 is `unknown`. Episode titles remain raw `order_label` values and
 `order_key=None`.
+
+The `--get-point` numeric reward (for example `5p`) is not an access price.
+It may coexist with `--free`; conflicting free/quota/paid modes still make
+Discovery incomplete. Missing and unrecognized badges remain `unknown`.
 
 Full and incremental discovery use the same complete expansion. Incremental
 stopping remains the generic known-streak behavior; no Magapoke-specific stop

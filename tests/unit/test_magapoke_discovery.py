@@ -46,6 +46,8 @@ def test_magapoke_episode_url_parser_is_strict_and_preserves_zeroes() -> None:
     ("classes", "expected"),
     [
         ("c-episode-item__ico c-episode-item__ico--free", "free"),
+        ("c-episode-item__ico c-episode-item__ico--get-point", "free"),
+        ("c-episode-item__ico--get-point c-episode-item__ico--free", "free"),
         ("c-episode-item__ico c-episode-item__ico--ticket-free", "quota"),
         ("c-episode-item__ico c-episode-item__ico--renting", "quota"),
         ("c-episode-item__ico c-episode-item__ico--point", "paid"),
@@ -57,12 +59,16 @@ def test_magapoke_access_mapping(classes: str | None, expected: str) -> None:
     assert map_magapoke_access_mode(classes) == expected
 
 
-def test_magapoke_conflicting_access_states_are_incomplete() -> None:
+@pytest.mark.parametrize(
+    "states",
+    [("ticket-free", "renting"), ("get-point", "point"), ("get-point", "ticket-free")],
+)
+def test_magapoke_conflicting_access_states_are_incomplete(states: tuple[str, str]) -> None:
     with pytest.raises(DiscoveryIncompleteError):
         map_magapoke_access_mode(
             [
-                "c-episode-item__ico c-episode-item__ico--ticket-free",
-                "c-episode-item__ico c-episode-item__ico--renting",
+                f"c-episode-item__ico c-episode-item__ico--{state}"
+                for state in states
             ]
         )
 

@@ -58,6 +58,7 @@ def _listing_html(
     no_progress: bool = False,
     split_list_containers: bool = False,
     special_title: str | None = None,
+    tail_icon_class: str | None = None,
 ) -> str:
     first = _row(
         "244819",
@@ -73,6 +74,7 @@ def _listing_html(
         <a class="c-episode-item" href="{tail_href}">
           <div class="c-episode-item__detail">
             <h2 class="c-episode-item__ttl">【第１話】「起点」(1)</h2>
+            {f'<div class="c-episode-item__ico {tail_icon_class}">5p</div>' if tail_icon_class else ''}
           </div>
         </a>
       </li>
@@ -153,11 +155,18 @@ async def _install_route(page, html: str) -> None:
     await page.route("https://pocket.shonenmagazine.com/**", fulfill)
 
 
+@pytest.mark.parametrize("tail_icon_class,tail_access", [
+    (None, "unknown"),
+    ("c-episode-item__ico--get-point", "free"),
+    ("c-episode-item__ico--get-point c-episode-item__ico--free", "free"),
+])
 async def test_magapoke_full_discovery_expands_validates_and_syncs_catalog(
     browser_page,
     tmp_path: Path,
+    tail_icon_class: str | None,
+    tail_access: str,
 ) -> None:
-    await _install_route(browser_page, _listing_html())
+    await _install_route(browser_page, _listing_html(tail_icon_class=tail_icon_class))
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()
     registry.register("magapoke", MagapokeDiscoveryAdapter)
@@ -181,7 +190,7 @@ async def test_magapoke_full_discovery_expands_validates_and_syncs_catalog(
         "quota",
         "quota",
         "free",
-        "unknown",
+        tail_access,
     ]
     sources = catalog.list_sources()
     assert sources[1].access_granted_until is None
