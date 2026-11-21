@@ -1,3 +1,72 @@
+## Discovery: active Premium rental without `mode-read`
+
+Current behavior (2026-11-22 JST): an exact authenticated native `purchased`
+grant plus a unique matching-title account row with the sole valid rental
+access label may establish a Premium rental even without `mode-read`, but only
+when its class set is exactly `series-eplist-item mode-store-item-blank`.
+The existing `mode-read` path remains supported. Work Ticket history retains
+its read-marker requirement; an unread `waitAndFree` row cannot use this
+Premium-only exception. Identity, authentication, single rental/access label,
+countdown format/bounds and native denial/zero checks remain required. Unknown
+unread classes and duplicate or contradictory metadata still fail closed.
+The expiry remains the displayed duration minus one hour; normalized access is
+`paid` with a future grant, allowing non-consuming `direct` Policy selection.
+There is no CLI, Catalog schema, Core, ticket-entry or consumption change.
+
+Read-only shared-CDP investigation of `takane-to-hana-hanayume` enumerated all
+319 public episode rows across 11 validated ranges, then reproduced
+`Hanayume public/history access-label conflict lacks an exact active grant`
+before the fix and before yielding any records. That diagnostic opened no
+Catalog, blocked non-read HTTP methods and made no ticket/control clicks.
+
+The failing row is 第4話① (`9d5e222206beb`, work `3ff0e8f611175`). Its public
+copy has no access-text label; the account copy has one exact
+`レンタル中 閲覧期限 14日+7時間` label and matching episode/title, but lacks
+`mode-read`. A second navigation observed the same row shape immediately,
+after another 1.5 seconds, and after another 3.5 seconds. Its natural exact
+series-access response reports `purchased`, `hasAccess=true`, and 1235358
+remaining seconds. Thus the label difference does not itself demonstrate
+contradictory site entitlement. The old implementation required `mode-read`
+before calculating `rental_history_until`, rejecting the otherwise active
+Premium rental because that calculated expiry was absent. The same
+listing's four other public/account label differences pass the current
+per-row grant checks. In particular, 番外編 高嶺とJr.と花 has the same public
+empty label and account rental label, plus `mode-read`, and is accepted.
+
+This observed Premium row shape is now admitted explicitly in production and
+`docs/DISCOVERY_AND_BATCH.md`; it is not generalized to arbitrary unread rows.
+The existing full/incremental browser test is extended to read/unread Work and
+Premium grants, including the observed 14-day countdown. Additional browser
+cases reject wrong/duplicate titles, duplicate/missing rental markers, extra
+labels, unknown/missing blank classes and duplicate history identities.
+Sanitized metadata evidence (no cookies, account identifiers, or response bodies):
+`.tmp/hanayume-conflict-20261122.json` and
+`.tmp/hanayume-conflict-confirm-20261122.json`.
+
+Post-fix production `DiscoveryService` verification used only the dedicated
+`.tmp/hy22live-f8c2713e/catalog.sqlite`. Full exhausted all 319 records with
+`complete=true`, 319 new and no error; incremental exhausted all 319 with
+0 new, 319 known and no error (`complete=null` is the incremental contract).
+Both saved 第4話① as `paid` with a future rental grant, and Policy selected
+eligible `direct` with `consumes_quota=false`. All non-read requests were
+blocked, no ticket control was clicked, and the normal Catalog/Watchlist were
+untouched. Report: `.tmp/hy22live-f8c2713e/report.json`. Live capture, END/ZIP,
+other works and actual consuming Batch were not exercised by this fix.
+
+Verification: the live-shaped full/incremental regression failed twice before
+the production fix. The final seven-file Hanayume selection (Discovery,
+identity, Policy and Adapter Unit; Discovery, Adapter and Premium browser
+Integration) passed **604** tests, **0 failed / 0 skipped / 0 deselected**, in
+674.65 seconds. Its 436 warnings are existing pytest-asyncio/Python deprecations.
+The new malformed-history fixture initially lacked a canonical base URL; it
+was corrected to use the existing fully routed local-page fixture, after which
+its eight denial cases and the two original regression cases passed separately
+before the final selection. `ruff check src tests` and changed-file whitespace
+checks passed. Report: `.tmp/hanayume-conflict-affected-20261122.xml`.
+Research/Probe tests and the full repository suite were not run because this
+change is restricted to Hanayume Discovery metadata classification; relevant
+production Unit, browser Integration and bounded live Discovery were exercised.
+
 ## Premium / すぐ無料チケット (2026-11-21)
 
 Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.
@@ -453,8 +522,12 @@ The API name `purchased` can represent an already active premium-ticket rental;
 it does not establish permanent ownership. Discovery accepts its public/history
 badge difference only with fresh series authentication, an exact same-work/episode
 native `purchased` row with `hasAccess=true` and no explicit zero timer, and a
-unique matching-title account row with `mode-read` and one `eliRentStat` marker
-that is also its sole access label. The exact displayed `D日+H時間` or `H時間`
+unique matching-title account row with one `eliRentStat` marker that is also its
+sole access label. The row must have `mode-read` or exactly the live-observed
+`series-eplist-item mode-store-item-blank` classes. Unknown unread classes remain
+unsupported. The latter shape is a Premium-only grant proof; Work Ticket
+history still requires `mode-read`.
+The exact displayed `D日+H時間` or `H時間`
 countdown supplies `access_granted_until`: observation start plus the displayed
 duration minus one hour, matching the display granularity conservatively.
 Days are bounded to 0..14 and hours to 0..23; zero/one-hour lower bounds,

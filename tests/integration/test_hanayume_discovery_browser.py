@@ -75,6 +75,7 @@ def _title(position: int) -> str:
 def _row(
     position: int, label: str, *, manual_rental: bool = False,
     rental_period: str = "2日+23時間",
+    manual_rental_read: bool = True,
 ) -> str:
     episode_id = _episode_id(position)
     row_class = (
@@ -82,6 +83,8 @@ def _row(
         if manual_rental
         else "series-eplist-item"
     )
+    if manual_rental and not manual_rental_read:
+        row_class = "series-eplist-item mode-store-item-blank"
     rental_stat = (
         '<span data-e2e="eliRentStat">'
         '\u30ec\u30f3\u30bf\u30eb\u4e2d \u95b2\u89a7\u671f\u9650'
@@ -161,6 +164,7 @@ def _page_html(
     manual_rental_ids: set[str] | None = None,
     manual_history_label_diff: bool = False,
     rental_period: str = "2日+23時間",
+    manual_rental_read: bool = True,
     series_auth_state: str | None = None,
     work_id_override: str | None = None,
     history_conflict: bool = False,
@@ -236,6 +240,7 @@ def _page_html(
             ),
             manual_rental=_episode_id(position) in manual_rental_ids,
             rental_period=rental_period,
+            manual_rental_read=manual_rental_read,
         )
         for position, label in row_details
         if history_preview_ids is None or _episode_id(position) in history_preview_ids
@@ -347,6 +352,7 @@ async def _install_pages(
     manual_rental_ids: set[str] | None = None,
     manual_history_label_diff: bool = False,
     rental_period: str = "2日+23時間",
+    manual_rental_read: bool = True,
     native_access_response: dict[str, object] | None = None,
     series_auth_state: str = "logged-out",
     history_conflict: bool = False,
@@ -387,6 +393,7 @@ async def _install_pages(
                     manual_rental_ids=manual_rental_ids,
                     manual_history_label_diff=manual_history_label_diff,
                     rental_period=rental_period,
+                    manual_rental_read=manual_rental_read,
                     series_auth_state=series_auth_state,
                     wrong_outer=wrong_series_outer,
                 ),
@@ -433,6 +440,7 @@ async def _install_pages(
                 manual_rental_ids=manual_rental_ids,
                 manual_history_label_diff=manual_history_label_diff,
                 rental_period=rental_period,
+                manual_rental_read=manual_rental_read,
                 history_conflict=history_conflict,
                 unknown_root=unknown_root,
                 nested_user_root=nested_user_root,
@@ -739,13 +747,22 @@ async def test_hanayume_delayed_account_history_still_refreshes_manual_ticket_gr
         pytest.param("7時間", False, 25200, False, id="hours-denied"),
         pytest.param("7時間", True, 0, False, id="hours-expired"),
         pytest.param("12日+1時間", True, 1042674, True, id="premium-twelve-days"),
+        pytest.param("14日+7時間", True, 1235358, True, id="premium-fourteen-days"),
     ],
 )
-@pytest.mark.parametrize("access_type", ["waitAndFree", "purchased"])
+@pytest.mark.parametrize(
+    ("access_type", "history_read"),
+    [
+        pytest.param("waitAndFree", True, id="work-read"),
+        pytest.param("waitAndFree", False, id="work-unread"),
+        pytest.param("purchased", True, id="premium-read"),
+        pytest.param("purchased", False, id="premium-unread"),
+    ],
+)
 async def test_hanayume_active_manual_grant_allows_exact_history_label_difference(
     browser_page, tmp_path: Path, refresh_mode: str,
     rental_period: str, has_access: bool, remaining_seconds: int, accepted: bool,
-    access_type: str,
+    access_type: str, history_read: bool,
 ) -> None:
     episode_id = _episode_id(TARGET_POSITION)
     native_payload: dict[str, object] = {
@@ -767,6 +784,7 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
         manual_rental_ids={episode_id},
         manual_history_label_diff=True,
         rental_period=rental_period,
+        manual_rental_read=history_read,
         native_access_response=native_payload,
         series_auth_state="authenticated",
     )
@@ -778,7 +796,7 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
     finished = datetime.now(UTC)
 
     source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
-    if access_type == "waitAndFree" and remaining_seconds > 259200:
+    if access_type == "waitAndFree" and (remaining_seconds > 259200 or not history_read):
         accepted = False
     # Minute displays are observed for Work Tickets only. Premium rentals still
     # require the existing conservative hours-based display expiry.
@@ -795,7 +813,9 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
     assert source is not None
     if access_type == "purchased":
         assert source.access_mode == "paid"
-        duration = {"2日+23時間": 70, "7時間": 6, "12日+1時間": 288}[rental_period]
+        duration = {
+            "2日+23時間": 70, "7時間": 6, "12日+1時間": 288, "14日+7時間": 342,
+        }[rental_period]
         expiry = datetime.fromisoformat(source.access_granted_until)
         assert started + timedelta(hours=duration) <= expiry <= finished + timedelta(hours=duration)
         decision = HanayumeSitePolicy().evaluate(source, now=finished, quota_available=0)
@@ -804,6 +824,64 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
     else:
         assert source.access_mode == "quota"
         assert source.access_granted_until is not None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong-title", "duplicate-title", "duplicate-rental", "extra-label",
+        "missing-marker", "unknown-class", "missing-blank-class", "duplicate-history",
+    ],
+)
+async def test_hanayume_unread_premium_rental_rejects_ambiguous_history(
+    browser_page, mutation: str,
+) -> None:
+    episode_id = _episode_id(TARGET_POSITION)
+    await _install_pages(
+        browser_page, all_badge="", manual_rental_ids={episode_id},
+        manual_history_label_diff=True, rental_period="14日+7時間",
+        manual_rental_read=False,
+    )
+    await browser_page.goto(f"{BASE}/episodes/{SEED_ID}/1")
+    await browser_page.locator(
+        f'[data-e2e="epListUser"] [data-e2e="eli"]:has(a[href="/episodes/{episode_id}"])'
+    ).evaluate("""(row, mutation) => {
+        const title = row.querySelector('[data-e2e="eliTitle"]');
+        const rental = row.querySelector('[data-e2e="eliRentStat"]');
+        if (mutation === 'wrong-title') title.textContent = 'Different episode';
+        if (mutation === 'duplicate-title') title.after(title.cloneNode(true));
+        if (mutation === 'duplicate-rental') rental.after(rental.cloneNode(true));
+        if (mutation === 'extra-label') {
+            const badge = document.createElement('span');
+            badge.className = 'series-eplist-item-access-text';
+            badge.textContent = '無料';
+            row.append(badge);
+        }
+        if (mutation === 'missing-marker') rental.remove();
+        if (mutation === 'unknown-class') row.classList.add('mode-unknown');
+        if (mutation === 'missing-blank-class') row.classList.remove('mode-store-item-blank');
+        if (mutation === 'duplicate-history') row.after(row.cloneNode(true));
+    }""", mutation)
+    if mutation == "duplicate-history":
+        with pytest.raises(hanayume_discovery.DiscoveryIncompleteError):
+            await hanayume_discovery._read_range_rows(
+                browser_page, work_id=WORK_ID, first_position=1, listing_authenticated=True,
+            )
+        return
+    rows = await hanayume_discovery._read_range_rows(
+        browser_page, work_id=WORK_ID, first_position=1, listing_authenticated=True,
+    )
+    row = next(row for row in rows if row.identity.episode_id == episode_id)
+    assert row.history_label_conflict is True
+    assert row.manual_rental_history is False
+    assert row.rental_history_until is None
+    native = hanayume_discovery.HanayumeNativeEpisodeAccess(
+        episode_id, "purchased", True, None, datetime.now(UTC),
+    )
+    with pytest.raises(hanayume_discovery.DiscoveryIncompleteError):
+        hanayume_discovery._apply_native_access(
+            [row], native_access={episode_id: native}, listing_authenticated=True,
+        )
 
 
 @pytest.mark.parametrize("conflicting_duplicate", [False, True])

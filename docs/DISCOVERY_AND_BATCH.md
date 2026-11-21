@@ -339,8 +339,14 @@ The API name `purchased` can represent an already active premium-ticket rental;
 it does not establish permanent ownership. Discovery accepts its public/history
 badge difference only with fresh series authentication, an exact same-work/episode
 native `purchased` row with `hasAccess=true` and no explicit zero timer, and a
-unique matching-title account row with `mode-read` and one `eliRentStat` marker
-that is also its sole access label. The exact displayed `D日+H時間` or `H時間`
+unique matching-title account row with one `eliRentStat` marker that is also its
+sole access label. The account row must have `mode-read` or exactly the observed
+`series-eplist-item mode-store-item-blank` classes. Read-only live investigation
+of 高嶺と花 第4話① on 2026-11-22 confirmed the latter shape with an active exact
+`purchased` grant and rental countdown; `mode-read` is therefore not mandatory
+for this Premium rental shape. Work Ticket history still requires `mode-read`;
+other unrecognized unread classes do not establish a grant.
+The exact displayed `D日+H時間` or `H時間`
 countdown supplies `access_granted_until`: observation start plus the displayed
 duration minus one hour, matching the display granularity conservatively.
 Days are bounded to 0..14 and hours to 0..23; zero/one-hour lower bounds,

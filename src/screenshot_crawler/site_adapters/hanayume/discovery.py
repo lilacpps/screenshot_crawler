@@ -1333,8 +1333,7 @@ async def _read_range_rows(
         # Below one day/hour the site uses "7時間" / "7分" respectively.
         # This marker still requires the exact native active-grant proof later.
         if (
-            "mode-read" in raw["classNames"]
-            and raw["rentalStatCount"] == 1
+            raw["rentalStatCount"] == 1
             and len(rental_texts) == 1
             and rental_texts[0].startswith(RENTAL_HISTORY_PREFIX)
             and re.fullmatch(
@@ -1342,9 +1341,19 @@ async def _read_range_rows(
                 rental_texts[0][len(RENTAL_HISTORY_PREFIX) :],
             )
         ):
-            manual_rental_history_ids.add(identity.episode_id)
+            history_is_read = "mode-read" in raw["classNames"]
+            if history_is_read:
+                manual_rental_history_ids.add(identity.episode_id)
             if (
-                raw.get("titleCount") == 1
+                # A live Premium rental can lack mode-read. Admit only its
+                # observed blank-row shape; Work Ticket proof still needs mode-read.
+                (
+                    history_is_read
+                    or set(raw["classNames"]) == {
+                        "series-eplist-item", "mode-store-item-blank",
+                    }
+                )
+                and raw.get("titleCount") == 1
                 and raw.get("title") == public_titles.get(identity.episode_id)
                 and raw["labels"] == rental_texts
             ):

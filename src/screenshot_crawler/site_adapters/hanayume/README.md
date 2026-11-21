@@ -81,8 +81,12 @@ The API name `purchased` can represent an already active premium-ticket rental;
 it does not establish permanent ownership. Discovery accepts its public/history
 badge difference only with fresh series authentication, an exact same-work/episode
 native `purchased` row with `hasAccess=true` and no explicit zero timer, and a
-unique matching-title account row with `mode-read` and one `eliRentStat` marker
-that is also its sole access label. The exact displayed `D日+H時間` or `H時間`
+unique matching-title account row with one `eliRentStat` marker that is also its
+sole access label. The row must have `mode-read` or exactly the live-observed
+`series-eplist-item mode-store-item-blank` classes. This second shape permits
+an active Premium rental before a read marker appears; unknown unread classes
+remain unsupported, and Work Ticket history still requires `mode-read`.
+The exact displayed `D日+H時間` or `H時間`
 countdown supplies `access_granted_until`: observation start plus the displayed
 duration minus one hour, matching the display granularity conservatively.
 Days are bounded to 0..14 and hours to 0..23; zero/one-hour lower bounds,
