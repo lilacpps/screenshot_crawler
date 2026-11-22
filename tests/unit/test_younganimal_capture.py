@@ -620,36 +620,38 @@ def test_younganimal_top_empty_three_pr_maps_all_observed_phases(seek, state, ac
     assert observed.initial_blank is (seek == 17)
 
 
-@pytest.mark.parametrize("body_count", [44, 4, 11, 5])
-def test_younganimal_top_empty_single_pr_maps_every_phase(body_count: int) -> None:
+@pytest.mark.parametrize(("body_count", "pr_count"), [(44, 1), (4, 1), (11, 1), (5, 1), (20, 3), (4, 3)])
+def test_younganimal_top_empty_pr_maps_every_phase(body_count: int, pr_count: int) -> None:
     odd_body = body_count % 2 == 1
-    maximum = body_count + 5 + int(odd_body)
+    maximum = body_count + pr_count + 4 + int(odd_body)
     seen = []
     for seek in range(maximum, 0, -2):
         row = _parse_viewer_observation(
-            _snapshot(seek, pr_tail_body_count=body_count, tail_pr_count=1, top_empty_pr=True),
+            _snapshot(seek, pr_tail_body_count=body_count, tail_pr_count=pr_count, top_empty_pr=True),
             expected_url=EPISODE_URL,
         )
-        assert row.layout_variant == ("top_empty_single_pr_odd_body" if odd_body else "top_empty_single_pr_even_body")
+        assert row.layout_variant == ("top_empty_three_pr" if pr_count == 3 else
+                                      "top_empty_single_pr_odd_body" if odd_body else "top_empty_single_pr_even_body")
         assert row.body_slots == tuple(range(2, body_count + 2))
         assert (row.ci_slot, row.pr_slots, row.good_slot, row.last_slot) == (
-            body_count + 2, (body_count + 3,), body_count + 4, body_count + 5)
+            body_count + 2, tuple(range(body_count + 3, body_count + 3 + pr_count)),
+            body_count + pr_count + 3, body_count + pr_count + 4)
         assert row.seek_max == maximum
         if seek == maximum:
             assert row.page_state == "initial_blank" and row.active_slots == (1,)
-        elif seek == 3:
+        elif 1 < seek < pr_count + (4 if odd_body else 3):
             assert row.page_state == "ad" and row.active_slots == ()
         elif seek == 1:
-            assert row.page_state == "end" and row.active_slots == (body_count + 5,)
+            assert row.page_state == "end" and row.active_slots == (body_count + pr_count + 4,)
         else:
             assert row.page_state == "content"
-            assert len(row.active_slots) == (1 if odd_body and seek == 5 else 2)
+            assert len(row.active_slots) == (1 if odd_body and seek == pr_count + 4 else 2)
             assert row.ready_slots == row.active_slots
             seen.extend(row.active_slots)
     assert seen == list(range(2, body_count + 2))
 
 
-@pytest.mark.parametrize(("pr_count", "body_count"), [(1, 44), (1, 11), (3, 9)])
+@pytest.mark.parametrize(("pr_count", "body_count"), [(1, 44), (1, 11), (3, 9), (3, 20), (3, 4)])
 @pytest.mark.parametrize("mutation", ["blank", "blank_canvas", "capability", "phase", "center", "tail", "tail_canvas", "range", "end_marker", "end_hidden", "short_body"])
 def test_top_empty_pr_tail_rejects_unknown_or_incomplete_layout(mutation: str, pr_count: int, body_count: int) -> None:
     maximum = body_count + pr_count + 5
@@ -677,7 +679,8 @@ def test_top_empty_pr_tail_rejects_unknown_or_incomplete_layout(mutation: str, p
     elif mutation == "end_hidden":
         raw["terminalMarkerVisible"] = False
     else:
-        raw = _snapshot(9, pr_tail_body_count=3, tail_pr_count=1, top_empty_pr=True)
+        raw = _snapshot(9, pr_tail_body_count=2 if pr_count == 3 else 3,
+                        tail_pr_count=pr_count, top_empty_pr=True)
     with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 

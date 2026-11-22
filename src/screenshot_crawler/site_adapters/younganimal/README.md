@@ -899,17 +899,31 @@ trailing PRs: top PR 0, exact blank 1, body 2-10, CI 11, PR 12-14, Good 15,
 Last 16, seek min=1/max=17/step=2. `top_empty_three_pr` requires the positive
 top-empty flag, horizontal/spread/RTL and PR/CI/Good capabilities, no vertical
 or single mode, exact canvas-free lead/blank/tail roles and contiguous known
-body states. Its derived body count B=N-8 is odd and at least three; seek max
-must equal N. This P=3 profile remains distinct from the observed even-body
-P=1/blank profile above; other blank/parity combinations and arbitrary PR
-counts remain unsupported.
+body states. Its derived body count B=N-8 is odd and at least three with
+max=N, or even and at least four with max=N-1. Arbitrary PR counts and
+shorter incomplete shapes remain unsupported.
 
 At max seek the centered top PR/blank has first+top-PR flags and is skipped by
-one ordinary public seek step. Body pairs start at max-2; seek 7 is the final
-single body/CI with CI+PR flags. Seeks 5 and 3 are PR/PR then PR/Good with PR;
+one ordinary public seek step. For the odd-body layout, body pairs start at
+max-2; seek 7 is the final single body/CI with CI+PR flags. Seeks 5 and 3 are PR/PR then PR/Good with PR;
 seek 1 is the unique visible/centered Last with Last-only flags. Python parsing,
 rewind, native source proof and CI-widget geometry use the same mapping. Full
-body coverage remains mandatory before END. Isolated normal Batch verification
+body coverage remains mandatory before END. For the even-body variant, the
+last body pair is at seek 7 without phase flags, CI/PR is at 5 with CI+PR,
+the PR pair is at 3 with PR, and Good/Last is at 1 with Last+PR. This map was
+observed at all fourteen public seeks on Item 52178 / Source 52485
+(`5ab62712681e2`, Chapter.7 ひな), whose twenty bodies occupy slots 2-21
+and whose exact CI/PR/PR/PR/Good/Last tail occupies 22-27. The earlier
+odd-only predicate caused its `PR-tail body mapping changed` timeout.
+Python, native source capture and CI-widget geometry now accept this proven
+even-body variant under the existing `top_empty_three_pr` name. Existing
+role, phase, center, source/replay, mutation and complete coverage proofs
+remain mandatory; there is no new option or timeout/access change.
+Final-code isolated Runner verification captured all twenty native 960x1364
+WebPs through END and validated ZIP CRC/order/member hashes/decode, without
+a ticket action or writes to the normal Catalog/library. Evidence:
+`output/younganimal-fix-52178/verified-final/live-report.json`.
+Earlier isolated normal Batch verification on Item/Source 35765
 completed all nine native 960x1364 WebP pages, independently equal to source
 RGBA, through END/ZIP/Catalog with no checkout or resource consumption. The
 normal Catalog and archives were untouched. The site note records test scope

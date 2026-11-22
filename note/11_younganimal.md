@@ -1,3 +1,53 @@
+## Initial blank, even body and three PRs (2026-11-22)
+
+Item 52178 / Source 52485 (`5ab62712681e2`, 3月のライオン / Chapter.7 ひな)
+failed before capture with `Younganimal PR-tail body mapping changed`.
+The existing `top_empty_three_pr` predicate admitted odd bodies only. Its
+saved DOM and a bounded shared-CDP public-seek probe instead prove N=28:
+top PR 0, exact blank 1, contiguous bodies 2-21 (B=20), CI 22, PR 23-25,
+Good 26 and Last 27; min=1/max=27/step=2. All fourteen positions were
+observed and rewound to 27. Initial flags are first+top-PR with centers 0/1;
+25..7 select body pairs without phase flags; 5 centers CI/PR with CI+PR;
+3 centers the PR pair with PR; 1 centers Good/Last with Last+PR and the
+unique visible/centered terminal marker. The probe blocked 38 mutating or
+off-target requests and performed no entry action. Metadata-only evidence:
+`.tmp/younganimal-52178-probe.json` (ignored, no permanent real-site fixture).
+
+Python parsing, native JS layout proof and CI mutation geometry now admit
+even B=N-8>=4 with max=N-1, retaining odd B>=3/max=N under the existing
+`top_empty_three_pr` variant. Exact capabilities, canvas-free non-body roles,
+contiguous known body states, every selected center/phase, frozen mapping,
+source/replay/node/write/epoch/post-encode proofs and full coverage before
+END remain mandatory. Unobserved shorter shapes and arbitrary PR counts
+still fail closed. This is a site-local predicate correction; configuration,
+CLI, timeout, Batch/access-resource rules and output contracts are unchanged.
+
+Final-code isolated production Runner verification captured all twenty bodies
+in order as native 960x1364 WebPs through END at max_pages=20, then created
+and validated the ZIP (CRC, member order, per-member manifest SHA-256 and
+decode/dimensions). Complete frozen coverage is slots 2-21. There was one
+target main-document request, 38 blocked mutating/off-target requests and
+no ticket action. Normal Catalog, Watchlist and library were not written;
+this was isolated Runner/packaging verification, not a normal Batch rerun.
+Evidence: `output/younganimal-fix-52178/verified-final/live-report.json` and
+`verified-manifest.json` (ignored). No separate live source-RGBA equality
+claim is made; synthetic browser tests compare native and PNG fallback
+outputs with their independent pixel authority. No new setting is needed;
+the original normal Batch command can be rerun after restarting its process.
+
+Validation: 503 capture Unit + 26 packaging cases and 124 selected real-browser
+Integration cases passed (zero skipped). Browser coverage includes B=20/B=4
+native output, forced PNG fallback with independent pixel equality, resumed
+entry, complete ordered capture/END/ZIP, role/capability/phase/center drift,
+premature END and post-encoding node/seek mutation rejection, plus the
+previous one/two-body and PR-tail profiles. An initial browser run exposed
+the remaining odd-only native predicate; it was corrected before the final
+124-case run and final live verification. Global `ruff check src tests` and
+scoped `git diff --check` passed. Full repository and Research/Probe suites
+were not run because this changes only the Younganimal layout predicates,
+not shared code or research helpers. The remaining normal Batch candidates
+have not been rerun or individually live-verified in this fix.
+
 ## Common Batch retry boundary (2026-11-22)
 
 Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
@@ -1263,13 +1313,16 @@ rejection and checked every seek 17..1 by -2 before rewinding to 17. It blocked
 
 `top_empty_three_pr` requires the positive top-empty flag, exact top-PR lead
 and separate canvas-free blank, exactly three PRs, and contiguous derived body
-slots starting at 2. B=N-8 must be odd and at least three, with min=1/max=N/
-step=2, horizontal/spread/RTL and PR/CI/Good capabilities, and no vertical or
+slots starting at 2. B=N-8 must be odd and at least three with max=N, or even
+and at least four with max=N-1; min=1/step=2, horizontal/spread/RTL and
+PR/CI/Good capabilities, and no vertical or
 single mode. Selected centers and phase flags must match at every seek.
 Initialization/rewind recognizes only this positively proven blank and uses
 one public seek step to the first body pair. Python parsing, native JS layout
-proof and CI mutation geometry share the role map. Unproven P=1/blank/body-parity combinations,
-arbitrary PR counts, changed roles/ranges, wrong Last and premature END remain
+proof and CI mutation geometry share the role map. The even-body map uses
+body pairs through seek 7, CI/PR at 5, PR/PR at 3 and Good/Last with Last+PR
+at 1, as verified on Item 52178 / Source 52485 above. Arbitrary PR counts,
+changed roles/ranges, wrong Last and premature END remain
 fail-closed. Every body slot is still required before END; source/replay,
 node/write/generation, final geometry, post-encoding proof and size guards stay
 unchanged. Existing profiles retain their contracts. No Core, access-resource,
@@ -2607,6 +2660,13 @@ also exact. END still requires complete frozen body coverage. Native source/
 replay, identity/write/epoch and CI disjoint-geometry checks remain. The current
 snapshot records existing-grant live B=10 evidence, synthetic B=4/B=10 captures
 and rejection of unobserved PR counts and incorrect CI/interstitial phases.
+
+With the exact extra blank at slot 1, `top_empty_three_pr` derives B=N-8:
+odd B>=3/max=N ends on a final single body/CI at 7 and Last-only at 1;
+even B>=4/max=N-1 has the final body pair at 7, CI/PR at 5 and Good/Last
+with Last+PR at 1. Both require the exact capabilities/roles, every phase
+and center, initial blank/rewind proof and complete frozen body coverage.
+The 52178/52485 checkpoint above records the even-body evidence.
 
 ### Horizontal no-top-PR layout with odd body
 

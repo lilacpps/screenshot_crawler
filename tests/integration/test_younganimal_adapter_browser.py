@@ -379,7 +379,7 @@ def _top_empty_viewer_html(
 
     nav_class = " mode-nav-open" if initial_nav_open else ""
     splash_nodes = ''.join('<div class="-cv-splash"></div>' for _ in range(initial_splash_count))
-    capabilities = " mode-has-pr mode-has-comic-info mode-has-good-page" if body_count % 2 or tail_pr_count == 1 else ""
+    capabilities = " mode-has-pr mode-has-comic-info mode-has-good-page" if body_count % 2 or tail_pr_count in {1, 3} else ""
     return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread mode-has-top-emptypage{nav_class}{capabilities}">
       {splash_nodes}
       <input id="xCVSeekBar" type="range" min="1" max="{maximum}" step="2" value="{maximum if initial_seek is None else initial_seek}">
@@ -414,9 +414,9 @@ def _top_empty_viewer_html(
           if (value === 1) viewer.classList.add('mode-last-page');
           if ({str(body_count % 2 == 1).lower()} && value === {7 if tail_pr_count == 3 else 5}) viewer.classList.add('mode-ci-page','mode-pr-page');
           if ({str(body_count % 2 == 1 and tail_pr_count == 2).lower()} && [1,3].includes(value)) viewer.classList.add('mode-pr-page');
-          if ({str(tail_pr_count == 3).lower()} && [3,5].includes(value)) viewer.classList.add('mode-pr-page');
-          if ({str(tail_pr_count == 1 and body_count % 2 == 0).lower()} && value === 3) viewer.classList.add('mode-ci-page','mode-pr-page');
-          if ({str(tail_pr_count == 1 and body_count % 2 == 0).lower()} && value === 1) viewer.classList.add('mode-pr-page');
+          if ({str(tail_pr_count == 3 and body_count % 2 == 1).lower()} && [3,5].includes(value)) viewer.classList.add('mode-pr-page');
+          if ({str(tail_pr_count in {1, 3} and body_count % 2 == 0).lower()} && value === {tail_pr_count + 2}) viewer.classList.add('mode-ci-page','mode-pr-page');
+          if ({str(tail_pr_count in {1, 3} and body_count % 2 == 0).lower()} && value < {tail_pr_count + 2}) viewer.classList.add('mode-pr-page');
           if ({str(tail_pr_count == 1 and body_count % 2 == 1).lower()} && value === 3) viewer.classList.add('mode-pr-page');
           body.forEach(wrapper => wrapper.classList.add('mode-loaded','mode-rendered'));
           const active = [focus - 1, focus].filter(slot => slot >= 2 && slot < {ci_slot});
@@ -2070,7 +2070,8 @@ async def test_younganimal_initial_ui_unknown_or_unsettled_fails_before_capture(
 @pytest.mark.parametrize("draw_before_translation", [False, True])
 @pytest.mark.parametrize(("body_count", "pr_count", "force_rendered_fallback"),
                          [(11, 2, False), (9, 3, False), (3, 3, False), (44, 1, False), (4, 1, False), (4, 1, True),
-                          (11, 1, False), (5, 1, False), (5, 1, True)])
+                          (11, 1, False), (5, 1, False), (5, 1, True),
+                          (20, 3, False), (4, 3, False), (4, 3, True)])
 async def test_younganimal_shorter_top_empty_runner_captures_last_single_body_and_packages(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, draw_before_translation: bool,
     body_count: int, pr_count: int, force_rendered_fallback: bool,
@@ -2148,7 +2149,7 @@ async def test_younganimal_shorter_top_empty_runner_captures_last_single_body_an
 
 
 @pytest.mark.parametrize("mutation", ["capability", "phase", "blank", "tail", "center", "premature_end"])
-@pytest.mark.parametrize(("body_count", "pr_count"), [(11, 2), (9, 3), (44, 1), (4, 1), (11, 1), (5, 1)])
+@pytest.mark.parametrize(("body_count", "pr_count"), [(11, 2), (9, 3), (44, 1), (4, 1), (11, 1), (5, 1), (20, 3), (4, 3)])
 async def test_younganimal_shorter_top_empty_native_rejects_profile_drift(
     browser_page, monkeypatch: pytest.MonkeyPatch, mutation: str,
     body_count: int, pr_count: int,
@@ -2192,20 +2193,20 @@ async def test_younganimal_shorter_top_empty_native_rejects_profile_drift(
 
 
 @pytest.mark.parametrize("mutation", ["replacement", "seek"])
-@pytest.mark.parametrize("profile", ["three_pr", "top_empty_three_pr", "top_empty_single_pr_even_body", "top_empty_single_pr_odd_body", "top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body", "no_lead_ci", "no_lead_ci_even"])
+@pytest.mark.parametrize("profile", ["three_pr", "top_empty_three_pr", "top_empty_three_pr_even_body", "top_empty_single_pr_even_body", "top_empty_single_pr_odd_body", "top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body", "no_lead_ci", "no_lead_ci_even"])
 async def test_younganimal_tail_profile_post_encoding_mutation_saves_no_artifact(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str,
     profile: str,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    top_empty = profile in {"top_empty_three_pr", "top_empty_single_pr_even_body", "top_empty_single_pr_odd_body"}
+    top_empty = profile in {"top_empty_three_pr", "top_empty_three_pr_even_body", "top_empty_single_pr_even_body", "top_empty_single_pr_odd_body"}
     single_pr = profile in {"top_empty_single_pr_even_body", "top_empty_single_pr_odd_body"}
     no_ci = profile in {"top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body"}
     no_lead_ci = profile in {"no_lead_ci", "no_lead_ci_even"}
     no_lead = profile in {"no_lead_no_ci", "no_lead_no_ci_even_body", "no_lead_ci", "no_lead_ci_even"}
     first_slot = 0 if no_lead else 2 if top_empty else 1
     await _install_fixture(browser_page, top_empty=top_empty,
-                           top_empty_body_count=4 if profile == "top_empty_single_pr_even_body" else 11 if single_pr else 9,
+                           top_empty_body_count=20 if profile == "top_empty_three_pr_even_body" else 4 if profile == "top_empty_single_pr_even_body" else 11 if single_pr else 9,
                            top_empty_tail_pr_count=1 if single_pr else 3,
                            native_source_slots=(0, 1) if no_lead else (2, 3) if top_empty else (1,),
                            pr_tail_body_count=None if top_empty or no_ci or no_lead_ci else 11, tail_pr_count=3,

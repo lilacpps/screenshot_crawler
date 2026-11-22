@@ -346,8 +346,9 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const compactEnd = children.length % 2 === 0;
     const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
     const ciSeek = prCount + (compactEnd ? 2 : 4);
+    // Blank + three PRs supports both body parities; wrapper parity proves the terminal map.
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? (prCount === 1 ? bodyCount < 4 : bodyCount < 3 || bodyCount % 2 !== 1)
+        (topEmpty ? bodyCount < (prCount === 1 || bodyCount % 2 === 0 ? 4 : 3)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
@@ -1280,11 +1281,12 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     if ci_slot is not None and ci_slot <= body_start:
         raise UnknownPageStateError("Younganimal viewer has no contiguous body region")
     body_slots = tuple(range(body_start, body_end))
+    # Blank + three PRs admits odd B>=3 and even B>=4 under the proven range/phase map.
     if pr_tail_profile and (
         (pr_tail_top_empty and (
             body_start != 2
             or (pr_tail_count == 1 and len(body_slots) < 4)
-            or (pr_tail_count == 3 and (len(body_slots) < 3 or len(body_slots) % 2 != 1))
+            or (pr_tail_count == 3 and len(body_slots) < (4 if len(body_slots) % 2 == 0 else 3))
         ))
         or (pr_tail_odd_body and (body_start != 1 or len(body_slots) < (5 if pr_tail_count == 1 else 3) or len(body_slots) % 2 != 1))
         or (not pr_tail_top_empty and not pr_tail_odd_body and (body_start != 1 or len(body_slots) < 4 or len(body_slots) % 2 != 0))

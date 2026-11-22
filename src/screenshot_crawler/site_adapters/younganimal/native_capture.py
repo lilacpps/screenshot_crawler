@@ -301,8 +301,9 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const compactEnd = children.length % 2 === 0;
     const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
     const ciSeek = prCount + (compactEnd ? 2 : 4);
+    // Blank + three PRs supports both body parities; wrapper parity proves the terminal map.
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? (prCount === 1 ? bodyCount < 4 : bodyCount < 3 || bodyCount % 2 !== 1)
+        (topEmpty ? bodyCount < (prCount === 1 || bodyCount % 2 === 0 ? 4 : 3)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
