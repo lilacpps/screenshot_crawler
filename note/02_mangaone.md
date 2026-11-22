@@ -1,3 +1,17 @@
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+A new Manga ONE quota attempt uses a speculative before-run grant, so it does
+not authorize automatic retry. Free/owned/already-granted direct attempts can retry.
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in

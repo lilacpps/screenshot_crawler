@@ -165,8 +165,10 @@ async def test_close_propagates_cancellation_from_pending_captcha_provider_check
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [403, 429])
+@pytest.mark.parametrize("late_stop", [False, True])
 async def test_runner_propagates_relevant_http_stop_without_retrying_adapter(
-    tmp_path: Path,
+    tmp_path: Path, status: int, late_stop: bool,
 ) -> None:
     class Page:
         url = "https://first-party.test/viewer"
@@ -183,7 +185,8 @@ async def test_runner_propagates_relevant_http_stop_without_retrying_adapter(
 
         async def goto(self, *_args: object, **_kwargs: object) -> None:
             assert self.listener is not None
-            self.listener(_response(self.url, 403))
+            if not late_stop:
+                self.listener(_response(self.url, status))
 
     class Adapter(SiteAdapter):
         initialize_calls = 0
@@ -193,6 +196,8 @@ async def test_runner_propagates_relevant_http_stop_without_retrying_adapter(
 
         async def initialize(self, _page: Page) -> None:
             self.initialize_calls += 1
+            from screenshot_crawler.core.errors import PageChangeTimeoutError
+            raise PageChangeTimeoutError("initial render timeout")
 
         async def detect_state(self, _page: Page) -> PageState:
             return PageState.END
@@ -214,16 +219,23 @@ async def test_runner_propagates_relevant_http_stop_without_retrying_adapter(
 
     page = Page()
     adapter = Adapter()
-    with pytest.raises(AccessStopError, match="http_403"):
-        await CrawlerRunner(
+    runner = CrawlerRunner(
             RunConfig(
                 site="test",
                 source_url=page.url,
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
             )
-        ).run(page, adapter)
-    assert adapter.initialize_calls == 0
+        )
+
+    async def diagnostics(*args, **kwargs):
+        if late_stop:
+            page.listener(_response(page.url, status))
+
+    runner._write_failure_diagnostics = diagnostics
+    with pytest.raises(AccessStopError, match=f"http_{status}"):
+        await runner.run(page, adapter)
+    assert adapter.initialize_calls == int(late_stop)
 
 
 @pytest.mark.asyncio

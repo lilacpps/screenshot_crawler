@@ -1,5 +1,16 @@
 # Screenshot Crawler 仕様書 v1.4
 
+## Normal Batch retry (2026-11-22)
+
+Normal Batch may retry an eligible acquisition timeout once, on a fresh Page,
+against the same validated target with non-consuming direct access. Two failed
+attempts stop the Batch; explicit access rejection and safety/rights uncertainty
+stop immediately. Grant-only and BookWalker quota/resume retain their existing
+no-auto-retry rules; Yanmaga entry replay remains prohibited by its Site Policy.
+Candidate counts and --limit count the logical target once; CrawlRuns retain both
+attempts. The complete contract is in docs/DISCOVERY_AND_BATCH.md, "Normal Batch
+single retry". This does not change Adapter navigation algorithms or capture proof.
+
 ## Hanayume Catalog修復 Stage 01 / 02（2026-11-11）
 
 作品管理GUIの「Catalog修復」はhanayume専用の読み取り専用解析・確認画面。

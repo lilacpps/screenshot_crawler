@@ -22,7 +22,7 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.cli import _parser
-from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
@@ -3381,6 +3381,113 @@ async def test_cleanup_cancellation_does_not_replace_candidate_failure(
             inter_candidate_delay_ms=0,
         )
     assert "リソース消費" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "unavailable", "cancel", "cleanup-failure", "cleanup-open", "fatal"])
+async def test_normal_batch_single_retry_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    from screenshot_crawler.batch.metrics import BatchMetricsWriter
+
+    operations = []
+    events = []
+    cancelled = False
+
+    class Page(str):
+        def is_closed(self):
+            return outcome != "cleanup-open"
+
+    class Session:
+        async def new_page(self):
+            page = Page(f"page-{len([x for x in operations if x.startswith('new:')]) + 1}")
+            operations.append(f"new:{page}")
+            return page
+
+        async def close_page(self, page):
+            operations.append(f"close:{page}")
+            if outcome == "cleanup-failure":
+                raise OSError("page cleanup failed")
+
+    class Executor:
+        async def execute_candidate(self, page, candidate, **kwargs):
+            operations.append(f"execute:{page}")
+            if page == "page-1":
+                if outcome == "fatal":
+                    raise cli.BatchExecutionError(
+                        "fatal", access_stop=cli.AccessStopError(
+                            reason="http_429", site="test", url="https://example.invalid",
+                        ),
+                    )
+                raise cli.CandidateExecutionError(
+                    "first timeout", retryable=True, crawl_run_id=11,
+                    diagnostics_dir=tmp_path / "first-diagnostics",
+                ) from PageChangeTimeoutError("first timeout")
+            if outcome == "failure":
+                raise cli.CandidateExecutionError(
+                    "different second failure", retryable=True, crawl_run_id=12,
+                ) from TimeoutError("different second failure")
+            if outcome == "unavailable":
+                raise cli.AccessResourceUnavailableError("no longer available")
+            return SimpleNamespace(archive_path=tmp_path / "success.zip")
+
+        def prepare_retry_candidate(self, candidate, error, **kwargs):
+            operations.append("revalidate")
+            assert error.retryable
+            return candidate
+
+    async def sleep(seconds):
+        nonlocal cancelled
+        operations.append(f"sleep:{seconds}")
+        if outcome == "cancel":
+            cancelled = True
+
+    monkeypatch.setattr(cli.asyncio, "sleep", sleep)
+    args = SimpleNamespace(
+        output_root=tmp_path / "batch", library_dir=tmp_path / "Books",
+        max_pages=100, max_same_content=3, keep_open=False,
+        cancel_check=lambda: cancelled,
+        event_sink=lambda name, **fields: events.append((name, fields)),
+    )
+    candidates = [SimpleNamespace(
+        item_id=i, source_id=i, target_id=i, site="test", metadata={},
+        access_strategy="direct", quota_resource=None,
+    ) for i in (1, 2)]
+    metrics = BatchMetricsWriter(tmp_path / "metrics", site="test")
+    try:
+        operation = cli._execute_batch_candidates(
+            args, Session(), Executor(), candidates, phase="test", metrics=metrics,
+            inter_candidate_delay_ms=17, attempt_limit=1,
+        )
+        if outcome == "success":
+            assert await operation == (1, True)
+        else:
+            expected = cli.BatchInterruptedError if outcome == "cancel" else cli.BatchExecutionError
+            with pytest.raises(expected):
+                await operation
+        metrics.finish()
+    finally:
+        metrics.close()
+    records = [json.loads(line) for line in metrics.path.read_text(encoding="utf-8").splitlines()]
+    summary = records[-1]
+    assert summary["candidates_started"] == 1
+    assert summary["candidates_completed"] == (outcome == "success")
+    assert summary["candidates_failed"] == (outcome != "success")
+    assert summary["retry_count"] == (outcome in {"success", "failure", "unavailable"})
+    assert len([x for x in operations if x.startswith("new:")]) == (
+        2 if outcome in {"success", "failure", "unavailable"} else 1
+    )
+    assert len([x for x in events if x[0] == "candidate_started"]) == 1
+    assert len([x for x in events if x[0] == "candidate_finished"]) == 1
+    if outcome in {"success", "failure", "unavailable", "cancel"}:
+        assert operations[:4] == [
+            "new:page-1", "execute:page-1", "close:page-1", "revalidate",
+        ]
+        scheduled = next(x for x in records if x.get("event") == "retry_scheduled")
+        assert scheduled["error_type"] == "PageChangeTimeoutError"
+        assert scheduled["crawl_run_id"] == 11
+    if outcome == "failure":
+        result = next(x for x in records if x.get("event") == "result")
+        assert result["error_message"] == "different second failure"
 
 
 @pytest.mark.parametrize(

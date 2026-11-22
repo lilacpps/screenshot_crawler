@@ -9,13 +9,14 @@ import uuid
 import warnings
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.archive_order import (
     ArchiveOrderPlanningError,
@@ -51,6 +52,7 @@ from screenshot_crawler.core.errors import (
     AccessEntryNotAttemptedError,
     AccessResourceUnavailableError,
     AccessStopError,
+    PageChangeTimeoutError,
 )
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, archive_stem, package_crawl_output
@@ -384,6 +386,8 @@ class BatchExecutor:
         session = None
         observer_cleanup: Callable[[], None] = lambda: None
         speculative_grant: tuple[str | None, str | None] | None = None
+        output_dir: Path | None = None
+        crawling = False
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
@@ -525,7 +529,10 @@ class BatchExecutor:
                 crawl_result = RunResult(tuple(session.saved_pages()), PageState(session.terminal["state"]),
                                          session.terminal["reason"])
             else:
-                crawl_result = await self.runner_factory(config).run(page, adapter)
+                runner = self.runner_factory(config)
+                crawling = True
+                crawl_result = await runner.run(page, adapter)
+                crawling = False
             # A deferred commit is based on observed adapter state, never planning intent.
             if adapter is not None:
                 _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
@@ -658,6 +665,17 @@ class BatchExecutor:
             raise CandidateExecutionError(
                 f"Batch candidate failed ({self._candidate_error_context(candidate)}): {exc}",
                 resource_consumed=resource_consumed,
+                retryable=(
+                    crawling
+                    and type(exc) in {PageChangeTimeoutError, PlaywrightTimeoutError, TimeoutError}
+                    and not getattr(exc, "__notes__", ())
+                ),
+                crawl_run_id=run_id,
+                diagnostics_dir=output_dir / "diagnostics" if output_dir is not None else None,
+                stop_resource_pass=(
+                    _stop_after_resource_consumption(candidate, adapter)
+                    if resource_consumed is True else False
+                ),
             ) from exc
         finally:
             observer_cleanup()
@@ -668,6 +686,48 @@ class BatchExecutor:
                 if callable(configure_existing_grant):
                     with suppress(Exception):
                         configure_existing_grant(None)
+
+    def prepare_retry_candidate(
+        self, candidate: BatchCandidate, error: CandidateExecutionError, *,
+        library_dir: str | Path | None = None, now: datetime | None = None,
+    ) -> BatchCandidate | None:
+        """Revalidate this exact target for a non-consuming, fresh-page retry.
+
+        Never reuse a quota intent or infer a grant from a speculative local
+        reservation. The caller owns the single-retry budget and Page cleanup.
+        """
+
+        if not error.retryable or candidate.capture_session_id or candidate.local_completion:
+            return None
+        if candidate.consumes_quota and (
+            candidate.quota_commit_mode != "after_observed_consumption"
+            or error.resource_consumed is not True
+        ):
+            return None
+        current = _normalize_now(now_jst() if now is None else now)
+        policy = self.policies.create(candidate.site)
+        if not policy.allows_automatic_candidate_retry():
+            return None
+        source = self.catalog.get_source(candidate.source_id)
+        decision = policy.evaluate(
+            source, now=current,
+            quota_available=policy.available_quota(
+                self.catalog.list_sources(site=candidate.site), current,
+            ),
+        )
+        if not decision.eligible or decision.access_strategy != "direct" or decision.consumes_quota:
+            return None
+        retry = replace(
+            candidate, access_strategy="direct", reason=decision.reason,
+            consumes_quota=False, quota_resource=decision.quota_resource,
+            quota_scope=decision.quota_scope, quota_limit=decision.quota_limit,
+            quota_commit_mode=decision.quota_commit_mode,
+        )
+        self._validate_candidate(
+            retry, policy, current,
+            library_dir=Path(library_dir) if library_dir is not None else self.library_dir,
+        )
+        return retry
 
     def grant_only_skip_reason(
         self, candidate: BatchCandidate, *, now: datetime | None = None

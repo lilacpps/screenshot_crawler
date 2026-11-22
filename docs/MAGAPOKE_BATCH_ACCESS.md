@@ -416,8 +416,11 @@ native capture and canvas-source collection retain their existing requirements.
 
 An ambiguous state, a still-visible requested control, or a resource mismatch
 fails closed. Work Ticket and Premium Ticket are never implicit fallbacks for
-one another. An ordinary site-operation failure marks the current candidate
-failed and stops the surrounding Batch after bounded cleanup. Expected
+one another. An eligible normal acquisition timeout gets the shared single
+fresh-page retry after bounded cleanup and exact-target direct revalidation.
+A new ticket attempt needs confirmed persisted consumption before it can retry
+as direct; unconfirmed consumption never retries. Other failures, or a failed
+retry, mark the candidate failed and stop the surrounding Batch. Expected
 cooldown/resource-unavailable outcomes remain skips. AccessGuard stops and
 Catalog/configuration errors still stop the Batch. Ctrl+C or task cancellation
 is recorded as `interrupted`, preserves only already confirmed consumption,

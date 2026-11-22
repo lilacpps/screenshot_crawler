@@ -1,5 +1,15 @@
 # Design Decisions
 
+## 通常Batchの取得timeoutは同じ話を1回だけ再試行する（2026-11-22）
+
+手動再実行で復旧する一時的な失敗の操作負担を減らすため、初回＋1回の計2回を上限とする。
+同じエラーかどうかは比較しない。2回目も失敗した案件を個別修正の対象として診断に残す。
+対象は取得中の明示timeoutに限定し、UNKNOWN、guard、権利不明、拒否、Catalog/出力の異常は
+再試行しない。最初のPageを閉じ、現在の同一target/Policyを再検証して追加消費のないdirectで
+やり直す。チケット消費確認済みの失敗はgrantを保持してdirectへ明示的に組み直す。
+BookWalker quota/resumeと、GETで初回無料権利を開始し得るYanmagaは再試行禁止を維持する。
+全体再実行・新規quota・自動refund・grant-only replay・同一失敗fingerprint管理は導入しない。
+
 ## ComicFUZの公開無料取得はログイン状態で制限しない（2026-11-22）
 
 Discoveryと公開無料話のcaptureから匿名状態の必須チェックを除く。

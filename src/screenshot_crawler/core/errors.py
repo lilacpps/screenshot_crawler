@@ -58,6 +58,10 @@ class PageChangeTimeoutError(CrawlerError):
     """Raised when a requested page change cannot be confirmed."""
 
 
+class SameContentExceededError(PageChangeTimeoutError):
+    """The repeated-content safety guard fired; never replay the candidate."""
+
+
 class AccessEntryNotAttemptedError(PageChangeTimeoutError):
     """Adapter proves no access-entry action was attempted in this run.
 

@@ -31,6 +31,17 @@ class BatchExecutionError(RuntimeError):
 class CandidateExecutionError(BatchExecutionError):
     """A candidate failed, but the surrounding Batch may continue."""
 
+    def __init__(
+        self, message: str, *, resource_consumed: bool | None = None,
+        retryable: bool = False, crawl_run_id: int | None = None,
+        diagnostics_dir: Path | None = None, stop_resource_pass: bool = False,
+    ) -> None:
+        super().__init__(message, resource_consumed=resource_consumed)
+        self.retryable = retryable
+        self.crawl_run_id = crawl_run_id
+        self.diagnostics_dir = diagnostics_dir
+        self.stop_resource_pass = stop_resource_pass
+
 
 class BatchInterruptedError(BatchExecutionError):
     """The operator interrupted the current Batch run."""

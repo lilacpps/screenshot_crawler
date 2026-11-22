@@ -9,6 +9,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Awaitable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -2145,12 +2146,13 @@ def _candidate_failure_root(error: BaseException) -> BaseException:
     return error.__cause__ if error.__cause__ is not None else error
 
 
-async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
+async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> bool:
     """Bound cleanup and keep it from replacing the active Batch error."""
 
     task = asyncio.ensure_future(awaitable)
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        return True
     except TimeoutError:
         if not task.done():
             task.cancel()
@@ -2161,6 +2163,7 @@ async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
     except BaseException:  # noqa: BLE001 - cleanup is best effort
         if not task.done():
             task.cancel()
+    return False
 
 
 async def _run_batch_run(args: argparse.Namespace) -> None:
@@ -2749,6 +2752,114 @@ def _candidate_event_result(
     return result
 
 
+async def _execute_normal_candidate_with_retry(
+    args: argparse.Namespace, session: BrowserSession, executor: BatchExecutor,
+    candidate: BatchCandidate, *, delay_ms: int,
+    metrics: BatchMetricsWriter | None, allow_quota_access: bool,
+):
+    """Own fresh Pages for at most two attempts at this single logical candidate."""
+
+    active = candidate
+    confirmed_consumption = False
+    stop_resource_pass = False
+    try:
+        for attempt in (1, 2):
+            _execution_checkpoint(args)
+            page = None
+            failure: BaseException | None = None
+            cleanup_ok = True
+            try:
+                if not getattr(active, "local_completion", False):
+                    page = await session.new_page()
+                result = await executor.execute_candidate(
+                    page, active, output_root=args.output_root, library_dir=args.library_dir,
+                    max_pages=args.max_pages, max_same_content=args.max_same_content,
+                    **({"allow_quota_access": True} if allow_quota_access and attempt == 1 else {}),
+                )
+                if stop_resource_pass:
+                    result = replace(result, stop_resource_pass=True)
+                if attempt == 2:
+                    print("  Retry succeeded.")
+                return result
+            except CandidateExecutionError as exc:
+                failure = exc
+                confirmed_consumption |= exc.resource_consumed is True
+                stop_resource_pass |= exc.stop_resource_pass
+            except AccessResourceUnavailableError as exc:
+                failure = exc
+                if attempt == 2:
+                    failure = CandidateExecutionError(
+                        f"Retry could not acquire the same episode: {exc}",
+                    )
+                    raise failure from exc
+                raise
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                if page is not None:
+                    try:
+                        cleanup_ok = await _best_effort_cleanup(session.close_page(page))
+                        is_closed = getattr(page, "is_closed", None)
+                        if cleanup_ok and callable(is_closed):
+                            cleanup_ok = is_closed()
+                    except (KeyboardInterrupt, asyncio.CancelledError):
+                        if failure is None:
+                            raise
+                        cleanup_ok = False
+            if attempt == 2 or not cleanup_ok:
+                raise failure
+            prepare_retry = getattr(executor, "prepare_retry_candidate", None)
+            try:
+                retry = prepare_retry(candidate, failure, library_dir=args.library_dir) if callable(prepare_retry) else None
+            except (BatchExecutionError, CatalogError, SitePolicyError) as validation_error:
+                print(f"  Retry blocked by revalidation: {validation_error}", file=sys.stderr)
+                failure.add_note(f"Retry revalidation failed: {validation_error}")
+                raise failure
+            if retry is None:
+                raise failure
+            root = _candidate_failure_root(failure)
+            print(
+                f"  Attempt 1/2 failed: {root}. Retrying this episode once "
+                f"after {delay_ms / 1000:g}s (final attempt)."
+            )
+            diagnostics = getattr(failure, "diagnostics_dir", None)
+            if diagnostics is not None:
+                print(f"  First attempt diagnostics: {diagnostics}")
+            if metrics is not None:
+                metrics.schedule_retry(failure)
+            _execution_event(
+                args, "candidate_retry", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, reason="retry_scheduled",
+                payload={
+                    "attempt": 1, "max_attempts": 2,
+                    "error_type": type(root).__name__, "error_message": str(root)[:4000],
+                    "crawl_run_id": failure.crawl_run_id,
+                    "diagnostics_dir": str(diagnostics) if diagnostics is not None else None,
+                },
+            )
+            remaining = delay_ms
+            while remaining > 0:
+                _execution_checkpoint(args)
+                step = min(200, remaining)
+                await asyncio.sleep(step / 1000)
+                remaining -= step
+            _execution_checkpoint(args)
+            if metrics is not None:
+                metrics.start_retry()
+            active = retry
+    except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+        raise BatchInterruptedError(
+            "Batch interrupted during candidate attempt or retry cleanup",
+            resource_consumed=True if confirmed_consumption else None,
+        ) from exc
+    except BaseException as exc:
+        if confirmed_consumption:
+            exc.resource_consumed = True
+        raise
+
+
 async def _execute_batch_candidates(
     args: argparse.Namespace,
     session: BrowserSession,
@@ -2892,8 +3003,9 @@ async def _execute_batch_candidates(
             metrics.start_candidate(candidate)
         try:
             if not getattr(candidate, "local_completion", False):
-                page = prepared_access.page if prepared_access is not None else await session.new_page()
                 contacted_site = True
+            if grant_only and not getattr(candidate, "local_completion", False):
+                page = prepared_access.page if prepared_access is not None else await session.new_page()
             if grant_only:
                 _execution_event(
                     args, "grant_attempted", key=getattr(candidate, "discovery_key", None),
@@ -2945,14 +3057,10 @@ async def _execute_batch_candidates(
                     resource=result.resource, resource_consumed=consumed, phase=phase,
                 )
             else:
-                result = await executor.execute_candidate(
-                    page,
-                    candidate,
-                    output_root=args.output_root,
-                    library_dir=args.library_dir,
-                    max_pages=args.max_pages,
-                    max_same_content=args.max_same_content,
-                    **({"allow_quota_access": True} if allow_quota_access else {}),
+                result = await _execute_normal_candidate_with_retry(
+                    args, session, executor, candidate,
+                    delay_ms=inter_candidate_delay_ms, metrics=metrics,
+                    allow_quota_access=allow_quota_access,
                 )
                 print(f"  completed: {result.archive_path}")
             continue_after_candidate = True
@@ -3088,6 +3196,8 @@ async def _execute_batch_candidates(
                     resource_consumed=getattr(exc, "resource_consumed", None),
                     error_type=type(root).__name__,
                     error_message=str(root)[:4000] or None,
+                    crawl_run_id=exc.crawl_run_id,
+                    diagnostics_dir=exc.diagnostics_dir,
                 )
             print("FAILED (stopping batch):", file=sys.stderr)
             print(f"  item={candidate.item_id}", file=sys.stderr)

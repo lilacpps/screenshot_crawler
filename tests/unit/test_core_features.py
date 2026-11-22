@@ -19,6 +19,7 @@ from screenshot_crawler.core.errors import (
     MaxPagesExceededError,
     PageChangeTimeoutError,
     RunAlreadyExistsError,
+    SameContentExceededError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.fingerprint import fingerprint_bytes
@@ -1105,7 +1106,7 @@ async def test_runner_stops_repeated_identity_without_duplicate_capture(
     identity = ContentIdentity(page_number=1, source_id="work-1")
     adapter = FakeAdapter([PageState.CONTENT], [identity])
 
-    with pytest.raises(PageChangeTimeoutError, match="same content"):
+    with pytest.raises(SameContentExceededError, match="same content"):
         await CrawlerRunner(
             RunConfig(
                 site="test",
@@ -1124,7 +1125,7 @@ async def test_duplicate_fingerprint_wait_uses_adapter_timeout_override(
         [ContentIdentity(page_number=1, source_id="work-1")],
     )
 
-    with pytest.raises(PageChangeTimeoutError, match="same content"):
+    with pytest.raises(SameContentExceededError, match="same content"):
         await CrawlerRunner(
             RunConfig(
                 site="test",
@@ -1289,7 +1290,7 @@ async def test_runner_uses_fingerprint_when_identity_is_unavailable(
 ) -> None:
     adapter = FakeAdapter([PageState.CONTENT], [ContentIdentity()])
 
-    with pytest.raises(PageChangeTimeoutError, match="same content"):
+    with pytest.raises(SameContentExceededError, match="same content"):
         await CrawlerRunner(
             RunConfig(
                 site="test",

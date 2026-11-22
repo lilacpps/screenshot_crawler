@@ -1,5 +1,25 @@
 # Access Control / Pacing Implementation Plan
 
+## Normal Batch single retry (2026-11-22)
+
+Status: IMPLEMENTED / TARGETED AND LOCAL-BROWSER VERIFIED. Full collection
+coverage: 10,211 passed, 2 existing operator-config expectation failures, 0 skipped;
+the two tests pass against isolated tracked defaults. Windows long-path failure
+was resolved by short isolated test output paths. Details: note/00_core.md.
+No new live consumption was used.
+The current execution contract is in docs/DISCOVERY_AND_BATCH.md, "Normal Batch
+single retry". This extends ordinary normal-capture timeout handling and does
+not change the earlier grant-only phases or Adapter-internal retry algorithms.
+
+Acceptance: failure then success continues; two failures stop even with different
+errors; first/final diagnostics and independent CrawlRuns remain; logical counts
+and limits count once; fresh Pages/Adapters are cleaned up before replay;
+cleanup failure/open Page and cancellation prohibit replay. Confirmed ticket
+grants allow direct recovery with no new debit and retain pass exhaustion;
+unknown consumption and before-run reservations never authorize replay.
+AccessGuard fatal stops, including late stops during diagnostics, remain fatal.
+BookWalker quota/resume and Yanmaga entry-replay prohibitions remain in force.
+
 ## Younganimal Premium extension (2026-11-21)
 
 Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.

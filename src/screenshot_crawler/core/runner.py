@@ -17,6 +17,7 @@ from screenshot_crawler.core.errors import (
     CaptureUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
+    SameContentExceededError,
     UnknownPageStateError,
 )
 from screenshot_crawler.core.fingerprint import fingerprint_bytes
@@ -382,6 +383,8 @@ class CrawlerRunner:
             if owns_guard:
                 await self._close_guard(guard, suppress_cancellation=True)
             self._access_guard = None
+            if not isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                guard.raise_if_stopped()
             raise
 
         saved_pages: list[CapturedPage] = session.saved_pages() if session else []
@@ -511,7 +514,7 @@ class CrawlerRunner:
                 if not new_captures:
                     same_content_count += 1
                     if same_content_count >= self.config.max_same_content:
-                        raise PageChangeTimeoutError(
+                        raise SameContentExceededError(
                             "The same content/capture fingerprint repeated after the retry limit"
                         )
                     await self._adapter_call(
@@ -607,6 +610,12 @@ class CrawlerRunner:
                     guard, suppress_cancellation=primary_error is not None
                 )
             self._access_guard = None
+            if primary_error is not None and not isinstance(
+                primary_error, (KeyboardInterrupt, asyncio.CancelledError)
+            ):
+                # Diagnostics/cleanup can observe a rejection after the original
+                # timeout. A fresh-page retry must never discard that fatal stop.
+                guard.raise_if_stopped()
 
     @staticmethod
     async def _close_guard(

@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
@@ -8,6 +10,7 @@ from playwright.async_api import Browser, Page
 from screenshot_crawler.core.errors import (
     MaxPagesExceededError,
     PageChangeTimeoutError,
+    SameContentExceededError,
     UnknownPageStateError,
 )
 from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunConfig
@@ -126,6 +129,108 @@ async def install_route(page: Page, url: str, body: str) -> None:
     await page.route(url, fulfill)
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_batch_retries_one_real_click_timeout_with_a_fresh_page(
+    integration_browser: Browser, tmp_path: Path, persistent: bool,
+) -> None:
+    from screenshot_crawler import cli
+    from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
+    from screenshot_crawler.batch.metrics import BatchMetricsWriter
+    from screenshot_crawler.catalog import (
+        CatalogService,
+        ItemInput,
+        SourceInput,
+        SourceTargetInput,
+        WorkInput,
+    )
+    from screenshot_crawler.runtime_settings import SiteRuntimeSettings
+    from screenshot_crawler.site_adapters.registry import AdapterRegistry
+    from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
+    from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
+
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="retry-fixture", title="Retry fixture", genre="manga"))
+    item = catalog.create_item(ItemInput(order_label="1"), work_id=work.id)
+    source = catalog.create_source(SourceInput(site="mangaone", external_id="1", access_mode="free"), item_id=item.id)
+    url = "https://local-viewer.test/episode"
+    catalog.create_source_target(SourceTargetInput(backend="web", locator=url), source_id=source.id)
+    watchlist = synchronized_legacy_watchlist(catalog)
+    policies = SitePolicyRegistry()
+    policies.register("mangaone", MangaOneSitePolicy)
+    adapters = AdapterRegistry()
+    pages = []
+
+    class Adapter(LocalViewerAdapter):
+        async def configure_run(self, page, access_strategy):
+            assert access_strategy == "direct"
+
+        async def go_next(self, page):
+            await page.locator("#next").click(timeout=80)
+
+    adapters.register("mangaone", Adapter)
+    executor = BatchExecutor(
+        catalog, policies, adapters, watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist, library_dir=tmp_path / "Books").plan(site="mangaone")
+    assert len(plan.candidates) == 1
+    context = await integration_browser.new_context()
+
+    async def route(request):
+        html = local_viewer_html([
+            {"state": "content", "identity": "p1"},
+            {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
+            {"state": "end"},
+        ])
+        if persistent or len(pages) == 1:
+            html += '<div style="position:fixed;inset:0;z-index:99999;background:transparent"></div>'
+        await request.fulfill(body=html, content_type="text/html")
+
+    await context.route(url, route)
+
+    class Session:
+        async def new_page(self):
+            page = await context.new_page()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            await page.close()
+
+    args = SimpleNamespace(
+        output_root=tmp_path / "batch", library_dir=tmp_path / "Books",
+        max_pages=5, max_same_content=2, keep_open=False,
+    )
+    metrics = BatchMetricsWriter(tmp_path / "metrics", site="mangaone")
+    try:
+        execute = cli._execute_batch_candidates(
+            args, Session(), executor, plan.candidates, phase="fixture",
+            metrics=metrics, inter_candidate_delay_ms=0,
+        )
+        if persistent:
+            with pytest.raises(CandidateExecutionError):
+                await execute
+        else:
+            assert await execute == (1, True)
+        metrics.finish()
+    finally:
+        metrics.close()
+        await context.close()
+    assert len(pages) == 2 and all(page.is_closed() for page in pages)
+    runs = catalog.list_crawl_runs(source_id=source.id)
+    assert [run.status for run in runs] == ["failed", "failed" if persistent else "succeeded"]
+    assert len(catalog.list_artifacts(item_id=item.id)) == (0 if persistent else 1)
+    outputs = list((tmp_path / "batch" / "mangaone").iterdir())
+    # Successful packaging removes only its own run directory; failed attempts remain.
+    assert len(outputs) == (2 if persistent else 1)
+    assert all((output / "manifest.json").is_file() for output in outputs)
+    assert sum((output / "diagnostics" / "error.txt").is_file() for output in outputs) == (2 if persistent else 1)
+    if not persistent:
+        with ZipFile(catalog.list_artifacts(item_id=item.id)[0].locator) as archive:
+            assert len([name for name in archive.namelist() if name.endswith(".png")]) == 2
+
+
 @pytest.mark.parametrize(
     ("steps", "expected_pages", "expected_stop"),
     [
@@ -240,7 +345,7 @@ async def test_runner_local_dom_same_identity_hits_same_content_guard(
         ),
     )
 
-    with pytest.raises(PageChangeTimeoutError, match="same content"):
+    with pytest.raises(SameContentExceededError, match="same content"):
         await CrawlerRunner(
             RunConfig(
                 site="fixture",

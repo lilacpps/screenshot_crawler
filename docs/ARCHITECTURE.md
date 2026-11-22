@@ -1,5 +1,17 @@
 # Architecture
 
+## Normal Batch single retry (2026-11-22)
+
+CLI/GUI common orchestration owns the two-attempt budget and fresh Page lifecycle.
+BatchExecutor marks only acquisition timeouts eligible, keeps failure histories and
+confirmed consumption, and prepares a retry for the same target using current
+Catalog/Policy and existing identity/output guards. Core Runner has no Catalog or
+site-name retry branch; it preserves late AccessGuard stops through failure cleanup.
+SitePolicy.allows_automatic_candidate_retry() lets integrations prohibit entry replay;
+Yanmaga opts out. Successful retry forwards an earlier confirmed resource-pass stop.
+Metrics and job events distinguish attempt evidence from the single final candidate
+result. No Catalog migration, new browser session or generic resume is added.
+
 ## Resource-specific grant expiry (2026-11-21)
 
 `SitePolicy.access_grant_until_for_resource(started_at, resource)` supplies the
@@ -795,7 +807,7 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - crawl + packaging + Artifact persistence成功後だけItemをcompletedにする
 - archive pathはItemへ置かずArtifact locatorへ保存する
 - crawl、viewer、packaging、Catalog persistenceの失敗時はitemをcompletedにせず、quota stateは保持する
-- candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
+- 取得attemptごとに一意なrun directoryを使う。通常Batchの取得timeoutは安全なdirect再検証後に1回だけ再試行し、最終失敗で後続を停止する
 - 現行Web Executorは`backend=web` targetだけを実行し、`target_id / backend / target_key / locator`を保持する
 - `locator`を既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する
 - Adapterはbody/URLを含めないtyped access-attempt observationを、同期sinkへ消費可能操作前に報告できる。Executorは現在candidateのsite/source/resource identityを検証し、durable sinkが失敗したら操作前に停止する

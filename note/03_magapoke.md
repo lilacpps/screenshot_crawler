@@ -1,3 +1,18 @@
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+The reported next-control click timeout is eligible for normal Batch retry.
+Work/Premium Ticket failures can retry as direct only after confirmed consumption
+and persisted future grant; the entry/ticket action itself is never replayed.
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in
@@ -1038,8 +1053,9 @@ check when content is observed before any ticket click, so grant-only skips to
 the next planned candidate. Missing confirmed consumption after an attempted
 ticket click remains a failure; Core's generic
 `AccessConsumptionUnconfirmedError` contract is unchanged.
-Candidate site-operation failures stop the Batch after the current candidate
-cleanup, while cooldown/resource-unavailable outcomes remain skips. Operator cancellation records
+Candidate site-operation failures follow the common retry boundary above:
+eligible normal timeouts get one fresh-page retry, and final failures stop after
+cleanup. Cooldown/resource-unavailable outcomes remain skips. Operator cancellation records
 `interrupted`, preserves only confirmed consumption, and prevents later
 candidates from starting.
 

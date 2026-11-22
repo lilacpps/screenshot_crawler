@@ -1,5 +1,17 @@
 # Shared Access Control, Pacing, Resource Selection, and Batch Observability
 
+## Normal Batch retry / access-stop interaction (2026-11-22)
+
+The normal Batch contract in docs/DISCOVERY_AND_BATCH.md permits one acquisition
+retry only after fresh target/rights revalidation, with no new resource consumption.
+AccessGuard fatal reasons and cancellation never retry. A stop arriving during
+diagnostics or cleanup wins over the original timeout. Grant-only is unchanged.
+Metrics keep one logical candidate start/result, plus retry_scheduled (first error,
+CrawlRun ID, diagnostics path) and retry_started (attempt 2 of 2). The candidate and
+Batch retry_count are 1 only when retry starts; requests/time include both attempts
+and retry waiting. Confirmed consumption stays true even if direct retry fails or
+is cancelled. A retry success is one completed candidate, zero failed candidates.
+
 ## 1. Status
 
 This document defines the adopted shared design for runtime pacing, access fail-safe behavior, Batch access metrics, and extensible access-resource selection.
@@ -212,7 +224,9 @@ It:
 - applies to normal Batch and grant-only execution,
 - runs after the current page/candidate is safely finished or closed and before the next network candidate begins,
 - does not run solely because of a local-only skip,
-- is not multiplied by candidate-internal retries.
+- is not multiplied by Adapter-internal retries.
+- is also applied once before the single fresh-page normal Batch retry; this
+  is a separate acquisition attempt, with no duplicate inter-candidate sleep.
 
 Explicit deferred grant-only runs and normal Batch deferred grant phases sequence
 their resolver and entry by Work,
