@@ -65,6 +65,7 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
     OVERSCAN_DISPLAY_SIZE,
     OVERSCAN_NATIVE_SIZE,
     SCALED_DISPLAY_PROFILES,
+    SCALED_DISPLAY_WIDTH_TOLERANCE,
     SCALED_NATIVE_ONLY_SIZES,
     SCALED_NATIVE_SIZES,
     NativeCaptureUnavailable,
@@ -594,6 +595,10 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_encoding_fallback_reason: str | None = None
         self._capture_output_format: str | None = None
         self._capture_output_lossless: bool | None = None
+        self._capture_interruption: dict[str, Any] | None = None
+        self._capture_timing: dict[str, Any] | None = None
+        self._capture_started = 0.0
+        self._capture_stage_started = 0.0
         self._capture_page: Page | None = None
         self._response_listener: Any = None
         self._native_responses: dict[str, list[Response]] = {}
@@ -718,6 +723,8 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_encoding_fallback_reason = None
         self._capture_output_format = None
         self._capture_output_lossless = None
+        self._capture_interruption = None
+        self._capture_timing = None
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
@@ -2097,7 +2104,8 @@ class PiccomaAdapter(SiteAdapter):
                     and tuple(frame_rect) != self._scaled_frame_rect)
             ))
             or (scaled_profile and (
-                abs(rect[2] - display_width) > 0.01 or abs(rect[3] - display_height) > 0.01
+                abs(rect[2] - display_width) > SCALED_DISPLAY_WIDTH_TOLERANCE
+                or abs(rect[3] - display_height) > 0.01
                 or abs(frame_rect[2] - frame_width) > 0.01 or abs(frame_rect[3] - 1200) > 0.01
                 # Live scaled pages use either aligned left edges or a -1/3
                 # CSS-pixel offset (13565:664249). Keep both discrete profiles;
@@ -2136,13 +2144,18 @@ class PiccomaAdapter(SiteAdapter):
                     profile.display_size[1] <= VIEWPORT_HEIGHT + 1
                     and profile.display_size[0] <= profile.frame_width + 0.5
                 )
-                and abs(rect[2] - profile.display_size[0]) <= 0.01
+                and abs(rect[2] - profile.display_size[0]) <= SCALED_DISPLAY_WIDTH_TOLERANCE
                 and abs(rect[3] - profile.display_size[1]) <= 0.01
                 and abs(frame[2] - profile.frame_width) <= 0.01
                 and abs(frame[3] - VIEWPORT_HEIGHT) <= 0.01
                 and abs(frame[0] - (VIEWPORT_WIDTH - profile.frame_width) / 2) <= 0.01
                 and abs(frame[1]) <= 0.01
-                and abs(rect[0] - frame[0]) <= 0.01
+                # General scaled overscan shares the ordinary scaled offsets.
+                # Keep the legacy overscan profile's aligned-only contract.
+                and any(
+                    abs(rect[0] - frame[0] - offset) <= 0.01
+                    for offset in ((0,) if size == OVERSCAN_NATIVE_SIZE else (0, -1 / 3))
+                )
                 and abs(rect[1] - frame[1] - profile.top_offset) <= 0.01
             )
         if size != OVERSCAN_NATIVE_SIZE:
@@ -2294,6 +2307,10 @@ class PiccomaAdapter(SiteAdapter):
         # Core may request fallback targets after an adapter timeout. Native-only
         # scaled/overscan profiles and additional ordinary widths still need proof.
         snapshot = await self._reader_snapshot(page)
+        if self._capture_interruption is not None:
+            self._validate_reader_mode(snapshot)
+            if not self._matches_viewer_url(page):
+                raise UnknownPageStateError("Piccoma fallback reader identity changed after capture interruption")
         active = snapshot.get("activeIds")
         if active != [self._expected_page_id] or self._expected_page_id is None:
             raise UnknownPageStateError("Piccoma fallback target is not the expected body page")
@@ -2304,17 +2321,71 @@ class PiccomaAdapter(SiteAdapter):
             or self._uses_additional_scaled_layout(snapshot, row)
         ):
             self._validate_canvas_geometry(snapshot, row)
-            raise UnknownPageStateError("Piccoma scaled page requires verified native capture")
+            self._raise_native_fallback_error("scaled")
         if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == OVERSCAN_NATIVE_SIZE:
             self._validate_canvas_geometry(snapshot, row)
             if self._overscan_geometry_is_valid(snapshot, row):
-                raise UnknownPageStateError("Piccoma overscan page requires verified native capture")
+                self._raise_native_fallback_error("overscan")
         if isinstance(canvas, dict) and is_additional_ordinary_size(canvas.get("width"), canvas.get("height")):
             self._validate_canvas_geometry(snapshot, row)
-            raise UnknownPageStateError("Piccoma ordinary-width page requires verified native capture")
+            self._raise_native_fallback_error("ordinary-width")
         return await super().get_capture_targets(page)
 
+    def _raise_native_fallback_error(self, profile: str) -> None:
+        interruption = self._capture_interruption
+        if interruption is not None and interruption["page_id"] == self._expected_page_id:
+            # Core reaches fallback after cancelling an expired capture hook.
+            # Keep that timeout retryable; never offer a display screenshot.
+            raise PageChangeTimeoutError(
+                "Piccoma native capture timed out "
+                f"(page={interruption['page_id']}, stage={interruption['stage']}, "
+                f"elapsed_ms={interruption['elapsed_ms']})"
+            )
+        raise UnknownPageStateError(f"Piccoma {profile} page requires verified native capture")
+
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._capture_interruption = None
+        self._capture_started = self._capture_stage_started = time.monotonic()
+        self._capture_timing = {
+            "page_id": self._expected_page_id, "stage": "reader_validation",
+            "stages_ms": {}, "outcome": "running",
+        }
+        outcome = "failed"
+        try:
+            result = await self._capture_verified_page(page)
+            outcome = "succeeded"
+            return result
+        except asyncio.CancelledError:
+            # Cancellation itself still propagates. Only a later Core fallback
+            # request may interpret this as its own expired capture deadline.
+            self._capture_interruption = {
+                "page_id": self._expected_page_id,
+                "stage": self._capture_timing.get("failure_stage", self._capture_timing["stage"]),
+                "elapsed_ms": round((time.monotonic() - self._capture_started) * 1000, 3),
+            }
+            outcome = "cancelled"
+            raise
+        finally:
+            self._mark_capture_stage(self._capture_timing["stage"])
+            self._capture_timing["outcome"] = outcome
+            self._capture_timing["elapsed_ms"] = round(
+                (time.monotonic() - self._capture_started) * 1000, 3
+            )
+            if outcome != "succeeded":
+                self._capture_timing.setdefault("failure_stage", self._capture_timing["stage"])
+
+    def _mark_capture_stage(self, stage: str) -> None:
+        timing = self._capture_timing
+        if timing is None:
+            return
+        now = time.monotonic()
+        previous = timing["stage"]
+        spans = timing["stages_ms"]
+        spans[previous] = round(spans.get(previous, 0) + (now - self._capture_stage_started) * 1000, 3)
+        timing["stage"] = stage
+        self._capture_stage_started = now
+
+    async def _capture_verified_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         self._capture_method = "not_captured"
         self._capture_source_native = False
         self._capture_source_mime = None
@@ -2338,6 +2409,8 @@ class PiccomaAdapter(SiteAdapter):
         if not self._canvas_renderability_is_valid(row):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         expected_size = self._validate_canvas_geometry(before, row)
+        if self._capture_timing is not None:
+            self._capture_timing["native_size"] = list(expected_size)
         overscan = self._overscan_geometry_is_valid(before, row)
         native_only_scaled = (expected_size in SCALED_NATIVE_ONLY_SIZES
                               or self._uses_additional_scaled_layout(before, row))
@@ -2363,6 +2436,7 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma active canvas generation cannot be monitored")
         guide_style = await self._hide_reading_guide(page, before)
         try:
+            self._mark_capture_stage("native_capture")
             native_result = None
             try:
                 native_result = await capture_native_tile_replay(
@@ -2381,6 +2455,7 @@ class PiccomaAdapter(SiteAdapter):
                                 and self._uses_additional_scaled_layout(before, row)))
                         else MAX_NATIVE_EPISODE_BYTES
                     ),
+                    report_stage=self._mark_capture_stage,
                 )
             except NativeCaptureUnavailable as exc:
                 self._native_bytes_read += exc.bytes_read
@@ -2413,12 +2488,14 @@ class PiccomaAdapter(SiteAdapter):
                         f" (native_fallback={self._capture_fallback_reason}, "
                         f"expected={expected_size[0]}x{expected_size[1]})"
                     )
+                self._mark_capture_stage("rendered_capture")
                 result = await capture_locator(target)
                 self._capture_method = "core_canvas_or_locator_png"
                 self._capture_source_native = False
                 self._capture_source_mime = None
                 self._capture_backdrop = None
                 self._capture_encoding_fallback_reason = None
+            self._mark_capture_stage("post_capture_validation")
             after = await self._reader_snapshot(page)
             self._validate_capture_post_state(
                 page, before, after, current, row, expected_size, result
@@ -2427,6 +2504,7 @@ class PiccomaAdapter(SiteAdapter):
                 page, target, target_baseline_signature
             )
             if native_result is not None:
+                self._mark_capture_stage("source_revalidation")
                 try:
                     fallback_reason = await validate_native_capture_still_current(
                         page, target, native_result
@@ -2453,6 +2531,7 @@ class PiccomaAdapter(SiteAdapter):
                     self._capture_source_native = False
                     self._capture_source_mime = None
                     self._capture_backdrop = None
+                    self._mark_capture_stage("rendered_capture")
                     result = await capture_locator(target)
                     after = await self._reader_snapshot(page)
                     self._validate_capture_post_state(
@@ -2469,7 +2548,12 @@ class PiccomaAdapter(SiteAdapter):
                 "image/webp",
             }
             return (result,)
+        except BaseException:
+            if self._capture_timing is not None:
+                self._capture_timing["failure_stage"] = self._capture_timing["stage"]
+            raise
         finally:
+            self._mark_capture_stage("cleanup")
             try:
                 await self._restore_reading_guide(page, guide_style)
             finally:
@@ -2702,6 +2786,12 @@ class PiccomaAdapter(SiteAdapter):
         }
         if self._body_wait_failure is not None:
             metadata["piccoma_body_wait_failure"] = self._body_wait_failure
+        if self._capture_interruption is not None:
+            metadata["piccoma_capture_interruption"] = dict(self._capture_interruption)
+        if self._capture_timing is not None and self._capture_timing["outcome"] != "succeeded":
+            metadata["piccoma_capture_timing"] = {
+                **self._capture_timing, "stages_ms": dict(self._capture_timing["stages_ms"]),
+            }
         return metadata
 
     def get_output_metadata(self) -> dict[str, str | None]:

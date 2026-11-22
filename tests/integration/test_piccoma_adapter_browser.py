@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import math
@@ -83,6 +84,9 @@ CENTERED_1342 = {
 }
 # Independent measured and synthetic expectations for actual-frame selection.
 DYNAMIC_DISPLAYS = {
+    (866, 1342, 777): (777.578125, 1205),
+    (867, 1342, 775): (775.25, 1200),
+    (776, 1200, 775): (775.34375, 1199),
     (898, 1342, 807): (807.65625, 1207),
     (900, 1342, 807): (807.4375, 1204),
     (901, 1342, 807): (807, 1202),
@@ -598,16 +602,22 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
 
 
 @pytest.mark.parametrize("delay", [700, -1])
-@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (902, 1342), (905, 1342), (907, 1342), (910, 1342), (898, 1342), (887, 1342), (901, 1342), (550, 834), (552, 834)])
+@pytest.mark.parametrize(("width", "height", "left_offset"), [
+    (w, h, 0) for w, h in [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (902, 1342), (905, 1342), (907, 1342), (910, 1342), (898, 1342), (887, 1342), (901, 1342), (550, 834), (552, 834)]
+] + [(866, 1342, -1 / 3)])
 async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnostics(
-    browser_page: Page, tmp_path: Path, delay: int, width: int, height: int
+    browser_page: Page, tmp_path: Path, delay: int, width: int, height: int, left_offset: float
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page, width=width, height=height, transition_delay_ms=delay,
-                                scaled_frame_width=807 if width == 898 else 793 if width in {887, 901} else 791 if width in {550, 552} else None)
+                                scaled_frame_width=777 if width == 866 else 807 if width == 898 else 793 if width in {887, 901} else 791 if width in {550, 552} else None)
     adapter.page_change_timeout_ms = 1200
     previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
+    if left_offset:
+        await browser_page.locator("#p2 .PCM-viewer2_zoomPageWrap").evaluate(
+            "(node, offset)=>node.style.left=offset+'px'", left_offset
+        )
     if delay < 0:
         with pytest.raises(PageChangeTimeoutError) as error:
             await adapter.wait_for_change(browser_page, previous)
@@ -631,13 +641,15 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
         assert (canvas["width"], canvas["height"]) == (width, height)
         assert canvas["loaded"] is True and canvas["inFrame"] is False
         assert canvas["rect"][0] < final["frame_rect"][0]
-        assert canvas["rect"][0] == final["frame_rect"][0] - final["frame_rect"][2] - 10
+        assert canvas["rect"][0] == pytest.approx(
+            final["frame_rect"][0] - final["frame_rect"][2] - 10 + left_offset, abs=0.01
+        )
 
         # A later diagnostics screenshot may see a settled page; the stored
         # failure-time samples must remain unchanged and reach metadata.json.
         await browser_page.locator("#p2").evaluate("node=>node.style.transform='none'")
         settled = await adapter._reader_snapshot(browser_page)
-        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 898, 901, 902, 910})
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 866, 898, 901, 902, 910})
         await write_diagnostics(
             browser_page, tmp_path, metadata={"adapter_debug": metadata}, error=error.value
         )
@@ -647,7 +659,7 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
     else:
         await adapter.wait_for_change(browser_page, previous)
         settled = await adapter._reader_snapshot(browser_page)
-        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 898, 901, 902, 910})
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width not in {552, 763, 866, 898, 901, 902, 910})
     assert (await adapter.get_content_identity(browser_page)).page_id == "p2"
     assert "piccoma_body_wait_failure" not in await adapter.collect_debug_metadata(browser_page)
     assert await browser_page.evaluate("window.forbiddenClicks") == 1
@@ -668,7 +680,11 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
                    "async_paint_change", "wrong_scale", "frame_change")
                   if (w, h, frame) in {(898, 1342, 807), (903, 1342, 807), (887, 1342, 793), (901, 1342, 793), (550, 834, 791), (552, 834, 791)}
                   else (None,))
-])
+] + [(w, h, fault, 775) for w, h in ((867, 1342), (776, 1200)) for fault in (
+    "width_rounding", "width_rounding_excess", "async_width_rounding",
+)] + [(866, 1342, fault, 777) for fault in (
+    "observed_left_offset", "unknown_left_offset", "async_left_offset", "missing_source", "extra_paint",
+)])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None,
     width: int, height: int, scaled_frame_width: int | None,
@@ -696,7 +712,13 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         if fault == "source_budget_exhausted"
         else 0 if width == 763 else piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES
     )
-    if fault == "frame_change":
+    if fault in {"width_rounding", "width_rounding_excess"}:
+        await browser_page.locator("#p1 canvas").evaluate(
+            "(node, width) => node.style.width = width + 'px'",
+            DYNAMIC_DISPLAYS[(width, height, 775)][0]
+            + (1 / 64 if fault == "width_rounding" else 2 / 64),
+        )
+    elif fault == "frame_change":
         await browser_page.locator("#js_frame").evaluate("n=>n.style.width='808px'")
     elif fault == "unknown_paint_role":
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.className='unknown'")
@@ -704,12 +726,17 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='800px'")
     elif fault == "wrong_scale":
         await browser_page.locator("canvas").evaluate("n=>n.style.height='1198px'")
-    elif fault in {"async_paint_change", "async_left_offset"}:
+    elif fault in {"async_paint_change", "async_left_offset", "async_width_rounding"}:
         evaluate = piccoma_native_capture_module._bounded_evaluate
         async def mutate_after_replay(subject, expression, argument=None, *, timeout_seconds):
             result = await evaluate(subject, expression, argument, timeout_seconds=timeout_seconds)
             if "NativeCapture.replay" in expression:
-                if fault == "async_left_offset":
+                if fault == "async_width_rounding":
+                    await browser_page.locator("#p1 canvas").evaluate(
+                        "(node, width) => node.style.width = width + 'px'",
+                        DYNAMIC_DISPLAYS[(width, height, 775)][0] + 1 / 64,
+                    )
+                elif fault == "async_left_offset":
                     await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate("n=>n.style.left='0px'")
                 else:
                     await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='800px'")
@@ -727,7 +754,7 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         async def ambiguous_source(*_args):
             return "source_response_became_ambiguous"
         monkeypatch.setattr(piccoma_adapter_module, "validate_native_capture_still_current", ambiguous_source)
-    if fault not in {None, "encoder_failure", "observed_left_offset"}:
+    if fault not in {None, "encoder_failure", "observed_left_offset", "width_rounding"}:
         with pytest.raises(UnknownPageStateError) as error:
             await adapter.capture_page(browser_page)
         if fault == "async_left_offset":
@@ -795,20 +822,56 @@ async def test_piccoma_native_only_core_fallback_never_saves_a_screenshot(
 
     async def unavailable_capture(_page):
         if timed_out:
-            raise PageChangeTimeoutError("synthetic adapter capture timeout")
+            adapter._mark_capture_stage("source_body_read")
+            await asyncio.Event().wait()
 
     async def forbidden_screenshot(_target):
         raise AssertionError("Core must not screenshot a page requiring native proof")
 
-    monkeypatch.setattr(adapter, "capture_page", unavailable_capture)
+    monkeypatch.setattr(
+        adapter, "_capture_verified_page" if timed_out else "capture_page", unavailable_capture
+    )
     monkeypatch.setattr(runner_module, "capture_locator", forbidden_screenshot)
     config = RunConfig(site="piccoma", source_url=SOURCE_URL,
-                       output_dir=tmp_path / "crawl", diagnostics_dir=tmp_path / "diagnostics")
-    with pytest.raises(UnknownPageStateError, match="requires verified native capture"):
-        await runner_module.CrawlerRunner(config).run(browser_page, adapter)
+                       output_dir=tmp_path / "crawl", diagnostics_dir=tmp_path / "diagnostics",
+                       adapter_timeout_grace_ms=0)
+
+    class ShortCaptureRunner(runner_module.CrawlerRunner):
+        async def _adapter_call(self, awaitable, operation, *, timeout_ms=None):
+            return await super()._adapter_call(
+                awaitable, operation, timeout_ms=10 if operation == "capture_page" else timeout_ms
+            )
+
+    error_type = PageChangeTimeoutError if timed_out else UnknownPageStateError
+    message = "native capture timed out" if timed_out else "requires verified native capture"
+    with pytest.raises(error_type, match=message):
+        await ShortCaptureRunner(config).run(browser_page, adapter)
+    diagnostics = json.loads((config.diagnostics_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert diagnostics["error_type"] == error_type.__name__
+    interruption = diagnostics["adapter_debug"].get("piccoma_capture_interruption")
+    if timed_out:
+        assert interruption["page_id"] == "p1"
+        assert interruption["stage"] == "source_body_read"
+        assert interruption["elapsed_ms"] > 0
+        timing = diagnostics["adapter_debug"]["piccoma_capture_timing"]
+        assert timing["failure_stage"] == "source_body_read"
+        assert timing["outcome"] == "cancelled"
+        assert timing["stages_ms"]["source_body_read"] > 0
+    else:
+        assert interruption is None
     manifest = json.loads((config.output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["pages"] == []
     assert not list(config.output_dir.glob("page-*"))
+    if timed_out and width == 1884:
+        original_url = browser_page.url
+        await browser_page.evaluate("url=>history.replaceState(null,'',url)", SOURCE_URL + "?changed=1")
+        with pytest.raises(UnknownPageStateError, match="reader identity changed"):
+            await adapter.get_capture_targets(browser_page)
+        await browser_page.evaluate("url=>history.replaceState(null,'',url)", original_url)
+        # A deadline does not override a subsequently invalid target geometry.
+        await browser_page.locator("#p1 canvas").evaluate("n=>n.style.height='1198px'")
+        with pytest.raises(UnknownPageStateError, match="supported viewport"):
+            await adapter.get_capture_targets(browser_page)
 
 
 @pytest.mark.parametrize(("width", "left_offset"), [(757, 0), (763, 0), (764, -1 / 3), (773, 0), (775, 0), (777, 0), (800, 0), (801, 0), (842, 0), (844, 0)])
@@ -3838,6 +3901,116 @@ def _piccoma_batch_setup(
         ),
     ).candidates[0]
     return catalog, work, item, source, target, policies, adapters, candidate
+
+
+@pytest.mark.parametrize("retry_fails", [False, True])
+async def test_piccoma_native_timeout_retries_same_grant_once_without_screenshot(
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retry_fails: bool,
+) -> None:
+    from screenshot_crawler.batch.metrics import BatchMetricsWriter
+    from screenshot_crawler.core.runner import CrawlerRunner
+
+    monkeypatch.setattr("screenshot_crawler.batch.executor.now_jst", lambda: BATCH_NOW)
+    catalog, _work, item, source, _target, policies, adapters, candidate = (
+        _piccoma_batch_setup(tmp_path, manual_grant=True)
+    )
+    created, pages, closed, events = [], [], [], []
+
+    class DeadlineAdapter(PiccomaAdapter):
+        async def _capture_verified_page(self, page):
+            if len(created) == 1 or retry_fails:
+                self._mark_capture_stage("replay")
+                await asyncio.Event().wait()
+            return await super()._capture_verified_page(page)
+
+    def make_adapter():
+        adapter = DeadlineAdapter()
+        created.append(adapter)
+        return adapter
+
+    adapters = AdapterRegistry()
+    adapters.register("piccoma", make_adapter)
+
+    class DeadlineRunner(CrawlerRunner):
+        def __init__(self, config):
+            super().__init__(replace(config, adapter_timeout_grace_ms=0))
+
+        async def _adapter_call(self, awaitable, operation, *, timeout_ms=None):
+            if operation == "capture_page" and (len(created) == 1 or retry_fails):
+                timeout_ms = 10
+            return await super()._adapter_call(awaitable, operation, timeout_ms=timeout_ms)
+
+    jpeg = _synthetic_tile_jpeg(width=20, height=30)
+
+    async def route_handler(route):
+        assert route.request.method in {"GET", "HEAD"}, "Retry must never redeem a ticket"
+        path = route.request.url.split("?", 1)[0]
+        if path == NATIVE_SOURCE_URL.split("?", 1)[0]:
+            await route.fulfill(status=200, body=jpeg, content_type="image/jpeg")
+        elif path.endswith(f"/web/product/{PRODUCT_ID}/episodes"):
+            await route.fulfill(status=200, body=_listing_html(status="granted"), content_type="text/html; charset=utf-8")
+        elif path == SOURCE_URL:
+            html = _native_viewer_html(
+                width=20, height=30, scaled_frame_width=800,
+            ).replace("</body>", """<script>window.step=direction=>{
+              if(direction!==1)return;
+              document.getElementById('p1').classList.remove('current');
+              document.getElementById('last').classList.add('current');
+              document.body.classList.add('PCM-viewer2_last');
+            };</script></body>""")
+            await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+        else:
+            await route.fulfill(status=404, body="missing")
+
+    class Session:
+        async def new_page(self):
+            page = await browser_page.context.new_page()
+            pages.append(page)
+            await page.route("**/*", route_handler)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+            await page.close()
+
+    executor = BatchExecutor(
+        catalog, policies, adapters, runner_factory=DeadlineRunner,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library", runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+    args = SimpleNamespace(
+        output_root=tmp_path / "batch-output", library_dir=tmp_path / "library",
+        max_pages=1, max_same_content=2, keep_open=False,
+        event_sink=lambda name, **fields: events.append((name, fields)),
+    )
+    metrics = BatchMetricsWriter(tmp_path / "metrics", site="piccoma")
+    try:
+        operation = cli._execute_batch_candidates(
+            args, Session(), executor, [candidate], phase="test", metrics=metrics,
+            inter_candidate_delay_ms=0,
+        )
+        if retry_fails:
+            with pytest.raises(CandidateExecutionError, match="native capture timed out"):
+                await operation
+        else:
+            assert await operation == (1, True)
+        metrics.finish()
+    finally:
+        metrics.close()
+    assert len(created) == len(pages) == len(closed) == 2
+    assert all(page.is_closed() for page in pages)
+    runs = catalog.list_crawl_runs(source_id=source.id)
+    assert [run.status for run in runs] == ["failed", "failed" if retry_fails else "succeeded"]
+    assert [run.access_strategy for run in runs] == ["direct", "direct"]
+    assert runs[0].error_type == "PageChangeTimeoutError"
+    assert catalog.get_item(item.id).status == ("pending" if retry_fails else "completed")
+    assert len(catalog.list_artifacts(item_id=item.id)) == (0 if retry_fails else 1)
+    assert catalog.get_source(source.id).quota_started_at is None
+    assert len([event for event, _ in events if event == "candidate_retry"]) == 1
+    summary = json.loads(metrics.path.read_text(encoding="utf-8").splitlines()[-1])
+    assert summary["retry_count"] == 1
+    assert summary["candidates_completed"] == (0 if retry_fails else 1)
+    assert summary["candidates_failed"] == (1 if retry_fails else 0)
 
 
 @pytest.mark.parametrize("manual_grant", [False, True])

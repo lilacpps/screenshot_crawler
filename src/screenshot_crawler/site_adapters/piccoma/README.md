@@ -66,6 +66,22 @@ must fit the1904px viewport. Display follows the site's
 quantized down to1/64 CSS px, and centered top. The raw full-height episode
 frame is bound after p1 and cannot drift.
 
+Scaled canvas width allows 1/64 CSS px (0.015625) of rounding difference
+from the profile, including dedicated profiles and centered overscan. Height,
+frame and offset tolerances remain 0.01 CSS px. Native paint validation uses
+the same width and right-overhang allowance; raw geometry must remain exactly
+equal throughout capture. This accepts Item/Source 46207's saved
+775.2604370117188px display versus derived 775.25px. Saved failure geometry
+and artificial-browser regression tests support this change; a new live
+capture has not been verified. Restart the Batch worker to load the fix.
+
+Actual-frame scaled overscan accepts the same discrete left offsets 0/-1/3
+within 0.01 CSS px as ordinary scaled pages; the special 763x1200 legacy
+overscan profile remains aligned-only. This fixes STEP47 (`281:19031`) p2,
+whose 1205px display was loaded but never admitted as ready at offset -1/3.
+Centered top/frame, exact display profile, three stable samples, transition
+exclusion and full native source/paint proof still apply. See [current evidence](../../../../note/09_piccoma.md#scaled-overscan-left-alignment-during-page-readiness-2026-11-22).
+
 Source dimensions alone do not select native-only scaling: it requires
 the actual1200px-high reader frame. Existing small1:1 layouts retain their
 Locator-PNG behavior, and ordinary/dedicated profiles retain their contracts.
@@ -109,7 +125,8 @@ suites were not required for this site-local change; live verification is above.
 The 1128x1600 profile was verified on `3312:158685` (Item/Source 41123),
 which failed before p1 with the same supported-viewport error. It requires
 the measured 845.2916870117188x1199 display, 845x1200 frame, +0.5 top offset
-and discrete left offsets 0/-1/3 within 0.01 CSS px. It has the same complete
+and discrete left offsets 0/-1/3 within 0.01 CSS px (canvas width allows
+1/64 CSS px). It has the same complete
 23x32 / 739-event tile protocol as 1125x1600 but a separate display/paint
 profile. Source, paint, generation and lossless RGBA proof remain mandatory;
 there is no unproven screenshot fallback, dimension-only attribution or
@@ -122,6 +139,19 @@ synthetic fixture. There were 0 skips; Ruff passed. Other entry/Discovery,
 standalone Research and full-repository suites were not rerun for this addition.
 
 ## Runtime pacing
+
+Native-only capture deadline recovery: after Core cancels a timed-out capture,
+fallback still refuses a screenshot but preserves `PageChangeTimeoutError`
+after validating the same expected page and geometry. Normal Batch may then
+retry once with freshly revalidated non-consuming direct access. A missing
+native proof or invalid target remains UNKNOWN; operator cancellation still
+propagates. Failure diagnostics record page, interrupted stage, total elapsed
+milliseconds and per-stage times in `adapter_debug.piccoma_capture_timing`.
+Source fetch, replay, WebP encoding and final validation are separate stages;
+cleanup does not erase the interrupted stage. No URL/source bytes or credentials
+are added, and successful-page manifests omit timings. The timeout error itself
+includes page/stage/elapsed time for existing Batch metrics. Restart the worker
+to load this behavior. See [current evidence and limits](../../../../note/09_piccoma.md#native-capture-timeout-and-failure-stage-diagnostics-2026-11-22).
 
 Phase 07 Stage A passed independent review. The distributed root `crawler.yaml` sets Piccoma `page_turn_delay_ms` to 200 and keeps `inter_candidate_delay_ms` at 3000 with the existing stop flags enabled. Both manual CLI and Batch use the existing site-neutral settings loader and resolve this value into `RunConfig`; no Piccoma-specific fallback or shared runtime change was added. If the Piccoma setting is absent, the common 1000ms fallback still applies. The delay remains once after save/progress and before the initial `go_next`, outside the page-change timeout. Rendering stability checks remain unchanged.
 
@@ -144,7 +174,8 @@ the former 1152-event per-target limit.
 
 Scaled capture includes the exact backing/grid pair:
 1441x2048, 29x41 (1189 draws plus context creation and two backing resets).
-It requires display 844+1/3 by 1200 within 0.01 CSS px, frame 844x1200, top
+It requires display 844+1/3 by 1200 (width tolerance 1/64 CSS px, height
+0.01 CSS px), frame 844x1200, top
 offset 0 and the existing discrete left offsets 0 or -1/3. The 1125x1600 and
 1350x1920 profiles retain their previous 843.046875x1199 presentation,
 843x1200 frame and +0.5 top offset. Other backing sizes require the bounded actual-frame protocol above;
@@ -156,7 +187,7 @@ extra paint operation fails the exact operation-count proof on this profile.
 
 The new profile requires the existing four-node scaled paint roles/styles
 with 844px ancestors. Its observed roughly 1/3 CSS-pixel right overhang is
-bounded by the exact profile widths plus the existing 0.01 tolerance; this
+bounded by the exact profile widths plus the 1/64 CSS px width tolerance; this
 does not claim covering-white compositing. Complete source/destination grids,
 fractional draw arguments, one source/load generation, unique baseline JPEG
 response, stable paint/target/raw geometry and exact lossless RGBA round-trip
@@ -681,7 +712,8 @@ Dedicated native replay profiles retain 1125x1600 (23x32 grid), 1350x1920
 (27x39 grid), 1128x1600 (23x32), 1441x2048 (29x41), and 1884x2819
 (38x57), with the additional display profiles described above. The first two
 use the same observed
-843.046875x1199 display profile within the existing 0.01 tolerance, left
+843.046875x1199 display profile (width tolerance 1/64 CSS px, height
+0.01 CSS px), left
 offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
 remain explicit for these dedicated profiles; additional sizes use the bounded
 actual-frame protocol above without dimension-only attribution.
@@ -738,7 +770,8 @@ Ten pages have x=530.5; ten have x=530.1666870117188. The latter offset
 The existing width tolerance already accepts this measured display width.
 
 For 1125x1600 and 1350x1920, the adapter accepts left offsets 0 and
--1/3 CSS px, each within the existing 0.01 tolerance. It does not accept the
+-1/3 CSS px. Width tolerance is 1/64 CSS px; height and offset tolerances
+remain 0.01 CSS px. It does not accept the
 intervening range. In-frame/viewport/DPR, dimensions, top offset, paint path,
 source binding, complete draw grid, generation, lossless RGBA output and exact
 raw geometry equality during capture remain mandatory. No renderer resize,
