@@ -123,15 +123,20 @@ async def _run_discovery(browser_page, tmp_path: Path, html: str, *, scope=None,
     return catalog, result, service
 
 
+@pytest.mark.parametrize("account_ui", [
+    {}, {"signin": False}, {"signin": False, "signout": True},
+    {"delayed_mutation": "anonymous"},
+], ids=["anonymous", "no-account-links", "signed-in", "hydrating-account-ui"])
 async def test_comicfuz_full_discovery_reconciles_catalog_and_global_positions(
     browser_page,
     tmp_path: Path,
+    account_ui,
 ) -> None:
     chapters = [("30", "第3話"), ("20", "第2話"), ("10", "第1話(後編)"), ("1", "第1話(前編)")]
     catalog, result, service = await _run_discovery(
         browser_page,
         tmp_path,
-        _listing_html(chapters, free_ids={"20", "1"}),
+        _listing_html(chapters, free_ids={"20", "1"}, **account_ui),
     )
 
     sources = catalog.list_sources(site="comicfuz")
@@ -258,13 +263,10 @@ async def test_comicfuz_access_refresh_and_incomplete_full_preserve_catalog_hist
     [
         {"canonical_work_id": "999"},
         {"current_work_id": "999"},
-        {"signin": False},
-        {"signout": True},
         {"add_control": True},
         {"replace_on_scroll": True},
         {"delayed_mutation": "route"},
         {"delayed_mutation": "canonical"},
-        {"delayed_mutation": "anonymous"},
     ],
 )
 async def test_comicfuz_unverified_listing_fails_before_source_upsert(

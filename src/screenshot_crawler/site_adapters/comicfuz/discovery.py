@@ -1,4 +1,4 @@
-"""Anonymous public-list Discovery for ComicFUZ.
+"""Public-list Discovery for ComicFUZ, independent of login state.
 
 The adapter consumes the public chapter metadata rendered by the work page and
 cross-checks it against the row DOM before returning any records. It never
@@ -230,28 +230,12 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         page: Page,
         target_parts: ComicFuzWorkParts,
     ) -> None:
+        # Header account links change after hydration and do not prove episode
+        # access. The exact row-local public-free marker is checked separately.
         identity = await page.evaluate(
             r"""() => {
               const canonical = document.querySelector('link[rel="canonical"]')?.href || null;
-              const signInLinks = [...document.querySelectorAll('a[href]')]
-                .filter(a => {
-                  const url = new URL(a.href, location.href);
-                  return url.origin === location.origin && url.pathname === '/account/signin';
-                })
-                .filter(a => {
-                  const style = getComputedStyle(a);
-                  return style.display !== 'none' && style.visibility !== 'hidden'
-                    && a.getClientRects().length > 0;
-                }).length;
-              const signedInLinks = [...document.querySelectorAll('a[href]')]
-                .filter(a => /\/(?:account\/(?:signout|logout)|logout|signout)(?:\/|$)/i
-                  .test(new URL(a.href, location.href).pathname))
-                .filter(a => {
-                  const style = getComputedStyle(a);
-                  return style.display !== 'none' && style.visibility !== 'hidden'
-                    && a.getClientRects().length > 0;
-                }).length;
-              return {url: location.href, canonical, signInLinks, signedInLinks};
+              return {url: location.href, canonical};
             }"""
         )
         if not isinstance(identity, Mapping):
@@ -262,10 +246,6 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         if self._same_work_page(str(identity.get("canonical") or ""), expected_path) is not True:
             raise DiscoveryIncompleteError(
                 "ComicFUZ canonical work identity does not match Watchlist"
-            )
-        if identity.get("signInLinks") != 1 or identity.get("signedInLinks") != 0:
-            raise DiscoveryIncompleteError(
-                "ComicFUZ anonymous state could not be positively confirmed"
             )
 
     @staticmethod

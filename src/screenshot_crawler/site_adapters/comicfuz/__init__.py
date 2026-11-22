@@ -1,4 +1,4 @@
-"""ComicFUZ anonymous Discovery and viewer support."""
+"""ComicFUZ public-free Discovery and viewer support."""
 
 from screenshot_crawler.site_adapters.comicfuz.adapter import ComicFuzAdapter
 from screenshot_crawler.site_adapters.comicfuz.discovery import (

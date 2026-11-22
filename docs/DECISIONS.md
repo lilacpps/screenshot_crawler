@@ -1,5 +1,40 @@
 # Design Decisions
 
+## ComicFUZの公開無料取得はログイン状態で制限しない（2026-11-22）
+
+Discoveryと公開無料話のcaptureから匿名状態の必須チェックを除く。
+初期実装の未ログイン限定条件がshared Chromeの既存loginと衝突していた。
+ヘッダーのログインリンクはhydration後にマイページへ変わるため、話のアクセス可否の証拠にはしない。
+対象作品・話の一致、native一覧とDOMの完全な対応、行内の明確な`無料`表示を引き続き必須とする。
+ログイン済みという理由でowned/grant/quotaをfreeに変換せず、ticket/charge/medal/purchase操作も追加しない。
+この変更はComicFUZ Adapter内に限定し、Core・Policy・Catalog・browser sessionの契約は変更しない。
+
+ComicFUZのnative `chapterMainName`はDiscoveryの行ラベルと同じ`split/join`で空白を正規化して照合する。
+全角空白・連続空白の差だけを吸収し、作品ID・話ID・文字や記号の不一致は引き続き停止する。
+work 3140 / chapter 82123で確認した最終本文+extraから残りextraペアへの過渡的重なりは、
+検証済みthree-extra manifest・本文全保存・直前group・次の正確なindex/roleを条件にwait内だけ許可する。
+重なりのcapture、任意のextra列、タイムアウト後の追加送りは許可しない。
+ログイン時に追加される同classの案内欄は、既存の終端おすすめ欄と区別する。
+終端は既存の正確なactionラベル、見出しに一致する一意なおすすめ欄、話タイトル、本文完了の証拠を必要とする。
+
+chapter 81871（本文1枚）で確認したthree-extraの別配置にも対応する。
+本文だけの最終group後は`(linked extra, unlinked extra)`、次に最後の`(linked extra)`を
+それぞれADとして一度だけ送る。従来の本文+最初のextra後に残りextraペアを送る経路も維持する。
+全本文保存・同じnative manifest・正確なindex/role・直前groupを必要とし、
+送り済みgroupの履歴は最大2つの既知遷移に限定する。付録をcaptureせず、順序飛ばし・
+繰り返し・終端未確認を成功扱いにしない。話IDやタイトルによる分岐は追加しない。
+
+chapter 80350の最終本文見開きへの遷移で、次の本文2枚に最初のextraまで加える予測バグを修正する。
+next body groupが2枚ならその2枚だけを期待し、最後の本文が1枚のときだけ最初のextraを添える。
+単ページ開始・見開き開始のどちらでも同じ枚数規則を使う。過渡的な3/4枚をcaptureせず、
+既存のindex/role/寸法/ready画像の安全性チェックと有界wait、ENDの肯定証拠は維持する。
+
+chapter 73083の初期化失敗に対応し、一度読めたmanifestが先頭ページの安定待ちや巻き戻し中に
+再び読めなくなっても、初期化の既存期限内だけ再取得を待つ。最初に束縛したmanifestは捨てず、
+復帰後は全descriptor・開始mode・話IDの一致を必須とする。欠落中は画像判定やcaptureへ進めない。
+復帰しない場合はtimeout、復帰後の構成変更やmetadata不一致は即停止する。
+初期化完了後の検出・captureでのmanifest消失は従来どおりfail-closedとし、一般のcache fallbackは追加しない。
+
 ## Piccomaのgrant-only allは作品ごとに両種別を確認する（2026-11-21）
 
 作品チケット系で全作品を巡回してから一気読み系で再巡回していた処理を、

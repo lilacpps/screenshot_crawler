@@ -53,8 +53,10 @@ def _jpeg_bytes(color: tuple[int, int, int] = (38, 121, 205)) -> bytes:
     return output.getvalue()
 
 
-def _work_html(*, free: bool = True) -> str:
-    chapters = [("80641", "第31話"), ("80640", "第30話"), ("80639", "第29話")]
+def _work_html(
+    *, free: bool = True, sign_in: bool = True, episode_title: str = EPISODE_TITLE,
+) -> str:
+    chapters = [("80641", episode_title), ("80640", "第30話"), ("80639", "第29話")]
     data = {
         "page": "/manga/[mangaId]",
         "props": {
@@ -77,10 +79,12 @@ def _work_html(*, free: bool = True) -> str:
         </div></div>"""
         for chapter, label in chapters
     )
+    account_link = ('<a href="/account/signin">Sign in</a>' if sign_in
+                    else '<a href="/mypage">My page</a>')
     return f'''<!doctype html><html><head><title>サンプル作品</title>
       <link rel="canonical" href="{BASE}/manga/1970">
       <script id="__NEXT_DATA__" type="application/json">{json.dumps(data, ensure_ascii=False)}</script>
-      </head><body><a href="/account/signin">Sign in</a>
+      </head><body>{account_link}
       <div class="title_detail_chapters__list__fixture"><ul>{rows}</ul></div>
       <style>body{{min-height:1200px}}</style></body></html>'''
 
@@ -89,6 +93,7 @@ def _viewer_html(
     jpeg: bytes,
     *,
     viewer_title: str = EPISODE_TITLE,
+    native_title: str = EPISODE_TITLE,
     sign_in: bool = True,
     transition_delay_ms: int = 0,
     missing_second_page: bool = False,
@@ -122,7 +127,7 @@ def _viewer_html(
                 "chapterId": "80641",
                 "data": {
                     "mangaId": "1970",
-                    "chapterMainName": EPISODE_TITLE,
+                    "chapterMainName": native_title,
                     "chapterSubName": native_subtitle,
                     "mangaName": "Verified ComicFUZ Work",
                 },
@@ -156,12 +161,15 @@ def _viewer_html(
             state += 1
     if image_groups:
         last_state = max(image_groups)
-        if len(image_groups[last_state]) == 1:
+        if len(image_groups[last_state]) == 1 and not (last_state == 0 and not first_pair_mode):
             image_groups[last_state].append(body_descriptor_count)
         if not first_pair_mode and missing_second_page:
             image_groups[1] = [1]
         if extra_tail:
-            image_groups[max(image_groups) + 1] = [body_descriptor_count + 1, body_descriptor_count + 2]
+            remaining_extras = [n for n in range(body_descriptor_count, body_descriptor_count + 3)
+                                if n not in image_groups[last_state]]
+            for start in range(0, len(remaining_extras), 2):
+                image_groups[max(image_groups) + 1] = remaining_extras[start:start + 2]
     terminal_state = max(image_groups) + 1 if image_groups else 0
     native_page_count = body_descriptor_count + (5 if extra_tail else 3)
     counter_values = [
@@ -221,7 +229,6 @@ def _viewer_html(
           if ('{transition_overlap_variant}' === 'outside') numbers = [3, 4, 99];
           if ('{transition_overlap_variant}' === 'gap') numbers = [3, 5, 6];
           if ('{transition_overlap_variant}' === 'duplicate') numbers = [3, 4, 4];
-          if ('{transition_overlap_variant}' === 'all_ready') numbers = [3, 4, 5];
           if ('{transition_overlap_variant}' === 'role') numbers = [3, 4, 10];
           reader.innerHTML = `<div id="pages"></div><h2 class="title_detail_viewer__detail__info__viewerTitle__GrN4D">{viewer_title}</h2>`;
           const area = document.querySelector('#pages');
@@ -230,7 +237,7 @@ def _viewer_html(
             const image = document.createElement('img');
             image.className = 'G54Y0W_page'; image.alt = `page_${{n}}`;
             image['__reactFiber$fixture'] = {{memoizedProps:{{webMangaViewerData}},return:null}};
-            image.src = ('{transition_overlap_variant}' === 'dimensions' && n === 4)
+            image.src = ('{transition_overlap_variant}' === 'dimensions' && index === 1)
               ? wrongDimensionSrc : src;
             const allReadyPositions = [945, 655, 355, 55];
             const clippedPositions = numbers.length === 4
@@ -239,7 +246,7 @@ def _viewer_html(
               ? allReadyPositions : clippedPositions;
             const left = positions[index] ?? 55;
             image.style.cssText = `position:absolute;top:40px;left:${{left}}px;width:300px;height:450px;object-fit:fill`;
-            if ('{transition_overlap_variant}' === 'visual_unsafe' && n === 4)
+            if ('{transition_overlap_variant}' === 'visual_unsafe' && index === 1)
               image.style.filter = 'grayscale(1)';
             area.append(image);
           }});
@@ -297,6 +304,13 @@ def _viewer_html(
               reader.querySelector('[class*="lastpagetitle"]').style.display = 'none';
             if ('{latest_end}' === 'duplicate_title')
               reader.append(reader.querySelector('h2').cloneNode(true));
+            if ('{latest_end}' === 'account_recommendations')
+              reader.querySelector('div.ChapterLastPage_lastpage__iBifl').insertAdjacentHTML(
+                'beforeend', '<div class="ChapterLastPage_lastpagetitle__INDwU">チャージが回復した作品</div>');
+            if ('{latest_end}' === 'duplicate_recommendations') {{
+              const recommendation = reader.querySelector('[class*="lastpagetitle"]');
+              recommendation.parentElement.append(recommendation.cloneNode(true));
+            }}
           }} else {{
             reader.innerHTML = `<div class="ChapterLastPage_lastpage__iBifl" style="position:fixed;left:200px;top:30px;width:500px;height:650px">
               <div class="ChapterLastPage_lastpage__nextChapter__6t7yj" style="position:absolute;left:15px;top:260px;width:470px;height:260px">
@@ -351,7 +365,10 @@ async def _route_comicfuz(
     page,
     *,
     viewer_title: str = EPISODE_TITLE,
+    listing_title: str = EPISODE_TITLE,
+    native_title: str = EPISODE_TITLE,
     free: bool = True,
+    sign_in: bool = True,
     transition_delay_ms: int = 0,
     missing_second_page: bool = False,
     clipped_second_page: bool = False,
@@ -376,10 +393,12 @@ async def _route_comicfuz(
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
 ):
-    body = _work_html(free=free)
+    body = _work_html(free=free, sign_in=sign_in, episode_title=listing_title)
     image = _viewer_html(
         _jpeg_bytes(),
         viewer_title=viewer_title,
+        native_title=native_title,
+        sign_in=sign_in,
         transition_delay_ms=transition_delay_ms,
         missing_second_page=missing_second_page,
         clipped_second_page=clipped_second_page,
@@ -481,11 +500,13 @@ async def _comicfuz_batch_fixture(
     return catalog, discovery, target, plan, candidate, executor, seen, watchlist
 
 
-@pytest.mark.parametrize(("extra_tail", "latest_end"), [
-    (False, "none"), (True, "none"), (True, "valid"), (False, "valid"),
+@pytest.mark.parametrize(("extra_tail", "latest_end", "body_count"), [
+    (False, "none", 2), (True, "none", 2), (True, "valid", 2), (False, "valid", 2),
+    (True, "account_recommendations", 2), (True, "none", 1), (True, "account_recommendations", 1),
 ])
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
-    browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str,
+    body_count: int,
 ) -> None:
     (
         catalog,
@@ -499,6 +520,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     ) = await _comicfuz_batch_fixture(
         browser_page, tmp_path, sync_legacy_unscoped_work,
         extra_tail=extra_tail, latest_end=latest_end,
+        true_mode_body_page_count=body_count,
         native_subtitle="Fixture subtitle" if latest_end == "valid" else "",
     )
 
@@ -516,12 +538,12 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     artifacts = catalog.list_artifacts(item_id=item.id)
     assert item.status == "completed"
     assert run.status == "succeeded" and run.stop_reason == "end"
-    assert result.stop_reason == "end" and result.page_count == 2
+    assert result.stop_reason == "end" and result.page_count == body_count
     assert len(artifacts) == 1 and artifacts[0].format == "zip"
     assert result.archive_path.name.startswith("003-")
     with zipfile.ZipFile(result.archive_path) as archive:
         names = archive.namelist()
-        assert len(names) == 2
+        assert len(names) == body_count
         assert all(name.lower().endswith(".png") for name in names)
 
     rediscovered = await discovery.discover(browser_page, target, "full")
@@ -536,8 +558,9 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
 
 
 @pytest.mark.parametrize("failure", [
-    "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail",
+    "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail", "stuck_single_extra_tail",
     "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
+    "duplicate_recommendations",
 ])
 async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
     browser_page, tmp_path: Path, sync_legacy_unscoped_work, failure: str
@@ -552,9 +575,11 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
             extra_tail=failure not in {"stale_free", "route_drift", "unknown_tail"},
-            stuck_extra_tail=failure == "stuck_extra_tail",
+            stuck_extra_tail=failure in {"stuck_extra_tail", "stuck_single_extra_tail"},
+            true_mode_body_page_count=1 if failure == "stuck_single_extra_tail" else 2,
             latest_end=failure if failure in {
                 "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
+                "duplicate_recommendations",
             } else "none",
             page_change_timeout_ms=700,
         )
@@ -585,7 +610,7 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
     if failure == "stale_free":
         assert seen is not None
         assert f"{BASE}/manga/viewer/80641" not in seen
-    if failure == "stuck_extra_tail":
+    if failure in {"stuck_extra_tail", "stuck_single_extra_tail"}:
         assert await browser_page.evaluate("window.leftTurns") == 3
 
 
@@ -620,12 +645,15 @@ async def test_comicfuz_batch_packaging_failure_keeps_item_pending(
     assert not list((tmp_path / "library").rglob("*.zip"))
 
 
+@pytest.mark.parametrize("sign_in", [True, False], ids=["anonymous", "signed-in"])
 async def test_comicfuz_runner_crawls_verified_spreads_to_positive_end(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, sign_in: bool
 ) -> None:
-    seen = await _route_comicfuz(browser_page, transition_delay_ms=350)
+    seen = await _route_comicfuz(browser_page, transition_delay_ms=350, sign_in=sign_in)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
-    adapter.page_change_timeout_ms = 800
+    # This success-path test needs animation + stable reads + browser latency;
+    # its old 800 ms adapter budget was tighter than the Runner's 2 s budget.
+    adapter.page_change_timeout_ms = 2_000
     config = RunConfig(
         site="comicfuz",
         source_url=VIEWER_URL,
@@ -652,16 +680,34 @@ async def test_comicfuz_runner_crawls_verified_spreads_to_positive_end(
     assert await browser_page.evaluate("() => window.transitionUnreadySeen === true")
 
 
-@pytest.mark.parametrize(("overlap_state", "overlap_size"), [(3, 3), (3, 4), (5, 3)])
+@pytest.mark.parametrize(("overlap_state", "overlap_size", "extra_tail", "body_count", "first_blank"), [
+    (3, 3, False, 10, True), (3, 4, False, 10, True), (5, 3, False, 10, True),
+    (2, 3, True, 2, True), (2, 4, True, 2, True),
+    (1, 3, True, 1, True), (2, 3, True, 1, True),
+    (1, 3, True, 4, False), (1, 4, True, 4, False), (4, 3, True, 9, True),
+])
 async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_end(
-    browser_page, tmp_path: Path, overlap_state: int, overlap_size: int
+    browser_page, tmp_path: Path, overlap_state: int, overlap_size: int, extra_tail: bool,
+    body_count: int, first_blank: bool,
 ) -> None:
+    previous = [1, 2] if extra_tail else ([3, 4] if overlap_state == 3 else [7, 8])
+    next_group = [3, 4] if extra_tail else ([5, 6] if overlap_state == 3 else [9, 10])
+    if body_count == 1:
+        previous, next_group = ([0], [1, 2]) if overlap_state == 1 else ([1, 2], [3])
+    elif not first_blank:
+        previous, next_group = [0, 1], [2, 3]
+    elif body_count == 9:
+        previous, next_group = [5, 6], [7, 8]
+    new_count = overlap_size - len(previous)
     await _route_comicfuz(
         browser_page,
-        true_mode_body_page_count=10,
+        true_mode_body_page_count=body_count,
+        first_mode_body_page_count=body_count,
+        first_page_blank=first_blank,
+        extra_tail=extra_tail,
         transition_delay_ms=180,
         transition_overlap_state=overlap_state,
-        transition_overlap_new_count=overlap_size - 2,
+        transition_overlap_new_count=new_count,
     )
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     config = RunConfig(
@@ -678,23 +724,17 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
     result = await CrawlerRunner(config).run(browser_page, adapter)
 
     assert result.stop_state is PageState.END
-    assert len(result.pages) == 10
-    assert [page.identity.page_id for page in result.pages] == [
-        "page_0",
-        "page_1|page_2",
-        "page_1|page_2",
-        "page_3|page_4",
-        "page_3|page_4",
-        "page_5|page_6",
-        "page_5|page_6",
-        "page_7|page_8",
-        "page_7|page_8",
-        "page_9",
-    ]
-    assert adapter._captured_indices == list(range(10))
-    previous = [3, 4] if overlap_state == 3 else [7, 8]
-    next_group = [5, 6] if overlap_state == 3 else [9, 10]
-    expected_overlap = previous + next_group[: overlap_size - 2]
+    assert len(result.pages) == body_count
+    expected_ids = ["page_0"] if first_blank else []
+    for start in range(1 if first_blank else 0, body_count, 2):
+        group = list(range(start, min(start + 2, body_count)))
+        expected_ids.extend(["|".join(f"page_{number}" for number in group)] * len(group))
+    assert [page.identity.page_id for page in result.pages] == expected_ids
+    assert adapter._captured_indices == list(range(body_count))
+    assert bool(adapter._advanced_extra_groups) is extra_tail
+    expected_overlap = previous + next_group[:new_count]
+    if body_count == 1:
+        assert adapter._advanced_extra_groups == ((1, 2), (3,))
     observed_overlap = await browser_page.evaluate("() => window.transitionOverlapSeen")
     assert observed_overlap == {
         "state": overlap_state,
@@ -705,8 +745,12 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
     assert not (tmp_path / "overlap-output" / "archive.zip").exists()
 
 
+@pytest.mark.parametrize(("extra_tail", "body_count", "first_blank"), [
+    (False, 10, True), (True, 2, True), (True, 1, True), (True, 4, False),
+])
 async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_artifact(
-    browser_page, tmp_path: Path, sync_legacy_unscoped_work
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool,
+    body_count: int, first_blank: bool,
 ) -> None:
     catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
@@ -714,9 +758,13 @@ async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_ar
             tmp_path,
             sync_legacy_unscoped_work,
             page_change_timeout_ms=250,
-            true_mode_body_page_count=10,
+            true_mode_body_page_count=body_count,
+            first_mode_body_page_count=body_count,
+            first_page_blank=first_blank,
+            extra_tail=extra_tail,
             transition_delay_ms=80,
-            transition_overlap_state=3,
+            transition_overlap_state=1 if body_count == 1 or not first_blank else (2 if extra_tail else 3),
+            transition_overlap_new_count=2 if body_count == 1 else 1,
             persistent_transition_overlap=True,
         )
     )
@@ -743,18 +791,24 @@ async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_ar
 
 
 @pytest.mark.parametrize(
-    "variant",
-    ["outside", "gap", "duplicate", "role", "all_ready", "visual_unsafe", "dimensions"],
+    ("variant", "extra_tail"),
+    [(variant, False) for variant in [
+        "outside", "gap", "duplicate", "role", "all_ready", "visual_unsafe", "dimensions",
+    ]] + [(variant, True) for variant in ["role", "all_ready", "visual_unsafe", "dimensions"]],
 )
 async def test_comicfuz_invalid_transition_wide_shapes_fail_closed(
-    browser_page, tmp_path: Path, variant: str
+    browser_page, tmp_path: Path, variant: str, extra_tail: bool,
 ) -> None:
     await _route_comicfuz(
         browser_page,
-        true_mode_body_page_count=10,
+        true_mode_body_page_count=2 if extra_tail else 10,
+        extra_tail=extra_tail,
         transition_delay_ms=160,
-        transition_overlap_state=3,
+        transition_overlap_state=2 if extra_tail else 3,
         transition_overlap_variant=variant,
+        # Keep the invalid state observable; a transient 160 ms fixture can
+        # disappear between browser polls under load before it is validated.
+        persistent_transition_overlap=True,
     )
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     config = RunConfig(
@@ -813,10 +867,11 @@ async def test_comicfuz_transition_wait_does_not_weaken_capture_or_state_shape_g
     assert adapter._captured_indices == []
 
 
+@pytest.mark.parametrize("sign_in", [True, False], ids=["anonymous", "signed-in"])
 async def test_comicfuz_nonfree_preflight_stops_before_reader_navigation(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, sign_in: bool
 ) -> None:
-    seen = await _route_comicfuz(browser_page, free=False)
+    seen = await _route_comicfuz(browser_page, free=False, sign_in=sign_in)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     config = RunConfig(
         site="comicfuz",
@@ -827,7 +882,7 @@ async def test_comicfuz_nonfree_preflight_stops_before_reader_navigation(
         navigation_timeout_ms=2_000,
     )
 
-    with pytest.raises(UnknownPageStateError, match="lacks exact current anonymous free-listing"):
+    with pytest.raises(UnknownPageStateError, match="lacks exact current public-free listing"):
         await CrawlerRunner(config).run(browser_page, adapter)
 
     assert f"{BASE}/manga/viewer/80641" not in seen
@@ -1075,10 +1130,16 @@ async def test_comicfuz_first_page_mode_drift_fails_closed(
         await adapter.detect_state(browser_page)
 
 
+@pytest.mark.parametrize("native_title", [
+    "第31話 特典情報", "第31話\u3000特典情報", "  第31話\t\n\u3000特典情報  ",
+])
 async def test_comicfuz_output_metadata_uses_verified_work_and_episode_titles(
     browser_page,
+    native_title: str,
 ) -> None:
-    await _route_comicfuz(browser_page)
+    listing_title = "第31話 特典情報"
+    await _route_comicfuz(browser_page, listing_title=listing_title,
+                         native_title=native_title, viewer_title=listing_title)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
     await browser_page.goto(WORK_URL, wait_until="commit")
@@ -1089,7 +1150,7 @@ async def test_comicfuz_output_metadata_uses_verified_work_and_episode_titles(
 
     metadata = adapter.get_output_metadata()
     assert metadata["title"] == "Verified ComicFUZ Work"
-    assert metadata["order"] == EPISODE_TITLE
+    assert metadata["order"] == listing_title
     assert metadata["genre"] == "漫画"
 
 
@@ -1105,22 +1166,85 @@ async def test_comicfuz_reader_title_must_match_fresh_listing_row(browser_page) 
         await adapter.initialize(browser_page)
 
 
-async def test_comicfuz_waits_for_initial_native_page_manifest(browser_page) -> None:
-    await _route_comicfuz(browser_page, delayed_manifest_ms=250)
+@pytest.mark.parametrize("loading", [
+    "delayed-first", "temporary-gap", "temporary-gap-pair", "rewind-gap", "permanent-gap",
+    "changed-after-gap", "chapter-drift-in-gap",
+])
+async def test_comicfuz_waits_for_initial_native_page_manifest(browser_page, monkeypatch, loading) -> None:
+    await _route_comicfuz(browser_page, delayed_manifest_ms=250 if loading == "delayed-first" else 0,
+                         initial_state=1 if loading == "rewind-gap" else 0,
+                         first_page_blank=loading != "temporary-gap-pair")
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
-    adapter.page_change_timeout_ms = 1_000
+    adapter.page_change_timeout_ms = 300 if loading == "permanent-gap" else 1_500
+    missing_reads = 0
+    if loading != "delayed-first":
+        original = adapter._read_viewer_snapshot
+        triggered = False
+        restoration_scheduled = False
+
+        async def replace_initial_fibers(page):
+            nonlocal triggered, missing_reads, restoration_scheduled
+            snapshot = await original(page)
+            can_trigger = loading != "rewind-gap" or await page.locator("img.G54Y0W_page").first.get_attribute("alt") == "page_0"
+            if snapshot["pages"] is not None and not triggered and can_trigger:
+                triggered = True
+                await page.evaluate("""mode => {
+                  window.initialManifestGap = [...document.querySelectorAll('img.G54Y0W_page')].map(image => {
+                    const key = Object.keys(image).find(k => k.startsWith('__reactFiber$'));
+                    const fiber = image[key];
+                    const props = fiber.memoizedProps;
+                    fiber.memoizedProps = {};
+                    return [fiber, props];
+                  });
+                  if (mode === 'chapter-drift-in-gap') {
+                    const node = document.querySelector('#__NEXT_DATA__');
+                    const data = JSON.parse(node.textContent);
+                    data.props.pageProps.chapterId = '999';
+                    node.textContent = JSON.stringify(data);
+                  }
+                }""", loading)
+            elif snapshot["pages"] is None and triggered:
+                missing_reads += 1
+                if not restoration_scheduled and loading != "permanent-gap":
+                    restoration_scheduled = True
+                    # Restore only after the gap was actually observed, so a
+                    # slow browser cannot make this success test vacuous.
+                    await page.evaluate("""mode => setTimeout(() => {
+                    for (const [fiber, props] of window.initialManifestGap) {
+                      if (mode === 'changed-after-gap')
+                        props.webMangaViewerData.viewerData.pages[0].image.imageWidth += 1;
+                      fiber.memoizedProps = props;
+                    }
+                    }, 250)""", loading)
+            return snapshot
+
+        monkeypatch.setattr(adapter, "_read_viewer_snapshot", replace_initial_fibers)
     await adapter.prepare_page(browser_page)
     await browser_page.goto(WORK_URL, wait_until="commit")
     await adapter.configure_target_identity("1970:80641", "comicfuz:1970")
     adapter.resolve_initial_navigation_url(VIEWER_URL)
 
-    await adapter.initialize(browser_page)
+    if loading == "permanent-gap":
+        with pytest.raises(PageChangeTimeoutError, match="first reader page did not become stable"):
+            await adapter.initialize(browser_page)
+    elif loading in {"changed-after-gap", "chapter-drift-in-gap"}:
+        with pytest.raises(UnknownPageStateError, match=(
+            "manifest changed" if loading == "changed-after-gap" else "metadata differs"
+        )):
+            await adapter.initialize(browser_page)
+    else:
+        await adapter.initialize(browser_page)
+        expected_initial = (0, 1) if loading == "temporary-gap-pair" else (0,)
+        assert tuple(row["number"] for row in await adapter._active_page_rows(browser_page)) == expected_initial
 
     assert adapter._viewer_pages is not None
-    assert tuple(row["number"] for row in await adapter._active_page_rows(browser_page)) == (0,)
+    assert adapter._captured_indices == []
+    if loading != "delayed-first":
+        assert missing_reads > 0
 
 
-async def test_comicfuz_established_manifest_disappearance_fails_closed(browser_page) -> None:
+@pytest.mark.parametrize("operation", ["detect", "capture"])
+async def test_comicfuz_established_manifest_disappearance_fails_closed(browser_page, operation) -> None:
     await _route_comicfuz(browser_page)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
@@ -1136,10 +1260,15 @@ async def test_comicfuz_established_manifest_disappearance_fails_closed(browser_
     )
 
     with pytest.raises(UnknownPageStateError, match="established viewer page-role manifest disappeared"):
-        await adapter.detect_state(browser_page)
+        if operation == "detect":
+            await adapter.detect_state(browser_page)
+        else:
+            await adapter.capture_page(browser_page)
 
 
-@pytest.mark.parametrize("drift", ["anonymous", "title", "subtitle", "malformed_subtitle"])
+@pytest.mark.parametrize("drift", [
+    "title", "subtitle", "malformed_subtitle", "main_title", "chapter", "work",
+])
 async def test_comicfuz_identity_drift_fails_closed(browser_page, drift: str) -> None:
     await _route_comicfuz(browser_page)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
@@ -1149,47 +1278,53 @@ async def test_comicfuz_identity_drift_fails_closed(browser_page, drift: str) ->
     adapter.resolve_initial_navigation_url(VIEWER_URL)
     await adapter.initialize(browser_page)
 
-    if drift == "anonymous":
-        await browser_page.locator('a[href="/account/signin"]').evaluate("element => element.remove()")
-        await browser_page.evaluate(
-            """() => document.body.insertAdjacentHTML('beforeend',
-              '<a href="/account/signout">Sign out</a>')"""
-        )
-    elif drift == "title":
+    if drift == "title":
         await browser_page.locator(adapter.viewer_title_selector).evaluate(
             "element => element.textContent = 'different episode'"
         )
     else:
+        field, value = {
+            "main_title": ("chapterMainName", "different main title"),
+            "chapter": ("chapterId", "999"),
+            "work": ("mangaId", "999"),
+            "subtitle": ("chapterSubName", "different subtitle"),
+            "malformed_subtitle": ("chapterSubName", 1),
+        }[drift]
         await browser_page.evaluate(
-            """value => {
+            """([field, value]) => {
               const node = document.querySelector('#__NEXT_DATA__');
               const data = JSON.parse(node.textContent);
-              data.props.pageProps.data.chapterSubName = value;
+              if (field === 'chapterId') data.props.pageProps.chapterId = value;
+              else data.props.pageProps.data[field] = value;
               node.textContent = JSON.stringify(data);
             }""",
-            1 if drift == "malformed_subtitle" else "different subtitle",
+            [field, value],
         )
 
     with pytest.raises(UnknownPageStateError):
         await adapter.detect_state(browser_page)
 
 
-async def test_comicfuz_extra_tail_cannot_skip_uncaptured_body_or_be_captured(browser_page) -> None:
-    await _route_comicfuz(browser_page, extra_tail=True)
+@pytest.mark.parametrize("body_count", [1, 2])
+async def test_comicfuz_extra_tail_cannot_skip_uncaptured_body_or_be_captured(
+    browser_page, body_count: int,
+) -> None:
+    await _route_comicfuz(browser_page, extra_tail=True, true_mode_body_page_count=body_count)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     await browser_page.goto(WORK_URL, wait_until="commit")
     await adapter.configure_target_identity("1970:80641", "comicfuz:1970")
     adapter.resolve_initial_navigation_url(VIEWER_URL)
     await adapter.initialize(browser_page)
     await adapter.capture_page(browser_page)
-    # Skip the final body+extra spread, simulating unexpected viewer drift.
+    # Skip the final body+extra spread, or the required first extra pair.
     await browser_page.keyboard.press("ArrowLeft")
     await browser_page.wait_for_function("document.querySelector('img').alt === 'page_1'")
     await browser_page.keyboard.press("ArrowLeft")
     await browser_page.wait_for_function("document.querySelector('img').alt === 'page_3'")
     with pytest.raises(UnknownPageStateError, match="extra tail is out of sequence"):
         await adapter.detect_state(browser_page)
-    with pytest.raises(UnknownPageStateError, match="no verified body"):
+    capture_error = "page group does not match" if body_count == 1 else "no verified body"
+    with pytest.raises(UnknownPageStateError, match=capture_error):
         await adapter.capture_page(browser_page)
     with pytest.raises(UnknownPageStateError):
         await adapter.go_next(browser_page)

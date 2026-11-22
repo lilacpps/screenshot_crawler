@@ -1,4 +1,4 @@
-"""Anonymous free-chapter viewer support for ComicFUZ."""
+"""Public-free chapter viewer support for ComicFUZ."""
 
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
 
 
 class ComicFuzAdapter(SiteAdapter):
-    """Capture only a freshly verified anonymous public-free ComicFUZ episode."""
+    """Capture only a freshly verified public-free ComicFUZ episode."""
 
     page_change_timeout_ms = 12_000
     render_stable_checks = 3
@@ -141,7 +141,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._is_first_page_blank: bool | None = None
         self._initial_body_indices: tuple[int, ...] = ()
         self._extra_page_index: int | None = None
-        self._extra_tail_advanced = False
+        self._advanced_extra_groups: tuple[tuple[int, ...], ...] = ()
         self._source_responses: OrderedDict[str, object] = OrderedDict()
         self._source_response_tasks: OrderedDict[str, asyncio.Task[bytes | None]] = OrderedDict()
         self._bound_page: Page | None = None
@@ -305,7 +305,7 @@ class ComicFuzAdapter(SiteAdapter):
         del page
         if access_strategy not in {"auto", "direct"}:
             raise UnsupportedAccessStrategyError(
-                "ComicFUZ anonymous free crawl supports access_strategy='auto' or 'direct' only"
+                "ComicFUZ public-free crawl supports access_strategy='auto' or 'direct' only"
             )
         self._access_strategy = access_strategy
 
@@ -323,7 +323,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._is_first_page_blank = None
         self._initial_body_indices = ()
         self._extra_page_index = None
-        self._extra_tail_advanced = False
+        self._advanced_extra_groups = ()
         self._advance_pending = False
         self._ended = False
         self._initialized = False
@@ -346,7 +346,7 @@ class ComicFuzAdapter(SiteAdapter):
         ]
         if len(matches) != 1 or matches[0].source.access_mode != "free":
             raise UnknownPageStateError(
-                "ComicFUZ target episode lacks exact current anonymous free-listing evidence"
+                "ComicFUZ target episode lacks exact current public-free listing evidence"
             )
         if matches[0].source.url != self._target_url:
             raise UnknownPageStateError(
@@ -412,7 +412,7 @@ class ComicFuzAdapter(SiteAdapter):
             actual_body = tuple(int(row["number"]) for row in body_rows)
             if not body_rows:
                 self._require_extra_tail_sequence(rows)
-                if self._extra_tail_advanced:
+                if tuple(int(row["number"]) for row in rows) in self._advanced_extra_groups:
                     raise UnknownPageStateError("ComicFUZ extra tail repeated after advance")
                 return PageState.AD
             if (
@@ -502,8 +502,8 @@ class ComicFuzAdapter(SiteAdapter):
         if state is PageState.AD:
             rows = await self._active_page_rows(page)
             self._require_extra_tail_sequence(rows)
-            self._extra_tail_advanced = True
             self._last_rendered_group = tuple(int(row["number"]) for row in rows)
+            self._advanced_extra_groups += (self._last_rendered_group,)
             self._last_captured_proofs = {
                 int(row["number"]): (
                     str(row["src"]), int(row["naturalWidth"]), int(row["naturalHeight"])
@@ -550,14 +550,14 @@ class ComicFuzAdapter(SiteAdapter):
                     body_rows = self._body_rows(rows)
                     if not body_rows:
                         self._require_extra_tail_sequence(rows)
-                        if not self._extra_tail_advanced:
+                        if tuple(int(row["number"]) for row in rows) not in self._advanced_extra_groups:
                             stable_checks = stable_checks + 1 if signature == previous_signature else 0
                             if stable_checks >= self.render_stable_checks:
                                 self._advance_pending = False
                                 return
                         else:
-                            # One extra-only spread is allowed, with one page turn.
-                            # A stale/repeated tail must time out, never turn again.
+                            # A stale/repeated extra group must time out; only
+                            # the exact next group may receive another turn.
                             stable_checks = 0
                         previous_signature = signature
                         await page.wait_for_timeout(self.render_poll_ms)
@@ -805,7 +805,6 @@ class ComicFuzAdapter(SiteAdapter):
     ) -> bool:
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader route differs from the verified target")
-        await self._validate_anonymous_state(page)
         snapshot = await self._read_viewer_snapshot(page)
         if (
             snapshot.get("chapter_id") != self._chapter_id
@@ -864,6 +863,10 @@ class ComicFuzAdapter(SiteAdapter):
             if allow_initial_manifest_loading:
                 return False
             raise UnknownPageStateError("ComicFUZ first-party viewer page-role manifest is unavailable")
+        elif allow_initial_manifest_loading and not self._initialized:
+            # Hydration can replace the initial image fibers after the first
+            # manifest read. Wait for the same bound manifest before capture.
+            return False
         elif allow_cached_manifest_at_end:
             manifest_available = False
         else:
@@ -947,6 +950,10 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError("ComicFUZ first-party viewer metadata could not be read") from exc
         if not isinstance(snapshot, dict):
             raise UnknownPageStateError("ComicFUZ first-party viewer metadata is malformed")
+        # Discovery normalizes listing labels with split/join. Use the same
+        # rule for native titles before comparing them to that bound label.
+        if isinstance(snapshot.get("episode_title"), str):
+            snapshot["episode_title"] = " ".join(snapshot["episode_title"].split())
         return snapshot
 
     async def _reader_route_is_target(self, page: Page) -> bool:
@@ -964,37 +971,6 @@ class ComicFuzAdapter(SiteAdapter):
             and not parsed.query
             and not parsed.fragment
         )
-
-    async def _validate_anonymous_state(self, page: Page) -> None:
-        identity = await page.evaluate(
-            r"""() => {
-              const visible = element => {
-                if (!element || element.getClientRects().length === 0) return false;
-                for (let node = element; node; node = node.parentElement) {
-                  const style = getComputedStyle(node);
-                  if (node.hidden || style.display === 'none' || style.visibility === 'hidden'
-                      || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
-                }
-                return true;
-              };
-              const links = [...document.querySelectorAll('a[href]')];
-              const signIn = links.filter(a => {
-                const u = new URL(a.href, location.href);
-                return u.origin === location.origin && u.pathname === '/account/signin' && visible(a);
-              }).length;
-              const signOut = links.filter(a => /\/(?:account\/(?:signout|logout)|logout|signout)(?:\/|$)/i
-                .test(new URL(a.href, location.href).pathname) && visible(a)).length;
-              return {signIn, signOut};
-            }"""
-        )
-        if (
-            not isinstance(identity, dict)
-            or identity.get("signIn") != 1
-            or identity.get("signOut") != 0
-        ):
-            raise UnknownPageStateError(
-                "ComicFUZ anonymous reader state is not positively confirmed"
-            )
 
     async def _read_episode_title(self, page: Page) -> str | None:
         locator = page.locator(self.viewer_title_selector)
@@ -1148,25 +1124,57 @@ class ComicFuzAdapter(SiteAdapter):
     def _body_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if row.get("role") == "body"]
 
-    def _require_extra_tail_sequence(self, rows: list[dict[str, Any]]) -> None:
-        """Bind the observed extra-only pair to an entirely captured body prefix."""
+    def _expected_extra_tail_group(self) -> tuple[int, ...]:
+        """Return only the next group in the two observed three-extra layouts."""
         extra = self._extra_page_index
-        numbers = tuple(int(row["number"]) for row in rows)
         if (
             extra is None
             or self._viewer_pages is None
             or len(self._viewer_pages) != extra + 5
-            or numbers != (extra + 1, extra + 2)
-            or [row.get("role") for row in rows] != ["unlinked_extra", "linked_extra"]
             or self._captured_indices != list(self._body_page_indices)
-            or self._last_rendered_group != (
-                numbers if self._extra_tail_advanced else (extra - 1, extra)
-            )
+        ):
+            return ()
+        if self._advanced_extra_groups:
+            if (
+                self._advanced_extra_groups == ((extra, extra + 1),)
+                and self._last_rendered_group == (extra, extra + 1)
+            ):
+                return (extra + 2,)
+            return ()
+        if self._last_rendered_group == (extra - 1, extra):
+            return (extra + 1, extra + 2)
+        if (
+            self._last_captured_group
+            and self._last_rendered_group == self._last_captured_group
+            and self._last_captured_group[-1] == extra - 1
+        ):
+            return (extra, extra + 1)
+        return ()
+
+    def _require_extra_tail_sequence(self, rows: list[dict[str, Any]]) -> None:
+        """Require the exact next extra group, or an already advanced stale group."""
+        extra = self._extra_page_index
+        numbers = tuple(int(row["number"]) for row in rows)
+        stale = bool(
+            self._advanced_extra_groups
+            and numbers == self._advanced_extra_groups[-1] == self._last_rendered_group
+        )
+        if (
+            not numbers
+            or extra is None
+            or self._viewer_pages is None
+            or len(self._viewer_pages) != extra + 5
+            or self._captured_indices != list(self._body_page_indices)
+            or (numbers != self._expected_extra_tail_group() and not stale)
+            or [row.get("role") for row in rows] != [
+                "unlinked_extra" if number == extra + 1 else "linked_extra"
+                for number in numbers
+            ]
         ):
             raise UnknownPageStateError("ComicFUZ extra tail is out of sequence")
 
     def _is_pending_transition_overlap(self, rows: list[dict[str, Any]]) -> bool:
-        if not self._advance_pending or len(rows) not in {3, 4}:
+        if not self._advance_pending or self._viewer_pages is None or len(rows) not in {3, 4}:
             return False
         if all(row.get("ready") for row in rows):
             return False
@@ -1174,23 +1182,24 @@ class ComicFuzAdapter(SiteAdapter):
             return False
 
         previous = self._last_rendered_group
-        previous_body = tuple(
-            number for number in previous if number in self._body_page_indices
-        )
-        if previous_body != self._last_captured_group:
-            return False
-        if tuple(self._captured_indices[-len(previous_body) :]) != previous_body:
-            return False
-
         expected_body = self._expected_body_group()
-        if not expected_body:
-            return False
         expected_next = list(expected_body)
-        if (
-            self._extra_page_index is not None
-            and expected_body[-1] == self._body_page_indices[-1]
-        ):
-            expected_next.append(self._extra_page_index)
+        if not expected_body:
+            expected_next = list(self._expected_extra_tail_group())
+            if not expected_next:
+                return False
+        else:
+            previous_body = tuple(number for number in previous if number in self._body_page_indices)
+            if previous_body != self._last_captured_group:
+                return False
+            if tuple(self._captured_indices[-len(previous_body) :]) != previous_body:
+                return False
+            if (
+                len(expected_body) == 1
+                and self._extra_page_index is not None
+                and expected_body[-1] == self._body_page_indices[-1]
+            ):
+                expected_next.append(self._extra_page_index)
         if len(expected_next) > 2:
             return False
 
@@ -1222,7 +1231,9 @@ class ComicFuzAdapter(SiteAdapter):
             return False
 
         expected_roles = {
-            number: "body" if number in self._body_page_indices else "linked_extra"
+            number: "body" if number in self._body_page_indices else (
+                "linked_extra" if self._viewer_pages[number].get("has_link") else "unlinked_extra"
+            )
             for number in combined
         }
         if any(row.get("role") != expected_roles.get(row["number"]) for row in rows):
@@ -1231,7 +1242,7 @@ class ComicFuzAdapter(SiteAdapter):
             not isinstance(row.get("number"), int)
             or not isinstance(row.get("alt"), str)
             or not row.get("alt")
-            or row.get("role") not in {"body", "linked_extra"}
+            or row.get("role") not in {"body", "linked_extra", "unlinked_extra"}
             or float(row.get("width") or 0) <= 0
             or float(row.get("height") or 0) <= 0
             for row in rows
@@ -1282,7 +1293,10 @@ class ComicFuzAdapter(SiteAdapter):
         if len(rows) == 2 and numbers[1] != numbers[0] + 1:
             raise UnknownPageStateError("ComicFUZ spread page identities are not contiguous")
         roles = [row.get("role") for row in rows]
-        if roles not in (["body"], ["body", "body"], ["unlinked_extra", "linked_extra"]):
+        if roles not in (
+            ["body"], ["body", "body"], ["unlinked_extra", "linked_extra"],
+            ["linked_extra", "unlinked_extra"], ["linked_extra"],
+        ):
             if roles == ["body", "linked_extra"]:
                 if rows[1].get("number") != rows[0].get("number") + 1:
                     raise UnknownPageStateError(
@@ -1404,13 +1418,13 @@ class ComicFuzAdapter(SiteAdapter):
                   const actions = [...root.querySelectorAll(args.actionsSelector)]
                     .filter(e => e.parentElement === root && visible(e));
                   const recommendations = [...root.querySelectorAll(args.recommendationsSelector)]
-                    .filter(e => e.parentElement === root && visible(e));
+                    .filter(e => e.parentElement === root && visible(e)
+                      && (e.innerText || '').trim()
+                        .startsWith('この作品を読んだあなたにおすすめ'));
                   if (actions.length !== 1 || recommendations.length !== 1) return false;
                   const labels = [...actions[0].querySelectorAll(args.actionTextSelector)]
                     .filter(e => visible(e)).map(e => (e.innerText || '').trim());
-                  return JSON.stringify(labels) === JSON.stringify(['お気に入り','いいね','コメント'])
-                    && (recommendations[0].innerText || '').trim()
-                      .startsWith('この作品を読んだあなたにおすすめ');
+                  return JSON.stringify(labels) === JSON.stringify(['お気に入り','いいね','コメント']);
                 });
                 const titles = [...document.querySelectorAll(args.titleSelector)]
                   .filter(e => visible(e, false));
@@ -1453,7 +1467,11 @@ class ComicFuzAdapter(SiteAdapter):
         previous: tuple[object, ...] | None = None
         stable = 0
         while asyncio.get_running_loop().time() < deadline:
-            await self._validate_reader_identity(page)
+            if not await self._validate_reader_identity(page, allow_initial_manifest_loading=True):
+                previous = None
+                stable = 0
+                await page.wait_for_timeout(self.render_poll_ms)
+                continue
             rows = await self._active_page_rows(page)
             if rows and all(row["ready"] for row in rows):
                 self._validate_page_group(rows)
@@ -1497,7 +1515,11 @@ class ComicFuzAdapter(SiteAdapter):
             stable = 0
             prior_signature: tuple[object, ...] | None = None
             while asyncio.get_running_loop().time() < deadline:
-                await self._validate_reader_identity(page)
+                if not await self._validate_reader_identity(page, allow_initial_manifest_loading=True):
+                    stable = 0
+                    prior_signature = None
+                    await page.wait_for_timeout(self.render_poll_ms)
+                    continue
                 current = await self._active_page_rows(page)
                 if current and all(row["ready"] for row in current):
                     current_signature = self._body_signature(current)

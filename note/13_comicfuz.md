@@ -55,6 +55,294 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
+## Login-independent public-free access (2026-11-22)
+
+Discovery and public-free capture work with the existing shared-Chrome session
+whether logged in or anonymous. Neither path requires `/account/signin` nor
+rejects sign-out/my-page links. The old anonymous-only gate rejected the user's
+logged-in work 3140 before any records were emitted: the initial server-rendered
+sign-in link disappeared during hydration and the settled header showed
+`/mypage`. Login-header changes are unrelated to work/chapter identity.
+
+Access classification still requires exactly one visible exact row-local `無料`
+marker. Other rows remain `unknown`; login, account rights, rentals, stock and
+balances never independently prove free access. Capture still validates the
+complete same-work listing and exact target free row before reader navigation,
+then binds the existing native episode/title/page-role and visual-safety proofs.
+Only `auto`/`direct` remain supported; no ticket/charge/medal/purchase operation
+or login/logout action is added. CLI, configuration and output contracts do not
+change. No Core, Site Policy, Catalog schema or operational Watchlist is changed.
+
+Live verification used the shared browser over CDP and a dedicated Page with an
+isolated Catalog under `.tmp/comicfuz-login-20261122/`. The old code reproduced
+the anonymous-state error with 0 observations; the corrected Full Discovery
+completed with 241 records, and a repeat completed with 0 new / 241 known. A
+separate temporary anonymous browser context on
+the same remote browser showed the same 241 native rows and 241 exact free
+markers, so the current count is not inferred from the logged-in user's rights.
+The user's session and operational Catalog were preserved. This live check
+opened only the work listing, not a reader or purchase/resource UI. A subsequent
+signed-in normal Batch capture through positive END is verified for chapter
+82123 as described below; nonfree rejection is covered synthetically.
+
+Validation: all 118 affected ComicFUZ Unit/Integration cases passed in three
+isolated invocations (48 Discovery/Unit + 1 route-drift + 69 other viewer cases),
+with zero skips. The first combined run stopped progressing at the route-drift
+case and was interrupted, so it is not counted as a successful run; that case
+passed alone and the remaining viewer module passed separately. Targeted login
+and identity checks had also passed (17 cases). `ruff check src tests` and scoped
+`git diff --check` passed. Full repository pytest was omitted for this site-local
+change; Research helper tests were omitted because no durable research code
+changed. This was the verification selection for the initial login-state fix;
+the subsequent Batch compatibility changes and verification are described next.
+
+## Work 3140 / chapter 82123 Batch compatibility (2026-11-22)
+
+The reported item 56381 / source 56688 failed because Discovery normalized the
+listing label to `第12巻 特典情報` while native `chapterMainName` contained an
+ideographic space (`第12巻　特典情報`). Native main titles now use the same Python
+`" ".join(value.split())` rule before comparing them with the bound listing
+label. Work/chapter IDs, other characters/punctuation, subtitle binding and
+rendered-title checks remain strict; no fuzzy matching or Unicode folding is
+used. Synthetic title variants cover ordinary, ideographic and repeated mixed
+whitespace; native main-title, work-ID and chapter-ID drift still fail closed.
+
+The exact native manifest observed on this chapter has ordinary body indices
+0-1, three extras 2-4 with link flags `(true,false,true)`, and `googleAds` /
+`lastPage` slots 5-6. A sanitized runner probe showed a pending transition from
+the captured final `(1,2)` spread toward extra-only `(3,4)`, with active rows
+`[1,2,3]`: the old body and new unlinked extra were clipped, while linked extra
+2 was ready. The existing body-to-body overlap wait is extended only for this
+known three-extra shape on that path: all body indices must already be captured, the prior
+group must be `(extra-1,extra)`, and no extra-tail advance may have occurred.
+Only a contiguous duplicate-free subset of the exact prior/next group union,
+with both groups represented and at least one not-ready row, can wait. Exact
+native roles and dimensions remain bound, including `unlinked_extra`; ready
+images retain their source/visual checks. The overlap is never captured.
+That path retains its single extra-group turn, timeout, strict capture and
+positive-END requirements. The alternate extra layout is described below. Synthetic cases cover both overlap
+sizes, persistent transition failure, malformed roles, all-ready wide shapes,
+unsafe ready pixels and descriptor dimension mismatch.
+
+The logged-in no-next END panel also includes a second direct
+`ChapterLastPage_lastpagetitle__*` block headed `チャージが回復した作品`.
+The adapter now selects the existing positive recommendation block by its
+expected `この作品を読んだあなたにおすすめ` heading before requiring uniqueness.
+The three exact action labels, one matching viewer title, full captured body
+prefix and cleared/matching inactive image shells remain mandatory. Duplicate
+matching recommendation blocks, missing/hidden evidence and partial panels
+still fail. No account section or action is clicked.
+
+Normal CLI `batch run --limit 1 --max-pages 10` succeeded for the same failed
+Catalog item/source using a SQLite backup, single-key Watchlist and dedicated
+outputs under `.tmp/comicfuz-82123-20261122/`. It reached positive END and saved
+two unique, decodable 1351x1920 JPEGs in the isolated `241-...` ZIP, with a
+present Artifact and Completed item. CRC and Catalog Artifact SHA-256/size
+checks passed. Both ZIP payloads equal the prior same-chapter body-prefix
+evidence saved before the extras-transition failure. The successful attempt's
+pre-package Manifest was not retained, so that specific comparison is not
+claimed. Audit: `.tmp/comicfuz-82123-20261122/audit.json`. The operational Catalog,
+Watchlist and library were not updated. No ticket/charge/medal/purchase action,
+Policy change, Core change, new CLI/configuration or output format is introduced.
+
+Verification covered all 8 ComicFUZ adapter Unit cases and 84 viewer Integration
+cases with passing results across the isolated invocations, with zero skips.
+The broad viewer invocation finished with 82 passed / 1 failed (one route-drift
+case was selected separately and passed). Its failure was the existing normal
+signed-in Runner fixture's 800 ms page-change budget during the final turn;
+the case passed alone. That success-path fixture now uses the same bounded
+2-second budget as its Runner config, allowing the 350 ms animation, repeated
+stable reads and browser overhead; both anonymous/signed-in variants then
+passed. Production timeout settings and negative timeout tests are unchanged.
+Earlier broad attempts were stopped when new live findings required another
+implementation iteration, and are not counted as successful complete runs.
+Targeted title/identity (10), overlap (18) and account-END/duplicate-END (2)
+selections also passed. Reports are under the same isolated directory.
+`ruff check src tests` and scoped `git diff --check` passed. Full repository
+pytest was omitted for this site-local change; durable Research helpers were
+not changed, so their separate tests were omitted. Only the exact reported
+chapter was live-crawled; the other pending chapters were not batch-executed.
+
+## One-body-page / two-extra-group layout (chapter 81871, 2026-11-22)
+
+The next reported failure, item 56382 / source 56689, is work 3140 / chapter
+81871 (SSSオフショット101). Shared-CDP probing confirmed one native body image
+at index 0, the already supported three-extra manifest at indices 1-3 with
+link flags `(true,false,true)`, and `googleAds` / `lastPage` at 4-5. Native
+`isFirstPageBlank=true` renders `(0,)`, then `(1,2)` with roles
+`(linked_extra,unlinked_extra)`, then a single `(3,)` linked extra, followed by
+the positive next-chapter END panel. No next chapter was opened.
+
+The previous adapter accepted only the other extra alignment: final mixed
+`(body, first linked extra)` followed by `(unlinked extra, linked extra)`.
+It stopped after saving body 0 because the first extra pair used a different
+role order. The adapter now tracks a bounded tuple of advanced extra groups.
+After all body indices are captured, the exact last rendered group chooses
+one of the two observed paths: a final mixed group requires the remaining
+extra pair; a final body-only group requires the first two extras and then
+the final linked extra. Native indices/roles, complete body prefix and prior
+group are mandatory, and each group receives at most one ArrowLeft. The
+maximum is two extra-group advances. Stale groups wait under the existing
+deadline and cannot receive another turn. Skips, unexpected order or role,
+early extras, and missing positive END still fail closed. Neither extra path
+produces CONTENT or image artifacts.
+
+The existing pending-overlap check uses the exact next extra group from the
+same bounded state, including body-only to extra-pair and extra-pair to single
+extra transitions. A duplicate-free contiguous subset of the prior/next union,
+both groups represented and at least one not-ready row are still required.
+Ready images retain native dimension, source and visual-safety checks;
+arbitrary wide shapes and all-ready wide rows are still rejected.
+
+Normal CLI `batch run --limit 1 --max-pages 10` completed this exact item/source
+using a read-only SQLite backup, a single-key Watchlist and dedicated outputs
+under `.tmp/comicfuz-81871-20261122/`. The prior completed chapter 82123 was
+excluded by normal planning. Chapter 81871 reached positive END, created a
+present ZIP Artifact and marked the isolated Item Completed. Its ZIP contains
+only one 1351x1920 JPEG. CRC/decoding and Catalog Artifact SHA-256/size checks
+passed; its bytes equal the native body-prefix evidence from the bounded
+same-chapter runner probes. The successful Batch's pre-package Manifest was
+not retained, so that specific comparison is not claimed. Audit:
+`.tmp/comicfuz-81871-20261122/audit.json`. Operational Catalog/Watchlist/library
+were preserved. No resource operation, site-ID/title special case, shared
+Core/Policy, CLI or output-format change was introduced. Other pending
+chapters were not batch-executed.
+
+Validation for this layout change: all 99 distinct affected cases (8 adapter
+Unit + 91 viewer Integration) passed across small completed invocations, with
+zero skips. The completed reports cover 9 Unit/route cases, 17 Batch/overlap
+cases, 11 invalid-overlap cases, 2 skipped-extra/capture-denial cases, 15
+opening/restore cases, 13 capture/terminal guards and two remaining groups of
+16 cases each. The initial broad browser run stopped during Windows async
+fixture teardown and was interrupted; it is not counted as a complete pass.
+Its transient invalid-overlap fixture could disappear after 160 ms before a
+poll saw it, so invalid variants now persist until validation (11 passed).
+The new singleton capture-denial case was already blocked by the layout guard;
+its message assertion now expects that guard rather than the pair's no-body
+message (both cases passed). These fixture changes do not alter production
+timeout or safety checks. `ruff check src tests` and scoped `git diff --check`
+passed. Full repository pytest was omitted for the site-local scope; no durable
+Research helper was changed, so separate Research tests were omitted.
+
+## Final full body spread / chapter 80350 (2026-11-22)
+
+The reported item 56394 / source 56701 is work 3140 / chapter 80350 (第96話).
+A bounded shared-CDP runner reproduced failure after capturing body indices
+0-23, with last rendered/captured group `(22,23)` and a pending next turn.
+Native `isFirstPageBlank=false` opens with `(0,1)`; the current manifest has
+26 ordinary body images, extras 26-28 with flags `(true,false,true)`, followed
+by `googleAds` and `lastPage` at 29-30. Active transition rows were `[22,23,24]`,
+with clipped old/new outer rows and ready body 23; body 25 and the extras were
+still outside the viewport.
+
+The pending-overlap predictor incorrectly appended first extra 26 to the
+expected final body pair `(24,25)`, then rejected that impossible three-image
+prediction before applying the existing wait allowance. It now appends the
+first extra only when the expected final body group contains one image.
+A complete final body/body group is predicted as exactly two body images in
+either native opening mode. All other requirements remain: exact contiguous
+prior/next indices and roles, duplicate-free union with both groups represented,
+at least one not-ready row, native dimensions and ready-image source/visual
+safety, the existing bounded deadline, and no capture during overlap. No
+page-role whitelist, END condition, retry/pacing limit or Core code is relaxed.
+
+Existing synthetic overlap tests now include both three/four-row transitions
+into the final body pair for a false-mode opening and a true-mode final pair.
+Expected captured identities follow the declared opening mode, and all body
+pages must be captured in order through positive END. A persistent false-mode
+final-pair overlap must still time out without an Artifact or Completed item.
+The existing mixed body/extra and both extra-only paths are retained.
+
+CLI/Executor live verification used a read-only SQLite backup, a single-key
+Watchlist and dedicated outputs under `.tmp/comicfuz-80350-20261122/`. A temporary
+Executor package-function hook copied `manifest.json` before calling the normal
+packager; no production code or package behavior was changed by that hook.
+`batch run --limit 1 --max-pages 80` completed the exact reported item/source
+through positive END, ZIP/Artifact creation and isolated Completed status.
+The ZIP contains 26 unique JPEGs: first two 1512x2150, remaining 24 1351x1920.
+Every member name/order, SHA-256 and dimension matches the pre-package Manifest;
+native body pair identities cover 0-25, excluding extras 26-28. All members
+decode, CRC passes, and Catalog Artifact hash/size matches the ZIP. Evidence:
+`manifest-before-package.json` and `audit.json` in the isolated directory.
+The operational Catalog/Watchlist/library were preserved. No ticket/charge/
+medal/purchase or next-chapter operation occurred. Other pending episodes were
+not batch-executed.
+
+Verification: all 103 distinct affected cases (8 adapter Unit + 95 viewer
+Integration) passed, zero skips. The targeted overlap/persistent-overlap group
+passed 14 cases; the Unit group passed 8; the remaining 81 cases passed in four
+small completed browser invocations (21/20/20/20), avoiding the previously
+observed long-module Windows teardown stall. The opening-mode matrix now
+covers final body/body and final body/extra transitions for both native modes.
+`ruff check src tests` and scoped `git diff --check` passed. Full repository
+pytest was omitted for this site-local predicate change. No durable Research
+helper changed, so separate Research tests were omitted. Live scope remains
+the exact reported episode, rather than the entire pending Batch.
+
+## Initial manifest readiness / chapter 73083 (2026-11-22)
+
+The reported item 56437 / source 56744 is work 3140 / chapter 73083
+(Episode.79). Its production diagnostics show `saved_pages=0`, empty content
+context and the manifest-disappeared error before initialization completed;
+the saved HTML already contains opening images page_0 through page_3. The
+implementation had bound a manifest once, then treated any subsequent missing
+read as fatal even while waiting for the initial images to settle or rewind.
+This readiness gap is consistent with the evidence. The exact transient was
+not reproduced in a fresh pre-fix runner or a pre-fix isolated CLI retry;
+both reached END. A particular React/hydration event is therefore a hypothesis,
+not a newly observed live fact.
+
+During initialization only (`_initialized=false` with explicit initial-loading
+permission), `_validate_reader_identity` may now return not-ready after a
+previously established manifest becomes temporarily unavailable. Initial body
+stability and rewind loops reset their counters, skip image processing and wait
+under their existing page-change deadlines. They do not clear or replace the
+first bound manifest, advance again while waiting, return CONTENT, or capture
+from cached metadata. Work/chapter/title/subtitle/route checks still run before
+that not-ready result. Once a current manifest returns, all descriptors,
+body/extra roles, chapter identity and native first-page mode must equal the
+original binding before normal image validation resumes. Permanent absence
+times out; changed manifests or metadata fail immediately. Detect/capture
+after initialization still reject disappearance. The existing positive-END
+exception remains separate and unchanged.
+
+Synthetic browser fault injection removes the real fixture image-fiber props
+after the first successful read, then restores them only after a missing read
+has actually been observed. It covers single and pair openings, a gap during
+rewind, non-returning metadata, changed native dimensions and chapter-ID drift.
+No case captures during initialization; negative cases stop. The existing
+post-initialization disappearance test now checks both detect and capture.
+The initial-gap exception is not enabled for normal page turns or capture.
+
+Post-fix CLI/Executor verification used a fresh read-only SQLite backup,
+single-key Watchlist and dedicated outputs under
+`.tmp/comicfuz-73083-20261122/verified/`, with a temporary pre-package Manifest
+copy hook and a guard refusing any candidate other than source 56744. The exact
+item completed with positive END, a present ZIP Artifact and isolated Completed
+status. Native `isFirstPageBlank=false`; body indices are 0-28, extras 29-31,
+then `googleAds` / `lastPage`. The ZIP contains 29 unique 1351x1920 JPEGs.
+All member names/order, SHA-256 and dimensions match the pre-package Manifest;
+all decode, CRC passes, and Catalog Artifact hash/size matches. Evidence:
+`manifest-before-package.json` and `audit.json` in that directory. The original
+live gap did not recur in this check, so recovery from that exact live event is
+not claimed; its controlled equivalent is covered by browser tests. Operational
+Catalog/Watchlist/library were preserved. No ticket/purchase/account action,
+shared Core/Policy, CLI, timeout configuration or output-format change was made.
+Other pending episodes were not batch-executed.
+
+Validation for the initial-readiness change: all 110 distinct affected cases
+(8 adapter Unit + 102 viewer Integration) passed with zero skips. The targeted
+group passed 9 cases, Unit passed 8, and the remaining cases passed in four
+small completed browser runs (24/23/23/23). The new cases prove an actually
+observed missing read before restoring fixture data, including both opening
+modes and rewind; permanent and changed-data cases cannot initialize.
+Strict detect/capture rejection after initialization also passed. `ruff check
+src tests` and scoped `git diff --check` passed. Full repository pytest was
+omitted for this site-local initialization change; no durable Research helper
+changed, so separate Research tests were omitted. The original live timing
+event remains unreproduced; successful exact-target live capture and byte-level
+archive checks are separate from the deterministic missing-read tests.
+
 ## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
 The site behavior below uses Catalog v7 and an explicit matching Watchlist.
@@ -110,11 +398,11 @@ The work-3140 compatibility fix (`f847af0`, developed on `fix/comicfuz-3140-page
 
 Verification selection (2026-10-17): 116 affected ComicFUZ Unit, browser Integration, and CLI tests passed in five isolated groups, with zero skips; `ruff check src tests` and `git diff --check` passed. An earlier combined invocation stopped making progress and was terminated; it is not counted as a pass. Separate focused runs also passed. Full suite was omitted for this site-local change; separate Research tests were omitted because no durable PoC/research helper changed. The normal-CLI live and archive audit above are separate from synthetic tests.
 
-## Phase 02: anonymous public-list Discovery
+## Phase 02: public-list Discovery
 
 `ComicFuzDiscoveryAdapter` is the site's Discovery implementation and uses the shared `BrowserSession`-provided Playwright `Page` through `DiscoveryService`; it does not launch Chrome, connect to CDP, or write Catalog directly. The current CLI also registers ComicFUZ manual crawl and normal Batch. This Phase 02 section describes Discovery's own boundary, not the current site's complete registration state. Phase 01 observations and current phase gates are in `runbooks/comicfuz-free/PROGRESS.md` and `runbooks/comicfuz-free/research/phase01-20261012.md`.
 
-The accepted input is `https://comic-fuz.com/manga/<numeric-work-id>` with no query or the observed decorative `position=thumbnail` query. The adapter rejects other hosts, routes, fragments, ports, credentials, and query parameters. After navigation it requires the current URL and canonical link to remain on the requested work. A single visible same-origin `/account/signin` link and no visible sign-out link are required as the anonymous-state check. Work identity and anonymous state are rechecked at every snapshot and immediately before the first emitted record; delayed route, canonical-link, or account-marker changes fail closed.
+The accepted input is `https://comic-fuz.com/manga/<numeric-work-id>` with no query or the observed decorative `position=thumbnail` query. The adapter rejects other hosts, routes, fragments, ports, credentials, and query parameters. After navigation it requires the current URL and canonical link to remain on the requested work. Work identity is rechecked at every snapshot and immediately before the first emitted record; delayed route or canonical-link changes fail closed. Login state and account-header changes do not gate listing observation or free classification.
 
 The public Next.js `#__NEXT_DATA__` route `/manga/[mangaId]` supplies `props.pageProps.chapters`, grouped as objects with `chapters` arrays. The adapter reads only each chapter's `chapterId` and `chapterMainName`; other hydrated fields are not interpreted. It flattens the groups and joins every record by exact sequence and normalized label to headings under the unique `div[class*="title_detail_chapters__list__"]`. A heading must have the observed two-level detail/row parent, the row must contain exactly one chapter heading, and each row identity must be unique. The row-local `p[class*="Chapter_chapter__price_free__"]` is positive free evidence only when exactly one marker is visible and its exact text is `無料`; hidden markers do not prove free access. A row without one visible exact marker remains `unknown`; multiple visible or malformed markers invalidate the listing. Dates and resource fields are not used as free or expiry evidence.
 
@@ -128,13 +416,13 @@ The currently served public list is newest-first. After validating the whole lis
 
 Phase 01 live evidence on 2026-10-12 confirmed an anonymous `/account/signin` header, canonical work 1970, 34 unique hydrated chapter IDs and exact ordered DOM-label joins, four exact row-local public-free markers, and no pagination/expand control in the observed listing. The current-public-list completeness and reverse native order were accepted by independent review (BLOCKING=0) and Lead. The seed evidence is in the sanitized runbook report; no image bytes, signed URLs, screenshot, or comic content is retained.
 
-Synthetic unit and browser-backed Catalog tests cover URL validation, hydration parsing, visible positive-free/unknown classification, full and bounded positions, incremental known-streak behavior, hidden or duplicate free markers, delayed route/canonical/auth drift, access refresh to unknown with expiry clearing, completed Artifact preservation, incomplete-full availability preservation, and rerun stability. The Phase 02 live isolated Catalog/Watchlist run and independent review are recorded in the progress ledger. Charge, ticket, and medal mechanics are explicitly deferred.
+Synthetic unit and browser-backed Catalog tests cover URL validation, hydration parsing, visible positive-free/unknown classification in logged-in and anonymous sessions, full and bounded positions, incremental known-streak behavior, hidden or duplicate free markers, delayed route/canonical drift, account-header hydration without failure, access refresh to unknown with expiry clearing, completed Artifact preservation, incomplete-full availability preservation, and rerun stability. The Phase 02 live isolated Catalog/Watchlist run and independent review are recorded in the progress ledger. Charge, ticket, and medal mechanics are explicitly deferred.
 
-## Phase 03: anonymous free viewer and manual crawl (PASS; live and independently reviewed)
+## Phase 03: public-free viewer and manual crawl (original anonymous live run PASS)
 
-Manual crawl first buffers and validates the current same-work public listing and checks the exact target row is positively marked `無料` before opening the viewer. It binds the exact work/chapter route, public anonymous markers, and first-party viewer hydration: `mangaId` must match the configured work, `chapterMainName` must match the freshly verified row label, and `mangaName` supplies the work title in output metadata. The viewer title must match the listing-bound main title plus the independently bound optional native subtitle, after whitespace normalization. Existing Runner max-pages and same-content guards remain enabled; the adapter does not launch Chrome or modify Core. Any route change before positive END fails closed; `NEXT_CONTENT` is not accepted.
+Manual crawl first buffers and validates the current same-work public listing and checks the exact target row is positively marked `無料` before opening the viewer. It binds the exact work/chapter route and first-party viewer hydration, independently of account-header state: `mangaId` must match the configured work, `chapterMainName` must match the freshly verified row label, and `mangaName` supplies the work title in output metadata. The viewer title must match the listing-bound main title plus the independently bound optional native subtitle, after whitespace normalization. Existing Runner max-pages and same-content guards remain enabled; the adapter does not launch Chrome or modify Core. Any route change before positive END fails closed; `NEXT_CONTENT` is not accepted.
 
-The supported reader manifest has a contiguous prefix of ordinary unlinked image descriptors, followed by either one linked `isExtraPage=true` image or exactly three extra images with link-presence sequence `(true, false, true)`, then exactly `googleAds` and `lastPage`. The three-extra shape was observed on work 3140, chapter 81136 (第98話): body indices 0-28, extra indices 29-31, and terminal slots 32-33. Visual inspection identified the extras as an official-X promotion, a volume promotion, and another-work recommendation. Only the ordinary prefix is captured; its work-related introductory/relationship charts are retained. Descriptor indices and dimensions must join exactly to rendered `page_N` identities. The final mixed spread must be fully ready; only its body half is saved. For the three-extra shape only, the following exact extra-only pair becomes `AD` after all body indices have been captured and the final mixed spread has been verified. The normal Runner performs one page turn for this pair; it is never captured. Repeated extra tails time out without further turns. Missing/clipped halves, unsafe pixels, body gaps, changed manifests, other extra/link sequences, and unverified terminal states fail closed. This supports the observed shapes only, not arbitrary `isExtraPage` semantics.
+The supported reader manifest has a contiguous prefix of ordinary unlinked image descriptors, followed by either one linked `isExtraPage=true` image or exactly three extra images with link-presence sequence `(true, false, true)`, then exactly `googleAds` and `lastPage`. The three-extra shape was observed on work 3140, chapter 81136 (第98話): body indices 0-28, extra indices 29-31, and terminal slots 32-33. Visual inspection identified the extras as an official-X promotion, a volume promotion, and another-work recommendation. Only the ordinary prefix is captured; its work-related introductory/relationship charts are retained. Descriptor indices and dimensions must join exactly to rendered `page_N` identities. Any final mixed spread must be fully ready; only its body half is saved. After all body indices are captured, a final mixed group is followed by the remaining extra pair, while a final body-only group is followed by the first extra pair and final single linked extra. These exact groups are AD, never capture, with at most two extra-group turns and one turn per group. Index/role/prior-group history rejects skips and repeated advances. Repeated extra tails time out without further turns. Missing/clipped halves, unsafe pixels, body gaps, changed manifests, other extra/link sequences, and unverified terminal states fail closed. This supports the observed shapes only, not arbitrary `isExtraPage` semantics.
 
 END still requires the entire body prefix to be captured, matching episode identity, and cleared or matching inactive image shells. A positive panel can be the original next-chapter panel, or the observed no-next latest-episode panel: exactly one visible last-page root, direct three-action block with exact labels お気に入り / いいね / コメント, a visible direct recommendation block with the expected heading, and exactly one shown matching viewer title. The latter title may be below the viewport; hidden titles and ambiguous/partial panels are rejected. It requires no next-chapter link/panel, never infers END from their absence, and never clicks any action or recommendation. First-party `chapterMainName` remains bound to the freshly verified listing label. Optional `chapterSubName` is bound separately; the viewer title must match the whitespace-normalized main title plus subtitle. Absent/null subtitles are empty; other non-string subtitles and subtitle drift fail closed.
 
