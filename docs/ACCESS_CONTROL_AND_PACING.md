@@ -415,6 +415,12 @@ consumption, a selected-candidate attempt, or a grant. It never shares publicly,
 retries a possibly dispatched spin, or records a daily ledger. AccessGuard,
 cancellation and timeout bounds remain active through preparation. The total
 65-second site budget is separate from individual observation timeouts.
+After a successful spin click, both adapters wait five seconds, then request new
+stock. Gacha result fields/panels are not parsed or awaited. Optional preparation
+errors are logged and recover only through read-only home/auth hydration and fresh
+stock; no spin is replayed. Unknown stock, account/access evidence, AccessGuard
+stops and cancellation retain their fail-closed behavior. Scoped campaign closes
+accept `popClose` and legacy `closeCpPop` on home and gacha, once per route.
 
 Grant expiry fallback/caps may vary by requested resource via
 `access_grant_until_for_resource(started_at, resource)`. The default delegates to

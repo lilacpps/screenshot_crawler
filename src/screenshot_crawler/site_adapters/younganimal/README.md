@@ -9,9 +9,13 @@ candidates, active manual grants, and coin-only paid episodes from naturally
 emitted listing responses; it does not click or consume tickets.
 
 Premium uses the account-wide すぐ無料チケット stock. Its site-owned resolver
-visits home, closes the optional campaign `popClose` (including delayed popup),
-and spins the daily native gacha once when available. Absent/used gacha continues;
-there is no share, replay or daily ledger. It reads stock N and opens only the
+visits home, closes the optional campaign `popClose` or legacy `closeCpPop`
+(including delayed home/gacha popups, once per route and popup kind), and spins the daily native
+gacha once when available. It waits five seconds after the click, without parsing
+or awaiting the result, then requests fresh stock. Optional preparation errors
+are logged and continue after read-only home/auth recovery and fresh stock.
+Absent/used gacha continues; there is no share, replay or daily ledger.
+Unknown stock/auth/access and fatal stops remain failures. It reads stock N and opens only the
 first Catalog candidate for eligibility/wallet verification, selecting the first
 N in unchanged Catalog order. Zero stops the pass before episode navigation;
 unknown state fails closed. No quota-episode search or Work cooldown applies.
@@ -24,6 +28,21 @@ are supported; `all` runs Work then Premium. Existing resource hooks and no-cap
 Younganimal expiry policy preserve the observed native15-day grant without
 shared production edits. Full behavior, limits and verification:
 `note/11_younganimal.md`, `runbooks/younganimal-premium/README.md`.
+
+Home preparation also closes the `「待つと無料」購読中作品のチャージが完了しました。`
+notice using its footer `閉じる`, scoped to the unique native dialog and exact
+`h2.dialog-h.mode-waitfree` heading. It never selects the notice's read link or
+top X. The source-observed `div.dialog-f > button.dialog-f-btn` must be unique,
+have the exact label, and be outside a form. One campaign and one notice may be
+closed per home/gacha route (four closes total), with bounded two-second click/hide
+waits and handler cleanup on every exit. Campaign closes retain old/new markers
+and accept the source-observed button/submit types.
+`Younganimal home popup:` JSON in job `stdout.log` records detection, dismissal,
+failure and unknown visible modal structures. Counts, tag/class/marker/type/role,
+close/read booleans and home-link/spin covering ancestors are bounded; page text,
+titles, URLs, account/input values, HTML and images are excluded. Source evidence
+is `.tmp/ya-charge-popup-20261123/evidence.json`; the live popup was not reproduced,
+so the revised close flow is synthetic-browser verified only.
 
 2026-11-21 isolated live verification consumed two tickets (18 ->16): grant-only
 left Item pending with zero Artifacts; normal captured14 native WebPs through
@@ -481,11 +500,13 @@ The later Item/Source 33083 read-only trace also observed
 bounded read-only reproduction on 2026-10-22 additionally identified the exact
 `/category/manga/day/2/1` RSC GET fetch. Item/Source 36914's failure and
 read-only reproduction on 2026-10-25 additionally identified the exact
-`/category/manga/day/1/1` RSC GET fetch. These use the same abort-only
+`/category/manga/day/1/1` RSC GET fetch. Item 52086 / Source 52393's retained
+failure and read-only reproduction on 2026-11-23 additionally identified
+`/category/manga/day/5/1`. These use the same abort-only
 known-page predicate: exact same-site origin, main-frame fetch, no navigation,
 and both `_rsc` query and `rsc` header markers. The product prefetch is blocked
 without failing the selected episode; other signatures remain fatal.
-Only those two observed category paths are recognized; other category paths, suffixes
+Only those three observed category paths are recognized; other category paths, suffixes
 and trailing-slash variants remain unknown. The 33403 diagnostics recorded
 `ticket_action_attempted=false`, and its metrics contain no rental-checkout
 request. The fixed production guard was checked on the exact episode with one
@@ -500,6 +521,15 @@ URL, zero click/checkout attempts, and blocked every mutating request (26
 baseline, 24 fixed). Evidence: `output/younganimal-error-36914/baseline.json`
 and `fixed.json`. This verifies route handling, not a fresh consuming grant;
 no Catalog/library write or consuming grant-only retry was performed.
+The 52086 failure occurred before the ticket action latch on episode
+`d981278f4fe8d`, work `8f7368e602ae0`. Both read-only shared-CDP probes used one
+owned Page/main document, observed the day/5/1 main-frame GET/fetch with both RSC
+markers and no navigation, retained the canonical target URL, and recorded zero
+clicks/checkouts. Baseline reproduced the fatal route; the fixed guard recorded
+and aborted it with no fatal reason or category response. All mutating requests
+were blocked (23 baseline, 21 fixed). Evidence:
+`.tmp/ya-rsc-20261123/baseline.json` and `fixed.json`. No new ticket, Catalog or
+library operation was performed; consuming entry was not retested.
 The adapter recognizes only these observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
 before any downstream handler. Stripe matching ignores URL fragments. The

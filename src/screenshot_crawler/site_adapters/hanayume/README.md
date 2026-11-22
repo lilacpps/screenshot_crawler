@@ -9,17 +9,22 @@ per-Work stock selection, with no per-Work limit or durable stock/cooldown.
 Work Ticket retains its original local 23-hour skip and 72-hour grant cap.
 
 The site-local `premium_access.py` visits home, closes the unique open campaign
-dialog with its scoped `popClose` submit button (including a delayed popup while
-the gacha link is waiting), and optionally performs one daily native gacha spin.
-The close is attempted once and the temporary locator handler is always removed.
+dialog with its scoped `popClose` or legacy `closeCpPop` submit button, including
+delayed popups over the home link or gacha spin. The handler stays active through
+the optional spin/settle and closes once per home/gacha route (at most two total);
+it is always removed on exit.
 `Hanayume home popup:` lines in GUI job `stdout.log` record detection/dismissal
 and structural evidence on home-navigation failure: bounded dialog/control tags,
-classes, `data-e2e`, types, link count and the element covering the link. They
-exclude text, HTML, URLs, images and account values. Unknown or repeated dialogs
-stop with diagnostics. Missing/
+classes, `data-e2e`, types, home/gacha phase, link/spin counts, covering elements
+and up to five ancestors with controls, plus other visible modal structures.
+They exclude text, HTML, URLs, images and account values. Unknown or repeated
+dialogs are not clicked and leave diagnostics. Missing/
 hidden entry continues to stock selection; no daily ledger, share or uncertain
-action replay is used. Preparation is bounded to 65 seconds with a 35-second
-result wait. Natural account `bonusValue` is ticket stock and `paidCoin` remains
+action replay is used. After a click the page waits five seconds, then requests
+fresh stock. Result parsing/verification and the 35-second result wait are removed.
+Optional gacha errors log/skip preparation and recover read-only home/auth plus
+new stock; unknown stock/auth/access and fatal stops still fail closed. The total
+65-second resolver bound remains. Natural account `bonusValue` is ticket stock and `paidCoin` remains
 separate. Zero stops the whole pass before another episode/Work. Positive stock
 allows one first-target check and selects only the first N existing Catalog
 quota candidates; later candidate pages are never explored to find eligibility.
@@ -40,8 +45,8 @@ Bounded live verification used three real Premium tickets total: one probe,
 one production grant-only, one production normal Batch on 高嶺と花. Grant-only
 saved the native expiry with Item pending; normal Batch reached END and created
 a six-page ZIP with Item completed. The daily gacha was spun once (result 1),
-with no share/retry. The 2026-11-22 popup correction has synthetic browser
-coverage. A read-only shared-CDP home check saw no popup; downloaded site code
+with no share/retry. The 2026-11-22/23 popup corrections have synthetic browser
+coverage. Read-only shared-CDP home/gacha checks saw no popup; downloaded site code
 confirmed the `popClose` submit-button shape, but an actual close was not
 re-executed live. No new spin or ticket was used. Existing
 Work Ticket verification below is historical and its resource counts are separate.

@@ -70,14 +70,96 @@ Only Premium opts into the existing per-Work stock resolver. No new CLI flag,
 configuration, durable stock/gacha ledger or shared production change is added.
 
 The resolver visits home, waits for positive account authentication and stock,
-and closes the optional unique campaign dialog using its `popClose` button.
+and closes the optional unique campaign dialog using its `popClose` or legacy
+`closeCpPop` button (`button.dialog-btn.mode-campaign` with the observed `button`
+or `submit` type, inside
+`dialog.dialog.mode-campaign[data-e2e="pop"][open]`).
 A scoped locator handler also closes a delayed campaign that obstructs the
-gacha link; unknown or repeated dialogs fail closed. An absent link continues.
+gacha link or the spin button on the gacha page. It remains installed through the
+spin/settle, closing each popup kind at most once per home/gacha route (one
+campaign plus one charge notice per route, four total); unknown,
+duplicate or repeated controls are never force-clicked. An absent link continues.
 The native gacha permits one click only for `canRollGacha=true,gachaTimes=0`.
 Used state continues without clicking even when the home link is still present.
-Result proof requires the matching native count 0..2 and visible result panel;
-zero is displayed as `はずれ`. No share, replay or daily-use tracking occurs.
-Preparation is bounded at 65 seconds, including 35 seconds for the result.
+After a successful click, wait five seconds, then fetch new `/api/userPoint`
+stock. Result-field parsing, panel verification and the 35-second result wait
+are removed. No share, replay or daily-use tracking occurs. Preparation retains
+the total 65-second bound. A Playwright/timeout/unknown preparation failure logs
+`Younganimal daily gacha: {event: preparation_skipped, error_type: ...}` to job
+stdout without raw error text. The resolver recovers read-only home, positive
+fresh account auth/header, then freshly requested stock; old stock cannot select
+candidates. Unknown stock/auth/access, AccessGuard stops and cancellation remain
+fatal. No new setting or output Artifact is introduced.
+Expected close-handler errors log `campaign_close_failed` inside the callback;
+the blocked original action fails within its existing bound. This avoids a
+Playwright event-listener exception leaking into the read-only recovery goto.
+
+Charge-complete notice and popup diagnostics (2026-11-23): the native open
+`dialog.dialog[data-e2e="pop"]` containing the exact whitespace-normalized
+`「待つと無料」購読中作品のチャージが完了しました。` heading under
+`div.dialog-content > h2.dialog-h.mode-waitfree` is closed through its unique
+`div.dialog-content > div.dialog-f > button.dialog-f-btn`, whose label must be
+exactly `閉じる`, type absent or `button`, and whose form ancestor must be absent.
+The read link and top `dialog-close` X are never used. Campaign and notice use
+separate temporary locator handlers, allowing sequential and delayed popups;
+each kind's close is attempted once per home/gacha route with existing two-second
+click/hide bounds. Handlers are removed in reverse installation order even on
+failure. Unknown, duplicate, changed or repeated controls are not clicked.
+
+Worker stdout `Younganimal home popup:` JSON has `home_ready`,
+`campaign_detected/dismissed`, `charge_notice_detected/dismissed`,
+`campaign_close_failed`, `charge_notice_close_failed`, `gacha_preparation_failed`
+and `gacha_preparation_skipped` events. The readiness event is emitted when a
+modal root exists, even if the gacha entry is absent. Diagnostics retain only
+phase, visible modal count (up to four roots), bounded tag/class/`data-e2e`/type/role,
+charge-heading marker count, up to eight controls with exact-close/read booleans,
+and home-link/spin counts with up to five covering-element ancestors and their
+controls. No actual headings, work titles, account/input values, URLs, HTML,
+images, response bodies or raw errors are logged. Inspection has a one-second
+bound and cannot replace the original error. These are operator stdout logs,
+not new metrics or a Catalog/output schema. No setting or CLI flag is added.
+
+The recent job `c56080cf-8b16-4a29-aa4c-3418cce02862` retained only a
+`preparation_skipped/TimeoutError`, without popup structure; it cannot prove
+which popup obstructed the page. Read-only shared-CDP home checks found no open
+popup, but the currently served component source confirms the screenshot's
+heading, read link, top X and unmarked footer close (the close handler only
+sets popup state false). Current campaign source also explicitly uses `submit`;
+the previous tested `button` type remains supported. Evidence:
+`.tmp/ya-charge-popup-20261123/evidence.json`. All non-read requests were blocked;
+no gacha, read link, rental, ticket, Catalog, Watchlist or library action was
+performed. Real dismissal of this notice remains unverified; it is covered by
+synthetic browser fixtures. The change is site-local home preparation, so
+`note/00_core.md` needs no additional update for this correction.
+
+Validation for the charge-notice correction: the complete Younganimal Premium
+browser file, optional-gacha recovery browser file and Younganimal
+live-access/policy/batch Unit files passed **224 tests, 0 failed / 0 skipped /
+0 deselected**, 70.60s (72 existing Python/pytest-asyncio deprecations). XML:
+`.tmp/ya-charge-popup-20261123/affected.xml`. Earlier focused selections passed
+16 daily-gacha/popup cases (41 deselected) and six close-rejection/diagnostic
+cases (57 deselected), both with zero skips. Coverage includes immediate/delayed
+charge notices, absent gacha, sequential charge/campaign, source-observed
+campaign submit type, no read/top-X/unrelated clicks, changed heading, missing/
+duplicate/footer-label/form-owned close and unknown dialog rejection, structural
+diagnostics with content exclusion, five-second settling and fresh-stock/error/
+cancellation behavior. `ruff check src tests` and scoped whitespace checks passed.
+Full pytest and separate Research suites were not rerun because the change is
+site-local home preparation with unchanged shared runtime, resource and capture
+contracts. Live checks were read-only source/structure inspections; actual notice
+dismissal, gacha or ticket entry was not exercised live for this revision.
+
+The 2026-11-23 correction passed the eight-file affected Unit/browser selection:
+**380 passed, 0 failed / 0 skipped / 0 deselected**, 119.63s, 364 existing
+Python/pytest-asyncio deprecations; `.tmp/hy-popup-20261123/final.xml`.
+Both old/new close markers, home/gacha/delayed overlays, five-second settle,
+ignored results, fresh-stock continuation and actual unknown/invalid close
+recovery are covered, including preserved fatal stops/cancellation and no writes.
+`ruff check src tests` and scoped whitespace checks passed. Full/Research suites
+were not rerun because these are site-local preparation changes with unchanged
+shared runtime and entry/capture contracts. No new Younganimal live close, spin
+or ticket was exercised for this correction; the older live evidence below
+does not verify the revised flow.
 
 `/api/userPoint.bonusValue` supplies stock; `paidCoin` stays separate. Home zero
 ends the whole Premium pass before episode entry. Otherwise the first Catalog
@@ -611,7 +693,7 @@ before starting a candidate; its UTF-8 rerun completed without a code change.
 
 
 
-### Ticket-entry category prefetch: Items/Sources 33403 and 36914
+### Ticket-entry category prefetch: Items 33403, 36914 and 52086
 
 The 2026-10-22 06:01:52 JST grant-only attempt on episode `c54c96563dfb3`
 / work `94d9f27c19815` failed before any ticket action. Its diagnostic
@@ -631,7 +713,16 @@ shows `ticket_action_attempted=false`; metrics run
 zero HTTP 403/429/5xx. A bounded shared-CDP baseline reproduced that natural
 non-navigation main-frame GET fetch and confirmed both RSC markers.
 
-`live_access.guarded_route_reason()` now recognizes those two exact paths under the
+The 2026-11-23 07:38:34 JST grant-only attempt on Item 52086 / Source 52393,
+episode `d981278f4fe8d` / work `8f7368e602ae0` (3月のライオン Chapter.100 泳ぐ人①),
+failed on `/category/manga/day/5/1`. Both retained failures (07:37 and 07:38) show
+`ticket_action_attempted=false`, main-frame non-navigation GET/fetch and the
+same first fatal path. The later metrics run
+`12f3fc693918451e92be6175741a0ada` contains no rental-checkout response or
+403/429/5xx. The shared-CDP baseline reproduced that exact natural request and
+confirmed both `_rsc` query and `rsc` header markers, with zero clicks/checkouts.
+
+`live_access.guarded_route_reason()` now recognizes those three exact paths under the
 existing known-page predicate: exact HTTPS site origin, GET, fetch, main frame,
 no navigation, and both RSC markers. The route is recorded and aborted before
 downstream dispatch while the selected episode operation continues. Recognition
@@ -660,6 +751,41 @@ normal Catalog/library write, capture or consuming grant-only retry was made.
 There is no new CLI/configuration, generic access/resource or shared Core
 behavior, so `note/00_core.md` needs no update. Rerun the existing Batch
 command to use the fix; unknown routes still fail closed.
+
+52086 evidence is isolated in `.tmp/ya-rsc-20261123/`: the bounded `probe.py`,
+`baseline.json` and `fixed.json`. Each probe used one owned Page and one exact
+episode main document, with unchanged canonical URL, zero clicks, zero checkout
+attempts and zero category responses. All mutating requests were blocked (23
+baseline, 21 fixed). The baseline reproduced `unknown_rsc_page_route`; the fixed
+production guard recorded/aborted day/5/1 as one of three known-page prefetches,
+with no fatal reason. No normal Catalog, Watchlist, library, capture, ticket or
+consuming grant-only retry was performed. The current revision extends only the
+site-local exact-path abort predicate; no shared runtime/resource/CLI contract
+changes and no `note/00_core.md` update are needed for this correction.
+
+2026-11-23 validation: the complete live-access, policy and batch Unit files plus
+the complete Premium browser file passed **197 tests** (68 existing deprecation
+warnings, 52.76s). The Adapter browser `-k 'ticket or grant'` selection passed
+**28 cases**, with 407 unrelated cases deselected (5 existing deprecation
+warnings, 69.70s). Both runs had zero failures/skips. XML evidence is
+`.tmp/ya-rsc-20261123/affected.xml` and `browser.xml`. This covers strict day/5/1
+signature/near-miss rejection, abort before downstream dispatch, normal Capture/END,
+grant-only continuation, Premium regressions, unknown-route diagnostics and
+post-consumption failure/cancellation persistence. `ruff check src tests` and
+scoped `git diff --check -- src tests note docs` passed.
+
+The initial broader `-k 'prefetch or route'` selection also selected a legacy
+rendered-capture case: 127 passed, 1 failed, 428 deselected, zero skips.
+`test_younganimal_drains_offscreen_prefetch_before_selecting_capture[rendered]`
+expects the unsupported rendered fallback and fails with `Younganimal generic
+locator and screenshot fallback is unsupported`. The same isolated case fails
+with the HEAD route classifier restored in memory by
+`.tmp/ya-rsc-20261123/check_baseline.py`; no production file was reverted.
+This preexisting capture-fixture mismatch is unresolved and outside this
+exact-route correction. Full pytest and separate Research/Probe suites were not
+run because shared Core, capture, Catalog/resource policy and research helpers
+are unchanged. Live verification covers read-only route handling only; consuming
+grant-only/normal ticket entry was not replayed.
 
 Validation covers 128 live-access/policy/batch Unit cases and 24 real-browser
 ticket-entry Integration cases, including normal Capture/END and grant-only
@@ -2007,7 +2133,7 @@ static site policy changed. Shared Core, Catalog schema, Batch, and Viewer code 
 by this extension; the earlier Viewer correction above is a separate change.
 
 The known-page RSC prefetch handling recognizes same-origin
-`/store_items/<positive-id>` and the exact observed `/category/manga/day/2/1`
+`/store_items/<positive-id>` and the exact observed `/category/manga/day/{1,2,5}/1`
 GET fetches on the main frame with no navigation
 and both `_rsc` query and `rsc` header markers. Like the existing known-page
 prefetches, these requests are aborted before downstream dispatch without

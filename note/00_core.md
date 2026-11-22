@@ -101,9 +101,23 @@ Hanayume Premium returns None so its positively confirmed native 15-day expiry
 is retained; Work Ticket still uses its separate 72-hour policy cap. No Catalog
 schema, CLI flag, Core Runner, browser lifecycle or generic resource-name branch
 is added. Per-Work stock selection and stop flags use the existing guarded
-resolver, including Hanayume's bounded optional daily-gacha preparation. Premium
-has no durable balance or work resource state. Exact implementation and live
+resolver, including Hanayume's bounded optional daily-gacha preparation. Optional
+preparation in Hanayume and Younganimal clicks at most once, waits five seconds
+without checking the gacha result, then requests fresh stock. Optional preparation
+errors log/skip the gacha and require positive read-only account recovery plus fresh
+stock. AccessGuard, cancellation, unknown balance/access and checkout proof retain
+their stop semantics. Both sites accept scoped `popClose` / legacy `closeCpPop`
+through the spin; Hanayume logs unknown overlay structure in job stdout. These are
+site-local changes using existing hooks, with no shared runtime/CLI/schema change.
+Premium has no durable balance or work resource state. Exact implementation and live
 limits are in `note/10_hanayume.md`.
+
+The 2026-11-23 optional-preparation correction passed 380 affected Unit/browser
+cases with zero failures/skips/deselections, plus Ruff and scoped whitespace
+checks. Full/Research suites were not rerun because shared production code and
+research helpers are unchanged. Revised popup closes/spins are synthetic-only;
+the read-only Hanayume home/gacha check encountered no visible popup. Exact
+scope, commands/evidence and live limits are in the two site notes.
 
 Verification: 417 affected Unit and 246 affected browser cases passed, followed
 by 168 final Hanayume cases. Full snapshot: 10011 run, 10003 passed / 8 failed /

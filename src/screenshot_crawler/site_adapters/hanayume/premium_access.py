@@ -26,7 +26,7 @@ from screenshot_crawler.site_adapters.base import AccessConsumption, AccessResou
 HOME = "https://hanayume.com/"
 GACHA = HOME + "gacha"
 RESOLUTION_BUDGET_MS = 65_000
-GACHA_WAIT_MS = 35_000
+GACHA_SETTLE_SECONDS = 5.0
 READY_SECONDS = 8.0
 RECOVERY_SECONDS = 5.0
 PREMIUM_SECONDS = 15 * 24 * 60 * 60
@@ -133,8 +133,7 @@ class PremiumObserver:
                         g = data.get("gacha") if isinstance(data, dict) else None
                         if (isinstance(g, dict) and type(g.get("canRollGacha")) is bool
                                 and _integer(g.get("gachaTimes"))):
-                            reduced = {"can": g["canRollGacha"], "times": g["gachaTimes"],
-                                       "result": g.get("gachaBonusResult")}
+                            reduced = {"can": g["canRollGacha"], "times": g["gachaTimes"]}
         except (PlaywrightError, TimeoutError, ValueError, TypeError, AttributeError):
             pass
         self.rows.setdefault(kind, []).append((started, reduced))
@@ -185,9 +184,24 @@ async def _log_home_popup(page: Page, event: str) -> None:
         async with asyncio.timeout(1):
             details = await page.evaluate("""() => {
                 const meta = n => n && ({tag: n.tagName,
-                    classes: String(n.className).slice(0, 120),
+                    classes: (n.getAttribute('class') || '').slice(0, 120),
                     e2e: n.getAttribute('data-e2e')?.slice(0, 80),
+                    role: n.getAttribute('role')?.slice(0, 40),
                     type: n.getAttribute('type')?.slice(0, 20)});
+                const ancestors = n => {
+                    const result = [];
+                    for (let p = n; p && result.length < 5; p = p.parentElement)
+                        result.push({...meta(p), controls: [...p.querySelectorAll('button,a')]
+                            .slice(0, 8).map(meta)});
+                    return result;
+                };
+                const target = selector => {
+                    const nodes = document.querySelectorAll(selector), n = nodes[0];
+                    const r = n?.getBoundingClientRect();
+                    return {count: nodes.length, node: meta(n),
+                        cover: r ? ancestors(document.elementFromPoint(
+                            r.x + r.width / 2, r.y + r.height / 2)) : []};
+                };
                 const dialogs = [...document.querySelectorAll('dialog[open]')];
                 const links = document.querySelectorAll('div.home-gacha > a.home-gacha-btn[href="/gacha"]');
                 const rect = links[0]?.getBoundingClientRect();
@@ -196,11 +210,18 @@ async def _log_home_popup(page: Page, event: str) -> None:
                         controls: [...n.querySelectorAll('button,a')].slice(0, 8).map(meta)})),
                     gacha_link_count: links.length,
                     link_cover: rect ? meta(document.elementFromPoint(
-                        rect.x + rect.width / 2, rect.y + rect.height / 2)) : null};
+                        rect.x + rect.width / 2, rect.y + rect.height / 2)) : null,
+                    targets: {home_link: target('div.home-gacha > a.home-gacha-btn[href="/gacha"]'),
+                        spin: target('[data-e2e="gachaExecBtn"]')},
+                    other_popups: [...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.mission-modal')]
+                        .filter(n => n.getBoundingClientRect().width && n.getBoundingClientRect().height)
+                        .slice(0, 4).map(n => ({...meta(n),
+                            controls: [...n.querySelectorAll('button,a')].slice(0, 8).map(meta)}))};
             }""")
-    except (PlaywrightError, TimeoutError) as exc:
+    except Exception as exc:  # noqa: BLE001 - diagnostics must preserve the original failure
         details = {"inspection_error": type(exc).__name__}
-    print("Hanayume home popup: " + json.dumps({"event": event, **details}), flush=True)
+    phase = {HOME: "home", GACHA: "gacha"}.get(page.url, "other")
+    print("Hanayume home popup: " + json.dumps({"event": event, "phase": phase, **details}), flush=True)
 
 
 async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_ms: int) -> None:
@@ -208,30 +229,39 @@ async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_
     await observer.wait("stock")  # Account hydration, not mere absence of a button.
     await page.locator('#xHeader [data-e2e="signoutBtn"]').wait_for(state="attached", timeout=timeout_ms)
     campaign = page.locator('dialog.dialog.mode-campaign[data-e2e="pop"][open]')
-    dismissed = False
+    dismissed_routes: set[str] = set()
     handler_added = False
 
     async def dismiss_campaign() -> None:
-        nonlocal dismissed
         await _log_home_popup(page, "campaign_detected")
-        if dismissed or await campaign.count() != 1:
+        if page.url not in {HOME, GACHA} or page.url in dismissed_routes or await campaign.count() != 1:
             raise UnknownPageStateError("Hanayume campaign popup is ambiguous or repeated")
         # The current site applies POPUP_CLOSE after its legacy campaign marker,
         # so the rendered close button uses popClose rather than closeCpPop.
-        close = campaign.locator('button.dialog-btn.mode-campaign[data-e2e="popClose"]')
+        close = campaign.locator('button.dialog-btn.mode-campaign:is([data-e2e="popClose"],'
+                                 '[data-e2e="closeCpPop"])')
         if await close.count() != 1 or await close.get_attribute("type") != "submit":
             raise UnknownPageStateError("Hanayume campaign close is ambiguous")
-        dismissed = True
+        dismissed_routes.add(page.url)
         await close.click(timeout=2_000)
         await campaign.wait_for(state="hidden", timeout=2_000)
         print('Hanayume home popup: {"event": "campaign_dismissed"}', flush=True)
+
+    async def handle_campaign() -> None:
+        try:
+            await dismiss_campaign()
+        except (PlaywrightError, UnknownPageStateError):
+            # Exceptions escaping a locator-handler event can poison the next
+            # Playwright call, including read-only recovery. Leave the popup
+            # untouched and let the original action's bounded wait fail.
+            await _log_home_popup(page, "campaign_close_failed")
 
     try:
         if await campaign.count() and await campaign.first.is_visible():
             await dismiss_campaign()
         # A campaign can appear after account hydration, while the link waits
         # for actionability. Never force-click through an unknown overlay.
-        await page.add_locator_handler(campaign, dismiss_campaign)
+        await page.add_locator_handler(campaign, handle_campaign)
         handler_added = True
         link = page.locator('div.home-gacha > a.home-gacha-btn[href="/gacha"]')
         if await link.count() == 0 or (await link.count() == 1 and not await link.is_visible()):
@@ -242,39 +272,25 @@ async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_
         await page.wait_for_url(GACHA, timeout=timeout_ms)
         if page.url != GACHA:
             raise UnknownPageStateError("Hanayume daily gacha route changed")
+        _, native = await observer.wait("gacha")
+        if not native["can"] or native["times"] != 0:
+            return  # Never use a share/retry entitlement.
+        button = page.locator('div.gacha-btn-wrap > a.gacha-btn.mode-user[data-e2e="gachaExecBtn"]')
+        if await button.count() != 1 or not await button.is_visible():
+            raise UnknownPageStateError("Hanayume daily gacha action is unknown")
+        if "すぐ無料ガチャをまわす" not in await button.inner_text():
+            raise UnknownPageStateError("Hanayume daily gacha label changed")
+        # One dispatch only. Results/animation are irrelevant to resource selection;
+        # the resolver reads fresh ticket stock afterward, even if this click fails.
+        await button.click(timeout=2_000, no_wait_after=True)
+        await asyncio.sleep(GACHA_SETTLE_SECONDS)
     except (PlaywrightError, UnknownPageStateError):
-        await _log_home_popup(page, "home_gacha_navigation_failed")
+        await _log_home_popup(page, "home_gacha_navigation_failed" if page.url == HOME
+                              else "gacha_preparation_failed")
         raise
     finally:
         if handler_added:
             await page.remove_locator_handler(campaign)
-    _, native = await observer.wait("gacha")
-    if not native["can"] or native["times"] != 0:
-        return  # Never use a share/retry entitlement.
-    button = page.locator('div.gacha-btn-wrap > a.gacha-btn.mode-user[data-e2e="gachaExecBtn"]')
-    if await button.count() != 1 or not await button.is_visible():
-        raise UnknownPageStateError("Hanayume daily gacha action is unknown")
-    if "すぐ無料ガチャをまわす" not in await button.inner_text():
-        raise UnknownPageStateError("Hanayume daily gacha label changed")
-    # One dispatch only. A timeout/error never retries the daily action.
-    started = datetime.now(UTC)
-    try:
-        await button.click(timeout=2_000, no_wait_after=True)
-        async with asyncio.timeout(GACHA_WAIT_MS / 1000):
-            while True:
-                row = observer.latest("gacha", after=started)
-                result = page.locator('[data-e2e="gachaResult"] [data-e2e="gachaResTicket"]')
-                if (row is not None and row[1]["times"] == 1 and row[1]["can"] is False
-                        and _integer(row[1]["result"], maximum=2)
-                        and await result.count() == 1 and await result.is_visible()
-                        and await result.inner_text() == str(row[1]["result"])):
-                    refreshed = datetime.now(UTC)
-                    await page.evaluate("() => fetch('/api/userPoint',{cache:'no-store',redirect:'error'})")
-                    await observer.wait("stock", after=refreshed)
-                    return
-                await asyncio.sleep(0.15)
-    except (PlaywrightError, TimeoutError) as exc:
-        raise UnknownPageStateError("Hanayume daily gacha outcome unknown; no replay") from exc
 
 
 async def _wallet_count(page: Page, observer: PremiumObserver, *, after: datetime) -> dict:
@@ -304,8 +320,21 @@ async def resolve_ticket_candidates(page: Page, candidates: tuple[object, ...], 
     observer = PremiumObserver(page, match[2], match[1])
     try:
         async with asyncio.timeout(RESOLUTION_BUDGET_MS / 1000):
-            await prepare_daily_gacha(page, observer, timeout_ms=timeout_ms)
-            _, home_stock = await observer.wait("stock")
+            try:
+                await prepare_daily_gacha(page, observer, timeout_ms=timeout_ms)
+            except (PlaywrightError, TimeoutError, UnknownPageStateError) as exc:
+                # Optional preparation never authorizes a replay or stale stock.
+                # Recover only the read-only account page, not the gacha action.
+                await _log_home_popup(page, "gacha_preparation_skipped")
+                print("Hanayume daily gacha: " + json.dumps({
+                    "event": "preparation_skipped", "error_type": type(exc).__name__,
+                }), flush=True)
+                await _goto(page, HOME, timeout_ms)
+                await page.locator('#xHeader [data-e2e="signoutBtn"]').wait_for(
+                    state="attached", timeout=timeout_ms)
+            refreshed = datetime.now(UTC)
+            await page.evaluate("() => fetch('/api/userPoint',{cache:'no-store',redirect:'error'})")
+            _, home_stock = await observer.wait("stock", after=refreshed)
             if home_stock["count"] == 0:
                 return _selection(candidates, 0)
             if before_episode is not None:
