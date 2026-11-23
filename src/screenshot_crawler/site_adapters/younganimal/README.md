@@ -9,9 +9,13 @@ candidates, active manual grants, and coin-only paid episodes from naturally
 emitted listing responses; it does not click or consume tickets.
 
 Premium uses the account-wide すぐ無料チケット stock. Its site-owned resolver
-visits home, closes the optional campaign `popClose` (including delayed popup),
-and spins the daily native gacha once when available. Absent/used gacha continues;
-there is no share, replay or daily ledger. It reads stock N and opens only the
+visits home, closes the optional campaign `popClose` or legacy `closeCpPop`
+(including delayed home/gacha popups, once per route and popup kind), and spins the daily native
+gacha once when available. It waits five seconds after the click, without parsing
+or awaiting the result, then requests fresh stock. Optional preparation errors
+are logged and continue after read-only home/auth recovery and fresh stock.
+Absent/used gacha continues; there is no share, replay or daily ledger.
+Unknown stock/auth/access and fatal stops remain failures. It reads stock N and opens only the
 first Catalog candidate for eligibility/wallet verification, selecting the first
 N in unchanged Catalog order. Zero stops the pass before episode navigation;
 unknown state fails closed. No quota-episode search or Work cooldown applies.
@@ -24,6 +28,21 @@ are supported; `all` runs Work then Premium. Existing resource hooks and no-cap
 Younganimal expiry policy preserve the observed native15-day grant without
 shared production edits. Full behavior, limits and verification:
 `note/11_younganimal.md`, `runbooks/younganimal-premium/README.md`.
+
+Home preparation also closes the `「待つと無料」購読中作品のチャージが完了しました。`
+notice using its footer `閉じる`, scoped to the unique native dialog and exact
+`h2.dialog-h.mode-waitfree` heading. It never selects the notice's read link or
+top X. The source-observed `div.dialog-f > button.dialog-f-btn` must be unique,
+have the exact label, and be outside a form. One campaign and one notice may be
+closed per home/gacha route (four closes total), with bounded two-second click/hide
+waits and handler cleanup on every exit. Campaign closes retain old/new markers
+and accept the source-observed button/submit types.
+`Younganimal home popup:` JSON in job `stdout.log` records detection, dismissal,
+failure and unknown visible modal structures. Counts, tag/class/marker/type/role,
+close/read booleans and home-link/spin covering ancestors are bounded; page text,
+titles, URLs, account/input values, HTML and images are excluded. Source evidence
+is `.tmp/ya-charge-popup-20261123/evidence.json`; the live popup was not reproduced,
+so the revised close flow is synthetic-browser verified only.
 
 2026-11-21 isolated live verification consumed two tickets (18 ->16): grant-only
 left Item pending with zero Artifacts; normal captured14 native WebPs through
@@ -481,11 +500,13 @@ The later Item/Source 33083 read-only trace also observed
 bounded read-only reproduction on 2026-10-22 additionally identified the exact
 `/category/manga/day/2/1` RSC GET fetch. Item/Source 36914's failure and
 read-only reproduction on 2026-10-25 additionally identified the exact
-`/category/manga/day/1/1` RSC GET fetch. These use the same abort-only
+`/category/manga/day/1/1` RSC GET fetch. Item 52086 / Source 52393's retained
+failure and read-only reproduction on 2026-11-23 additionally identified
+`/category/manga/day/5/1`. These use the same abort-only
 known-page predicate: exact same-site origin, main-frame fetch, no navigation,
 and both `_rsc` query and `rsc` header markers. The product prefetch is blocked
 without failing the selected episode; other signatures remain fatal.
-Only those two observed category paths are recognized; other category paths, suffixes
+Only those three observed category paths are recognized; other category paths, suffixes
 and trailing-slash variants remain unknown. The 33403 diagnostics recorded
 `ticket_action_attempted=false`, and its metrics contain no rental-checkout
 request. The fixed production guard was checked on the exact episode with one
@@ -500,6 +521,15 @@ URL, zero click/checkout attempts, and blocked every mutating request (26
 baseline, 24 fixed). Evidence: `output/younganimal-error-36914/baseline.json`
 and `fixed.json`. This verifies route handling, not a fresh consuming grant;
 no Catalog/library write or consuming grant-only retry was performed.
+The 52086 failure occurred before the ticket action latch on episode
+`d981278f4fe8d`, work `8f7368e602ae0`. Both read-only shared-CDP probes used one
+owned Page/main document, observed the day/5/1 main-frame GET/fetch with both RSC
+markers and no navigation, retained the canonical target URL, and recorded zero
+clicks/checkouts. Baseline reproduced the fatal route; the fixed guard recorded
+and aborted it with no fatal reason or category response. All mutating requests
+were blocked (23 baseline, 21 fixed). Evidence:
+`.tmp/ya-rsc-20261123/baseline.json` and `fixed.json`. No new ticket, Catalog or
+library operation was performed; consuming entry was not retested.
 The adapter recognizes only these observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
 before any downstream handler. Stripe matching ignores URL fragments. The
@@ -899,17 +929,31 @@ trailing PRs: top PR 0, exact blank 1, body 2-10, CI 11, PR 12-14, Good 15,
 Last 16, seek min=1/max=17/step=2. `top_empty_three_pr` requires the positive
 top-empty flag, horizontal/spread/RTL and PR/CI/Good capabilities, no vertical
 or single mode, exact canvas-free lead/blank/tail roles and contiguous known
-body states. Its derived body count B=N-8 is odd and at least three; seek max
-must equal N. This P=3 profile remains distinct from the observed even-body
-P=1/blank profile above; other blank/parity combinations and arbitrary PR
-counts remain unsupported.
+body states. Its derived body count B=N-8 is odd and at least three with
+max=N, or even and at least four with max=N-1. Arbitrary PR counts and
+shorter incomplete shapes remain unsupported.
 
 At max seek the centered top PR/blank has first+top-PR flags and is skipped by
-one ordinary public seek step. Body pairs start at max-2; seek 7 is the final
-single body/CI with CI+PR flags. Seeks 5 and 3 are PR/PR then PR/Good with PR;
+one ordinary public seek step. For the odd-body layout, body pairs start at
+max-2; seek 7 is the final single body/CI with CI+PR flags. Seeks 5 and 3 are PR/PR then PR/Good with PR;
 seek 1 is the unique visible/centered Last with Last-only flags. Python parsing,
 rewind, native source proof and CI-widget geometry use the same mapping. Full
-body coverage remains mandatory before END. Isolated normal Batch verification
+body coverage remains mandatory before END. For the even-body variant, the
+last body pair is at seek 7 without phase flags, CI/PR is at 5 with CI+PR,
+the PR pair is at 3 with PR, and Good/Last is at 1 with Last+PR. This map was
+observed at all fourteen public seeks on Item 52178 / Source 52485
+(`5ab62712681e2`, Chapter.7 ひな), whose twenty bodies occupy slots 2-21
+and whose exact CI/PR/PR/PR/Good/Last tail occupies 22-27. The earlier
+odd-only predicate caused its `PR-tail body mapping changed` timeout.
+Python, native source capture and CI-widget geometry now accept this proven
+even-body variant under the existing `top_empty_three_pr` name. Existing
+role, phase, center, source/replay, mutation and complete coverage proofs
+remain mandatory; there is no new option or timeout/access change.
+Final-code isolated Runner verification captured all twenty native 960x1364
+WebPs through END and validated ZIP CRC/order/member hashes/decode, without
+a ticket action or writes to the normal Catalog/library. Evidence:
+`output/younganimal-fix-52178/verified-final/live-report.json`.
+Earlier isolated normal Batch verification on Item/Source 35765
 completed all nine native 960x1364 WebP pages, independently equal to source
 RGBA, through END/ZIP/Catalog with no checkout or resource consumption. The
 normal Catalog and archives were untouched. The site note records test scope

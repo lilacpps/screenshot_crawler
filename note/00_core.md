@@ -1,3 +1,157 @@
+## Forward-click timeout recovery (2026-11-23)
+
+Magapoke, Comic DAYS and Jump+ page-forward controls use Playwright's ordinary
+click actionability wait with a 3000 ms upper bound. A ready control is clicked
+immediately; no fixed three-second sleep or application-level click replay is
+added. Magapoke retains its observed offset click position; Jump+ retains its
+existing transit-guide wait and startup/rewind behavior.
+
+The lightweight `patterns/forward_click.py` helper retains a timed-out forward
+operation only when the Adapter observed a known one/two-page body position
+before the click. The next `wait_for_change` then observes the same Page without
+another click, including without Magapoke's ordinary navigation retries. It
+requires repeated stable Adapter body observations with consecutive positions
+immediately following the prior body/spread. Same-position redraws do not prove
+progress; stable skipped/reversed/unknown positions and route changes fail
+closed. The observation deadline starts at the original click timeout and is
+bounded by the existing Adapter page-change budget; polling or a slow observation
+cannot reset it. Successful recovery returns to ordinary capture/provenance
+validation. No capture proof or END rule is relaxed.
+
+Missing pre-click body evidence, startup controls, and a timeout followed only
+by an empty/ad/terminal-looking screen do not authorize recovery. Such cases
+retain the original timeout and existing Batch recovery contract. This helper
+does not infer END or advance through non-body screens. Ordinary successful-click
+navigation/terminal handling remains authoritative. Cancellation, AccessGuard
+rejection, quota entry and grant-only behavior are unchanged.
+
+Failure `metadata.json` exposes `adapter_debug.forward_click`: outcome, bounded
+body positions, elapsed click/recovery milliseconds, sample count, a body-signature
+hash and a best-effort control snapshot (visibility/disabled/rect/pointer-hit and
+covering tag). It records no text, URLs, response bodies, credentials or images.
+The control inspection has a 250 ms bound and cannot replace the original click
+failure. State is reset by `configure_run`; each successful new click replaces the
+previous operation's diagnostic snapshot. No CLI/YAML option is added.
+
+Validation uses synthetic Chromium viewers and existing site Unit/Integration
+coverage. New real-site recovery/rate verification is not yet performed; the old
+six failed jobs and their manual reruns do not prove this implementation's live
+recovery rate.
+
+Validation (2026-11-23): the final affected Unit/browser suite passed 486
+cases; the completed 53-case recovery browser file and 36 CLI/Executor retry
+boundary cases give **528 unique passed, 0 failures/errors/skips**, deduplicated
+by testcase identity. Synthetic real-browser coverage includes immediate and
+>1-second actionability, late body/draw completion after an ambiguous click,
+permanent covering UI, unchanged/missing/skipped/reversed body positions, route
+changes, slow observations, cancellation, AccessGuard interruption, diagnostic
+failure/privacy and no application-level second click. The existing Comic DAYS
+Runner/spread/END/manifest/ZIP test also passes with a deliberately lost forward
+click completion; its ordinary variant remains green. Ruff src/tests and scoped
+diff checks passed. XML evidence: output/fc-final.xml, fc-last.xml and
+fc-boundary.xml; deduplicated summary: output/fc-verification-summary.json.
+
+An initial affected run had 437 passed and one 400 ms Comic DAYS positive
+normalization-fixture timeout. Rechecking the family had two timing failures;
+the HEAD implementation loaded in memory passed 12 cases. The five involved
+production initialization methods are AST-identical to HEAD. Only that fixture's
+positive budget was changed to 1000 ms; negative cases keep 150 ms, production
+normalization budgets remain unchanged, and the final complete module is green.
+The first targeted run also emitted a pytest-cache permission warning; final
+runs disable that cache and have no skips. Existing Python/pytest-asyncio
+deprecation warnings remain.
+
+Full repository and unrelated Research suites were not run: this change has
+three explicit Adapter consumers, all covered by affected Unit/Integration and
+retry-boundary checks, with no Core/Runner, Policy, schema or research-helper
+change. Live verification is not performed; synthetic recovery and the older
+manual live reruns do not establish the new live recovery rate. No operational
+Catalog, Watchlist, runtime settings, Chrome profile or archive was modified.
+
+## Normal Batch single retry (2026-11-22)
+
+Normal CLI/GUI Batch gives an eligible acquisition timeout one fresh-page retry:
+initial attempt plus one retry, at most two attempts of the same Item/Source/Target.
+No error-message or page-position equality comparison is required. A successful
+retry continues the Batch; a failed retry stops later candidates and sites.
+Unavailable on the retry is also a final failure, not a skip that hides the
+initial failure. Expected first-attempt unavailability keeps its existing skip behavior.
+Grant-only, Discovery and manual single-URL crawl do not acquire this retry loop.
+
+Only an exact PageChangeTimeoutError, Playwright TimeoutError or built-in TimeoutError
+raised while CrawlerRunner.run is active is eligible. Unknown states, native-proof
+or capture-unavailable errors, guard limits, entry-not-attempted/auth signals,
+configuration/identity/output failures and packaging/finalization failures stop
+without replay. Failure recording or consumption-persistence errors also prohibit
+retry. AccessGuard 403/429/challenge/CAPTCHA and operator cancellation stop immediately;
+a fatal rejection observed during timeout diagnostics/cleanup takes precedence.
+The shared repeated-content guard raises SameContentExceededError (a subtype
+of PageChangeTimeoutError), so it cannot be mistaken for a retryable timeout.
+Existing relevant-host rules and Adapter-internal bounded retries remain authoritative.
+
+After successful bounded Page cleanup, Executor revalidates the exact target and
+current Site Policy. Only eligible non-consuming direct access can be retried.
+A newly consuming quota candidate additionally requires matching confirmed observed
+consumption and its persisted grant; a before-run reservation is insufficient.
+No refund, new quota use, resource/source fallback, resume-session reuse or automatic
+Discovery occurs. BookWalker quota/capture sessions retain their no-auto-retry
+contract. Yanmaga opts out through SitePolicy.allows_automatic_candidate_retry()
+because even direct GET can initiate first-free rental and its entry must not replay.
+
+Before the retry, apply the site's existing inter_candidate_delay_ms once (default
+3000 ms, explicit 0 remains valid); cooperative stop checks are at most 200 ms apart.
+The retry opens a fresh Page and Adapter, restarts acquisition from the beginning,
+and uses a new output directory and CrawlRun. First-attempt files/diagnostics and
+all confirmed consumption remain. Only successful packaging/finalization completes
+the Item. A confirmed resource-pass stop survives successful direct retry.
+
+The logical candidate, GUI progress and --limit count once. Each actual acquisition
+attempt has its own CrawlRun; candidate_retry events and retry_scheduled/retry_started
+metrics retain the first error, CrawlRun ID and diagnostic directory. Only the final
+candidate result changes success/failure counts. retry_count is 1 only after the
+second attempt starts, including when that attempt fails. No retry setting or
+Catalog schema change is introduced.
+
+Current implementation: cli._execute_normal_candidate_with_retry,
+BatchExecutor.prepare_retry_candidate and BatchMetricsWriter retry events.
+Synthetic Unit and real local-browser tests cover recovery and repeated failure,
+rights/consumption, late fatal stops, cancellation, output/history and counters.
+New real-site retry verification is not performed; existing site evidence does
+not establish the recovery rate of this new orchestration.
+
+Verification (2026-11-22): final affected Unit/component/browser coverage passed
+561 tests, 0 failed/errors/skipped (output/batch-retry-final-affected.xml).
+This includes CLI/job-event/worker/presenter, Batch/Policy/validation, Core and
+local viewer/AccessGuard and Magapoke local-viewer integration. Ruff src/tests and changed-file diff checks
+passed. Full collection was covered in sequential segments: 10,213 unique
+cases, 10,211 passed, 2 failed, 0 skipped/errors. The two remaining failures are
+existing root-crawler.yaml default-value assertions in test_runtime_settings.py:
+Hanayume Discovery is operator-configured to 10000 rather than 5000 ms, and
+Magapoke page/inter-candidate delays are 1500/6000 rather than 1000/3000 ms.
+These settings were uncommitted before this task and were not edited. Both exact
+tests pass when their root-config read is redirected, in an isolated test process,
+to the tracked HEAD defaults. The working runtime file remains unchanged.
+
+The first full run stopped at a 264-character Windows manifest temporary path
+(FileNotFoundError despite an existing parent). Repeating the complete affected
+module and all later modules with --basetemp output/f resolved that failure.
+All 10,213 final cases are accounted for; reports are merged by testcase identity,
+not summed across repeated modules. The current-environment suite is not claimed
+fully green because the two operator-config assertions still fail.
+Reports: output/batch-retry-full-final.xml, batch-retry-remaining.xml,
+batch-retry-tail.xml, batch-retry-runtime-current.xml; supplemental default-config
+proof: batch-retry-runtime-default.xml. The deduplicated result is
+output/batch-retry-verification-summary.json. Research tests are included in the
+full coverage; no separate live/probe session or new entitlement use was performed.
+
+Current implementation files: batch/{executor,metrics,models}.py, cli.py,
+core/{errors,runner}.py, site_policies/{base,yanmaga}.py under src/screenshot_crawler.
+Regression files: tests/unit/test_{cli,batch_executor,access_guard,core_features,
+yanmaga_policy}.py and tests/integration/test_local_viewer_flows.py. The SPEC,
+ARCHITECTURE, DISCOVERY_AND_BATCH, ACCESS_CONTROL_AND_PACING, its PLAN,
+MAGAPOKE_BATCH_ACCESS and DECISIONS documents carry the same execution contract.
+All thirteen current site notes carry their common retry boundary and exceptions.
+
 ## Younganimal Premium integration (2026-11-21)
 
 Younganimal now uses the existing resource-aware stock resolver and native grant
@@ -17,9 +171,23 @@ Hanayume Premium returns None so its positively confirmed native 15-day expiry
 is retained; Work Ticket still uses its separate 72-hour policy cap. No Catalog
 schema, CLI flag, Core Runner, browser lifecycle or generic resource-name branch
 is added. Per-Work stock selection and stop flags use the existing guarded
-resolver, including Hanayume's bounded optional daily-gacha preparation. Premium
-has no durable balance or work resource state. Exact implementation and live
+resolver, including Hanayume's bounded optional daily-gacha preparation. Optional
+preparation in Hanayume and Younganimal clicks at most once, waits five seconds
+without checking the gacha result, then requests fresh stock. Optional preparation
+errors log/skip the gacha and require positive read-only account recovery plus fresh
+stock. AccessGuard, cancellation, unknown balance/access and checkout proof retain
+their stop semantics. Both sites accept scoped `popClose` / legacy `closeCpPop`
+through the spin; Hanayume logs unknown overlay structure in job stdout. These are
+site-local changes using existing hooks, with no shared runtime/CLI/schema change.
+Premium has no durable balance or work resource state. Exact implementation and live
 limits are in `note/10_hanayume.md`.
+
+The 2026-11-23 optional-preparation correction passed 380 affected Unit/browser
+cases with zero failures/skips/deselections, plus Ruff and scoped whitespace
+checks. Full/Research suites were not rerun because shared production code and
+research helpers are unchanged. Revised popup closes/spins are synthetic-only;
+the read-only Hanayume home/gacha check encountered no visible popup. Exact
+scope, commands/evidence and live limits are in the two site notes.
 
 Verification: 417 affected Unit and 246 affected browser cases passed, followed
 by 168 final Hanayume cases. Full snapshot: 10011 run, 10003 passed / 8 failed /
@@ -732,7 +900,9 @@ keys and saved revision. MainWindow reloads (deferring another read when one is
 already in flight) and offers a single Full Yes/No confirmation with the existing
 execution preview. Yes queues the existing worker; No only saves. Inventory
 execution checks remain unchanged. Changed inputs are rejected by revision and
-worker fingerprint checks, disabled keys stay disabled, failures never auto-retry.
+worker fingerprint checks, disabled keys stay disabled; selection/Discovery
+failures never auto-retry. Normal Batch acquisition follows the single-retry
+contract at the start of this note.
 Normal Full reflects per-key flags; no implicit Scope apply occurs. Pending outer
 boundary edits use old flags; saved exact holes use the existing Batch deny.
 Existing ZIPs require explicit audit/renumber if desired; physical DB cleanup
@@ -3211,7 +3381,8 @@ output_dir = output/batch/<site>/item-<item>-source-<source>-<JST timestamp>-<uu
 diagnostics_dir = <run directory>/diagnostics
 ```
 
-実行はsequential、stop-on-first-failureである。candidate validation後、Crawler開始前に
+実行はsequential。通常Batchの取得timeoutは先頭のsingle-retry契約に従い1回だけ再試行し、
+最終失敗で後続を停止する。candidate validation後、Crawler開始前に
 `CrawlRun(running)`を作成する。quota candidateだけはその後に`record_quota_access()`を呼び、
 Policyの`access_grant_until()`で計算したgrantを保存する。direct candidateはquota stateを
 変更しない。保存後にcrawl、viewer、packagingが失敗してもquota stateはrefundしない。
@@ -3373,8 +3544,9 @@ is **AUTOMATED VERIFIED / LIVE PARTIAL**.
 
 ### Batch candidate failure and interruption current state
 
-Batch site-operation errors are represented as candidate-scoped failures and
-stop the sequential Batch after the current candidate is cleaned up. The
+Batch site-operation errors are represented as candidate-scoped failures.
+Eligible normal acquisition timeouts receive the single retry described above;
+other errors and failed retries stop the Batch after candidate cleanup. The
 original underlying error type and message remain in the CrawlRun and metrics.
 Expected cooldown/resource-unavailable outcomes continue as skips. AccessGuard
 stops and Catalog/configuration errors remain Batch-fatal.

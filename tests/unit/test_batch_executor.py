@@ -7,9 +7,11 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import screenshot_crawler.batch.executor as batch_executor_module
 from screenshot_crawler.batch import (
@@ -40,6 +42,11 @@ from screenshot_crawler.core.errors import (
     AccessEntryNotAttemptedError,
     AccessResourceUnavailableError,
     AccessStopError,
+    CaptureUnavailableError,
+    MaxPagesExceededError,
+    PageChangeTimeoutError,
+    SameContentExceededError,
+    UnknownPageStateError,
 )
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import (
@@ -1667,6 +1674,200 @@ async def test_quota_state_is_persisted_before_crawl_and_granted_for_24_hours(
     assert configs[0].access_strategy == "quota"
     assert service.get_item(candidate.item_id).status == "completed"
     assert result.archive_path.exists() is True
+
+
+@pytest.mark.parametrize(
+    ("error_type", "during_package", "retryable"),
+    [
+        (PageChangeTimeoutError, False, True),
+        (PlaywrightTimeoutError, False, True),
+        (TimeoutError, False, True),
+        (UnknownPageStateError, False, False),
+        (CaptureUnavailableError, False, False),
+        (MaxPagesExceededError, False, False),
+        (SameContentExceededError, False, False),
+        (AccessEntryNotAttemptedError, False, False),
+        (RuntimeError, False, False),
+        (OSError, False, False),
+        (PageChangeTimeoutError, True, False),
+    ],
+)
+async def test_candidate_retry_requires_a_crawl_timeout(
+    tmp_path: Path, error_type: type[Exception], during_package: bool, retryable: bool,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    class Runner:
+        async def run(self, page, adapter):
+            if not during_package:
+                raise error_type("synthetic timeout or guard")
+            return RunResult((), PageState.END, "end")
+
+    def package(*args, **kwargs):
+        raise error_type("package failure")
+
+    executor.runner_factory = lambda config: Runner()
+    executor.package_function = package
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(object(), candidate, output_root=tmp_path / "batch", now=NOW)
+    failure = raised.value
+    assert failure.retryable is retryable
+    assert failure.crawl_run_id == service.list_crawl_runs()[0].id
+    assert failure.diagnostics_dir.parent.parent == tmp_path / "batch" / candidate.site
+    retry = executor.prepare_retry_candidate(candidate, failure, now=NOW)
+    assert (retry is not None) is retryable
+    if retryable:
+        assert retry == replace(candidate, reason="free")
+        # Revalidation never silently adopts changed identity or completes an Item.
+        service.mark_item_completed(candidate.item_id)
+        with pytest.raises(BatchExecutionError, match="item.status"):
+            executor.prepare_retry_candidate(candidate, failure, now=NOW)
+
+
+async def test_retry_never_trusts_a_before_run_quota_reservation(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    executor = make_executor(service)
+    service.record_quota_access(
+        candidate.source_id, quota_started_at=NOW,
+        access_granted_until=NOW + timedelta(hours=24),
+    )
+    error = CandidateExecutionError("timeout", retryable=True)
+    assert executor.prepare_retry_candidate(candidate, error, now=NOW) is None
+
+
+@pytest.mark.parametrize("resource", [None, "work_ticket", "premium_ticket"])
+@pytest.mark.parametrize("retry_outcome", ["success", "failure", "cancel"])
+async def test_batch_retry_preserves_outputs_history_and_single_consumption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resource: str | None, retry_outcome: str,
+) -> None:
+    from screenshot_crawler import cli
+    from screenshot_crawler.batch.metrics import BatchMetricsWriter
+
+    monkeypatch.setattr(batch_executor_module, "now_jst", lambda: NOW)
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = (
+        _add_magapoke_candidate(service, resource=resource) if resource
+        else add_candidate(service, site="magapoke", access_mode="free")
+    )
+    consumption = AccessConsumption(bool(resource), resource, NOW if resource else None, stop_resource_pass=bool(resource))
+    executor = _make_magapoke_executor(service, consumption)
+    configs = []
+    adapters = []
+    pages = []
+    closed = []
+    events = []
+
+    class Runner:
+        def __init__(self, config):
+            self.config = config
+            configs.append(config)
+
+        async def run(self, page, adapter):
+            adapters.append(adapter)
+            self.config.output_dir.mkdir(parents=True)
+            (self.config.output_dir / "synthetic-page.txt").write_text("synthetic data", encoding="utf-8")
+            if len(configs) == 1:
+                raise PageChangeTimeoutError("next click failed")
+            assert self.config.access_strategy == "direct"
+            if retry_outcome == "failure":
+                raise PageChangeTimeoutError("second attempt failed")
+            return RunResult((), PageState.END, "end")
+
+    class Session:
+        async def new_page(self):
+            page = object()
+            pages.append(page)
+            return page
+
+        async def close_page(self, page):
+            closed.append(page)
+
+    executor.runner_factory = Runner
+    args = SimpleNamespace(
+        output_root=tmp_path / "batch", library_dir=tmp_path / "Books",
+        max_pages=7, max_same_content=2, keep_open=False,
+        event_sink=lambda name, **fields: events.append((name, fields)),
+        cancel_check=lambda: retry_outcome == "cancel" and any(
+            name == "candidate_retry" for name, _ in events
+        ),
+    )
+    metrics = BatchMetricsWriter(tmp_path / "metrics", site="magapoke")
+    try:
+        operation = cli._execute_batch_candidates(
+            args, Session(), executor, [candidate], phase="test", metrics=metrics,
+            inter_candidate_delay_ms=0,
+        )
+        if retry_outcome == "success":
+            assert await operation == (1, not bool(resource))
+        else:
+            error_type = BatchInterruptedError if retry_outcome == "cancel" else CandidateExecutionError
+            with pytest.raises(error_type) as raised:
+                await operation
+            assert raised.value.resource_consumed is (True if resource else None)
+        metrics.finish()
+    finally:
+        metrics.close()
+    count = 1 if retry_outcome == "cancel" else 2
+    assert len(configs) == len(pages) == len(adapters) == count
+    assert closed == pages
+    if count == 2:
+        assert adapters[0] is not adapters[1]
+        assert configs[0].output_dir != configs[1].output_dir
+    assert all((config.output_dir / "synthetic-page.txt").exists() for config in configs)
+    assert all(config.max_pages == 7 and config.max_same_content == 2 for config in configs)
+    runs = service.list_crawl_runs(source_id=candidate.source_id)
+    assert [run.status for run in runs] == ["failed"] + (
+        [] if count == 1 else ["succeeded" if retry_outcome == "success" else "failed"]
+    )
+    assert [run.access_strategy for run in runs] == ["quota" if resource else "direct"] + (
+        ["direct"] if count == 2 else []
+    )
+    assert service.get_item(candidate.item_id).status == ("completed" if retry_outcome == "success" else "pending")
+    assert len(service.list_artifacts(item_id=candidate.item_id)) == (retry_outcome == "success")
+    records = [json.loads(line) for line in metrics.path.read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["candidates_completed"] == (retry_outcome == "success")
+    assert records[-1]["candidates_failed"] == (retry_outcome != "success")
+    assert records[-1]["retry_count"] == (count - 1)
+    assert len([name for name, _ in events if name == "candidate_started"]) == 1
+    assert len([name for name, _ in events if name == "candidate_finished"]) == 1
+    if resource:
+        source = service.get_source(candidate.source_id)
+        assert source.quota_started_at == NOW.isoformat()
+        result = next(x for x in records if x.get("event") == "result")
+        assert result["resource_consumed"] is True
+
+
+@pytest.mark.parametrize("resource", ["work_ticket", "premium_ticket"])
+@pytest.mark.parametrize("confirmed", [True, False])
+async def test_retry_uses_only_a_confirmed_persisted_ticket_grant(
+    tmp_path: Path, resource: str, confirmed: bool,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource=resource)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(confirmed, resource if confirmed else None, NOW if confirmed else None),
+        failure=PageChangeTimeoutError("next click failed"),
+    )
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(object(), candidate, output_root=tmp_path / "batch", now=NOW)
+    retry = executor.prepare_retry_candidate(candidate, raised.value, now=NOW)
+    assert (retry is not None) is confirmed
+    if confirmed:
+        assert retry.source_id == candidate.source_id
+        assert retry.target_id == candidate.target_id
+        assert retry.locator == candidate.locator
+        assert retry.access_strategy == "direct" and not retry.consumes_quota
+        assert retry.quota_resource is None
+        grant = service.get_source(candidate.source_id)
+        executor._validate_candidate(retry, MagapokeSitePolicy(), NOW)
+        # An expired grant cannot reauthorize the original ticket intent.
+        assert executor.prepare_retry_candidate(
+            candidate, raised.value, now=NOW + timedelta(hours=72),
+        ) is None
+        assert service.get_source(candidate.source_id) == grant
 
 
 async def test_completed_at_uses_completion_time_not_plan_start_time(

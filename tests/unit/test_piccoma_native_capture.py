@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageChops
@@ -262,7 +264,7 @@ def test_native_snapshot_json_rejects_oversized_transport(
     ("scaled_size", "left_offset", "offset_supported"),
     [(None, 0, True), (None, -1 / 3, True)] + [
         (size, offset, accepted and (size != (763, 1200) or offset == 0))
-        for size in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (763, 1200))
+        for size in ((1350, 1920), (1125, 1600), (1128, 1600), (1441, 2048), (1884, 2819), (905, 1342), (866, 1342), (763, 1200))
         for offset, accepted in (
             (0, True), (-1 / 3, True), (-1 / 3 + 0.009, True),
             (-1 / 3 + 0.011, False), (-0.2, False), (-0.5, False), (1 / 3, False),
@@ -300,6 +302,10 @@ def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
     if scaled_size == (763, 1200):
         row["canvas"].update(width=763, height=1200, rect=[570, -1, 764.265625, 1202], inFrame=False)
         snapshot["frameRect"] = [570, 0, 764, 1200]
+    elif scaled_size == (866, 1342):
+        row["canvas"].update(width=866, height=1342,
+                             rect=[563.5, -2.5, 777.5833740234375, 1205], inFrame=False)
+        snapshot["frameRect"] = [563.5, 0, 777, 1200]
     elif scaled_size == (905, 1342):
         row["canvas"].update(width=905, height=1342, rect=[547.5, 0, 809.234375, 1200])
         snapshot["frameRect"] = [547.5, 0, 809, 1200]
@@ -362,7 +368,10 @@ def test_piccoma_native_only_profile_rejects_unobserved_display_geometry(size, f
                           {"display": "block", "visibility": "visible", "opacity": 1,
                            "contentVisibility": "visible"}]}}}
     snapshot = {"viewport": [1904, 1200, 1], "frameRect": [530, 0, 844, 1200]}
-    if size == (905, 1342):
+    if size == (1441, 2048):
+        # Apply fault deltas from the profile, not an already rounded sample.
+        row["canvas"]["rect"][2] = 844 + 1 / 3
+    elif size == (905, 1342):
         row["canvas"]["rect"] = [547.5, 0, 809.234375, 1200]
         snapshot["frameRect"] = [547.5, 0, 809, 1200]
     elif size == (1884, 2819):
@@ -412,6 +421,7 @@ def test_piccoma_centered_family_requires_measured_geometry_and_full_proof(width
 
 
 @pytest.mark.parametrize(("width", "height", "frame", "display_width", "display_height"), [
+    (866, 1342, 777, 777.578125, 1205),
     (898, 1342, 807, 807.65625, 1207),
     (900, 1342, 807, 807.4375, 1204),
     (901, 1342, 807, 807, 1202),
@@ -444,7 +454,7 @@ def test_piccoma_centered_family_requires_measured_geometry_and_full_proof(width
     (2500, 1500, 1600, 1600, 960),
     (1900, 2850, 800, 800, 1200),
 ])
-@pytest.mark.parametrize("fault", [None, "scale", "frame_drift", "paint"])
+@pytest.mark.parametrize("fault", [None, "scale", "frame_drift", "paint", "observed_left_offset", "bad_left_offset"])
 def test_bounded_scaled_layout_uses_actual_episode_frame(
     width, height, frame, display_width, display_height, fault
 ) -> None:
@@ -469,12 +479,55 @@ def test_bounded_scaled_layout_uses_actual_episode_frame(
         adapter._scaled_frame_rect = (left - 0.5, 0, frame + 1, 1200)
     elif fault == "paint":
         paint["ancestors"][1]["rect"][2] -= 1
-    if fault in {"scale", "frame_drift"}:
+    elif fault in {"observed_left_offset", "bad_left_offset"}:
+        offset = -1 / 3 if fault == "observed_left_offset" else -0.2
+        row["canvas"]["rect"][0] += offset
+        paint["canvasRect"][0] += offset
+        for ancestor in paint["ancestors"]:
+            ancestor["rect"][0] += offset
+    if fault in {"scale", "frame_drift", "bad_left_offset"}:
         with pytest.raises(UnknownPageStateError, match="supported viewport"):
             adapter._validate_canvas_geometry(snapshot, row)
     else:
         assert adapter._validate_canvas_geometry(snapshot, row) == (width, height)
-        assert validate_scaled_alpha_paint_path(paint, width=width, height=height) is (fault is None)
+        assert validate_scaled_alpha_paint_path(paint, width=width, height=height) is (fault != "paint")
+
+
+@pytest.mark.parametrize(("delta", "accepted"), [
+    (0, True), (0.01043701171875, True),
+    (1 / 64, True), (-1 / 64, True),
+    (1 / 64 + 0.000001, False), (-1 / 64 - 0.000001, False),
+    (0.02, False), (-0.02, False),
+])
+@pytest.mark.parametrize(("width", "height", "frame", "display_width", "display_height"), [
+    (867, 1342, 775, 775.25, 1200),
+    (898, 1342, 807, 807.65625, 1207),  # Centered overscan.
+    (1441, 2048, 844, 844 + 1 / 3, 1200),  # Dedicated profile.
+    (776, 1200, 775, 775.34375, 1199),  # Ordinary-size source in a scaled frame.
+])
+def test_scaled_width_rounding_matches_batch_failure_and_keeps_a_bound(
+    delta, accepted, width, height, frame, display_width, display_height,
+) -> None:
+    # Saved p1 geometry from item/source 46207; no artwork or site snapshot.
+    left = (1904 - frame) / 2
+    rect = [564.1666870117188 if width == 867 else left,
+            (1200 - display_height) / 2, display_width + delta, display_height]
+    row = {"canvas": {"width": width, "height": height, "rect": rect,
+        "inFrame": display_height <= 1201 and display_width <= frame + 0.5,
+        "renderability": {"visible": True, "ancestors": [{"display": "block",
+            "visibility": "visible", "opacity": 1, "contentVisibility": "visible"}]}}}
+    snapshot = {"viewport": [1904, 1200, 1.0000000298023224],
+                "frameRect": [left, 0, frame, 1200]}
+    paint = _scaled_paint_path()
+    for index, ancestor in enumerate(paint["ancestors"]):
+        ancestor["rect"] = [*rect[:2], rect[2] if index == 0 else frame, display_height]
+    paint.update(canvasRect=list(rect), firstOpaqueCoversCanvas=False)
+    assert validate_scaled_alpha_paint_path(paint, width=width, height=height) is accepted
+    if accepted:
+        assert PiccomaAdapter()._validate_canvas_geometry(snapshot, row) == (width, height)
+    else:
+        with pytest.raises(UnknownPageStateError, match="supported viewport"):
+            PiccomaAdapter()._validate_canvas_geometry(snapshot, row)
 
 
 @pytest.mark.parametrize("frame", [0, -1, 1905, 807.1, True, float("nan"), float("inf"), None])
@@ -762,6 +815,72 @@ def test_replay_output_is_composited_on_white_without_lossy_reencoding() -> None
         changed_rgb_pixel = actual.copy()
         changed_rgb_pixel.putpixel((0, 0), (177, 138, 142))
         assert ImageChops.difference(actual, changed_rgb_pixel).getbbox() is not None
+
+
+async def test_capture_cancellation_propagates_and_interruption_does_not_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = PiccomaAdapter()
+    adapter._expected_page_id = "p8"
+    started = asyncio.Event()
+
+    async def blocked_capture(_page):
+        adapter._mark_capture_stage("replay")
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(adapter, "_capture_verified_page", blocked_capture)
+    task = asyncio.create_task(adapter.capture_page(None))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    debug = await adapter.collect_debug_metadata(None)
+    assert debug["piccoma_capture_interruption"]["page_id"] == "p8"
+    assert debug["piccoma_capture_interruption"]["stage"] == "replay"
+    assert debug["piccoma_capture_timing"]["failure_stage"] == "replay"
+
+    async def completed_capture(_page):
+        return ()
+
+    monkeypatch.setattr(adapter, "_capture_verified_page", completed_capture)
+    assert await adapter.capture_page(None) == ()
+    assert "piccoma_capture_interruption" not in await adapter.collect_debug_metadata(None)
+    assert "piccoma_capture_timing" not in await adapter.collect_debug_metadata(None)
+    adapter._capture_interruption = {"page_id": "p8", "elapsed_ms": 12_000}
+    await adapter.configure_run(None, "direct")
+    assert "piccoma_capture_interruption" not in await adapter.collect_debug_metadata(None)
+
+
+async def test_capture_failure_timing_records_stages_without_error_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import screenshot_crawler.site_adapters.piccoma.adapter as adapter_module
+
+    clock = [1.0]
+    monkeypatch.setattr(adapter_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    adapter = PiccomaAdapter()
+    adapter._expected_page_id = "p8"
+
+    async def failed_capture(_page):
+        clock[0] = 1.010
+        adapter._mark_capture_stage("source_body_read")
+        clock[0] = 1.013
+        adapter._mark_capture_stage("replay")
+        clock[0] = 1.020
+        raise UnknownPageStateError("untrusted exception payload")
+
+    monkeypatch.setattr(adapter, "_capture_verified_page", failed_capture)
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(None)
+    debug = await adapter.collect_debug_metadata(None)
+    assert debug["piccoma_capture_timing"] == {
+        "page_id": "p8", "stage": "replay", "failure_stage": "replay",
+        "outcome": "failed", "elapsed_ms": 20.0,
+        "stages_ms": {"reader_validation": 10.0, "source_body_read": 3.0, "replay": 7.0},
+    }
+    assert "piccoma_capture_interruption" not in debug
+    assert "untrusted exception payload" not in json.dumps(debug)
 
 
 def test_lossless_webp_round_trip_preserves_full_rgb_without_resizing() -> None:

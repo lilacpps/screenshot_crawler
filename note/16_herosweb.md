@@ -61,6 +61,19 @@ and recorded. The current HERO page fails closed if its own service-worker
 controller is active or its expected document did not traverse the guard.
 This is not a global service-worker guarantee.
 
+## Normal Batch retry (shared generic contract)
+
+HERO'S WEB inherits the generic Normal Batch retry policy; its Site Policy does
+not add or override retry behavior. An eligible acquisition timeout may receive
+one retry on a fresh Page for the same Item/Source/Target after the configured
+inter-candidate pacing, for at most two attempts total. The retry rechecks the
+exact target and current direct/free eligibility before entry. AccessGuard
+403/429/challenge/CAPTCHA stops, UNKNOWN state, same-content/max-pages failures,
+capture/native-proof failures and other non-eligible errors do not retry. The
+contract is defined in `docs/DISCOVERY_AND_BATCH.md`. Local merge validation is
+tracked in [PROGRESS.md](../runbooks/herosweb-free/PROGRESS.md); post-merge live
+verification has not been performed.
+
 ## Manual Viewer and capture (Phase 03)
 
 `HeroswebAdapter` supports only `auto` and `direct`. It rejects quota/resource

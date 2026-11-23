@@ -1,5 +1,6 @@
 """Artificial native/UI contracts; never call the live site."""
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -229,18 +230,29 @@ async def test_stock_resolver_never_walks_large_quota_pool(browser_page, monkeyp
 
 
 @pytest.mark.parametrize("mode", ["absent", "hidden", "used", "win", "zero", "uncertain",
-                                  "popup-late", "popup-none"])
+                                  "popup-late", "popup-none", "popup-legacy",
+                                  "popup-gacha", "popup-gacha-late", "popup-both"])
 async def test_daily_gacha_once_or_absent_never_shares_or_retries(browser_page, monkeypatch,
                                                                capsys, mode):
-    monkeypatch.setattr(premium, "GACHA_WAIT_MS", 1000)
+    settles = []
+    original_sleep = asyncio.sleep
+    async def sleep(delay):
+        if delay == premium.GACHA_SETTLE_SECONDS:
+            settles.append(delay)
+            await original_sleep(0.05)
+        else:
+            await original_sleep(delay)
+    monkeypatch.setattr(premium.asyncio, "sleep", sleep)
     counts = {"spin": 0, "share": 0, "close": 0}
     home = '''<header id="xHeader"><button data-e2e="signoutBtn">Logout</button></header>
       <dialog class="dialog mode-campaign" data-e2e="pop"><button type="submit" class="dialog-btn mode-campaign" data-e2e="popClose" onclick="console.log('closed-campaign');this.closest('dialog').close()">Close</button></dialog>
       <script>document.querySelector('dialog').showModal()</script>'''
     if mode == "popup-late":
         home = home.replace("document.querySelector('dialog').showModal()", "setTimeout(()=>{document.querySelector('dialog').showModal();document.querySelector('.home-gacha-btn').style.pointerEvents='auto'},150)")
-    elif mode == "popup-none":
+    elif mode in {"popup-none", "popup-gacha", "popup-gacha-late"}:
         home = home.replace("document.querySelector('dialog').showModal()", "")
+    if mode == "popup-legacy":
+        home = home.replace('data-e2e="popClose"', 'data-e2e="closeCpPop"')
     browser_page.on('console', lambda message: counts.__setitem__('close', counts['close'] + 1)
                     if message.text == 'closed-campaign' else None)
     if mode != "absent":
@@ -257,6 +269,15 @@ async def test_daily_gacha_once_or_absent_never_shares_or_retries(browser_page, 
       }</script>'''
     gacha = gacha.replace('RENDER', '' if mode == 'uncertain' else
         f'''document.body.insertAdjacentHTML('beforeend','<div data-e2e="gachaResult"><span data-e2e="gachaResTicket">{0 if mode == 'zero' else 1}</span></div>');''')
+    if mode in {"popup-gacha", "popup-gacha-late", "popup-both"}:
+        gacha += '''<dialog class="dialog mode-campaign" data-e2e="pop"><button type="submit"
+          class="dialog-btn mode-campaign" data-e2e="closeCpPop"
+          onclick="console.log('closed-campaign');this.closest('dialog').close()">×</button></dialog>'''
+        show = "document.querySelector('dialog').showModal()"
+        if mode == "popup-gacha-late":
+            gacha += '<style>[data-e2e="gachaExecBtn"]{pointer-events:none}</style>'
+            show = "setTimeout(()=>{" + show + ";document.querySelector('[data-e2e=\"gachaExecBtn\"]').style.pointerEvents='auto'},150)"
+        gacha += '<script>' + show + '</script>'
     async def route(r):
         path = urlsplit(r.request.url).path
         if path == '/':
@@ -277,14 +298,11 @@ async def test_daily_gacha_once_or_absent_never_shares_or_retries(browser_page, 
     await browser_page.route('**/*', route)
     observer = premium.PremiumObserver(browser_page, EPISODE_ID, WORK_ID)
     try:
-        if mode == 'uncertain':
-            with pytest.raises(UnknownPageStateError, match='no replay'):
-                await premium.prepare_daily_gacha(browser_page, observer, timeout_ms=1500)
-        else:
-            await premium.prepare_daily_gacha(browser_page, observer, timeout_ms=1500)
+        await premium.prepare_daily_gacha(browser_page, observer, timeout_ms=1500)
         assert counts['spin'] == (0 if mode in {'absent', 'hidden', 'used'} else 1)
+        assert settles == ([5.0] if counts['spin'] else [])
         assert counts['share'] == 0
-        assert counts['close'] == (0 if mode == 'popup-none' else 1)
+        assert counts['close'] == (0 if mode == 'popup-none' else 2 if mode == 'popup-both' else 1)
         log = capsys.readouterr().out
         assert ('"event": "campaign_detected"' in log) == (mode != 'popup-none')
         assert ('"event": "campaign_dismissed"' in log) == (mode != 'popup-none')
@@ -293,7 +311,8 @@ async def test_daily_gacha_once_or_absent_never_shares_or_retries(browser_page, 
 
 
 @pytest.mark.parametrize("case", ["missing", "duplicate", "wrong-type", "unknown-dialog"])
-async def test_home_popup_unknown_controls_leave_structural_diagnostics(browser_page, capsys, case):
+@pytest.mark.parametrize("phase", ["home", "gacha"])
+async def test_home_popup_unknown_controls_leave_structural_diagnostics(browser_page, capsys, case, phase):
     button = '<button type="submit" class="dialog-btn mode-campaign" data-e2e="popClose" onclick="window.closeClicks++">Close</button>'
     if case == "missing":
         button = ""
@@ -309,6 +328,14 @@ async def test_home_popup_unknown_controls_leave_structural_diagnostics(browser_
         <input value="private-account-value"><a href="https://example.invalid/?token=private-url-token">Private text</a>
       </dialog><script>window.closeClicks=0;document.querySelector('dialog').showModal();fetch('/api/userPoint')</script>'''
     paths = []
+    gacha = home.replace(
+        '<div class="home-gacha"><a class="home-gacha-btn" href="/gacha">Gacha</a></div>',
+        '<div class="gacha-btn-wrap"><a class="gacha-btn mode-user" data-e2e="gachaExecBtn">すぐ無料ガチャをまわす</a></div>')
+    gacha += "<script>fetch('/api/gacha')</script>"
+    if phase == "gacha":
+        home = '''<header id="xHeader"><button data-e2e="signoutBtn">Logout</button></header>
+          <div class="home-gacha"><a class="home-gacha-btn" href="/gacha">Gacha</a></div>
+          <script>fetch('/api/userPoint')</script>'''
 
     async def route(r):
         path = urlsplit(r.request.url).path
@@ -317,25 +344,32 @@ async def test_home_popup_unknown_controls_leave_structural_diagnostics(browser_
             await r.fulfill(content_type='text/html; charset=utf-8', body=home)
         elif path == '/api/userPoint':
             await r.fulfill(json={'bonusValue': 3, 'paidCoin': 0})
+        elif path == '/gacha':
+            await r.fulfill(content_type='text/html; charset=utf-8', body=gacha)
+        elif path == '/api/gacha':
+            await r.fulfill(json={'gacha': {'canRollGacha': True, 'gachaTimes': 0}})
         else:
             await r.abort()
 
     await browser_page.route('**/*', route)
     observer = premium.PremiumObserver(browser_page, EPISODE_ID, WORK_ID)
     try:
-        with pytest.raises((UnknownPageStateError, PlaywrightError)):
+        with pytest.raises((UnknownPageStateError, PlaywrightError)) as error:
             await premium.prepare_daily_gacha(browser_page, observer, timeout_ms=500)
         assert await browser_page.evaluate('closeClicks') == 0
-        assert '/gacha' not in paths and '/api/gacha' not in paths
+        assert ('/gacha' in paths and '/api/gacha' in paths) == (phase == 'gacha')
         logs = [json.loads(line.split(': ', 1)[1]) for line in capsys.readouterr().out.splitlines()
                 if line.startswith('Hanayume home popup: ')]
         failure = logs[-1]
-        assert failure['event'] == 'home_gacha_navigation_failed'
-        assert failure['open_dialog_count'] == 1
-        assert failure['dialogs'][0]['classes'] == dialog_class
-        assert failure['gacha_link_count'] == 1
-        assert failure['link_cover'] is not None
-        controls = failure['dialogs'][0]['controls']
+        assert failure['event'] == ('home_gacha_navigation_failed' if phase == 'home' else 'gacha_preparation_failed'), str(error.value)
+        assert failure['phase'] == phase
+        structure = next(row for row in reversed(logs) if 'open_dialog_count' in row)
+        assert structure['open_dialog_count'] == 1
+        assert structure['dialogs'][0]['classes'] == dialog_class
+        assert structure['gacha_link_count'] == (1 if phase == 'home' else 0)
+        target = structure['targets']['home_link' if phase == 'home' else 'spin']
+        assert target['count'] == 1 and target['cover']
+        controls = structure['dialogs'][0]['controls']
         assert sum(c['e2e'] == 'popClose' for c in controls) == (0 if case == 'missing' else 2 if case == 'duplicate' else 1)
         assert not any(value in json.dumps(logs) for value in
                        ('private-account-value', 'private-url-token', 'Private text', 'https://'))

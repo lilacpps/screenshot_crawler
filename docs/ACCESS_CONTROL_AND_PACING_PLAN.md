@@ -1,5 +1,25 @@
 # Access Control / Pacing Implementation Plan
 
+## Normal Batch single retry (2026-11-22)
+
+Status: IMPLEMENTED / TARGETED AND LOCAL-BROWSER VERIFIED. Full collection
+coverage: 10,211 passed, 2 existing operator-config expectation failures, 0 skipped;
+the two tests pass against isolated tracked defaults. Windows long-path failure
+was resolved by short isolated test output paths. Details: note/00_core.md.
+No new live consumption was used.
+The current execution contract is in docs/DISCOVERY_AND_BATCH.md, "Normal Batch
+single retry". This extends ordinary normal-capture timeout handling and does
+not change the earlier grant-only phases or Adapter-internal retry algorithms.
+
+Acceptance: failure then success continues; two failures stop even with different
+errors; first/final diagnostics and independent CrawlRuns remain; logical counts
+and limits count once; fresh Pages/Adapters are cleaned up before replay;
+cleanup failure/open Page and cancellation prohibit replay. Confirmed ticket
+grants allow direct recovery with no new debit and retain pass exhaustion;
+unknown consumption and before-run reservations never authorize replay.
+AccessGuard fatal stops, including late stops during diagnostics, remain fatal.
+BookWalker quota/resume and Yanmaga entry-replay prohibitions remain in force.
+
 ## Younganimal Premium extension (2026-11-21)
 
 Status: IMPLEMENTED / TARGETED VERIFIED / BOUNDED LIVE VERIFIED.
@@ -9,7 +29,7 @@ aggregate conflict and episode route guards accompany the two-step entry.
 Home campaign `popClose`, one native gacha spin (zero / はずれ), grant-only and
 normal END/ZIP were live verified. Two tickets total were consumed (18 -> 16);
 the gacha was never replayed. Synthetic coverage includes absent/delayed popup,
-absent/used gacha, positive/zero/unknown result, 9000-candidate stock bounds,
+absent/used gacha, ignored positive/zero/unknown result, 9000-candidate stock bounds,
 last-ticket completion, identity/account conflicts and post-debit failure.
 Current evidence, test counts and live limits: `note/11_younganimal.md`.
 
@@ -26,7 +46,14 @@ Acceptance covers 9000 quota candidates bounded before entry, zero/unknown stock
 Work Ticket priority, exact zero-coin single-ticket checkout, two distinct UI
 actions without replay, 15-day persistence without Work state, pending grant-only,
 same-Page normal Viewer, last-ticket completion, and debit preservation through
-later failure. Gacha fixtures cover absent/used/0/1/uncertain outcomes and no share.
+later failure. The 2026-11-23 gacha contract removes result verification and its
+35-second wait: click once, settle five seconds, request fresh stock. Both sites
+accept old/new campaign close markers through the spin, once per home/gacha route.
+Optional gacha errors continue only after positive auth and fresh valid stock;
+unknown stock and fatal access/cancellation still stop. Hanayume failure diagnostics
+include the spin cover/ancestors and unknown modal controls for future patterns.
+Gacha fixtures cover absent/used/ignored outcomes, no share/replay, both close
+markers, delayed home/gacha overlays and failure/cancellation boundaries.
 Three authorized live tickets total verified probe/grant-only/normal paths;
 the once-daily spin was exercised once. Current evidence and limitations are in
 `note/10_hanayume.md`; the remaining unused-gacha production branch is synthetic

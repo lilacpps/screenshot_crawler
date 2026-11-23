@@ -1,5 +1,49 @@
 # Discovery / Catalog / Batch Design
 
+## Normal Batch single retry (2026-11-22)
+
+Normal CLI/GUI Batch gives an eligible acquisition timeout one fresh-page retry:
+initial attempt plus one retry, at most two attempts of the same Item/Source/Target.
+No error-message or page-position equality comparison is required. A successful
+retry continues the Batch; a failed retry stops later candidates and sites.
+Unavailable on the retry is also a final failure, not a skip that hides the
+initial failure. Expected first-attempt unavailability keeps its existing skip behavior.
+Grant-only, Discovery and manual single-URL crawl do not acquire this retry loop.
+
+Only an exact PageChangeTimeoutError, Playwright TimeoutError or built-in TimeoutError
+raised while CrawlerRunner.run is active is eligible. Unknown states, native-proof
+or capture-unavailable errors, guard limits, entry-not-attempted/auth signals,
+configuration/identity/output failures and packaging/finalization failures stop
+without replay. Failure recording or consumption-persistence errors also prohibit
+retry. AccessGuard 403/429/challenge/CAPTCHA and operator cancellation stop immediately;
+a fatal rejection observed during timeout diagnostics/cleanup takes precedence.
+The shared repeated-content guard raises SameContentExceededError (a subtype
+of PageChangeTimeoutError), so it cannot be mistaken for a retryable timeout.
+Existing relevant-host rules and Adapter-internal bounded retries remain authoritative.
+
+After successful bounded Page cleanup, Executor revalidates the exact target and
+current Site Policy. Only eligible non-consuming direct access can be retried.
+A newly consuming quota candidate additionally requires matching confirmed observed
+consumption and its persisted grant; a before-run reservation is insufficient.
+No refund, new quota use, resource/source fallback, resume-session reuse or automatic
+Discovery occurs. BookWalker quota/capture sessions retain their no-auto-retry
+contract. Yanmaga opts out through SitePolicy.allows_automatic_candidate_retry()
+because even direct GET can initiate first-free rental and its entry must not replay.
+
+Before the retry, apply the site's existing inter_candidate_delay_ms once (default
+3000 ms, explicit 0 remains valid); cooperative stop checks are at most 200 ms apart.
+The retry opens a fresh Page and Adapter, restarts acquisition from the beginning,
+and uses a new output directory and CrawlRun. First-attempt files/diagnostics and
+all confirmed consumption remain. Only successful packaging/finalization completes
+the Item. A confirmed resource-pass stop survives successful direct retry.
+
+The logical candidate, GUI progress and --limit count once. Each actual acquisition
+attempt has its own CrawlRun; candidate_retry events and retry_scheduled/retry_started
+metrics retain the first error, CrawlRun ID and diagnostic directory. Only the final
+candidate result changes success/failure counts. retry_count is 1 only after the
+second attempt starts, including when that attempt fails. No retry setting or
+Catalog schema change is introduced.
+
 ## Younganimal Premium stock passes (2026-11-21)
 
 Younganimal exposes explicit Work Ticket, then account-wide `premium_ticket`
@@ -11,12 +55,29 @@ unknown state fails closed. No search through quota episodes, per-Work Premium
 limit, durable balance, Work cooldown update, or implicit resource fallback.
 
 The current native labels are すぐ無料チケット / すぐ無料ガチャ. Home preparation
-closes the unique open campaign dialog with its `popClose` button, including a
-delayed popup that obstructs the gacha link. The native daily action is attempted
+closes the unique open campaign dialog with its `popClose` or legacy `closeCpPop`
+button, including a delayed popup that obstructs the home link or spin button.
+The handlers stay active through the spin. Each home/gacha route permits one
+campaign close and one charge-complete notice close (at most four total).
+Younganimal also dismisses the observed charge-complete informational popup:
+an open native `dialog.dialog[data-e2e="pop"]` with the exact Japanese
+`h2.dialog-h.mode-waitfree` heading, through its unique footer
+`div.dialog-f > button.dialog-f-btn` labeled `閉じる`. The read link and top X
+are not used. Missing/changed/duplicate controls or a form-owned close are
+rejected. Known campaign buttons accept the observed `button` and `submit` types.
+Worker stdout `Younganimal home popup:` records bounded structural metadata at
+home readiness with a popup, detection/dismissal and preparation/close failure.
+It includes dialog/control tag/class/`data-e2e`/type/role, heading-marker count,
+close/read label booleans and covering-element ancestors. Titles, URLs, account
+values, HTML, images and raw API data are excluded. Unknown popups are not clicked.
+The native daily action is attempted
 once only when `canRollGacha=true,gachaTimes=0`; an absent home entry or already
-used native state continues to stock selection. A zero result is displayed as
-`はずれ`; positive results display their count. No public share or replay occurs.
-The site uses the existing 65-second resolver budget and 35-second result bound.
+used native state continues to stock selection. After one click, wait five seconds,
+then read fresh ticket stock. Result/API outcome matching and result-panel waits
+are deliberately absent. Optional preparation errors are logged without replay;
+recover positive account authentication and fresh stock before selecting anything.
+Unknown stock/auth/access and AccessGuard/cancellation still stop. No public share
+or replay occurs. The existing total 65-second resolver budget remains.
 
 Premium entry validates the selected header and three native IDs, positive
 authentication, continuing Work Ticket recovery, exact ticket stock/coins, then
@@ -40,21 +101,27 @@ live stock, no per-Work consumption limit and no durable resource balance/state.
 
 Premium's guarded resolver visits home and closes the unique open
 `dialog.dialog.mode-campaign[data-e2e="pop"]` through its scoped
-`button.dialog-btn.mode-campaign[data-e2e="popClose"][type="submit"]`.
-The handler also covers a campaign that appears while the gacha link waits
-for actionability; it is removed on exit. The close is attempted at most once,
-and duplicate, repeated or unknown controls fail closed. Worker stdout records
+`button.dialog-btn.mode-campaign[type="submit"]` with `popClose` or legacy
+`closeCpPop`. The handler also covers a campaign that appears while the home link
+or gacha spin waits for actionability; it is removed after the spin/settle or on
+failure. The close is attempted at most once per home/gacha route (two total).
+Duplicate, repeated or unknown controls are not clicked. Worker stdout records
 `Hanayume home popup:` structural diagnostics on detection and home-navigation
 failure, and a dismissal result: bounded dialog/control tag, class, `data-e2e`,
-type, link count and the element covering its center. No text, HTML, account
-values, URLs or images are logged. The resolver follows the visible daily gacha
+type, home/gacha phase, link/spin counts, covering-element ancestors and their
+controls, plus other visible modal structures. No text, HTML, account values,
+URLs or images are logged. The resolver follows the visible daily gacha
 link if present. A positively ready
 account with no visible link continues to stock selection. On the gacha page,
-only native `canRollGacha=true, gachaTimes=0` permits one normal spin. A matching
-0..2 result and visible result panel complete the operation; no daily ledger,
-share, retry or replay of an uncertain spin is implemented. Existing resolver
-budget configuration supplies a bounded 65-second preparation budget, including
-at most 35 seconds for the result. This prerequisite may acquire free stock but
+only native `canRollGacha=true, gachaTimes=0` permits one normal spin. After the
+click, wait five seconds without checking the result, then fetch fresh stock.
+Result-field parsing, result-panel matching and the old 35-second result wait
+are removed. A preparation error is logged and skips the remaining gacha work;
+read-only home/auth recovery and a new stock request are required to continue.
+Pre-gacha stock never authorizes selection after either success or failure.
+Unknown stock/auth/access, fatal AccessGuard stops and cancellation remain fatal.
+No daily ledger, share, retry or replay is implemented. Existing resolver budget
+configuration retains a bounded total 65-second preparation budget. This optional step may acquire free stock but
 does not consume an access resource or create a grant/Artifact.
 
 `GET /api/userPoint.bonusValue` is the account balance; `paidCoin` is separate.
@@ -1079,7 +1146,8 @@ lower bound, not an exact rental expiry.
 `batch run` is implemented for Manga ONE and BookWalker. It consumes the
 Phase 5A plan in stable order, creates a site-neutral `RunConfig`, runs the
 existing crawler, packages successful output, and then marks the item
-completed. It is sequential and stops on the first failure. The plan command
+completed. It is sequential; eligible normal acquisition timeouts receive the
+single retry specified above before a final failure stops the Batch. The plan command
 remains fully read-only, while `batch run` may update local quota fields before
 a quota crawl and item completion fields after successful packaging.
 

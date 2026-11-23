@@ -75,6 +75,7 @@ def test_yanmaga_policy_allows_available_free_direct_without_resource(
     assert policy.supported_access_resources() == ("work_ticket",)
     assert policy.additional_access_resource_passes() == ()
     assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.allows_automatic_candidate_retry() is False
 
 
 @pytest.mark.parametrize(

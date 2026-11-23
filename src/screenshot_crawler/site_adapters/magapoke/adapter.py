@@ -21,6 +21,7 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.patterns.forward_click import ForwardClick, ForwardObservation
 from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
 from screenshot_crawler.site_adapters.magapoke.access import magapoke_access_profile
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
@@ -279,6 +280,7 @@ class MagapokeAdapter(SiteAdapter):
         self._initial_parts: MagapokeUrlParts | None = None
         self._source_episode: MagapokeUrlParts | None = None
         self._advance_pending = False
+        self._forward_click = ForwardClick()
         self._source_responses: dict[str, object] = {}
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
         self._output_title: str | None = None
@@ -314,6 +316,7 @@ class MagapokeAdapter(SiteAdapter):
                 f"MagapokeAdapter does not support access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._forward_click = ForwardClick()
         self._access_consumption = AccessConsumption()
         self._premium_target_url = None
         self._premium_preflight_count = None
@@ -1130,6 +1133,7 @@ class MagapokeAdapter(SiteAdapter):
             else None
         )
         return {
+            "forward_click": dict(self._forward_click.debug),
             "magapoke_entry_confirmation": {
                 "requested_resource": self._quota_resource,
                 "initialization_mode": self._initialization_mode,
@@ -1521,6 +1525,16 @@ class MagapokeAdapter(SiteAdapter):
             title=title,
         )
 
+    async def _forward_observation(self, page: Page) -> ForwardObservation | None:
+        rows = await self._canvas_rows(page)
+        if not rows:
+            return None
+        positions = tuple(row.get("pageIndex", -1) for row in rows)
+        signature = tuple((row.get("pageIndex"), row.get("sourcePath"),
+                           round(float(row.get("x", 0))), round(float(row.get("y", 0))))
+                          for row in rows)
+        return ForwardObservation(positions, signature)
+
     async def go_next(self, page: Page) -> None:
         button = page.locator(self.next_selector)
         if await button.count() != 1:
@@ -1529,21 +1543,22 @@ class MagapokeAdapter(SiteAdapter):
         if box is None or box["width"] <= 0 or box["height"] <= 0:
             raise PageChangeTimeoutError("Magapoke next control was not visible")
         self._advance_pending = True
-        try:
-            await button.click(
-                position={
-                    "x": min(80, box["width"] / 10),
-                    "y": box["height"] / 2,
-                },
-                timeout=1_000,
-                no_wait_after=True,
-            )
-        except PlaywrightTimeoutError as exc:
-            raise PageChangeTimeoutError("Magapoke next control could not be clicked") from exc
+        await self._forward_click.click(
+            page, button, await self._forward_observation(page),
+            position={"x": min(80, box["width"] / 10), "y": box["height"] / 2},
+            timeout_error=PageChangeTimeoutError("Magapoke next control could not be clicked"),
+        )
 
     async def wait_for_change(
         self, page: Page, previous_identity: ContentIdentity | None
     ) -> None:
+        if self._forward_click.error is not None:
+            await self._forward_click.recover(
+                page, lambda: self._forward_observation(page),
+                timeout_ms=self.page_change_timeout_ms, stable_checks=self.render_stable_checks,
+            )
+            self._advance_pending = False
+            return
         if previous_identity is None:
             await self._wait_for_render_ready(page)
             return

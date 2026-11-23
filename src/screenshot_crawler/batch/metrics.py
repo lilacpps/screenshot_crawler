@@ -45,6 +45,7 @@ class BatchMetricsWriter:
         self._current_started_monotonic: float | None = None
         self._current_request_count = 0
         self._current_retry_count = 0
+        self._current_consumed: bool | None = None
         self._finalized = False
         self._candidates_started = 0
         self._candidates_completed = 0
@@ -137,6 +138,28 @@ class BatchMetricsWriter:
             }
         )
 
+    def schedule_retry(self, error: BaseException) -> None:
+        """Keep the first failed attempt without finishing its logical candidate."""
+
+        root = error.__cause__ or error
+        self._current_consumed = getattr(error, "resource_consumed", None)
+        diagnostics = getattr(error, "diagnostics_dir", None)
+        self._write({
+            "type": "candidate", "event": "retry_scheduled", "run_id": self.run_id,
+            **(self._current or {}), "attempt": 1, "max_attempts": 2,
+            "crawl_run_id": getattr(error, "crawl_run_id", None),
+            "diagnostics_dir": str(diagnostics) if diagnostics is not None else None,
+            "error_type": type(root).__name__, "error_message": str(root)[:4000] or None,
+            "resource_consumed": self._current_consumed,
+        })
+
+    def start_retry(self) -> None:
+        self._current_retry_count = 1
+        self._write({
+            "type": "candidate", "event": "retry_started", "run_id": self.run_id,
+            **(self._current or {}), "attempt": 2, "max_attempts": 2,
+        })
+
     def record_access_event(self, event: AccessEvent) -> None:
         if event.event_type == "request":
             self._http_requests_total += 1
@@ -213,14 +236,19 @@ class BatchMetricsWriter:
         result: str,
         stop_reason: str | None,
         resource_consumed: bool | None = None,
-        retry_count: int = 0,
+        retry_count: int | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
+        crawl_run_id: int | None = None,
+        diagnostics_dir: Path | None = None,
     ) -> None:
         if self._current is None or self._current_started_monotonic is None:
             return
         elapsed = max(0.0, time.monotonic() - self._current_started_monotonic)
-        self._current_retry_count = max(0, retry_count)
+        if retry_count is not None:
+            self._current_retry_count = max(0, retry_count)
+        if self._current_consumed is True:
+            resource_consumed = True
         self._retry_count += self._current_retry_count
         if result == "completed":
             self._candidates_completed += 1
@@ -243,6 +271,8 @@ class BatchMetricsWriter:
                 "resource_consumed": resource_consumed,
                 "error_type": error_type,
                 "error_message": error_message,
+                "crawl_run_id": crawl_run_id,
+                "diagnostics_dir": str(diagnostics_dir) if diagnostics_dir is not None else None,
             }
         )
         self._current = None
@@ -250,6 +280,7 @@ class BatchMetricsWriter:
         self._current_started_monotonic = None
         self._current_request_count = 0
         self._current_retry_count = 0
+        self._current_consumed = None
 
     def finish(self, *, stop_reason: str | None = None) -> None:
         if self._finalized:

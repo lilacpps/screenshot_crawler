@@ -81,6 +81,11 @@ class SitePolicy(ABC):
 
         return False
 
+    def allows_automatic_candidate_retry(self) -> bool:
+        """Whether fresh-page replay is safe even for nominal direct entry."""
+
+        return True
+
     def requires_quota_access_opt_in(self) -> bool:
         """Whether normal Batch must explicitly authorize quota use."""
 

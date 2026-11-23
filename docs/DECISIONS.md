@@ -1,5 +1,36 @@
 # Design Decisions
 
+## ページ送りclick timeoutは同じPageを読み取って照合する（2026-11-23）
+
+Magapoke / Comic DAYS / Jump+の次ページclick上限を1秒から3秒へ変更する。
+固定sleepではなくPlaywright actionability待機で、条件成立時は即進行する。
+click timeout後は既知本文位置がある場合だけ、既存page-change予算内で同じPageを
+読み取り照合する。直後の連続本文位置・Adapterの描画安定が確認できた場合だけ継続し、
+再clickや広告送り、END推定を行わない。Magapokeの通常navigation retryもこの経路では
+使用しない。未解消時は元timeoutを保持し、既存の通常Batch single retryへ委ねる。
+本文欠落・位置逆行/飛び・route変化・権利不明は成功にしない。control構造と結果を
+非機密metadataへ記録する。source-native capture、アクセス・ログイン・quota規則と
+共有Runnerの変更は不要。詳細はnote/00_core.mdの同日sectionを参照する。
+
+## ガチャ結果を取得の必須条件にしない（2026-11-23）
+
+Hanayume / Younganimalのガチャは任意の無料残数補充であり、取得権利の証拠ではない。
+ユーザー指定により結果API/表示の照合と35秒の結果待ちを削除する。一度クリック後は
+5秒待ち、新しい残チケット数で候補を選ぶ。操作失敗は再抽選せずログに残し、
+read-onlyのhome/auth再確認とfresh stockで続行する。残数・権利不明、拒否、中止は停止を維持する。
+紹介の×は既知dialog内の旧closeCpPop/現popCloseを両方認識し、homeとgacha各1回まで閉じる。
+未知の紹介を推測で閉じず、Hanayumeは覆っている要素と親・controlの構造を記録する。
+
+## 通常Batchの取得timeoutは同じ話を1回だけ再試行する（2026-11-22）
+
+手動再実行で復旧する一時的な失敗の操作負担を減らすため、初回＋1回の計2回を上限とする。
+同じエラーかどうかは比較しない。2回目も失敗した案件を個別修正の対象として診断に残す。
+対象は取得中の明示timeoutに限定し、UNKNOWN、guard、権利不明、拒否、Catalog/出力の異常は
+再試行しない。最初のPageを閉じ、現在の同一target/Policyを再検証して追加消費のないdirectで
+やり直す。チケット消費確認済みの失敗はgrantを保持してdirectへ明示的に組み直す。
+BookWalker quota/resumeと、GETで初回無料権利を開始し得るYanmagaは再試行禁止を維持する。
+全体再実行・新規quota・自動refund・grant-only replay・同一失敗fingerprint管理は導入しない。
+
 ## ComicFUZの公開無料取得はログイン状態で制限しない（2026-11-22）
 
 Discoveryと公開無料話のcaptureから匿名状態の必須チェックを除く。

@@ -31,7 +31,7 @@ from screenshot_crawler.site_adapters.younganimal.live_access import (
 HOME = "https://younganimal.com/"
 GACHA = HOME + "gacha"
 RESOLUTION_BUDGET_MS = 65_000
-GACHA_WAIT_MS = 35_000
+GACHA_SETTLE_SECONDS = 5.0
 READY_SECONDS = 8.0
 RECOVERY_SECONDS = 5.0
 PREMIUM_SECONDS = 15 * 24 * 60 * 60
@@ -173,8 +173,7 @@ class PremiumObserver:
                         g = data.get("gacha") if isinstance(data, dict) else None
                         if (isinstance(g, dict) and type(g.get("canRollGacha")) is bool
                                 and _integer(g.get("gachaTimes"))):
-                            reduced = {"can": g["canRollGacha"], "times": g["gachaTimes"],
-                                       "result": g.get("gachaBonusResult")}
+                            reduced = {"can": g["canRollGacha"], "times": g["gachaTimes"]}
         except (PlaywrightError, TimeoutError, ValueError, TypeError, AttributeError):
             pass
         self.rows.setdefault(kind, []).append((started, reduced))
@@ -242,31 +241,109 @@ async def _goto(page: Page, url: str, timeout_ms: int) -> None:
         raise UnknownPageStateError("Younganimal Premium prerequisite route changed")
 
 
+async def _log_home_popup(page: Page, event: str) -> None:
+    """Bounded structural diagnostics, excluding titles, URLs and account data."""
+    try:
+        async with asyncio.timeout(1):
+            details = await page.evaluate("""() => {
+              const meta=n=>n&&({tag:n.tagName,classes:(n.getAttribute('class')||'').slice(0,120),
+                e2e:n.getAttribute('data-e2e')?.slice(0,80),type:n.getAttribute('type')?.slice(0,20),
+                role:n.getAttribute('role')?.slice(0,40)});
+              const visible=n=>!!(n.getBoundingClientRect().width&&n.getBoundingClientRect().height);
+              const ancestors=n=>{
+                const rows=[];
+                for(let p=n;p&&rows.length<5;p=p.parentElement)
+                  rows.push({...meta(p),controls:[...p.querySelectorAll('button,a')].slice(0,8).map(meta)});
+                return rows;
+              };
+              const target=selector=>{
+                const nodes=document.querySelectorAll(selector),n=nodes[0],r=n?.getBoundingClientRect();
+                return {count:nodes.length,node:meta(n),cover:r?ancestors(document.elementFromPoint(
+                  r.x+r.width/2,r.y+r.height/2)):[]};
+              };
+              const roots=[...document.querySelectorAll('dialog[open],[role="dialog"],[aria-modal="true"]')].filter(visible);
+              return {open_dialog_count:roots.length,dialogs:roots.slice(0,4).map(n=>({...meta(n),
+                charge_heading_count:n.querySelectorAll('div.dialog-content > h2.dialog-h.mode-waitfree').length,
+                controls:[...n.querySelectorAll('button,a')].slice(0,8).map(b=>({...meta(b),
+                  is_close:(b.innerText||'').trim()==='閉じる',is_read:(b.innerText||'').trim()==='読む'}))})),
+                targets:{home_link:target('div.home-gacha > a.home-gacha-btn[href="/gacha"]'),
+                  spin:target('[data-e2e="gachaExecBtn"]')}};
+            }""")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not replace the original failure
+        details = {"inspection_error": type(exc).__name__}
+    phase = {HOME: "home", GACHA: "gacha"}.get(page.url, "other")
+    print("Younganimal home popup: " + json.dumps({"event": event, "phase": phase, **details}), flush=True)
+
+
 async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_ms: int) -> None:
     await _goto(page, HOME, timeout_ms)
     await observer.wait("stock")  # Account hydration, not mere absence of a button.
     await observer.wait("auth")
     await page.locator('#xHeader [data-e2e="signoutBtn"]').wait_for(state="attached", timeout=timeout_ms)
     campaign = page.locator('dialog.dialog.mode-campaign[data-e2e="pop"][open]')
-    dismissed = False
+    charge = page.locator('dialog.dialog[data-e2e="pop"][open]:has('
+                          'div.dialog-content > h2.dialog-h.mode-waitfree)')
+    dismissed_routes: set[str] = set()
+    dismissed_charges: set[str] = set()
+    handlers = []
 
     async def dismiss_campaign() -> None:
-        nonlocal dismissed
-        if dismissed or await campaign.count() != 1:
+        await _log_home_popup(page, "campaign_detected")
+        if page.url not in {HOME, GACHA} or page.url in dismissed_routes or await campaign.count() != 1:
             raise UnknownPageStateError("Younganimal campaign popup is ambiguous or repeated")
-        close = campaign.locator('button.dialog-btn.mode-campaign[data-e2e="popClose"]')
-        if await close.count() != 1 or await close.get_attribute("type") != "button":
+        close = campaign.locator('button.dialog-btn.mode-campaign:is([data-e2e="popClose"],'
+                                 '[data-e2e="closeCpPop"])')
+        if await close.count() != 1 or await close.get_attribute("type") not in {"button", "submit"}:
             raise UnknownPageStateError("Younganimal campaign close is ambiguous")
-        dismissed = True
+        dismissed_routes.add(page.url)
         await close.click(timeout=2_000)
         await campaign.wait_for(state="hidden", timeout=2_000)
+        print('Younganimal home popup: {"event": "campaign_dismissed"}', flush=True)
 
-    # Account hydration can finish before the optional advertisement appears.
-    # Handle only the observed campaign dialog, including during link actionability.
-    if await campaign.count() and await campaign.first.is_visible():
-        await dismiss_campaign()
-    await page.add_locator_handler(campaign, dismiss_campaign)
+    async def dismiss_charge() -> None:
+        await _log_home_popup(page, "charge_notice_detected")
+        if page.url not in {HOME, GACHA} or page.url in dismissed_charges or await charge.count() != 1:
+            raise UnknownPageStateError("Younganimal charge notice is ambiguous or repeated")
+        heading = charge.locator('div.dialog-content > h2.dialog-h.mode-waitfree')
+        if (await heading.count() != 1 or re.sub(r"\s+", "", await heading.inner_text())
+                != "「待つと無料」購読中作品のチャージが完了しました。"):
+            raise UnknownPageStateError("Younganimal charge notice heading changed")
+        close = charge.locator('div.dialog-content > div.dialog-f > button.dialog-f-btn')
+        if (await close.count() != 1 or await close.inner_text() != "閉じる"
+                or await close.get_attribute("type") not in {None, "button"}
+                or not await close.evaluate("n => !n.closest('form')")):
+            raise UnknownPageStateError("Younganimal charge notice close is ambiguous")
+        dismissed_charges.add(page.url)
+        await close.click(timeout=2_000)
+        await charge.wait_for(state="hidden", timeout=2_000)
+        print('Younganimal home popup: {"event": "charge_notice_dismissed"}', flush=True)
+
+    async def handle_campaign() -> None:
+        try:
+            await dismiss_campaign()
+        except (PlaywrightError, UnknownPageStateError) as exc:
+            # Keep event-listener failures out of subsequent read-only recovery.
+            # The original click still fails its bounded popup/actionability wait.
+            await _log_home_popup(page, "campaign_close_failed")
+            print("Younganimal daily gacha: " + json.dumps({
+                "event": "campaign_close_failed", "error_type": type(exc).__name__,
+            }), flush=True)
+
+    async def handle_charge() -> None:
+        try:
+            await dismiss_charge()
+        except (PlaywrightError, UnknownPageStateError):
+            await _log_home_popup(page, "charge_notice_close_failed")
+
     try:
+        if await page.locator('dialog[open],[role="dialog"],[aria-modal="true"]').count():
+            await _log_home_popup(page, "home_ready")
+        for popup, dismiss, handler in ((campaign, dismiss_campaign, handle_campaign),
+                                        (charge, dismiss_charge, handle_charge)):
+            if await popup.count() and await popup.first.is_visible():
+                await dismiss()
+            await page.add_locator_handler(popup, handler)
+            handlers.append(popup)
         link = page.locator('div.home-gacha > a.home-gacha-btn[href="/gacha"]')
         if await link.count() == 0 or (await link.count() == 1 and not await link.is_visible()):
             return
@@ -276,35 +353,23 @@ async def prepare_daily_gacha(page: Page, observer: PremiumObserver, *, timeout_
         await page.wait_for_url(GACHA, timeout=timeout_ms)
         if page.url != GACHA:
             raise UnknownPageStateError("Younganimal daily gacha route changed")
-    finally:
-        await page.remove_locator_handler(campaign)
-    _, native = await observer.wait("gacha")
-    if not native["can"] or native["times"] != 0:
-        return  # Never use a share/retry entitlement.
-    button = page.locator('div.gacha-btn-wrap > a.gacha-btn.mode-user[data-e2e="gachaExecBtn"]')
-    if await button.count() != 1 or not await button.is_visible():
-        raise UnknownPageStateError("Younganimal daily gacha action is unknown")
-    if "すぐ無料ガチャをまわす" not in await button.inner_text():
-        raise UnknownPageStateError("Younganimal daily gacha label changed")
-    # One dispatch only. A timeout/error never retries the daily action.
-    started = datetime.now(UTC)
-    try:
+        _, native = await observer.wait("gacha")
+        if not native["can"] or native["times"] != 0:
+            return  # Never use a share/retry entitlement.
+        button = page.locator('div.gacha-btn-wrap > a.gacha-btn.mode-user[data-e2e="gachaExecBtn"]')
+        if await button.count() != 1 or not await button.is_visible():
+            raise UnknownPageStateError("Younganimal daily gacha action is unknown")
+        if "すぐ無料ガチャをまわす" not in await button.inner_text():
+            raise UnknownPageStateError("Younganimal daily gacha label changed")
         await button.click(timeout=2_000, no_wait_after=True)
-        async with asyncio.timeout(GACHA_WAIT_MS / 1000):
-            while True:
-                row = observer.latest("gacha", after=started)
-                result = page.locator('[data-e2e="gachaResult"] [data-e2e="gachaResTicket"]')
-                if (row is not None and row[1]["times"] == 1 and row[1]["can"] is False
-                        and _integer(row[1]["result"], maximum=2)
-                        and await result.count() == 1 and await result.is_visible()
-                        and await result.inner_text() == ("はずれ" if row[1]["result"] == 0 else str(row[1]["result"]))):
-                    refreshed = datetime.now(UTC)
-                    await page.evaluate("() => fetch('/api/userPoint',{cache:'no-store',redirect:'error'})")
-                    await observer.wait("stock", after=refreshed)
-                    return
-                await asyncio.sleep(0.15)
-    except (PlaywrightError, TimeoutError) as exc:
-        raise UnknownPageStateError("Younganimal daily gacha outcome unknown; no replay") from exc
+        # Allow the native action to finish without inspecting its result.
+        await asyncio.sleep(GACHA_SETTLE_SECONDS)
+    except (PlaywrightError, TimeoutError, UnknownPageStateError):
+        await _log_home_popup(page, "gacha_preparation_failed")
+        raise
+    finally:
+        for popup in reversed(handlers):
+            await page.remove_locator_handler(popup)
 
 
 async def _wallet_count(page: Page, observer: PremiumObserver, *, after: datetime) -> dict:
@@ -334,8 +399,22 @@ async def resolve_ticket_candidates(page: Page, candidates: tuple[object, ...], 
     observer = PremiumObserver(page, match[2], match[1])
     try:
         async with asyncio.timeout(RESOLUTION_BUDGET_MS / 1000):
-            await prepare_daily_gacha(page, observer, timeout_ms=timeout_ms)
-            _, home_stock = await observer.wait("stock")
+            try:
+                await prepare_daily_gacha(page, observer, timeout_ms=timeout_ms)
+            except (PlaywrightError, TimeoutError, UnknownPageStateError) as exc:
+                await _log_home_popup(page, "gacha_preparation_skipped")
+                print("Younganimal daily gacha: " + json.dumps({
+                    "event": "preparation_skipped", "error_type": type(exc).__name__,
+                }), flush=True)
+                await _goto(page, HOME, timeout_ms)
+                recovered = datetime.now(UTC)
+                await page.evaluate("() => fetch('/api/auth/session',{cache:'no-store',redirect:'error'})")
+                await observer.wait("auth", after=recovered)
+                await page.locator('#xHeader [data-e2e="signoutBtn"]').wait_for(
+                    state="attached", timeout=timeout_ms)
+            refreshed = datetime.now(UTC)
+            await page.evaluate("() => fetch('/api/userPoint',{cache:'no-store',redirect:'error'})")
+            _, home_stock = await observer.wait("stock", after=refreshed)
             if home_stock["count"] == 0:
                 return _selection(candidates, 0)
             if before_episode is not None:

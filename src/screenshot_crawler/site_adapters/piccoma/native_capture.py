@@ -62,6 +62,9 @@ SCALED_DISPLAY_PROFILES = {
     (1884, 2819): ScaledDisplayProfile((801.3125, 1199), 801, 0.5),
 }
 SCALED_NATIVE_SIZES = frozenset(SCALED_DISPLAY_PROFILES)
+# Allow one CSS layout subpixel between derived and measured scaled widths.
+# Other geometry tolerances and exact raw geometry continuity remain separate.
+SCALED_DISPLAY_WIDTH_TOLERANCE = 1 / 64
 OVERSCAN_NATIVE_SIZE = (763, 1200)
 OVERSCAN_DISPLAY_SIZE = (764.265625, 1202)
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
@@ -1276,7 +1279,8 @@ def _validate_paint_path(
     # Preserve RGBA instead of claiming a white composite covers the observed
     # fractional overhang. Exact node sizes/roles and raw continuity still bind it.
     right_overhang = (0.27 if overscan else
-                     max(0.05, display_width - frame_width + 0.01) if scaled_profile else 0.01)
+                     max(0.05, display_width - frame_width + SCALED_DISPLAY_WIDTH_TOLERANCE)
+                     if scaled_profile else 0.01)
     # Additional ordinary widths must prove a 1:1 presentation. Preserve the
     # existing discrete profiles' tolerances and alpha/overscan paint contracts.
     new_ordinary_width = is_additional_ordinary_size(width, height)
@@ -1286,7 +1290,9 @@ def _validate_paint_path(
         or not isinstance(rect, list)
         or len(rect) != 4
         or any(type(value) not in {int, float} or not math.isfinite(value) for value in rect)
-        or abs(rect[2] - display_width) > display_tolerance
+        or abs(rect[2] - display_width) > (
+            SCALED_DISPLAY_WIDTH_TOLERANCE if scaled_profile and not overscan else display_tolerance
+        )
         or abs(rect[3] - display_height) > display_tolerance
         or not isinstance(rows, list)
         or not isinstance(first_opaque, int)
@@ -1313,7 +1319,9 @@ def _validate_paint_path(
                 or row.get("tag") != ("CANVAS" if index == 0 else "DIV")
                 or (role and role not in row.get("classes", "").split())
                 or abs(box[0] - rect[0]) > 0.01 or abs(box[1] - rect[1]) > 0.01
-                or abs(box[2] - (display_width if index == 0 else frame_width)) > 0.01
+                or abs(box[2] - (display_width if index == 0 else frame_width)) > (
+                    SCALED_DISPLAY_WIDTH_TOLERANCE if index == 0 and scaled_profile else 0.01
+                )
                 or abs(box[3] - display_height) > 0.01
             ):
                 return False
@@ -1704,14 +1712,18 @@ async def capture_native_tile_replay(
     response_registry_overflowed: bool,
     bytes_already_read: int,
     max_episode_bytes: int,
+    report_stage: Callable[[str], None] | None = None,
 ) -> NativeCapture:
     """Materialize an exact selected source graph or report a safe fallback reason."""
 
+    mark = report_stage or (lambda _stage: None)
     if response_registry_overflowed:
         raise NativeCaptureUnavailable("response_registry_overflow")
     preserve_alpha = (expected_width, expected_height) in SCALED_NATIVE_SIZES
     try:
+        mark("trace_snapshot")
         before = await _read_native_snapshot(page, canvas)
+        mark("trace_and_paint_validation")
         trace = validate_tile_trace(
             before, expected_width=expected_width, expected_height=expected_height
         )
@@ -1739,6 +1751,7 @@ async def capture_native_tile_replay(
             )
         ):
             raise NativeCaptureUnavailable("white_backdrop_unproven")
+        mark("source_response_lookup")
         candidates = await responses_for_url(trace.source_url)
         if len(candidates) != 1 or response_count_for_url(trace.source_url) != 1:
             raise NativeCaptureUnavailable(
@@ -1775,6 +1788,7 @@ async def capture_native_tile_replay(
         if remaining_budget <= 0 or declared_length > remaining_budget:
             raise NativeCaptureUnavailable("episode_source_byte_budget_exhausted")
         try:
+            mark("source_body_read")
             body = await asyncio.wait_for(response.body(), timeout=5.0)
         except Exception as exc:
             raise NativeCaptureUnavailable("source_body_unavailable") from exc
@@ -1784,6 +1798,7 @@ async def capture_native_tile_replay(
             or bytes_already_read + len(body) > max_episode_bytes
         ):
             raise NativeCaptureUnavailable("source_body_length_mismatch", bytes_read=len(body))
+        mark("source_jpeg_validation")
         validate_source_jpeg(body, width=expected_width, height=expected_height)
         specification = {
             "width": trace.width,
@@ -1796,6 +1811,7 @@ async def capture_native_tile_replay(
             "draws": list(trace.draws),
         }
         encoded = base64.b64encode(body).decode("ascii")
+        mark("replay")
         replayed = await _bounded_evaluate(
             page,
             "async ([bytes, spec]) => window.__piccomaNativeCapture.replay(bytes, spec)",
@@ -1809,6 +1825,7 @@ async def capture_native_tile_replay(
             or replayed.get("drawCount") != len(trace.draws)
         ):
             raise NativeCaptureUnavailable("replay_output_unverified")
+        mark("replay_revalidation")
         after = await _read_native_snapshot(page, canvas)
         if (
             not isinstance(after, dict)
@@ -1831,8 +1848,10 @@ async def capture_native_tile_replay(
             raise NativeCaptureUnavailable(
                 "paint_path_changed_during_replay", bytes_read=len(body), unsafe_live_change=True
             )
+        mark("pixel_decode_and_composite")
         replay_png = _decode_replay_data_url(replayed.get("dataUrl"))
         if preserve_alpha:
+            mark("webp_encode_and_validation")
             output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
                 replay_png, width=expected_width, height=expected_height, preserve_alpha=True
             )
@@ -1840,9 +1859,11 @@ async def capture_native_tile_replay(
             composited = composite_replay_png_on_white(
                 replay_png, width=expected_width, height=expected_height
             )
+            mark("webp_encode_and_validation")
             output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
                 composited, width=expected_width, height=expected_height
             )
+        mark("encoding_revalidation")
         final_snapshot = await _read_native_snapshot(page, canvas)
         if (
             not isinstance(final_snapshot, dict)

@@ -1,5 +1,20 @@
 # 14. YanmagaWeb (`yanmaga.jp`) 現行実装ノート
 
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+Yanmaga opts out through SitePolicy.allows_automatic_candidate_retry(): the
+saved public GET can initiate first-free rental, so automatic entry replay remains
+prohibited. Full Discovery/manual replanning remain the recovery path.
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
 ## 保存済み話URLへの直接入場（2026-11-21）
 
 `YanmagaAdapter` validates the saved public episode URL against the configured

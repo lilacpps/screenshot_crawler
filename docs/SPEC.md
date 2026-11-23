@@ -1,5 +1,16 @@
 # Screenshot Crawler 仕様書 v1.4
 
+## Normal Batch retry (2026-11-22)
+
+Normal Batch may retry an eligible acquisition timeout once, on a fresh Page,
+against the same validated target with non-consuming direct access. Two failed
+attempts stop the Batch; explicit access rejection and safety/rights uncertainty
+stop immediately. Grant-only and BookWalker quota/resume retain their existing
+no-auto-retry rules; Yanmaga entry replay remains prohibited by its Site Policy.
+Candidate counts and --limit count the logical target once; CrawlRuns retain both
+attempts. The complete contract is in docs/DISCOVERY_AND_BATCH.md, "Normal Batch
+single retry". This does not change Adapter navigation algorithms or capture proof.
+
 ## Hanayume Catalog修復 Stage 01 / 02（2026-11-11）
 
 作品管理GUIの「Catalog修復」はhanayume専用の読み取り専用解析・確認画面。
@@ -601,6 +612,12 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 終端確認済みのZIP/Catalog処理はreader接続なしで再試行する。
 
 ## 20. Retry / safety guard
+
+Magapoke / Comic DAYS / Jump+の既存ページ送りclickはPlaywright actionability待機を
+最大3000 msとし、成立時は即進行する。既知本文位置を伴うclick timeoutは、同じPageの
+直後の連続本文位置と描画安定を既存page-change期限内で読み取り確認できた場合だけ
+継続できる。この回復中は再click・非本文送り・END推定を行わない。不明状態は停止し、
+未解消timeoutは既存Batch retryの適格性判定へ委ねる。設定/CLIとcapture proofは維持する。
 
 一時的なloadingやクリックはbounded retryしてよい。
 

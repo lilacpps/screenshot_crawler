@@ -1,3 +1,138 @@
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
+## Native capture timeout and failure-stage diagnostics (2026-11-22)
+
+Piccoma retains a cancelled native-only capture as a timeout when Core asks
+for fallback targets. The current reader mode, viewer identity, page ID and
+supported canvas geometry must still validate first. It raises an exact
+`PageChangeTimeoutError` with page,
+stage and elapsed milliseconds, allowing the existing normal Batch single
+retry after current non-consuming direct access is revalidated. A confirmed
+ticket debit must already have its persisted grant; no new quota intent is
+replayed. Missing native proof without a capture interruption remains UNKNOWN.
+Invalid geometry/cursor still wins over timeout recovery. Operator cancellation
+propagates as cancellation, and no display screenshot is enabled. Interruption
+and timing state reset on the next capture or `configure_run`.
+
+Failure diagnostics `metadata.json` include
+`adapter_debug.piccoma_capture_timing`: `page_id`, `stage`, `failure_stage`,
+`outcome`, validated `native_size` when available, total `elapsed_ms` and
+per-stage `stages_ms`. Stages distinguish
+reader/trace/paint validation, source lookup/body/JPEG validation, replay,
+replay revalidation, pixel decode/compositing, WebP encoding/validation,
+encoding revalidation, post-capture/source revalidation, permitted legacy
+rendered capture and cleanup.
+`failure_stage` retains the interrupted stage even after cleanup. The
+`piccoma_capture_interruption` entry and timeout error text also retain page,
+stage and elapsed time. The latter reaches existing Batch metrics/error events.
+Only fixed stage labels, page IDs and numeric times are recorded; no URLs,
+source bytes, credentials or exception payloads are added. Successful pages
+do not add timing fields to their manifests. No CLI/config option is needed;
+restart the worker and use the usual Batch command.
+
+Evidence: Item/Source 40980 (`1902:93257`) retained seven source-native
+1884x2819 WebP pages out of 18 and stopped at p8 with the plain fallback
+refusal. Its metrics record retry_count=0 and confirmed resource consumption.
+The previous Core path caught an expired capture call (default 10s + 2s grace)
+and the Adapter replaced it with UNKNOWN while refusing fallback. The exact
+late substage was not retained in that failure, so its cause is unconfirmed.
+A bounded shared-CDP direct-grant probe captured the same p8 in 7.193s;
+replay took 1.932s and method-6 encoding/validation 3.239s. It dispatched no
+Piccoma mutation, ticket or purchase action. This demonstrates current p8
+capture, not the cause of the earlier delay. The method-4 comparison preserved
+every RGBA byte but was not adopted; production codec, timeout and source
+proof budgets remain unchanged. Isolated probe outputs are under
+`output/piccoma-capture-timeout-20261122/`. Normal Catalog/library are untouched.
+
+The isolated direct-grant live run completed all 18 pages through explicit
+END in 142.103s using the normal 12s capture bound, method 6 and 200ms pacing.
+All 18 source-native lossless WebP files fully decode at 1884x2819, without
+fallback; p8 RGBA equals the earlier verified replay. Capture spans ranged
+5.036..9.167s; p8 took 6.888s. Read-only protection aborted two attempted
+Piccoma background mutations; no ticket/purchase action was sent. This is a
+protected direct-grant Runner check, not a live automatic Batch retry or a
+normal Catalog/ZIP completion. Its report is `live-final-report.json` in the
+isolated directory. The old delay was not reproduced and is not claimed fixed;
+the verified fix preserves timeout classification and future failure evidence.
+
+Validation: 1723 native-capture/Policy Unit cases and 43 affected Batch/CLI/
+AccessGuard boundary cases passed. Synthetic browser coverage passed 42 cases
+for deadline/unavailable distinction, failure timing, guarded no-screenshot
+fallback, source/paint changes, native pixels, packaging and same-grant retry
+success/final failure. The final identity/mode guard was checked in a further
+12-case subset (overlapping the 42), including URL and geometry changes after
+interruption. All completed selections had 0 failures/errors/skips. Reports:
+`unit-final.xml`, `boundary-final.xml`, `browser-final.xml` and
+`browser-guard-final.xml` in the isolated directory. Ruff and scoped diff
+checks passed. Full repository and unrelated Research tests were not selected:
+production changes are Piccoma-local, with no shared Core/Batch/access-policy
+or probe contract change. Live direct capture passed as described above;
+automatic fresh-page retry with live entitlements remains synthetic-only.
+Core behavior is unchanged, so `note/00_core.md` does not require an update.
+
+## Scaled overscan left alignment during page readiness (2026-11-22)
+
+Item/Source 46208 (`281:19031`, STEP47) saved p1 and failed at p2 in both
+attempts. Metrics `ddfdadfab61743d1bd739e960dc38d84` confirm one automatic
+retry, with two 10-second readiness timeouts. Both diagnostics show p2 loaded
+and visible with stable 866x1342 backing, rect
+[563.1666870117188, -2.5, 777.5833740234375, 1205] and frame
+[563.5, 0, 777, 1200]. The supported near-1 DPR and reader mode are intact.
+The measured -1/3px left offset combined with centered vertical/right
+overscan was rejected by the overscan helper's former aligned-only rule;
+normal scaled geometry already allowed that offset. All retained settled
+failure samples (16 total) now pass the geometry check.
+
+General actual-frame scaled overscan now uses the same discrete left offsets
+0/-1/3 within 0.01 CSS px as normal scaled pages. Exact profile dimensions,
+centered frame/top, inFrame classification and all other geometry checks remain.
+The special 763x1200 legacy overscan profile stays aligned-only. Readiness still
+requires three stable samples and excludes horizontal slide-in displacement.
+Unknown offsets, malformed frames and missing source/paint proof fail closed.
+Capture still requires verified native pixels, preserving full source dimensions
+and RGBA; no display screenshot, crop or resampling is enabled. Timeout, retry,
+access, pacing, Catalog, CLI and configuration contracts are unchanged.
+
+Synthetic regressions reproduce the old p2 readiness timeout and cover delayed
+settlement, permanent off-frame refusal, accepted/rejected offsets, unchanged
+raw geometry during capture, complete native RGBA equality and missing/extra
+source-paint rejection. Restart the worker before the usual Piccoma Batch run.
+Evidence and isolated verification outputs are under
+`output/piccoma-p2-20261122/`; normal Catalog/library are not modified.
+This is site-local geometry maintenance, so `note/00_core.md` needs no update.
+
+Protected shared-CDP direct access completed all 17 STEP47 pages through END
+in 44.680s at the normal capture/readiness bounds and 200ms pacing. All files
+are source-native lossless WebP at their original 859..872x1342 dimensions;
+p2 is 866x1342 and captured in 1.699s. Complete source/paint proof was retained
+with no capture fallback. One background mutating request was blocked; no
+ticket/purchase action was dispatched. This verifies isolated Runner capture,
+not a normal Catalog/ZIP completion or a new resource consumption. The retained
+`live-report.json` records the result. It does not claim independent live
+pixel equality; the independent full-RGBA comparison is synthetic browser QA.
+
+Validation: the added p2 transition case reproduced the original timeout before
+the fix, and the recorded-layout Unit case failed the old geometry gate. Final
+native-capture Unit coverage passed 1857 cases; affected synthetic browser
+coverage passed 65 cases, including the legacy profile, transition settlement,
+unknown offsets, native-only fallback refusal and independent RGBA equality.
+All completed final selections had 0 failures/errors/skips. Reports are
+`unit.xml` and `browser.xml` in the isolated directory. Ruff and scoped diff
+checks passed. Full repository and unrelated Research tests were not selected
+for this single Piccoma geometry predicate; no shared Core, policy, packaging
+or probe contract changed. A normal Catalog/ZIP Batch rerun was not performed;
+live verification used protected direct access and isolated output only.
+
 ## Work-first combined grant-only checks (2026-11-21)
 
 `--grant-only all` now processes A(Work-ticket → Binge-ticket), then B, then C.
@@ -223,8 +358,12 @@ Current behavior:
   source dimensions alone. A small legacy1:1 canvas/frame retains its prior
   geometry and Locator-PNG fallback. The native result is never resized to
   the enlarged/reduced CSS dimensions.
-- Canvas/frame scale, top and allowed left alignment still match within
-  0.01 CSS px. Centered vertical/right overscan is admitted only by this
+- Scaled canvas width matches within 1/64 CSS px (0.015625); height,
+  frame geometry, top and allowed left alignment still match within
+  0.01 CSS px. The same width tolerance bounds native paint validation and
+  its right-edge overhang allowance, including centered overscan. Raw
+  geometry must still remain exactly equal throughout capture.
+  Centered vertical/right overscan is admitted only by this
   exact geometry during readiness and capture; horizontal transition
   displacement is excluded. The snapshot's existing 0.5px edge tolerance
   reports centered 1201px displays as in-frame.
@@ -240,6 +379,37 @@ Current behavior:
   proof stops without a display screenshot. WebP encoding failure retains
   the same proven native pixels as PNG. No retry/deadline/resource ceiling
   is raised and no access/pacing behavior changes.
+
+Width-rounding maintenance (2026-11-22): Item/Source 46207 (`281:19032`,
+STEP48) failed before p1 on a stable 867x1342 native canvas in frame
+[564.5, 0, 775, 1200]. Saved diagnostics show displayed width
+775.2604370117188 versus derived 775.25, a 0.01043701171875 CSS px
+difference just outside the former 0.01 bound. Three samples had identical
+geometry at the supported viewport and near-1 DPR. The width-only allowance
+now covers one CSS layout subpixel; this also applies to dedicated scaled
+profiles. No source-size exception, output resizing, fallback, access or
+retry change is introduced. Unit regressions cover the recorded geometry,
+both width boundaries and rejection beyond them. Synthetic browser cases
+cover native RGBA equality, excessive-width rejection and an asynchronous
+within-tolerance width change that must still stop capture. The saved live
+failure is evidence of geometry only; a new live capture/Batch rerun has not
+been performed. Restart the worker before the usual Piccoma Batch command.
+
+Validation for this maintenance: all 1682 native-capture Unit cases passed.
+The affected synthetic browser selection passed 271 cases. A final alignment
+of the paint validator's initial width check also covers ordinary-size native
+sources in scaled frames; final browser checks passed 8 cases across 867x1342
+and 776x1200, with 4 overlapping the broad selection (275 distinct browser
+cases total). All completed runs had 0 failures/errors/skips. The original
+three retained failure-time geometry samples also pass the current adapter.
+Reports are `output/piccoma-width-unit-complete-20261122.xml`,
+`output/piccoma-width-browser-affected-20261122.xml` and
+`output/piccoma-width-browser-final-20261122.xml`. Ruff and scoped diff checks
+passed. Full repository/standalone Research tests were not selected for this
+site-local geometry fix; no research contract, shared Core or Batch behavior
+changed. New live capture was not performed; verification uses saved geometry
+and synthetic viewers without consuming site resources or writing the normal
+Catalog/library. `note/00_core.md` requires no update for this site-local fix.
 
 The protocol is supported by observed viewer code plus per-page source proof,
 not interpolation of attribution between known image sizes. Nonpositive,
@@ -318,7 +488,8 @@ the reported error was the missing 1128x1600 profile, not a viewport change.
 Current capture enumerates 1128x1600 with exactly 23x32 tiles / 736 draws
 plus the existing three setup events (739 total). Its measured display,
 845x1200 frame, +0.5 top offset and discrete left offsets 0/-1/3 must match
-within 0.01 CSS px. Full fractional source/destination grids, baseline JPEG,
+within 0.01 CSS px, except the scaled canvas width's 1/64 CSS px allowance.
+Full fractional source/destination grids, baseline JPEG,
 unique response/source/load generation, four-node scaled paint roles/styles,
 raw geometry continuity and exact RGBA lossless round-trip remain required.
 Other backing sizes can qualify only through the bounded actual-frame protocol above. Native proof is mandatory, including
@@ -347,9 +518,9 @@ selection covered 95 cases: 78 existing-profile transition/capture/fallback
 cases passed, and all 17 new-profile cases passed on targeted rerun after a
 fixture correction. Initial new-profile failures were a synthetic CSS layout
 artifact: requesting 845.2916870117188px in headless Chromium yields
-845.28125px, outside the existing 0.01px band. The fixture now requests the
-nearest representable width inside that band (845.296875px); production
-geometry tolerance is unchanged. New cases include independent RGBA equality,
+845.28125px, outside the then-current 0.01px band. The fixture requests the
+nearest representable width inside that band (845.296875px). Current width
+tolerance is 1/64 CSS px as described above. New cases include independent RGBA equality,
 left-offset/paint/generation changes, missing/ambiguous source, extra paint,
 budget exhaustion, native PNG encoding fallback, delayed/permanent off-frame
 transition, and unavailable/timeout Core fallback refusal. There were 0 skips.
@@ -373,7 +544,8 @@ which the former `.jpg`-only path gate rejected.
 Current capture explicitly supports this backing with a 38x57 grid
 (2166 draws plus context creation and two dimension resets). Display/frame,
 top offset and existing discrete left offsets 0/-1/3 must match within
-0.01 CSS px. Full source/destination coverage, fractional draw arguments,
+0.01 CSS px, except the scaled canvas width's 1/64 CSS px allowance.
+Full source/destination coverage, fractional draw arguments,
 source/load/response identity, baseline JPEG validation, four-node scaled
 paint roles/styles and raw geometry/generation continuity remain mandatory.
 The bounded target-event limit is 2169 in both Python and JavaScript;
@@ -642,7 +814,8 @@ the former 1152-event per-target limit.
 
 Scaled capture includes the exact backing/grid pair:
 1441x2048, 29x41 (1189 draws plus context creation and two backing resets).
-It requires display 844+1/3 by 1200 within 0.01 CSS px, frame 844x1200, top
+It requires display 844+1/3 by 1200 (width tolerance 1/64 CSS px, height
+0.01 CSS px), frame 844x1200, top
 offset 0 and the existing discrete left offsets 0 or -1/3. The 1125x1600 and
 1350x1920 profiles retain their previous 843.046875x1199 presentation,
 843x1200 frame and +0.5 top offset. Other backing sizes require the bounded actual-frame protocol above;
@@ -654,7 +827,7 @@ extra paint operation fails the exact operation-count proof on this profile.
 
 The new profile requires the existing four-node scaled paint roles/styles
 with 844px ancestors. Its observed roughly 1/3 CSS-pixel right overhang is
-bounded by the exact profile widths plus the existing 0.01 tolerance; this
+bounded by the exact profile widths plus the 1/64 CSS px width tolerance; this
 does not claim covering-white compositing. Complete source/destination grids,
 fractional draw arguments, one source/load generation, unique baseline JPEG
 response, stable paint/target/raw geometry and exact lossless RGBA round-trip
@@ -1228,7 +1401,8 @@ Dedicated native replay profiles retain 1125x1600 (23x32 grid), 1350x1920
 (27x39 grid), 1128x1600 (23x32), 1441x2048 (29x41), and 1884x2819
 (38x57), with the additional display profiles described above. The first two
 use the same observed
-843.046875x1199 display profile within the existing 0.01 tolerance, left
+843.046875x1199 display profile (width tolerance 1/64 CSS px, height
+0.01 CSS px), left
 offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
 remain explicit for these dedicated profiles; additional sizes use the bounded
 actual-frame protocol above and never infer source attribution from dimensions.
@@ -1285,7 +1459,8 @@ Ten pages have x=530.5; ten have x=530.1666870117188. The latter offset
 The existing width tolerance already accepts this measured display width.
 
 For 1125x1600 and 1350x1920, the adapter accepts left offsets 0 and
--1/3 CSS px, each within the existing 0.01 tolerance. It does not accept the
+-1/3 CSS px. Width tolerance is 1/64 CSS px; height and offset tolerances
+remain 0.01 CSS px. It does not accept the
 intervening range. In-frame/viewport/DPR, dimensions, top offset, paint path,
 source binding, complete draw grid, generation, lossless RGBA output and exact
 raw geometry equality during capture remain mandatory. No renderer resize,

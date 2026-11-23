@@ -1,3 +1,15 @@
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
 ## Discovery: active Premium rental without `mode-read`
 
 Current behavior (2026-11-22 JST): an exact authenticated native `purchased`
@@ -83,31 +95,77 @@ observations, optional daily-gacha preparation, stock selection and two-step
 entry. Before each Premium Work's stock resolution it visits home, waits for
 account/stock hydration, closes the unique open campaign
 `dialog.dialog.mode-campaign[data-e2e="pop"]` with its scoped
-`button.dialog-btn.mode-campaign[data-e2e="popClose"][type="submit"]`, and
+`button.dialog-btn.mode-campaign[type="submit"]` with `popClose` or legacy
+`closeCpPop`, and
 follows the unique visible `.home-gacha-btn[href="/gacha"]` if present. A
-temporary Playwright locator handler also handles an advertisement appearing
-after hydration while the link waits for actionability, and is removed on every
-exit. The close is dispatched at most once; duplicate, repeated or unknown
-dialogs/controls stop without force-clicking. The close/hide waits remain bounded
+temporary Playwright locator handler also handles advertisements appearing
+after hydration over the home link or the gacha spin button. It remains active
+through the spin/five-second settle and is removed on every exit. The close is
+dispatched at most once per home/gacha route (two total); duplicate, repeated or
+unknown dialogs/controls are not clicked. The close/hide waits remain bounded
 to two seconds each and navigation uses the supplied timeout. A missing
 or hidden entrance after readiness simply proceeds to stock selection. No daily
 ledger is kept. Only natural `/api/gacha` `canRollGacha=true,gachaTimes=0` allows
-one `gachaExecBtn` click. A matching native 0..2 result and visible
-`gachaResult/gachaResTicket` complete the result; the stock is then refreshed.
-No share/retry/uncertain-spin replay is implemented. A 65-second resolver budget
-includes at most 35 seconds for the result; per-observation bounds and AccessGuard
-remain separate. Gacha does not create a candidate attempt, grant or Artifact.
+one `gachaExecBtn` click. After a successful click, wait five seconds before
+requesting new `/api/userPoint` stock. Gacha result fields and panels are no
+longer parsed/verified; the old 35-second result wait is removed. Optional
+preparation errors log/skip the gacha without replay and recover only through
+read-only home, positive account header and freshly requested valid stock.
+Pre-gacha stock never authorizes selection after success or failure. Unknown
+stock/auth/access, fatal AccessGuard stops and cancellation still stop. No
+share/retry/uncertain-spin replay is implemented. The total 65-second resolver
+budget, per-observation bounds and AccessGuard remain separate. Gacha does not
+create a candidate attempt, grant or Artifact; no new CLI/config option is added.
 
-Home popup diagnostics (2026-11-22): `Hanayume home popup:` JSON lines are
+Popup diagnostics (updated 2026-11-23): `Hanayume home popup:` JSON lines are
 flushed to worker stdout (GUI: `output/management/logs/<job_id>/stdout.log`).
 `campaign_detected` and `campaign_dismissed` identify the observed close flow;
-`home_gacha_navigation_failed` captures failure structure before cleanup.
+`campaign_close_failed` records a rejected/failed handler close. Expected errors
+are contained inside the locator-handler callback so they cannot leak into the
+next Playwright call and prevent read-only account recovery; the original action
+still times out within its existing bound while the popup remains visible.
+`home_gacha_navigation_failed`, `gacha_preparation_failed` and
+`gacha_preparation_skipped` capture failure structure before read-only recovery.
 Evidence is capped at four open dialogs and eight controls each, with bounded
-tag/class/`data-e2e`/type values, gacha-link count and the element over its center.
+tag/class/`data-e2e`/type/role values. Diagnostics include home/gacha phase, home-link
+and spin counts, the element covering each control, up to five ancestors with
+up to eight controls each, and up to four visible role/aria/mission modal roots.
 Page text, HTML, input/account values, URLs, images, API bodies and credentials
 are excluded. Inspection has a separate one-second bound and a diagnostic
-inspection error does not replace the original navigation failure. These are
+inspection error does not replace the original navigation failure, including
+custom errors propagated from a Playwright locator handler. `Hanayume daily
+gacha:` logs `preparation_skipped` and only the error type, not raw error text. These are
 operator stdout diagnostics, not a new metrics/event or Catalog contract.
+
+The 2026-11-23 06:49 JST production failure occurred in Premium preparation,
+after 20 successful Work Ticket grants. Metrics show a successful gacha GET but
+no gacha POST response and no 403/429/5xx. The old error wrapped both a two-second
+click failure and the 35-second result timeout; the gacha GET at 06:49:25.504
+and job end at 06:49:27.641 support a click failure rather than a full result wait.
+An obstructing introduction popup is plausible, but its original structure was
+not logged. The old handler was removed before the spin, leaving gacha-page
+introductions uncovered. The revised handler covers that phase as well.
+Read-only shared-CDP home/gacha checks on 2026-11-23 saw no visible popup;
+current source still declares `closeCpPop` and `popClose`. Evidence is in
+`.tmp/hy-popup-20261123/evidence.json`. Non-read requests were blocked; no spin,
+ticket, Catalog or Watchlist operation was performed. Revised popup closing and
+five-second stock sequencing remain synthetic-browser verified, not live verified.
+
+Validation for the 2026-11-23 revision: the complete Hanayume/Younganimal Premium
+browser files, `test_optional_daily_gacha_browser.py`, Hanayume Adapter/Policy
+Unit files and Younganimal Policy/Batch/Live-access Unit files passed **380 tests,
+0 failed / 0 skipped / 0 deselected** in 119.63s (364 existing Python/pytest-asyncio
+deprecations). XML: `.tmp/hy-popup-20261123/final.xml`. The prior focused selection
+passed 47 cases, with 71 unrelated cases deselected. Coverage includes old/new
+close markers, delayed home/gacha/both-route popups, no result-panel dependency,
+five-second settle invocation, fresh-stock selection after success/error,
+zero/unknown stock, actual invalid/unknown overlay recovery, no extra writes,
+and propagation of access stops/cancellation. `ruff check src tests` and scoped
+`git diff --check -- docs note src tests` passed. Full pytest and Research/Probe
+suites were not run: production changes are limited to site-local optional
+preparation, with shared runtime, entry/capture proof and research helpers unchanged.
+Live verification is the read-only metadata/source check above; revised closes,
+new spins, five-second timing and ticket entry were not exercised live.
 
 The 2026-11-22 06:43 JST production job failed before any gacha spin because
 the open campaign intercepted the home link. The old once-only lookup for
@@ -228,10 +286,9 @@ and the additional opacity case are covered by the final targeted 168 cases.
 The interrupted earlier partial full run is not counted. Exact evidence and
 changed paths are in `runbooks/hanayume-premium/README.md` and
 `.tmp/hy-premium/validation-summary.json`.
-Popup-close and unused-gacha production
-branches cannot both be re-exercised live today; synthetic fixtures cover these
-paths. The once-only gacha probe confirms the site operation, while the production
-unused-gacha branch is synthetic-only today. Exhaustion/last-ticket behavior is
+Revised popup-close and unused-gacha production branches have not been
+re-exercised live; synthetic fixtures cover these paths. The historical once-only
+gacha probe confirms the site operation. Exhaustion/last-ticket behavior is
 synthetic-only because draining the remaining 11 tickets exceeds the approved
 research budget. No all-Work live run or independent agent review is claimed.
 

@@ -1,3 +1,39 @@
+## Forward-click timeout recovery (2026-11-23)
+
+Jump+ now waits up to 3000 ms for the existing page-forward control to become
+actionable, returning immediately when it is ready. On a click timeout with a
+known body prestate, the Adapter observes the same Page under the existing
+page-change deadline and never clicks again during recovery. Only repeated,
+consecutive next-body observations can continue capture. Unknown/skipped/reversed
+positions or route changes stop; unchanged/missing body evidence preserves the
+original timeout for the existing Batch retry rules.
+
+Recovery uses filtered body indices and the existing source/draw signature plus geometry. Startup/rewind cannot recover without an established first-body boundary. Vertical mode and complete-body END handling retain their existing paths.
+
+`adapter_debug.forward_click` records body positions, stage/outcome, timing,
+sample count, a signature hash and bounded control/pointer-hit diagnostics.
+No CLI/configuration, output format, quota operation or capture proof changes.
+Empty/ad/terminal-only observations do not establish recovery/END. See the
+[shared current behavior](00_core.md#forward-click-timeout-recovery-2026-11-23).
+Synthetic browser validation is used; new live automatic recovery is unverified.
+
+Verification: 528 unique affected/retry-boundary cases passed (0 skipped),
+including 53 recovery browser cases and the Comic DAYS Runner/manifest/ZIP
+recovery path. Ruff and diff checks passed. See the shared note for XML paths,
+fixture timing adjustment and unrun Full/Research/Live categories.
+
+## Common Batch retry boundary (2026-11-22)
+
+Normal CLI/GUI Batch can retry an eligible acquisition timeout once on a fresh
+Page/Adapter, using the same target and freshly validated non-consuming direct
+access. Two failures stop the Batch. AccessGuard rejection, UNKNOWN/proof/guard
+errors, cancellation, output/Catalog failures and grant-only never retry. New quota
+intent cannot replay; only confirmed observed consumption with a persisted grant
+can authorize direct recovery. First-attempt diagnostics/history remain; final
+candidate counts and --limit count once. See [shared current behavior](00_core.md#normal-batch-single-retry-2026-11-22).
+Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
+is available; no new real-site retry verification was performed.
+
 ## Discovery target pacing (2026-11-13)
 
 CLI/GUI Discover uses shared `discovery_inter_target_delay_ms` (3000 ms in

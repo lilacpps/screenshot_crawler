@@ -69,6 +69,12 @@ class YanmagaSitePolicy(SitePolicy):
             hours=self._cooldown_hours(cooldown_hours)
         )
 
+    def allows_automatic_candidate_retry(self) -> bool:
+        # Even a nominally free/direct episode GET may initiate first-free rental.
+        # Preserve the existing no-entry-replay contract until there is explicit
+        # operation-stage evidence that can authorize a narrower retry.
+        return False
+
     def evaluate(
         self,
         source: Source,
