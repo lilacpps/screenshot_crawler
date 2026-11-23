@@ -1143,6 +1143,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "comicfuz",
         "ebookjapan",
         "hanayume",
+        "herosweb",
         "jumpplus",
         "kadocomi",
         "magapoke",
@@ -1173,6 +1174,9 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     ebookjapan_policy = cli._batch_policy_registry().create("ebookjapan")
     assert ebookjapan_policy.supported_access_resources() == ()
     assert ebookjapan_policy.grant_only_supported_access_resources() == ()
+    herosweb_policy = cli._batch_policy_registry().create("herosweb")
+    assert herosweb_policy.supported_access_resources() == ()
+    assert herosweb_policy.grant_only_supported_access_resources() == ()
     younganimal_policy = cli._batch_policy_registry().create("younganimal")
     assert younganimal_policy.supported_access_resources() == ("work_ticket", "premium_ticket")
     assert younganimal_policy.grant_only_supported_access_resources() == ("work_ticket", "premium_ticket")
@@ -1199,6 +1203,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicfuz",
         "ebookjapan",
         "hanayume",
+        "herosweb",
         "jumpplus",
         "kadocomi",
         "magapoke",
@@ -1214,6 +1219,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicfuz",
         "ebookjapan",
         "hanayume",
+        "herosweb",
         "jumpplus",
         "kadocomi",
         "magapoke",
@@ -1231,6 +1237,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicfuz",
         "ebookjapan",
         "hanayume",
+        "herosweb",
         "jumpplus",
         "kadocomi",
         "magapoke",
@@ -1244,14 +1251,17 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "comicdays" in cli._batch_policy_registry().sites()
     assert "piccoma" in cli._batch_policy_registry().sites()
     assert "hanayume" in cli._batch_policy_registry().sites()
+    assert "herosweb" in cli._batch_policy_registry().sites()
     assert "younganimal" in cli._batch_policy_registry().sites()
     assert "comicfuz" in cli._batch_policy_registry().sites()
     assert cli._registry().create("kadocomi").__class__.__name__ == "KadocomiAdapter"
     assert cli._registry().create("yanmaga").__class__.__name__ == "YanmagaAdapter"
     assert cli._registry().create("ebookjapan").__class__.__name__ == "EbookJapanAdapter"
+    assert cli._registry().create("herosweb").__class__.__name__ == "HeroswebAdapter"
     assert cli._batch_adapter_registry({}).create("kadocomi").__class__.__name__ == "KadocomiAdapter"
     assert cli._batch_adapter_registry({}).create("yanmaga").__class__.__name__ == "YanmagaAdapter"
     assert cli._batch_adapter_registry({}).create("ebookjapan").__class__.__name__ == "EbookJapanAdapter"
+    assert cli._batch_adapter_registry({}).create("herosweb").__class__.__name__ == "HeroswebAdapter"
     # Both adapters must keep the current Kadocomi entry contract when a new site is added.
     kadocomi_url = (
         "https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000700021_E"

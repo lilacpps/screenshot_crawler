@@ -3094,8 +3094,9 @@ and manually entered IDs retain their exact spelling; no IDs are migrated.
 Human confirmation binds the current edited candidate; retry, membership, label
 or key changes invalidate confirmation and the affected Work's detail proof.
 New single-source Works need no scope. Existing-Work additions/multiple keys
-require complete-list detail; sites outside the supported nine (Magapoke,
-Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal, BookWalker, Kadocomi) block that path.
+require complete-list detail; sites outside the supported ten (Magapoke,
+Jump+, Zeblack, Comic DAYS, Piccoma, Hanayume, Younganimal, BookWalker,
+Kadocomi, HERO'S WEB) block that path.
 BookWalker requires a complete single page in native latest-release order.
 Kadocomi supports continuous ranges/open ends only, with its complete native
 ID/position proof preserving gaps; individual exclusions and empty assignments
@@ -3184,6 +3185,6 @@ The final preview, atomic/race cases, normal and draft-only WorkEditor, Full
 Yes/No/failure and Windows GUI flow use isolated synthetic data. Kadocomi
 exact-detail metadata and the four Stage 06A paths have bounded one-work live
 checks at that Stage05/06A checkpoint. Current bounded metadata and Stage07
-listing evidence, nine supported preview sites and two unresolved sites are
+listing evidence, ten supported preview sites and two unresolved sites are
 recorded in runbooks/watchlist-url-registration/PROGRESS.md. Do not generalize
 one-Work checks to all Works/accounts or mix metadata with complete-list proof.

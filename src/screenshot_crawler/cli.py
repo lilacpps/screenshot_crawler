@@ -548,6 +548,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
     from screenshot_crawler.site_adapters.ebookjapan import EbookJapanAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
+    from screenshot_crawler.site_adapters.herosweb import HeroswebAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
@@ -571,6 +572,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     )
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    registry.register("herosweb", HeroswebAdapter)
     registry.register("kadocomi", KadocomiAdapter)
     registry.register("yanmaga", YanmagaAdapter)
     younganimal_work_url = env_value("YOUNGANIMAL_WORK_URL", values or {})
@@ -590,6 +592,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
     from screenshot_crawler.site_adapters.ebookjapan import EbookJapanAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
+    from screenshot_crawler.site_adapters.herosweb import HeroswebAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
@@ -619,6 +622,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     )
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    registry.register("herosweb", HeroswebAdapter)
     registry.register("kadocomi", KadocomiAdapter)
     registry.register("yanmaga", YanmagaAdapter)
     registry.register("younganimal", YounganimalAdapter)
@@ -633,6 +637,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.comicfuz import ComicFuzDiscoveryAdapter
     from screenshot_crawler.site_adapters.ebookjapan import EbookJapanDiscoveryAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeDiscoveryAdapter
+    from screenshot_crawler.site_adapters.herosweb import HeroswebDiscoveryAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
@@ -653,6 +658,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("comicdays", ComicDaysDiscoveryAdapter)
     registry.register("hanayume", HanayumeDiscoveryAdapter)
     registry.register("younganimal", YounganimalDiscoveryAdapter)
+    registry.register("herosweb", HeroswebDiscoveryAdapter)
     registry.register("comicfuz", ComicFuzDiscoveryAdapter)
     registry.register("yanmaga", YanmagaDiscoveryAdapter)
     registry.register("ebookjapan", EbookJapanDiscoveryAdapter)
@@ -670,11 +676,13 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("ebookjapan", EbookJapanSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+    from screenshot_crawler.site_policies.herosweb import HeroswebSitePolicy
     from screenshot_crawler.site_policies.yanmaga import YanmagaSitePolicy
     from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
     registry.register("comicdays", ComicDaysSitePolicy)
     registry.register("piccoma", PiccomaSitePolicy)
     registry.register("hanayume", HanayumeSitePolicy)
+    registry.register("herosweb", HeroswebSitePolicy)
     registry.register("kadocomi", KadocomiSitePolicy)
     registry.register("yanmaga", YanmagaSitePolicy)
     registry.register("younganimal", YounganimalSitePolicy)

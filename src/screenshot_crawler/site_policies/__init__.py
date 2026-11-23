@@ -11,6 +11,7 @@ from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
 from screenshot_crawler.site_policies.comicfuz import ComicFuzSitePolicy
 from screenshot_crawler.site_policies.ebookjapan import EbookJapanSitePolicy
 from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+from screenshot_crawler.site_policies.herosweb import HeroswebSitePolicy
 from screenshot_crawler.site_policies.jumpplus import JumpPlusSitePolicy
 from screenshot_crawler.site_policies.kadocomi import KadocomiSitePolicy
 from screenshot_crawler.site_policies.magapoke import MagapokeSitePolicy
@@ -28,6 +29,7 @@ __all__ = [
     "ComicFuzSitePolicy",
     "EbookJapanSitePolicy",
     "HanayumeSitePolicy",
+    "HeroswebSitePolicy",
     "JumpPlusSitePolicy",
     "KadocomiSitePolicy",
     "MagapokeSitePolicy",

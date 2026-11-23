@@ -1,6 +1,6 @@
 # Phase 05 — Independent end-to-end verification
 
-**Status: NOT STARTED.** Use only supported public/current free examples; no entitlement or payment actions.
+**Status: PASS / BLOCKING 0.** Tester E2E, independent artifact/Catalog audit and final Reviewer/Lead gate passed. Use only supported public/current free examples; no entitlement or payment actions. The two earlier HTTP 429 attempts remain failed historical Runs.
 
 ## Objective
 
@@ -26,3 +26,21 @@ Reviewer/Tester provide PASS or precise BLOCKING issue(s) on:
 Report exact count of free/quota/paid/unknown sources, run results per Work, original/native/canvas/screenshot page totals, failed/fallback reasons and remaining unverified layouts. Document data-only status carefully: a successful PNG-only Batch is valid free-only E2E, **not** proof that original recovery is impossible or complete.
 
 Close runbook only when requested free-only E2E genuinely passes and independent review has no BLOCKING issues. Ticket work remains expressly deferred regardless of completion.
+
+## Current checkpoint — 2026-11-22
+
+### Final Tester evidence — 2026-11-23
+
+- After the user reported normal display, the Tester confirmed the current freeze and ran one new isolated standard CLI Batch attempt for A, followed by B's first attempt. Both processes exited 0: A captured 10 PNG pages and B captured 38. The combined audit is `output/herosweb_experiment/phase05-independent/proofs/20261123/phase05-final-independent-audit.json`.
+- The audit confirms 108 sources (84 free / 20 quota / 4 paid), unchanged resource fields and stable identities/positions; Items 21 and 103 are completed, new Runs 3 and 4 succeeded at END, and two present ZIP Artifacts match the audited SHA-256 and byte sizes. Replanning returns zero eligible candidates. The two earlier 429 Runs 1 and 2 remain preserved.
+- Before/after freeze manifests match for 230 Python files plus runtime config; imported module paths resolve to this worktree. The shared Phase 05 browser lease is released. Final independent Reviewer/Lead sign-off passed with BLOCKING 0.
+- Native/original implementation remains a separately authorized post-Phase05 follow-up and has not started. One bounded A diagnostic has completed; source evidence review is pending. See the Phase 06 checkpoint in PROGRESS before any further live probe.
+
+### Historical access-stop checkpoint (superseded by the successful 2026-11-23 runs above)
+
+- The isolated setup's Watchlist add and unscoped Full/Incremental Discovery completed successfully. The 108-source audit remains stable at 84 free / 20 quota / 4 paid; the unscoped Batch plan is 84 direct / 0 quota / 24 skipped. Proofs are under `output/herosweb_experiment/phase05-independent/proofs/`.
+- The first selected Work A Batch job's initial main-document request received HTTP 429 with `Retry-After: 1` at 23:10:17 JST. It stopped with exit 2 before capture; no PNG/ZIP/Artifact was made, and Work B was not started. The post-stop Catalog audit found access modes, availability, quota and grant state unchanged.
+- Independent Reviewer approved one fresh same-A guarded attempt only after at least five minutes without HERO traffic, with the same profile/endpoint/headers/transport/config and the first failed Run preserved. That one recovery also returned HTTP 429 and exited 2 before capture. Evidence is in `output/herosweb_experiment/phase05-independent/proofs/recovery-20261122T2316JST/`; the Reviewer independently matched the exact 253-entry pre/post-freeze comparison in this proof set. The two Runs are failed IDs 1 and 2, with zero Phase05 Artifacts. Structured Catalog reports retain the expected 84 free / 20 quota / 4 paid counts and unchanged source availability/grants/quota state. No B or subsequent HERO request followed the second response.
+- At that historical checkpoint, automatic requests were stopped pending external site availability. The user later reported normal display and separately authorized one bounded new A attempt followed by B; the successful results and final audit are recorded above.
+- The Phase04 raw file hashes are the reviewed baseline. Although the earlier Phase05 freeze helper omitted the `src/` prefix, the corrected Reviewer comparison matched all 253 entries; executable files and config stayed frozen. Only documentation was updated after freeze.
+- The user-requested original/source-native fidelity investigation remains planned for after a successfully closed Phase05; it is not implemented or started by this blocked E2E attempt.

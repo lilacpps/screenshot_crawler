@@ -7,7 +7,7 @@ from screenshot_crawler.registration.naming import available_name, slug, suggest
 from screenshot_crawler.registration.resolver import UrlResolver
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
-PREVIEW_SITES = frozenset({"magapoke", "jumpplus", "zeblack", "comicdays", "piccoma", "hanayume", "younganimal", "bookwalker", "kadocomi"})
+PREVIEW_SITES = frozenset({"magapoke", "jumpplus", "zeblack", "comicdays", "piccoma", "hanayume", "younganimal", "bookwalker", "kadocomi", "herosweb"})
 
 
 @dataclass(frozen=True)

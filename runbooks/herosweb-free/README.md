@@ -1,6 +1,6 @@
 # HERO'S WEB — Free-only Site Adapter Runbook
 
-Status: **PLANNED / NOT IMPLEMENTED / LIVE PROOF PENDING** (2026-11-22)  
+Status: **Phases 01-06 PASS / BLOCKING 0. A10 passed independent full A capture audit (10/10 VP8L pages at 1440x2048); B14 passed independent full B capture audit (38/38 VP8L pages at 844x1200), both with actual END and ZIP/Catalog proof. B14 also verified exact source-PNG RGBA, 16-tile history, replay and stability. Original JPEG bytes/recovery remain unproven and are separate from Phase 06.** (2026-11-23)
 Site key: `herosweb`  
 Implementation: new feature branch from the then-current `main`; **do not merge automatically**.  
 Authority for execution evidence: [PROGRESS.md](PROGRESS.md).
@@ -13,13 +13,13 @@ Add a dedicated HERO'S WEB adapter to the existing `screenshot_crawler` pipeline
 
 This iteration **downloads only directly readable, non-consuming `free` episodes**. Discovery must also recognize and persist evidence-supported `quota`, `paid`, and `unknown` classifications. No tickets, waiting, daily recovery, rental checkout, paid coins, account-resource inventory, purchase, or rights-acquisition action in this iteration. An already-accessible rental does not become `free` merely because the viewer opens; any later support is separate.
 
-**No current HERO'S WEB browser / DOM / native-image proof has been collected in this runbook.** Do not treat Hanayume or Younganimal evidence as HERO'S WEB evidence, or mark a phase PASS without its own test/probe.
+HERO'S WEB current-site observations and verification evidence are recorded in [PROGRESS.md](PROGRESS.md) and `note/16_herosweb.md`. Hanayume and Younganimal evidence is reference material only; each HERO'S WEB gate uses its own current-site probe, tests and independent review.
 
 ### User-confirmed URL correction
 
 - User reports `https://heros-web.com/series/fdf345d17d2b6` is accessible for 「はんばけ」 after changing `/seriesh/` to `/series/`. Treat **`/series/` as the initial candidate**, not `/seriesh/`.
 - Previous `/seriesh/fdf345d17d2b6` suggestion was erroneous/unverified: **never add it as a canonical seed**. Do not silently normalize arbitrary `/seriesh/` URLs to `/series/`; prove any conversion with site identity/redirect evidence, otherwise reject and request the canonical URL.
-- Work/episode ID format, episode route, range route, host variants and redirects remain **UNKNOWN** until Phase 01. An observed 13-hex ID on another site is not a HEROS constraint.
+- At initial planning the Work/episode ID formats and route behavior were **UNKNOWN**. Phase 01 observed 13-character lowercase hexadecimal Work and episode IDs, `/episodes/<episode-id>` reader routes, and `/series/<work-id>/<range>` listing routes on the two supplied Works; the adapter validates only this proven route family. Redirects are rejected by the guarded document transport.
 - Legacy `viewer.heros-web.com` pages/search indices are not evidence of the post-2026-06-01 production website. Site changeover: https://viewer.heros-web.com/news/entry/heros-info2603 . Probe the current `https://heros-web.com/` only.
 
 ## 2. Authorities and references
@@ -110,8 +110,8 @@ One shared Crawler Chrome operator at a time. Use isolated ignored `output/heros
 | [01 Site Probe](01-site-probe/README.md) | Current URL/identity, complete-list candidate, access signals, viewer, original/native candidate | Bounded evidence; OBSERVED / INFERRED / UNKNOWN distinguished; independent review |
 | [02 Discovery](02-discovery/README.md) | Registration, full/incremental inventory, exact classification, Catalog | Strict all-or-nothing listing + relevant unit/integration checks |
 | [03 Viewer / Capture](03-viewer-capture/README.md) | Free-only entry/END, original-first and verified fallbacks | Identity/ordering/capture proof, browser tests, independent review |
-| [04 Batch](04-free-batch/README.md) | Direct-only policy, CLI/GUI integration, sequential ZIP | Free executed, nonfree preserved/skipped, synthetic Batch completion |
-| [05 E2E](05-e2e/README.md) | 2-work isolated live runs and artifact audit | Actual END + ZIP + source Catalog final state, independent review and no blockers |
+| [04 Batch](04-free-batch/README.md) | Direct-only policy, CLI wiring, sequential ZIP | PASS / BLOCKING 0; synthetic retry/no-END, isolated CLI sample and independent audit pass |
+| [05 E2E](05-e2e/README.md) | Isolated live CLI E2E and artifact audit | Tester A/B CLI runs, independent artifact/Catalog audit and final Reviewer/Lead gate PASS / BLOCKING 0; prior two 429 Runs preserved |
 
 Phase 01 must not become a research-only dead end: move directly through supported phases when evidence suffices. Probe and implement in small bounded slices; reviewer findings on identity, entitlement, incomplete inventory or capture pixels are blocking until corrected. If a higher-fidelity capture path cannot be proven in a bounded investigation, complete the correct PNG path and record the native follow-up rather than falsifying success.
 

@@ -1,6 +1,13 @@
 # Phase 03 — Free Viewer and original-image-first capture
 
-**Status: NOT STARTED.** Do not copy Hanayume/Younganimal geometry constants.
+**Status: PASS / BLOCKING 0 for A10 and B14 full native profiles.** A10 passed independent full-capture audit with 10/10 lossless VP8L pages at 1440x2048; B14 passed with 38/38 lossless VP8L pages at 844x1200. Both matched retained source-PNG RGBA, reached actual END and passed ZIP/Catalog integrity. B14 also verified exact tile history, replay, stability and page order. B10 was an earlier full rendered-PNG run; B11 and B13 were bounded diagnostics whose limitations are historical and retained below. The B12 resumed-loading profile and synthetic regressions remain bounded to the observed layouts. Original JPEG recovery remains unproven. Do not copy Hanayume/Younganimal geometry constants.
+
+Current live profiles and independent artifact audits:
+
+- `dca88b215773f` / `4fe9831c6f540`: 17 wrappers, 10 body slots, fresh plain-free proof, 10/10 VP8L pages at 1440x2048, terminal seek 1 / Last wrapper 16, audited ZIP.
+- `0f023839d7bca` / `b92706d1ebe2e`: 45 wrappers, 38 body slots, fresh authenticated same-Work free proof, 38/38 VP8L pages at 844x1200, terminal seek 1 / Last wrapper 44 after body coverage, audited ZIP.
+
+Both current audits verified manifest/ZIP order, CRC, exact decoded RGBA against retained source-PNG proofs, body-slot/spread order, full source-tile history/replay/stability and terminal coverage. Original JPEG-byte fidelity remains unproven. Earlier Phase 03/05 PNG runs, B10 rendered capture and B11/B13 bounded diagnostics are historical checkpoints superseded by A10/B14; their evidence and limits remain in [PROGRESS.md](../PROGRESS.md).
 
 ## Goal
 

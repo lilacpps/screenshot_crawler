@@ -1,6 +1,6 @@
 # Phase 02 — Full / incremental Discovery and registration
 
-**Status: NOT STARTED.** Phase 01 evidence, the parent contract and current Hanayume/Younganimal implementation are prerequisites.
+**Status: PASS, including reopened B3 redirect review (see current [PROGRESS](../PROGRESS.md)).** The implementation follows the Phase 01 evidence, parent contract and current Hanayume/Younganimal references.
 
 ## Goal / code
 

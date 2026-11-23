@@ -4099,3 +4099,31 @@ with a synthetic SequenceRunner, not the production CrawlerRunner. A separate
 representative grant-only Work case uses the actual CrawlerRunner. No full suite
 was rerun for this Piccoma/transport-local revision. Current validation details
 and remaining live limits are in the [Piccoma runbook progress](../runbooks/piccoma-ticket-auto/PROGRESS.md).
+# HERO'S WEB Discovery, Viewer, Batch and native capture (Phases 02-06)
+
+The CLI Discovery registry includes `HeroswebDiscoveryAdapter`; the manual
+crawl registry includes `HeroswebAdapter`, and
+`registration/draft.PREVIEW_SITES` permits read-only complete-list preview for
+`herosweb`. The adapter is isolated under `site_adapters/herosweb/` and uses
+the existing Discovery, registration, AccessGuard, Runner and packaging
+contracts. It buffers every declared numeric range before yielding. Phase 03
+provides the site-local manual Viewer adapter, stable rendered-canvas PNG
+fallback and bounded source-native capture. Phase 04 registers the Batch
+adapter and direct-only `HeroswebSitePolicy`; only available `free` sources are
+eligible. No ticket, resource, grant-only or entitlement-mutation path exists.
+Output metadata supplies comic genre while preserving explicit request
+precedence.
+
+Phase 06 source-native capture passed independent full audits for both
+observed profiles: Work A saved 10/10 lossless VP8L pages at 1440x2048, and
+Work B saved 38/38 at 844x1200. All decoded RGBA matched the retained exact
+source-PNG proof; full tile history, replay, body order, stability and actual
+END were verified, and both ZIP/Catalog audits passed. Original JPEG bytes or
+lossless JPEG restoration remain unproven and are parked as a separate
+follow-up. No Catalog field, Core site branch or ticket resource was added.
+
+The two earlier same-A HTTP 429 Runs (IDs 1 and 2) remain preserved without
+Artifacts. The source/config freeze matched 230 Python files plus runtime
+configuration, and imported modules resolved to this worktree. Current site
+behavior, final audit paths and verification limits are in
+`runbooks/herosweb-free/PROGRESS.md` and `note/16_herosweb.md`.

@@ -61,7 +61,7 @@ def test_distributed_discovery_delays_cover_all_registered_sites() -> None:
     for site in _discovery_registry().sites():
         assert site in settings.sites
         assert settings.for_site(site).discovery_inter_target_delay_ms == (
-            5000 if site in {"hanayume", "younganimal"} else 3000
+            5000 if site in {"hanayume", "herosweb", "younganimal"} else 3000
         )
 
 
@@ -80,6 +80,15 @@ def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_oth
     assert settings.for_site("magapoke").inter_candidate_delay_ms == 3000
     assert settings.for_site("mangaone").page_turn_delay_ms == 1000
     assert settings.for_site("bookwalker").page_turn_delay_ms == 0
+    assert settings.for_site("herosweb") == SiteRuntimeSettings(
+        page_turn_delay_ms=1500,
+        inter_candidate_delay_ms=5000,
+        stop_on_http_403=True,
+        stop_on_http_429=True,
+        stop_on_challenge=True,
+        stop_on_captcha=True,
+        discovery_inter_target_delay_ms=5000,
+    )
 
 
 @pytest.mark.parametrize("site", ["piccoma", "ebookjapan"])

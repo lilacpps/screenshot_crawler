@@ -1,6 +1,6 @@
 # Phase 01 — HERO'S WEB current-site evidence probe
 
-**Status: NOT STARTED.** Read [parent contract](../README.md) and [PROGRESS](../PROGRESS.md). Browser evidence must be from post-2026-06-01 `https://heros-web.com/`; legacy `viewer.heros-web.com` is not the target.
+**Status: PASS (supported scope; see current [PROGRESS](../PROGRESS.md)).** Browser evidence is from post-2026-06-01 `https://heros-web.com/`; legacy `viewer.heros-web.com` is not the target.
 
 ## Goal
 

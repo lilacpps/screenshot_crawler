@@ -72,6 +72,15 @@ sites:
     stop_on_challenge: true
     stop_on_captcha: true
 
+  herosweb:
+    discovery_inter_target_delay_ms: 5000
+    page_turn_delay_ms: 1500
+    inter_candidate_delay_ms: 5000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
+
   kadocomi:
     discovery_inter_target_delay_ms: 3000
     page_turn_delay_ms: 1000
