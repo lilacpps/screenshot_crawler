@@ -49,8 +49,9 @@ B14 is the final standard-CLI full B run. Independent audit passed all 38 ZIP me
 
 The user explicitly authorized committing the current HERO'S WEB version and
 merging it into local `main`; no push was requested. The implementation commit
-`4f9550a` is complete. Local-main fast-forward remains pending; no merge is
-claimed here. The current shared Batch contract permits one fresh-Page retry
+is `4f9550a`; integration merge commit `7335e5e365671fc9c9e3a274fc381cecff82fba7`
+includes main base `f76e723` and was fast-forwarded successfully to local `main`.
+The feature branch remains available. No push was performed. The current shared Batch contract permits one fresh-Page retry
 for an eligible acquisition timeout, with existing inter-candidate pacing and
 a maximum of two attempts total. HERO'S WEB does not override that behavior;
 AccessGuard stops, unknown state, same-content/max-pages and capture/native-proof
@@ -58,7 +59,7 @@ failures remain non-retryable.
 
 - Targeted generic retry command: `.venv\Scripts\python.exe -X utf8 -m pytest tests/unit/test_batch_executor.py -k retry --basetemp "$env:TEMP\hweb-main-merge-retry" -q --tb=short` — exit 0, 25 passed, 133 deselected, 226 existing asyncio warnings, 13.60 s.
 - Combined pre-merge suite covered the three HERO unit files, two HERO browser files, CLI/runtime settings, and registration resolver/draft/service. Log: `output/herosweb_merge/merged-tests.log`. Result: exit 0, 597 passed, 1 skipped, 594 existing asyncio deprecation warnings, 331.55 s. The sole skip is `tests/unit/test_registration_draft.py:165`, optional `pytest.importorskip('pykakasi')`.
-- Changed-HERO Ruff and cached `git diff --check` passed. No post-merge live verification has been performed; the A10/B14 live proofs above predate local-main integration.
+- Changed-HERO Ruff and cached `git diff --check` passed. Final independent review: PASS / BLOCKING 0. The main-user-changes preservation audit passed at `output/herosweb_merge/main-user-changes-preservation.json`: protected `.gitignore`, BookWalker note/README/adapter/test and Watchlist hashes are unchanged; the original `crawler.yaml` content and values are preserved, with only the approved HERO block added. Protected user files remained unstaged and outside the merge commit. No post-merge live verification has been performed; the A10/B14 live proofs above predate local-main integration.
 
 ## A10 / B10 historical full-run checkpoint - superseded by B14
 
