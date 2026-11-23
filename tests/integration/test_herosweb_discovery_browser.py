@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import ClassVar
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Page, Route
 
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.discovery import (
@@ -116,6 +118,52 @@ def _herosweb_registry() -> DiscoveryAdapterRegistry:
     registry = DiscoveryAdapterRegistry()
     registry.register("herosweb", HeroswebDiscoveryAdapter)
     return registry
+
+
+@pytest.mark.parametrize(
+    ("heading", "expected"),
+    [
+        ("Fixture Work", "Fixture Work"),
+        ("HERO'S Web（ヒーローズウェブ）公式サイトの Fixture Work", "Fixture Work"),
+        ("HERO'S Web（ヒーローズウェブ）公式サイトの", None),
+    ],
+)
+async def test_herosweb_registration_observes_clean_work_title(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, heading: str, expected: str | None,
+) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write((
+                f'<html><head><link rel="canonical" href="{BASE}"></head><body>'
+                f'<div class="series-h"><h1>{heading}</h1></div></body></html>'
+            ).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    fetch = Route.fetch
+
+    async def local_fetch(route, **kwargs):
+        return await fetch(route, url=f"http://127.0.0.1:{server.server_port}/", **kwargs)
+
+    monkeypatch.setattr(Route, "fetch", local_fetch)
+    adapter = HeroswebDiscoveryAdapter()
+    try:
+        resolution = adapter.resolve_registration_url(BASE)
+        result = await adapter.observe_registration_metadata(browser_page, resolution)
+        assert result.title == expected
+        assert result.discovery_url == BASE
+        assert (len(result.warnings) > len(resolution.warnings)) is (expected is None)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def _page_html(*, base: bool, row_count: int, defer_rows: bool = False) -> str:
@@ -244,8 +292,9 @@ def _authenticated_page_html(
     )
 
 
+@pytest.mark.parametrize("prefix", ["", "HERO'S Web（ヒーローズウェブ）公式サイトの"])
 async def test_herosweb_discovery_buffers_rows_and_rejects_incomplete_before_yield(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, prefix: str,
 ) -> None:
     page = browser_page
     incomplete = {"enabled": False}
@@ -292,7 +341,7 @@ async def test_herosweb_discovery_buffers_rows_and_rejects_incomplete_before_yie
         await route.fulfill(
             status=200,
             headers={"content-type": "text/html; charset=utf-8"},
-            body=html,
+            body=html.replace("<h1>Fixture Work</h1>", f"<h1>{prefix}Fixture Work</h1>"),
         )
 
     async def record_delay(milliseconds: int) -> None:
@@ -333,6 +382,7 @@ async def test_herosweb_discovery_buffers_rows_and_rejects_incomplete_before_yie
     adapter = HeroswebDiscoveryAdapter()
     try:
         records = [record async for record in adapter.iter_records(page, target, "full")]
+        assert {record.item.canonical_title for record in records} == {"Fixture Work"}
         assert [record.source.external_id for record in records] == [
             f"{WORK_ID}:0000000000002",
             f"{WORK_ID}:0000000000001",

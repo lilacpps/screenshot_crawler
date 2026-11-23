@@ -8,6 +8,15 @@ Discovery. The CLI Discovery registry and manual crawl registry include
 `herosweb`; `registration.draft.PREVIEW_SITES` enables its complete-list
 preview. Phase 04 registers the direct-only Batch adapter and site policy.
 
+Work title extraction removes the exact leading site boilerplate
+`HERO'S Web（ヒーローズウェブ）公式サイトの` and trims surrounding whitespace.
+The same site-local normalization applies to URL registration metadata and
+Discovery Work/range headers, so later Discovery keeps the clean title.
+Occurrences inside a title are preserved; a boilerplate-only heading provides
+no title and fails the existing missing-title checks. Existing saved titles
+are not migrated by this change. Synthetic Unit/browser regression tests
+cover this normalization; this title fix has not been live-verified.
+
 The supported Work URL is canonical HTTPS
 `https://heros-web.com/series/<13 lowercase hexadecimal Work ID>` with no
 query, fragment or credentials. Discovery freezes Work identity/title/range

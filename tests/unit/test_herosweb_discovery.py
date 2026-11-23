@@ -18,6 +18,7 @@ from screenshot_crawler.site_adapters.herosweb.discovery import (
     _CurrentDocumentAuth,
     _validate_snapshot,
     _validate_work_header_snapshot,
+    _work_title,
     parse_herosweb_episode_url,
     parse_herosweb_work_url,
     parse_range_map,
@@ -25,6 +26,22 @@ from screenshot_crawler.site_adapters.herosweb.discovery import (
 
 WORK_ID = "0f023839d7bca"
 BASE = f"https://heros-web.com/series/{WORK_ID}"
+
+
+@pytest.mark.parametrize(
+    ("heading", "expected"),
+    [
+        ("Fixture Work", "Fixture Work"),
+        (" HERO'S Web（ヒーローズウェブ）公式サイトの　架空作品 ", "架空作品"),
+        ("架空作品 HERO'S Web（ヒーローズウェブ）公式サイトの続き",
+         "架空作品 HERO'S Web（ヒーローズウェブ）公式サイトの続き"),
+        ("HERO'S Web（ヒーローズウェブ）公式サイトの", ""),
+    ],
+)
+def test_herosweb_work_title_removes_only_the_leading_boilerplate(
+    heading: str, expected: str,
+) -> None:
+    assert _work_title(heading) == expected
 
 
 def _access_node(
@@ -187,11 +204,14 @@ def test_herosweb_current_range_alias_is_only_allowed_when_selected() -> None:
         )
 
 
-def test_herosweb_work_header_validation_does_not_treat_preview_roots_as_inventory() -> None:
+@pytest.mark.parametrize("prefix", ["", "HERO'S Web（ヒーローズウェブ）公式サイトの"])
+def test_herosweb_work_header_validation_does_not_treat_preview_roots_as_inventory(
+    prefix: str,
+) -> None:
     snapshot = {
         "canonicalCount": 1,
         "canonicals": [BASE],
-        "titles": ["Fixture Work"],
+        "titles": [f"{prefix}Fixture Work"],
         "mainCount": 1,
         "rangeContainerCount": 1,
         "rangeLinks": [
@@ -222,6 +242,13 @@ def test_herosweb_work_header_validation_does_not_treat_preview_roots_as_invento
     with pytest.raises(DiscoveryIncompleteError):
         _validate_work_header_snapshot(
             {**snapshot, "canonicals": [f"{BASE}/1"]},
+            expected_url=BASE,
+            work_id=WORK_ID,
+        )
+
+    with pytest.raises(DiscoveryIncompleteError):
+        _validate_work_header_snapshot(
+            {**snapshot, "titles": ["HERO'S Web（ヒーローズウェブ）公式サイトの"]},
             expected_url=BASE,
             work_id=WORK_ID,
         )

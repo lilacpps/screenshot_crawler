@@ -66,6 +66,10 @@ MAX_AUTH_RESPONSE_BYTES = 256_000
 LATEST_LABEL = "最新話から"
 
 
+def _work_title(text: str) -> str:
+    return text.strip().removeprefix("HERO'S Web（ヒーローズウェブ）公式サイトの").strip()
+
+
 @dataclass(frozen=True, slots=True)
 class HeroswebRange:
     page_number: int
@@ -1017,7 +1021,7 @@ def _validate_snapshot(
         not isinstance(titles, list)
         or len(titles) != 1
         or not isinstance(titles[0], str)
-        or not titles[0].strip()
+        or not _work_title(titles[0])
         or not isinstance(roots, list)
         or not roots
         or not isinstance(ranges, list)
@@ -1126,7 +1130,7 @@ def _validate_snapshot(
             raise DiscoveryIncompleteError("HERO'S WEB zero-area listing mirror diverges from its owner")
     if len(parsed_roots) != len(positive_roots) + len(zero_roots):
         raise DiscoveryIncompleteError("HERO'S WEB has an unexpected list root")
-    return titles[0].strip(), owner_rows
+    return _work_title(titles[0]), owner_rows
 
 
 def _validate_work_header_snapshot(
@@ -1147,11 +1151,11 @@ def _validate_work_header_snapshot(
         or not isinstance(titles, list)
         or len(titles) != 1
         or not isinstance(titles[0], str)
-        or not titles[0].strip()
+        or not _work_title(titles[0])
         or not isinstance(entries, list)
     ):
         raise DiscoveryIncompleteError("HERO'S WEB Work identity or range list is ambiguous")
-    return titles[0].strip(), parse_range_map(entries, work_id=work_id)
+    return _work_title(titles[0]), parse_range_map(entries, work_id=work_id)
 
 
 def _records_from_rows(
@@ -1249,7 +1253,7 @@ class HeroswebDiscoveryAdapter(DiscoveryAdapter):
                 )
                 if len(headings) != 1:
                     raise ObservationUnavailable("HERO'S WEB Work title is not unambiguous")
-                return observed_title(resolution, headings[0], resolution.discovery_url)
+                return observed_title(resolution, _work_title(headings[0]), resolution.discovery_url)
         except ObservationUnavailable as exc:
             return observation_failure(resolution, exc)
 
