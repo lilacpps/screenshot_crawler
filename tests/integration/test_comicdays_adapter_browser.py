@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 import pytest
+from playwright.async_api import Locator
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError
@@ -867,7 +869,10 @@ async def test_comicdays_dummy_two_front_leading_tail_requires_exact_structure(
           document.querySelector('#viewer-colophon').style.display = 'block';
           document.querySelector('.js-slide-backward').disabled = false;
         }""")
-    adapter.page_change_timeout_ms = 400 if mutation is None else 150
+    # The positive case restores and settles the viewer through several real
+    # browser round trips; 400 ms races the unchanged normalization deadline on
+    # Windows. Keep malformed-layout denial on its short negative budget.
+    adapter.page_change_timeout_ms = 1_000 if mutation is None else 150
     if mutation:
         assert (await adapter._active(browser_page)).get("frontPrefixMode") != "dummy-two-front-single"
         with pytest.raises(PageChangeTimeoutError):
@@ -1867,13 +1872,26 @@ async def test_comicdays_initialize_fails_bounded_for_ambiguous_resume(
         await adapter.initialize(browser_page)
 
 
+@pytest.mark.parametrize("lost_click_result", [False, True])
 async def test_comicdays_runner_browser_captures_spread_and_end(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path, lost_click_result
 ) -> None:
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
     monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
     adapter = ComicDaysAdapter()
+    lost = []
+    if lost_click_result:
+        original_click = Locator.click
+
+        async def ambiguous_click(control, **kwargs):
+            forward = "js-slide-forward" in (await control.get_attribute("class") or "")
+            await original_click(control, **kwargs)
+            if forward and not lost:
+                lost.append(True)
+                raise PlaywrightTimeoutError("synthetic lost forward completion")
+
+        monkeypatch.setattr(Locator, "click", ambiguous_click)
     runner_url = "data:text/html," + quote(RUNNER_HTML)
     adapter.resolve_initial_navigation_url = lambda _source_url: runner_url  # type: ignore[method-assign]
     result = await CrawlerRunner(
@@ -1889,6 +1907,7 @@ async def test_comicdays_runner_browser_captures_spread_and_end(
         )
     ).run(browser_page, adapter)
     assert result.stop_state is PageState.END
+    assert bool(lost) is lost_click_result
     assert len(result.pages) == 4
     assert [page.identity.page_id for page in result.pages] == ["1", "2,3", "2,3", "4"]
     manifest = json.loads((tmp_path / "runner-output" / "manifest.json").read_text(encoding="utf-8"))

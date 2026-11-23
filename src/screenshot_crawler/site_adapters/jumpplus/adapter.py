@@ -14,6 +14,7 @@ from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.patterns.forward_click import ForwardClick, ForwardObservation
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.jumpplus.access import jumpplus_access_profile
 from screenshot_crawler.site_adapters.jumpplus.native_capture import (
@@ -165,6 +166,7 @@ class JumpPlusAdapter(SiteAdapter):
         self._initial_url: str | None = None
         self._initial_parts = None
         self._advance_pending = False
+        self._forward_click = ForwardClick()
         self._terminal_reached = False
         self._vertical_capture_completed = False
         self._content_page_count: int | None = None
@@ -188,6 +190,7 @@ class JumpPlusAdapter(SiteAdapter):
                 f"JumpPlusAdapter does not support access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._forward_click = ForwardClick()
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
@@ -570,7 +573,20 @@ class JumpPlusAdapter(SiteAdapter):
             await page.wait_for_timeout(100)
             elapsed += 100
         self._advance_pending = True
-        await button.click(timeout=1_000, no_wait_after=True)
+        # Startup/rewind has not established the first body boundary yet.
+        before = (await self._forward_observation(page)
+                  if self._first_content_page_index is not None else None)
+        await self._forward_click.click(page, button, before)
+
+    async def _forward_observation(self, page: Page) -> ForwardObservation | None:
+        rows = await self._capture_rows(page)
+        if not rows:
+            return None
+        return ForwardObservation(
+            tuple(row.get("pageIndex", -1) for row in rows),
+            (self._signature(rows), tuple((row.get("x"), row.get("y"),
+                                          row.get("width"), row.get("height")) for row in rows)),
+        )
 
     async def _has_preceding_page_areas(
         self, page: Page, rows: list[dict[str, object]]
@@ -986,6 +1002,13 @@ class JumpPlusAdapter(SiteAdapter):
         await self._click_forward(page)
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
+        if self._forward_click.error is not None:
+            await self._forward_click.recover(
+                page, lambda: self._forward_observation(page),
+                timeout_ms=self.page_change_timeout_ms, stable_checks=self.render_stable_checks,
+            )
+            self._advance_pending = False
+            return
         if self._terminal_reached or self._viewer_mode == "vertical":
             return
         if previous_identity is None:
@@ -1037,4 +1060,4 @@ class JumpPlusAdapter(SiteAdapter):
             debug["renderer"] = await page.evaluate("() => window.__jumpplusProductionCapture ? window.__jumpplusProductionCapture.debug() : {}")
         except Exception:  # noqa: BLE001
             debug["renderer"] = {}
-        return {"jumpplus_capture": debug}
+        return {"jumpplus_capture": debug, "forward_click": dict(self._forward_click.debug)}

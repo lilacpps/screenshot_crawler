@@ -1,3 +1,73 @@
+## Forward-click timeout recovery (2026-11-23)
+
+Magapoke, Comic DAYS and Jump+ page-forward controls use Playwright's ordinary
+click actionability wait with a 3000 ms upper bound. A ready control is clicked
+immediately; no fixed three-second sleep or application-level click replay is
+added. Magapoke retains its observed offset click position; Jump+ retains its
+existing transit-guide wait and startup/rewind behavior.
+
+The lightweight `patterns/forward_click.py` helper retains a timed-out forward
+operation only when the Adapter observed a known one/two-page body position
+before the click. The next `wait_for_change` then observes the same Page without
+another click, including without Magapoke's ordinary navigation retries. It
+requires repeated stable Adapter body observations with consecutive positions
+immediately following the prior body/spread. Same-position redraws do not prove
+progress; stable skipped/reversed/unknown positions and route changes fail
+closed. The observation deadline starts at the original click timeout and is
+bounded by the existing Adapter page-change budget; polling or a slow observation
+cannot reset it. Successful recovery returns to ordinary capture/provenance
+validation. No capture proof or END rule is relaxed.
+
+Missing pre-click body evidence, startup controls, and a timeout followed only
+by an empty/ad/terminal-looking screen do not authorize recovery. Such cases
+retain the original timeout and existing Batch recovery contract. This helper
+does not infer END or advance through non-body screens. Ordinary successful-click
+navigation/terminal handling remains authoritative. Cancellation, AccessGuard
+rejection, quota entry and grant-only behavior are unchanged.
+
+Failure `metadata.json` exposes `adapter_debug.forward_click`: outcome, bounded
+body positions, elapsed click/recovery milliseconds, sample count, a body-signature
+hash and a best-effort control snapshot (visibility/disabled/rect/pointer-hit and
+covering tag). It records no text, URLs, response bodies, credentials or images.
+The control inspection has a 250 ms bound and cannot replace the original click
+failure. State is reset by `configure_run`; each successful new click replaces the
+previous operation's diagnostic snapshot. No CLI/YAML option is added.
+
+Validation uses synthetic Chromium viewers and existing site Unit/Integration
+coverage. New real-site recovery/rate verification is not yet performed; the old
+six failed jobs and their manual reruns do not prove this implementation's live
+recovery rate.
+
+Validation (2026-11-23): the final affected Unit/browser suite passed 486
+cases; the completed 53-case recovery browser file and 36 CLI/Executor retry
+boundary cases give **528 unique passed, 0 failures/errors/skips**, deduplicated
+by testcase identity. Synthetic real-browser coverage includes immediate and
+>1-second actionability, late body/draw completion after an ambiguous click,
+permanent covering UI, unchanged/missing/skipped/reversed body positions, route
+changes, slow observations, cancellation, AccessGuard interruption, diagnostic
+failure/privacy and no application-level second click. The existing Comic DAYS
+Runner/spread/END/manifest/ZIP test also passes with a deliberately lost forward
+click completion; its ordinary variant remains green. Ruff src/tests and scoped
+diff checks passed. XML evidence: output/fc-final.xml, fc-last.xml and
+fc-boundary.xml; deduplicated summary: output/fc-verification-summary.json.
+
+An initial affected run had 437 passed and one 400 ms Comic DAYS positive
+normalization-fixture timeout. Rechecking the family had two timing failures;
+the HEAD implementation loaded in memory passed 12 cases. The five involved
+production initialization methods are AST-identical to HEAD. Only that fixture's
+positive budget was changed to 1000 ms; negative cases keep 150 ms, production
+normalization budgets remain unchanged, and the final complete module is green.
+The first targeted run also emitted a pytest-cache permission warning; final
+runs disable that cache and have no skips. Existing Python/pytest-asyncio
+deprecation warnings remain.
+
+Full repository and unrelated Research suites were not run: this change has
+three explicit Adapter consumers, all covered by affected Unit/Integration and
+retry-boundary checks, with no Core/Runner, Policy, schema or research-helper
+change. Live verification is not performed; synthetic recovery and the older
+manual live reruns do not establish the new live recovery rate. No operational
+Catalog, Watchlist, runtime settings, Chrome profile or archive was modified.
+
 ## Normal Batch single retry (2026-11-22)
 
 Normal CLI/GUI Batch gives an eligible acquisition timeout one fresh-page retry:

@@ -1,5 +1,11 @@
 # Architecture
 
+`patterns/forward_click.py` supplies a small bounded click/observation helper to
+Magapoke, Comic DAYS and Jump+. Adapters own selectors and body/progress evidence;
+the helper owns the 3s actionability cap, read-only timeout deadline and structural
+diagnostics. It performs no click replay, terminal inference or browser lifecycle
+operation. Core Runner, access policy and normal Batch retry remain unchanged.
+
 ## Normal Batch single retry (2026-11-22)
 
 CLI/GUI common orchestration owns the two-attempt budget and fresh Page lifecycle.

@@ -1,5 +1,17 @@
 # Design Decisions
 
+## ページ送りclick timeoutは同じPageを読み取って照合する（2026-11-23）
+
+Magapoke / Comic DAYS / Jump+の次ページclick上限を1秒から3秒へ変更する。
+固定sleepではなくPlaywright actionability待機で、条件成立時は即進行する。
+click timeout後は既知本文位置がある場合だけ、既存page-change予算内で同じPageを
+読み取り照合する。直後の連続本文位置・Adapterの描画安定が確認できた場合だけ継続し、
+再clickや広告送り、END推定を行わない。Magapokeの通常navigation retryもこの経路では
+使用しない。未解消時は元timeoutを保持し、既存の通常Batch single retryへ委ねる。
+本文欠落・位置逆行/飛び・route変化・権利不明は成功にしない。control構造と結果を
+非機密metadataへ記録する。source-native capture、アクセス・ログイン・quota規則と
+共有Runnerの変更は不要。詳細はnote/00_core.mdの同日sectionを参照する。
+
 ## ガチャ結果を取得の必須条件にしない（2026-11-23）
 
 Hanayume / Younganimalのガチャは任意の無料残数補充であり、取得権利の証拠ではない。

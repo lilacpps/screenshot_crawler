@@ -613,6 +613,12 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 
 ## 20. Retry / safety guard
 
+Magapoke / Comic DAYS / Jump+の既存ページ送りclickはPlaywright actionability待機を
+最大3000 msとし、成立時は即進行する。既知本文位置を伴うclick timeoutは、同じPageの
+直後の連続本文位置と描画安定を既存page-change期限内で読み取り確認できた場合だけ
+継続できる。この回復中は再click・非本文送り・END推定を行わない。不明状態は停止し、
+未解消timeoutは既存Batch retryの適格性判定へ委ねる。設定/CLIとcapture proofは維持する。
+
 一時的なloadingやクリックはbounded retryしてよい。
 
 無理に突破しないもの:

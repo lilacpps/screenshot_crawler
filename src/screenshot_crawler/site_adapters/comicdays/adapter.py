@@ -25,6 +25,7 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.patterns.forward_click import ForwardClick, ForwardObservation
 from screenshot_crawler.site_adapters.base import (
     AccessConsumption,
     AccessResourceResolution,
@@ -87,6 +88,7 @@ class ComicDaysAdapter(SiteAdapter):
         self._author: str | None = None
         self._terminal = False
         self._advance_pending = False
+        self._forward_click = ForwardClick()
         self._advance_from_slider: int | None = None
         self._known_tail_slider: int | None = None
         self._known_nonbody_passes = 0
@@ -210,6 +212,7 @@ class ComicDaysAdapter(SiteAdapter):
                 f"ComicDaysAdapter does not support access_strategy={access_strategy!r}"
             )
         self._ticket_trace = []
+        self._forward_click = ForwardClick()
         self._transition_trace = []
         self._transition_trace_samples = {}
         self._transition_trace_started = time.monotonic()
@@ -1798,10 +1801,28 @@ class ComicDaysAdapter(SiteAdapter):
         self._advance_from_slider = slider[0]
         self._advance_pending = True
         self._trace_transition("click_start", slider_from=slider[0], slider_last=slider[1])
-        await button.click(timeout=1_000, no_wait_after=True)
-        self._trace_transition("click_returned")
+        await self._forward_click.click(page, button, self._body_forward_observation(state))
+        self._trace_transition("click_timeout" if self._forward_click.error else "click_returned")
+
+    def _body_forward_observation(self, state: dict[str, Any]) -> ForwardObservation | None:
+        rows = state.get("rows", [])
+        if state.get("ready") is not True or self._valid_slider_state(state) is None:
+            return None
+        return ForwardObservation(tuple(row.get("areaIndex", -1) for row in rows),
+                                  (state["sliderNow"], self._signature(rows)))
+
+    async def _forward_observation(self, page: Page) -> ForwardObservation | None:
+        return self._body_forward_observation(await self._active(page))
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
+        if self._forward_click.error is not None:
+            await self._forward_click.recover(
+                page, lambda: self._forward_observation(page),
+                timeout_ms=self.page_change_timeout_ms, stable_checks=3,
+            )
+            self._advance_pending = False
+            self._advance_from_slider = None
+            return
         self._transition_trace_samples = {}
         self._trace_transition(
             "wait_start", slider_from=self._advance_from_slider,
@@ -1929,6 +1950,7 @@ class ComicDaysAdapter(SiteAdapter):
         del page
         return {
             **self._capture_debug,
+            "forward_click": dict(self._forward_click.debug),
             "last_transition_observation": self._last_transition_observation,
             "ticket_trace": [dict(event) for event in self._ticket_trace],
             "transition_trace": [dict(event) for event in self._transition_trace],
