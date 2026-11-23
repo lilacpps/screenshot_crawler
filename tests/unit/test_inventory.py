@@ -211,7 +211,7 @@ def test_existing_policy_classification_matrix(inventory_inputs, site):
                     assert result.category == decision.access_strategy
                 elif decision.pending_quota:
                     assert result.category == "quota"
-                elif decision.reason in {"paid", "expired_rental"}:
+                elif decision.reason in {"paid", "paid_not_supported", "expired_rental"}:
                     assert result.category == "paid"
                 elif decision.reason in {"unavailable", "expired_free"}:
                     assert result.category == "unavailable"
@@ -255,6 +255,16 @@ def test_expiry_paid_rental_multiple_resources_and_site_slots(inventory_inputs):
     classified = _access(registry.create("yanmaga"), candidate, NOW)
     assert (classified.category, classified.reason) == ("paid", "paid")
     assert classified.resources == ()
+    policy = registry.create("herosweb")
+    for mode in ("quota", "paid"):
+        candidate = replace(source, site="herosweb", access_mode=mode, available=True)
+        classified = _access(policy, candidate, NOW)
+        assert (classified.category, classified.reason, classified.resources) == (
+            mode, f"{mode}_not_supported", (),
+        )
+        decision = policy.evaluate(candidate, now=NOW, quota_available=100)
+        assert not decision.eligible and decision.access_strategy is None
+        assert not decision.consumes_quota
     db, _ = inventory_inputs
     with sqlite3.connect(db) as connection:
         connection.execute("UPDATE sources SET quota_started_at=? WHERE site='mangaone'", (NOW.isoformat(),))

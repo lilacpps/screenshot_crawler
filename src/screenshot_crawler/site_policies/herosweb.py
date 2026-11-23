@@ -44,6 +44,7 @@ class HeroswebSitePolicy(SitePolicy):
             False,
             None,
             reasons.get(source.access_mode, "unsupported_access_mode"),
+            pending_quota=source.access_mode == "quota",
         )
 
 

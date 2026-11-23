@@ -401,6 +401,8 @@ pipのないuv環境では `uv pip install --python .venv/Scripts/python.exe -e 
   対象総数は担当内Sourceを持つItem数、担当外はSource数です。
 - 「直取候補」「Quota対象残」はCatalogと既存Site Policyによるローカル判定です。
   Quotaの対象話数とサイト共通の残枠は別です。実サイトの現在の取得可否を保証しません。
+  取得機能が未対応でも、既知のチケット対象はQuota、有償話は有償未取得に集計します。
+  例としてHERO'S WEBのquota/paidはこの分類に表示されますが、Batch取得対象には入りません。
 - `—`は未確認・算定不能、`~`は未同期などの診断がある暫定集計です。
   未Discover・Scope未同期・未管理は正常な0件に置き換えません。
 - 完全Inventory証拠の日時とアクセス観測日時は別です。再試行時刻は既存Policyと

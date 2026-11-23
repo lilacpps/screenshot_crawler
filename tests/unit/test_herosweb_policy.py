@@ -93,6 +93,7 @@ def test_policy_rejects_every_nonfree_mode_even_with_stock_or_active_grant(
     )
     assert not decision.consumes_quota
     assert decision.quota_resource is None
+    assert decision.pending_quota is (access_mode == "quota")
     assert (source.quota_started_at, source.access_granted_until) == prior_state
 
 

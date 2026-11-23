@@ -943,6 +943,22 @@ resource support, quota consumption or Batch selection. Completed/external/
 skipped Item status and ambiguity handling retain precedence; exceptions remain
 unknown. Site-specific rules stay in SitePolicy; no shared site-name branch,
 Catalog schema, persistence field, CLI/config or runtime access change is added.
+HERO'S WEB sets this display-only flag for available quota Sources while
+retaining its ineligible `quota_not_supported` decision. Inventory also maps
+the explicit `paid_not_supported` reason to `paid`. Known unsupported access
+therefore remains in the Quota/paid counts, rather than unknown/要確認; the
+original rejection reason and empty supported-resource set are preserved.
+Unavailable and completed/external/skipped precedence, unknown access and
+Policy errors keep their existing handling. These counts do not authorize
+Batch, ticket entry or payment. Existing GUI processes need restarting to load
+the changed projection; Discovery/Catalog data does not need rewriting.
+Validation for this display correction: Inventory/Policy Unit 55 passed and
+Qt-offscreen model 19 passed. The initial Qt module skip in the worktree Python
+(missing PySide6) was resolved by rerunning in the GUI-enabled root `.venv`.
+The operational read-only Inventory projection confirms HERO'S WEB quota 66,
+paid 2 and unknown 0 on 2026-11-23. Changed-file Ruff and whitespace checks pass.
+Browser Integration, Research/Probe, live site access and full suite were not
+run for the local display classification change.
 Piccoma admits available quota sources without an active manual grant through
 its site-owned normal Batch and grant-only resources; active manual grants
 remain non-consuming and are freshly revalidated. The inventory flag remains

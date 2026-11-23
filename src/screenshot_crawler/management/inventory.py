@@ -93,7 +93,7 @@ def _access(policy, source, now):
         decision = policy.evaluate(source, now=now, quota_available=None)
         if decision.eligible and decision.access_strategy in {"direct", "quota"}:
             category = decision.access_strategy
-        elif decision.reason in {"paid", "expired_rental"}:
+        elif decision.reason in {"paid", "paid_not_supported", "expired_rental"}:
             category = "paid"
         elif decision.reason in {"unavailable", "expired_free"}:
             category = "unavailable"

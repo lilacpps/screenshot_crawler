@@ -164,6 +164,17 @@ even when a source has an active grant or positive quota state. This policy
 does not expose access resources, ticket passes, grant-only passes or grant
 mutation. The CLI Batch adapter and policy registries include `herosweb`;
 runtime uses 1500 ms page turns and 5000 ms between candidates.
+For GUI Inventory, available quota Sources set the existing display-only
+`pending_quota` flag and appear as `quota`/Quota対象残. The shared Inventory
+projection maps `paid_not_supported` to `paid`/有償未取得. They retain the
+`quota_not_supported`/`paid_not_supported` rejection reasons and remain
+ineligible for Batch, with no supported resources. Known quota/paid Sources
+are no longer counted as unknown/要確認. No Catalog rewrite or Discovery is
+required; restart an already-running GUI to load the changed code.
+Read-only operational Inventory verification on 2026-11-23 confirmed quota 66,
+paid 2 and unknown 0. Inventory/Policy Unit and Qt-offscreen model validation
+passed (74 tests in total); no real-site or Catalog write was performed for
+this display change.
 
 Identity-bound Batch `direct` entry stays on the canonical Catalog episode
 URL. It verifies the current episode/Work header, rejects visible charge/login
