@@ -88,7 +88,7 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-11-21
+最終同期: 2026-11-23
 
 ## Two-part retained redraw recovery / Source 1916 (2026-11-21)
 
@@ -1110,9 +1110,40 @@ profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる�
 - non-white pixels
 - signatureの連続安定
 
+通常は従来の64×64縮小signatureを使う。縮小sampleのnon-whiteが0の場合だけ、
+同じ同期観測内で元canvasを256行ずつ読み取り、non-white画素の位置とRGBAも
+checksumへ含める。初期Home前後のatomic observationと通常のrender-ready待ちは
+同一のBookWalker内helperを使用する。文字の少ないページの移動・色変化も安定判定に
+反映し、本当に白一色のcanvasは引き続きreadyにしない。capture provenance、END、
+navigation retry回数、CLI/config/output、Coreのtimeout guardは変更しない。
+
 `render_stable_checks = 4`。
 
 `page_change_timeout_ms = 14_000` 内に安定しなければ `PageChangeTimeoutError`。
+
+### Source 1941 sparse-page timeout（2026-11-23）
+
+11:19および11:25 JST開始のowned/direct Batchは両方とも297画像保存後に停止した。
+保存HTMLのcounterは`298/303`、loaderは非表示、診断画像には本文末尾の文字があり、
+metricsの403/429/5xx/challengeは0件。counterは進んでいるため、送り操作の失敗ではない。
+2859×1479の保存screenshotをローカルChromium canvasへ描画すると、旧64×64判定は
+`nonWhite=0`、元解像度判定は5957画素（初回）だった。縮小で文字を拾えず
+`_wait_for_render_ready()`が待機を続け、最終的にCore guardの
+`Adapter operation timed out: wait_for_change`になった。
+
+修正後は同じ2枚の保存診断画像でnon-whiteを検出し、描画安定待ちが約0.8～1秒で
+終了した。結果は`.tmp/bw1941-sparse-replay.json`。これは保存画像のローカル再生であり、
+実サイトでの取得成功ではない。人工canvasの白紙・1画素の文字相当・同画素数の位置移動・
+色変化で通常wait/初期atomic観測の一致とfail-closedを検証する。
+実サイト再取得・全巻完走・ZIP完成は未確認。既存output/Catalogは変更していない。
+
+検証はadapter/original/native capture、native source、purchased mapping、lossless JPEG、
+terminal、capture resumeの関連Unitと2つのBookWalker browser Integrationで
+600 passed、0 skipped（153.10秒）。追加の人工canvas 4ケースは単独実行でも通過した。
+`ruff check src tests`と変更4ファイルの`git diff --check`は成功。
+BookWalker内の待機signalだけの変更なのでfull suite/Researchは未実行、
+Coreの現行契約に変更が無いため`note/00_core.md`は更新不要。
+Live再実行は行わず、上記の保存実サイト証拠とローカル再生を検証範囲とする。
 
 ## 9. Page identity
 

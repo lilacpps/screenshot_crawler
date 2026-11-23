@@ -11,6 +11,8 @@ from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter_module
 import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
+from screenshot_crawler.core.errors import PageChangeTimeoutError
+from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
     _PIXEL_EXACT_COMPARISON_SCRIPT,
@@ -124,6 +126,60 @@ async def _initialize_strict(
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
     await adapter.initialize(browser_page)
     return adapter
+
+
+@pytest.mark.parametrize("ink", ["blank", "sparse", "moved", "recolored"])
+async def test_bookwalker_sparse_page_change_requires_stable_native_ink(
+    browser_page: Page, ink: str
+) -> None:
+    # Artificial ink only: reproduce the retained 298/303 renderer dimensions,
+    # where Chromium's 64x64 sample missed the real page's sparse text.
+    await browser_page.set_content("""
+      <span id="pageSliderCounter">298/303</span>
+      <div id="renderer"><div class="currentScreen">
+        <canvas width="2859" height="1479" style="width:800px;height:400px"></canvas>
+      </div></div>
+    """)
+    await browser_page.evaluate("""ink => {
+      const canvas = document.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (ink !== 'blank') {
+        ctx.fillStyle = 'black'; ctx.fillRect(1, 1, 1, 1);
+      }
+    }""", ink)
+    sampled_ink = await browser_page.locator("canvas").evaluate("""canvas => {
+      const probe = document.createElement('canvas'); probe.width = probe.height = 64;
+      const ctx = probe.getContext('2d'); ctx.drawImage(canvas, 0, 0, 64, 64);
+      return ctx.getImageData(0, 0, 64, 64).data.some(value => value < 245);
+    }""")
+    assert sampled_ink is False
+    adapter = BookWalkerAdapter()
+    adapter.page_change_timeout_ms = 900
+    first = await adapter._canvas_signature(browser_page)
+    assert first is not None
+    assert first[1] == (0 if ink == "blank" else 1)
+    assert (await adapter._initial_page_observation(browser_page))["signature"] == first
+    if ink in {"moved", "recolored"}:
+        await browser_page.evaluate("""ink => {
+          setTimeout(() => {
+            const ctx = document.querySelector('canvas').getContext('2d');
+            ctx.fillStyle = 'white'; ctx.fillRect(1, 1, 1, 1);
+            ctx.fillStyle = ink === 'recolored' ? 'red' : 'black';
+            ctx.fillRect(ink === 'moved' ? 2 : 1, 1, 1, 1);
+          }, 150);
+        }""", ink)
+    previous = ContentIdentity(page_id="297/303", page_number=297)
+    if ink == "blank":
+        with pytest.raises(PageChangeTimeoutError, match="did not finish loading"):
+            await adapter.wait_for_change(browser_page, previous)
+        assert adapter._last_render_ready_signature is None
+    else:
+        await adapter.wait_for_change(browser_page, previous)
+        final = await adapter._canvas_signature(browser_page)
+        assert final == adapter._last_render_ready_signature
+        assert (await adapter._initial_page_observation(browser_page))["signature"] == final
+        assert (final != first) is (ink in {"moved", "recolored"})
 
 
 @pytest.mark.parametrize("paint_delay_ms", [150, 2300], ids=["fast-paint", "late-paint"])

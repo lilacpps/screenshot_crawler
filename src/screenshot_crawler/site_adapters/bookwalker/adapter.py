@@ -84,6 +84,51 @@ from screenshot_crawler.site_adapters.bookwalker.terminal_match import (
     match_terminal_descriptor,
 )
 
+_CANVAS_SIGNATURE_SCRIPT = """
+element => {
+  const probe = document.createElement('canvas');
+  window.__bookwalkerMarkInternalCanvas?.(probe);
+  probe.width = 64;
+  probe.height = 64;
+  const context = probe.getContext('2d');
+  if (!context) return [0, 0];
+  context.drawImage(element, 0, 0, 64, 64);
+  const sample = context.getImageData(0, 0, 64, 64).data;
+  const nonWhitePixel = (data, offset) => data[offset] < 245
+    || data[offset + 1] < 245 || data[offset + 2] < 245 || data[offset + 3] < 245;
+  let nonWhite = 0;
+  let checksum = 0;
+  for (let offset = 0; offset < sample.length; offset += 4) {
+    for (let channel = 0; channel < 4; channel += 1) {
+      checksum = (checksum * 31 + sample[offset + channel]) >>> 0;
+    }
+    if (nonWhitePixel(sample, offset)) nonWhite += 1;
+  }
+  // Chromium's downsampling can miss sparse text entirely. Only an apparently
+  // blank sample needs a native-resolution check. Read strips to bound scratch
+  // memory; include positions and RGBA so sparse redraws affect stability too.
+  if (nonWhite === 0) {
+    const native = element.getContext('2d');
+    if (!native) return [0, 0];
+    checksum = (checksum * 31 + element.width) >>> 0;
+    checksum = (checksum * 31 + element.height) >>> 0;
+    for (let top = 0; top < element.height; top += 256) {
+      const data = native.getImageData(
+        0, top, element.width, Math.min(256, element.height - top)).data;
+      for (let offset = 0; offset < data.length; offset += 4) {
+        if (!nonWhitePixel(data, offset)) continue;
+        nonWhite += 1;
+        checksum = (checksum * 31 + top * element.width + offset / 4) >>> 0;
+        for (let channel = 0; channel < 4; channel += 1) {
+          checksum = (checksum * 31 + data[offset + channel]) >>> 0;
+        }
+      }
+    }
+  }
+  return [checksum, nonWhite];
+}
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class _RetainedRedrawRetry:
@@ -6175,37 +6220,7 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         try:
             value = await asyncio.wait_for(
-                canvas.evaluate(
-                    """
-                    element => {
-                      const probe = document.createElement('canvas');
-                      window.__bookwalkerMarkInternalCanvas?.(probe);
-                      probe.width = 64;
-                      probe.height = 64;
-                      const probeContext = probe.getContext('2d');
-                      if (!probeContext) return [0, 0];
-                      probeContext.drawImage(element, 0, 0, 64, 64);
-                      const sample = probeContext.getImageData(0, 0, 64, 64).data;
-                      let nonWhite = 0;
-                      let checksum = 0;
-                      for (let offset = 0; offset < sample.length; offset += 4) {
-                        checksum = (checksum * 31 + sample[offset]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 1]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 2]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 3]) >>> 0;
-                        if (
-                          sample[offset] < 245 ||
-                          sample[offset + 1] < 245 ||
-                          sample[offset + 2] < 245 ||
-                          sample[offset + 3] < 245
-                        ) {
-                          nonWhite += 1;
-                        }
-                      }
-                      return [checksum, nonWhite];
-                    }
-                    """
-                ),
+                canvas.evaluate(_CANVAS_SIGNATURE_SCRIPT),
                 timeout=2,
             )
             # Playwright decodes a JavaScript Array as a Python list. Keep
@@ -6265,28 +6280,7 @@ class BookWalkerAdapter(SiteAdapter):
                     const rect = canvas.getBoundingClientRect();
                     const geometryState =
                       window.__bookwalkerDirectOneHopGeometryState?.(canvas) || null;
-                    const probe = document.createElement('canvas');
-                    window.__bookwalkerMarkInternalCanvas?.(probe);
-                    probe.width = 64;
-                    probe.height = 64;
-                    const context = probe.getContext('2d');
-                    if (context) {
-                      context.drawImage(canvas, 0, 0, 64, 64);
-                      const sample = context.getImageData(0, 0, 64, 64).data;
-                      let nonWhite = 0;
-                      let checksum = 0;
-                      for (let offset = 0; offset < sample.length; offset += 4) {
-                        checksum = (checksum * 31 + sample[offset]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 1]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 2]) >>> 0;
-                        checksum = (checksum * 31 + sample[offset + 3]) >>> 0;
-                        if (sample[offset] < 245 || sample[offset + 1] < 245
-                            || sample[offset + 2] < 245 || sample[offset + 3] < 245) {
-                          nonWhite += 1;
-                        }
-                      }
-                      signature = [checksum, nonWhite];
-                    }
+                    signature = (__CANVAS_SIGNATURE__)(canvas);
                     traceId = canvas.getAttribute('data-bookwalker-trace-id');
                     geometry = {
                       width: canvas.width,
@@ -6314,7 +6308,7 @@ class BookWalkerAdapter(SiteAdapter):
                     signature,
                   };
                 }
-                """
+                """.replace("__CANVAS_SIGNATURE__", _CANVAS_SIGNATURE_SCRIPT)
             )
         except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TimeoutError):
             data = None

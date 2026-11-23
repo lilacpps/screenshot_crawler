@@ -157,6 +157,16 @@ ROI check; real-viewer recovery with the settled baseline remains unverified.
 
 ## Viewer and capture target
 
+Render stability normally uses the existing 64x64 canvas signature. When that
+sample reports no non-white pixels, the same synchronous observation scans the
+native canvas in 256-row strips and hashes non-white pixel positions and RGBA.
+This detects sparse text missed by Chromium downsampling while retaining the
+non-empty and four-stable-check requirements. Initial Home observations and
+ordinary page-change waits use the same signature. A genuinely white canvas
+still times out; this signal does not authorize capture provenance or END.
+The retained Source 1941 failure screenshots reproduce the old false-blank
+result locally; corrected live acquisition of that volume remains unverified.
+
 BookWalker uses a canvas renderer. The observed current screen is `#renderer .currentScreen canvas:not(.dummy)`. Core reads the canvas PNG buffer so viewer toolbar/browser UI is not included.
 
 The adapter first traces renderer `drawImage` geometry and source metadata. When one visible page
