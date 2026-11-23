@@ -204,9 +204,14 @@ def _viewer_page(
     hide_nav_open_on_capture: bool = False,
     native_materialization_fails: bool = False,
     native_color_space: str = "srgb",
+    seek_max_override: int | None = None,
 ) -> str:
     wrapper_count = body_count + 7
-    seek_max = wrapper_count
+    seek_max = (
+        seek_max_override
+        if seek_max_override is not None
+        else 2 * ((wrapper_count - 1) // 2) + 1
+    )
     initial_value = initial_seek or seek_max
     wrappers: list[str] = []
     initial_wrapper_markup: list[str] = []
@@ -752,6 +757,7 @@ def _make_herosweb_batch(
     [
         (WORK_A, EPISODE_A, 10, 1, ((1, 10),), tuple(range(1, 11))),
         (WORK_B, EPISODE_B, 38, 6, ((1, 30), (31, 38)), tuple(range(1, 6))),
+        (WORK_B, "e1d105f22de45", 15, 1, ((1, 15),), tuple(range(1, 16))),
     ],
 )
 async def test_herosweb_free_episode_runner_captures_all_body_and_terminal_end(
@@ -818,7 +824,9 @@ async def test_herosweb_free_episode_runner_captures_all_body_and_terminal_end(
     assert len(first_capture_metadata) == 1
     assert first_capture_metadata[0]["slots"] == [1]
     assert len(latest_capture_metadata) == (body_count + 2) // 2
-    assert latest_capture_metadata[-1]["slots"] == [body_count]
+    assert latest_capture_metadata[-1]["slots"] == (
+        [body_count] if body_count % 2 == 0 else [body_count - 1, body_count]
+    )
     assert first_capture_metadata[0]["images"][0]["mode"] == "rendered_canvas_png"
     assert first_capture_metadata[0]["images"][0]["target_generation"] == 0
     explicit_output_dir = tmp_path / "explicit-metadata-output"
@@ -1482,23 +1490,33 @@ async def test_herosweb_native_materializer_error_falls_back_without_losing_body
     ] == ["native_materialization_error", "native_materialization_error"]
 
 
+@pytest.mark.parametrize(
+    ("body_count", "native_source"), [(10, False), (10, True), (15, False), (15, True)]
+)
 async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     browser_page: Page,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    native_source: bool,
+    body_count: int,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requests = await _install_live_fixture(
         browser_page,
         work_id=WORK_A,
         episode_id=EPISODE_A,
-        body_count=10,
+        body_count=body_count,
         target_position=1,
         ranges=((1, 10),),
         preview_rows=tuple(range(1, 11)),
         ambiguous_preview_roots=True,
+        viewer_options={
+            "native_source": native_source,
+            "delay_structure_ms": 600 if body_count % 2 else 0,
+        },
     )
     monkeypatch.setattr(adapter_module, "RANGE_PACING_MS", 20)
+    monkeypatch.setattr(adapter_module, "MAX_VIEWER_SETTLE_SECONDS", 3)
     catalog, executor, candidate = _make_herosweb_batch(tmp_path)
 
     result = await executor.execute_candidate(
@@ -1506,19 +1524,18 @@ async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
         candidate,
         output_root=tmp_path / "batch-output",
         library_dir=tmp_path / "Books",
-        max_pages=10,
+        max_pages=body_count,
         now=NOW,
     )
 
-    assert result.page_count == 10
+    assert result.page_count == body_count
     assert result.stop_reason == "end"
     assert result.archive_path.is_file()
     assert result.status_path.is_file()
     assert result.archive_path.parent.parent.name == "漫画"
     assert "Catalog Work" in result.archive_path.name
-    assert requests.count(f"GET /episodes/{EPISODE_A}") == 2
-    assert requests.count(f"GET /series/{WORK_A}") == 1
-    assert requests.count(f"GET /series/{WORK_A}/1") == 1
+    assert requests.count(f"GET /episodes/{EPISODE_A}") == 1
+    assert not any(request.startswith("GET /series/") for request in requests)
     assert not any(request.startswith("POST ") for request in requests)
 
     item = catalog.get_item(candidate.item_id)
@@ -1531,8 +1548,8 @@ async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     assert len(catalog.list_crawl_runs(item_id=candidate.item_id, status="succeeded")) == 1
     with zipfile.ZipFile(result.archive_path) as archive:
         names = archive.namelist()
-        assert len(names) == 10
-        assert all(name.endswith(".png") for name in names)
+        assert len(names) == body_count
+        assert all(name.endswith(".webp" if native_source else ".png") for name in names)
 
 
 async def test_herosweb_batch_without_terminal_end_keeps_item_pending(
@@ -2080,8 +2097,9 @@ async def test_herosweb_now_free_waits_for_current_document_auth_header_hydratio
         adapter._remove_preflight_access_listener(browser_page)
 
 
+@pytest.mark.parametrize("access_strategy", ["auto", "direct"])
 async def test_herosweb_catalog_work_mismatch_fails_before_work_preflight(
-    browser_page: Page, tmp_path: Path
+    browser_page: Page, tmp_path: Path, access_strategy: str
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requests = await _install_live_fixture(
@@ -2095,10 +2113,10 @@ async def test_herosweb_catalog_work_mismatch_fails_before_work_preflight(
     )
     adapter = HeroswebAdapter()
     await adapter.configure_target_identity(f"{WORK_A}:{EPISODE_A}", "expected-work")
+    config = _run_config(tmp_path, EPISODE_A, max_pages=10)
+    config.access_strategy = access_strategy
     with pytest.raises(UnknownPageStateError, match="Catalog Work"):
-        await CrawlerRunner(_run_config(tmp_path, EPISODE_A, max_pages=10)).run(
-            browser_page, adapter
-        )
+        await CrawlerRunner(config).run(browser_page, adapter)
     assert f"GET /series/{WORK_B}" not in requests
 
 
@@ -2269,6 +2287,7 @@ async def test_herosweb_capture_rejects_canvas_clear_without_draw_call(
     [
         ({"unknown_role": True}, "wrapper role is unfamiliar"),
         ({"omit_last": True}, "unknown role mode"),
+        ({"seek_max_override": 15}, "public seek and wrapper range disagree"),
     ],
 )
 async def test_herosweb_unknown_layout_and_missing_last_fail_closed(
@@ -2796,11 +2815,12 @@ async def test_herosweb_body_locator_screenshot_is_png_fallback_only_for_exact_c
     )
 
 
+@pytest.mark.parametrize("catalog_direct", [False, True])
 async def test_herosweb_direct_reader_gate_blocks_before_png_capture(
-    browser_page: Page, tmp_path: Path
+    browser_page: Page, tmp_path: Path, catalog_direct: bool
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    await _install_live_fixture(
+    requests = await _install_live_fixture(
         browser_page,
         work_id=WORK_A,
         episode_id=EPISODE_A,
@@ -2810,10 +2830,16 @@ async def test_herosweb_direct_reader_gate_blocks_before_png_capture(
         preview_rows=tuple(range(1, 11)),
         viewer_options={"access_gate": True},
     )
+    adapter = HeroswebAdapter()
+    config = _run_config(tmp_path, EPISODE_A, max_pages=10)
+    if catalog_direct:
+        await adapter.configure_target_identity(f"{WORK_A}:{EPISODE_A}", "expected-work")
+        config.access_strategy = "direct"
     with pytest.raises(UnknownPageStateError, match="access gate"):
-        await CrawlerRunner(_run_config(tmp_path, EPISODE_A, max_pages=10)).run(
-            browser_page, HeroswebAdapter()
-        )
+        await CrawlerRunner(config).run(browser_page, adapter)
+    if catalog_direct:
+        assert requests == [f"GET /episodes/{EPISODE_A}"]
+    assert not list((tmp_path / "crawl-output").glob("page-*"))
 
 
 @pytest.mark.parametrize(

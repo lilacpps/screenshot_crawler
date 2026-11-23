@@ -98,6 +98,30 @@ Verified live profiles:
 - Work `0f023839d7bca`, episode `b92706d1ebe2e`: 45 wrappers and 38 body
   slots; the row was `今なら無料`, and entry required fresh authenticated
   same-Work evidence after its header hydrated.
+- Work `0f023839d7bca`, episode `e1d105f22de45`: 22 wrappers and 15 body
+  slots, public seek 1–21 by 2. A bounded live probe verified first pair
+  (lead PR/body 1), body 2/3, final body 14/15, and terminal Good/Last.
+
+Public seek maximum is the largest odd integer at or below the wrapper count:
+`2 * floor((wrapper_count - 1) / 2) + 1`. Initialization/loading, Python layout
+validation and the native draw observer use the same rule. Even body counts
+retain a lone terminal Last wrapper; odd body counts end in the exact frozen
+Good/Last pair. END still requires minimum seek, `mode-last-page`, that exact
+terminal slot set and complete ordered body coverage. Arbitrary shortened seek
+ranges and missing/unknown roles remain rejected. No timeout, access, route,
+pixel-proof or same-content guard is relaxed. The earlier direct-entry live
+sample covered only an even body count and did not expose this preexisting
+layout assumption. Failure evidence: Batch Run 29127 (Item 56761 / Source
+57068). Live layout probe: `output/herosweb-odd-e1-probe/snapshots.json`.
+The corrected same-episode identity-bound direct Runner completed all 15 body
+slots in order, including final pair 14/15, then reached actual END at seek 1
+and produced an isolated ZIP. All 15 members are valid 1440x2048 WebPs; ZIP CRC
+and Pillow image verification passed. Exactly one episode document navigation
+was observed, with no Work listing navigation. Normal Catalog/Library were not
+modified. Evidence: `output/ho-live-be28109b/verification.json` and the retained
+pre-packaging `manifest-proof.json` beside it. This verifies Runner + Packager
+on the supplied target; Catalog Batch orchestration is covered by synthetic
+browser tests for both odd/even bodies, native WebP and rendered PNG fallback.
 
 The adapter captures body slots in observed order, excludes lead/CI/PR/Good/
 Last wrappers, and accepts actual terminal END only after all body slots are
@@ -140,6 +164,36 @@ even when a source has an active grant or positive quota state. This policy
 does not expose access resources, ticket passes, grant-only passes or grant
 mutation. The CLI Batch adapter and policy registries include `herosweb`;
 runtime uses 1500 ms page turns and 5000 ms between candidates.
+
+Identity-bound Batch `direct` entry stays on the canonical Catalog episode
+URL. It verifies the current episode/Work header, rejects visible charge/login
+gates and nested viewer frames, and requires the existing strict Viewer/body
+readiness and capture proof. It does not traverse any Work/range listing or
+reload the episode before capture. The diagnostic `free_proof.source` is
+`catalog_direct_episode_entry`; this records direct entry evidence, not a fresh
+listing classification. Batch output title/order come from the existing Catalog
+metadata override; missing adapter title/order remain unset. Manual entry
+without Catalog identity retains the fresh same-Work listing preflight.
+Synthetic browser tests cover single episode navigation through END/ZIP with
+native WebP and PNG fallback, current gate rejection, Work mismatch, and manual
+entry preservation. On 2026-11-23, an isolated identity-bound `direct` Runner
+verification of Work `dca88b215773f` / episode `4fe9831c6f540` captured all ten
+1440x2048 WebPs through END. All ten manifest pages record exactly one guarded
+document interception, the target episode URL, and no navigation violation;
+all ten images passed Pillow verification. Catalog was not modified. This is
+direct Runner verification; normal Batch orchestration/ZIP is covered by the
+synthetic browser test. Evidence:
+`output/herosweb-direct-live-c382b471/verification.json`.
+Current layout/entry validation passes all 103 native-capture Unit and
+adapter-browser cases, with no skips (`output/ho-all` temporary root).
+This includes odd/even body counts through END/ZIP, loading-shell hydration,
+native WebP/PNG fallback, resumed entry, inconsistent seek rejection and access
+guards. Policy/Discovery were unchanged by the odd-body correction; the earlier
+direct-entry validation also covered those contracts. Short temporary paths
+avoid the Windows path length failures seen in the earlier validation run.
+Changed-file Ruff and whitespace checks pass; repository-wide Ruff still
+reports 13 unrelated existing findings. Full suite and Research/Probe tests
+were not run for this site-local entry change.
 
 The adapter output metadata supplies genre `漫画` without replacing explicit
 request metadata. Synthetic coverage exercises a full Planner → Executor →

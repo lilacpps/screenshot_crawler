@@ -70,6 +70,12 @@ PAGE_CHANGE_TIMEOUT_MS = 20_000
 POLL_INTERVAL_MS = 100
 SEEK_SETTLE_INTERVAL_MS = 200
 
+def _spread_seek_max(wrapper_count: int) -> int:
+    # The native range enumerates odd-valued spread starts. An even wrapper
+    # count ends with the observed Good/Last pair, rather than a lone Last.
+    return 2 * ((wrapper_count - 1) // 2) + 1
+
+
 _ROOT_REQUIRED_MODES = frozenset(
     {
         "mode-h",
@@ -237,7 +243,8 @@ _OBSERVER_INIT_SCRIPT = r"""(() => {
     const parseInteger = value => /^\d+$/.test(String(value)) ? Number(value) : NaN;
     const seekMin=parseInteger(input.min), seekMax=parseInteger(input.max),
       seekStep=parseInteger(input.step), seekValue=parseInteger(input.value);
-    if (input.disabled || seekMin !== 1 || seekStep !== 2 || seekMax !== wrappers.length ||
+    const expectedSeekMax = 2 * Math.floor((wrappers.length - 1) / 2) + 1;
+    if (input.disabled || seekMin !== 1 || seekStep !== 2 || seekMax !== expectedSeekMax ||
         !Number.isInteger(seekValue) || seekValue < seekMin || seekValue > seekMax ||
         (seekValue-seekMin)%seekStep || (seekMax-seekMin)%seekStep) return null;
     const rootStructuralModes = [...rootClasses].filter(mode =>
@@ -1367,32 +1374,41 @@ class HeroswebAdapter(SiteAdapter):
             raise UnknownPageStateError("HERO'S WEB episode header differs from its Catalog Work")
         self._work_id = header_work_id
 
-        access = await self._prove_current_free_episode(page)
-        if access != "free":
-            raise UnknownPageStateError("HERO'S WEB current episode is not positively free")
+        if self._expected_work_id is not None and self._access_strategy == "direct":
+            # Batch already selected a free Source. Verify the current exact
+            # episode gate and Viewer instead of traversing the Work listing.
+            await self._validate_episode_entry(page)
+            self._free_proof = {
+                "source": "catalog_direct_episode_entry",
+                "work_id": self._work_id,
+                "episode_id": self._episode_id,
+                "episode_path": urlsplit(self._target_url).path,
+                "access_strategy": "direct",
+            }
+        else:
+            access = await self._prove_current_free_episode(page)
+            if access != "free":
+                raise UnknownPageStateError("HERO'S WEB current episode is not positively free")
 
-        # Return to the exact target after the read-only same-Work preflight.
-        await page.wait_for_timeout(RANGE_PACING_MS)
-        self._raise_if_route_guard_failed()
-        self._raise_if_preflight_access_stopped()
-        route_guard = self._route_guard
-        if route_guard is None:
-            raise UnknownPageStateError("HERO'S WEB main-frame route guard is unavailable")
-        prior_navigation_count = len(route_guard.main_frame_navigation_urls)
-        self._allow_navigation(self._target_url)
-        response = await page.goto(
-            self._target_url, wait_until="domcontentloaded", timeout=20_000
-        )
-        route_guard.require_navigation(self._target_url, prior_navigation_count)
-        await self._assert_no_service_worker_controller(page)
-        self._raise_if_route_guard_failed()
-        self._raise_if_preflight_access_stopped()
-        if (
-            response is None
-            or response.status not in (*range(200, 300), 304)
-            or page.url != self._target_url
-        ):
-            raise UnknownPageStateError("HERO'S WEB direct free entry changed its target route")
+            # Manual entry returns after the read-only same-Work preflight.
+            await page.wait_for_timeout(RANGE_PACING_MS)
+            self._raise_if_route_guard_failed()
+            self._raise_if_preflight_access_stopped()
+            prior_navigation_count = len(route_guard.main_frame_navigation_urls)
+            self._allow_navigation(self._target_url)
+            response = await page.goto(
+                self._target_url, wait_until="domcontentloaded", timeout=20_000
+            )
+            route_guard.require_navigation(self._target_url, prior_navigation_count)
+            await self._assert_no_service_worker_controller(page)
+            self._raise_if_route_guard_failed()
+            self._raise_if_preflight_access_stopped()
+            if (
+                response is None
+                or response.status not in (*range(200, 300), 304)
+                or page.url != self._target_url
+            ):
+                raise UnknownPageStateError("HERO'S WEB direct free entry changed its target route")
         await page.wait_for_timeout(250)
         self._raise_if_preflight_access_stopped()
         await self._validate_episode_entry(page)
@@ -1412,7 +1428,7 @@ class HeroswebAdapter(SiteAdapter):
         self._layout = layout
         if layout.seek_min != 1 or layout.seek_step != 2:
             raise UnknownPageStateError("HERO'S WEB public seek geometry changed")
-        if layout.seek_max != len(layout.wrapper_node_ids):
+        if layout.seek_max != _spread_seek_max(len(layout.wrapper_node_ids)):
             raise UnknownPageStateError("HERO'S WEB seek range does not match its frozen wrappers")
 
         current_seek = self._seek_value(first)
@@ -1945,7 +1961,7 @@ class HeroswebAdapter(SiteAdapter):
                   const wrappers = [...pages[0].children];
                   const seek = seeks[0];
                   return wrappers.length > 1 && Number(seek.min) === 1 && Number(seek.step) === 2 &&
-                    Number(seek.max) === wrappers.length;
+                    Number(seek.max) === 2 * Math.floor((wrappers.length - 1) / 2) + 1;
                 }""",
                 arg=self._target_url,
                 timeout=int(MAX_VIEWER_SETTLE_SECONDS * 1_000),
@@ -2063,7 +2079,7 @@ class HeroswebAdapter(SiteAdapter):
         if (
             seek_min != 1
             or seek_step != 2
-            or seek_max != len(wrappers)
+            or seek_max != _spread_seek_max(len(wrappers))
             or seek[0].get("disabled") is not False
         ):
             return False
@@ -2273,7 +2289,7 @@ class HeroswebAdapter(SiteAdapter):
             or seek_value > seek_max
             or (seek_value - seek_min) % seek_step
             or (seek_max - seek_min) % seek_step
-            or seek_max != len(wrappers)
+            or seek_max != _spread_seek_max(len(wrappers))
             or len(wrapper_ids) != len(set(wrapper_ids))
         ):
             raise UnknownPageStateError("HERO'S WEB public seek and wrapper range disagree")
@@ -2550,10 +2566,15 @@ class HeroswebAdapter(SiteAdapter):
         seek_value = self._seek_value(raw)
         root_modes = set(raw.get("rootClassTokens", []))
         if "last" in active_roles:
+            terminal_slots = (
+                (layout.last_slot,)
+                if layout.last_slot % 2 == 0
+                else (layout.good_slot, layout.last_slot)
+            )
             if (
                 seek_value != layout.seek_min
                 or "mode-last-page" not in root_modes
-                or active_roles != {"last"}
+                or active != terminal_slots
                 or tuple(self._captured_slots) != layout.body_slots
             ):
                 raise UnknownPageStateError("HERO'S WEB Last screen appeared before completed body coverage")
@@ -2612,16 +2633,14 @@ class HeroswebAdapter(SiteAdapter):
         if (
             self._work_id is None
             or self._episode_id is None
-            or self._work_title is None
-            or self._episode_title is None
             or self._free_proof is None
         ):
-            raise UnknownPageStateError("HERO'S WEB capture context lacks fresh free identity proof")
+            raise UnknownPageStateError("HERO'S WEB capture context lacks direct access identity proof")
         return ContentContext(
             content_id=f"herosweb:{self._work_id}:{self._episode_id}",
             work_id=self._work_id,
             episode_id=self._episode_id,
-            title=f"{self._work_title} — {self._episode_title}",
+            title=self.get_output_metadata()["title"],
         )
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:

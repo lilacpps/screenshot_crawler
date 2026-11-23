@@ -76,15 +76,47 @@ evidence; a previously free Catalog row or title match alone is insufficient.
 The exact episode route and header are then revalidated. It never clicks a
 ticket, payment, wait, login, or rights CTA.
 
-Two live reader profiles have been verified:
+Identity-bound Batch `direct` entry uses the canonical Catalog episode URL
+without visiting Work/range listings or reloading the episode. It checks the
+current exact episode/Work header and charge/login/frame gates, then uses the
+existing strict Viewer and capture checks. Catalog metadata supplies Batch
+title/order; absent adapter metadata remains unset. Diagnostics identify this
+as `catalog_direct_episode_entry`, rather than fresh listing free proof.
+Synthetic browser coverage verifies one episode navigation through END/ZIP
+with native WebP and PNG fallback and rejects current gates/Work mismatch.
+An isolated identity-bound direct Runner verification on 2026-11-23 saved all
+ten A-profile pages as 1440x2048 WebP through END, with exactly one guarded
+episode document interception in every manifest page and no navigation
+violation. All images passed verification; Catalog was not modified. This
+checks direct Runner entry; normal Batch orchestration/ZIP is covered locally.
+Evidence: `output/herosweb-direct-live-c382b471/verification.json`.
+
+Live reader layouts have been observed:
 
 - Work `dca88b215773f`, episode `4fe9831c6f540`: 17 wrappers, 10 body slots.
 - Work `0f023839d7bca`, episode `b92706d1ebe2e`: 45 wrappers, 38 body slots;
   entry required fresh authenticated `今なら無料` proof.
+- Work `0f023839d7bca`, episode `e1d105f22de45`: 22 wrappers, 15 body slots,
+  seek 1–21 by 2. A bounded live probe verified the initial, ordinary/final
+  body pairs and terminal Good/Last pair.
 
-For each profile, the Runner captures all body slots in order, excludes the
+The public seek enumerates odd-valued spread starts: its maximum is the largest
+odd number at or below the frozen wrapper count. Python layout/loading checks
+and native draw attribution share this rule. The odd-body terminal is the exact
+Good/Last pair; the even-body terminal remains Last alone. Both require full
+ordered body coverage, minimum seek and `mode-last-page` before END. Unknown
+roles or inconsistent ranges still fail closed. This corrects the assumption
+behind the Item 56761 / Source 57068 initialization failure without extra
+navigation, access actions or a broader timeout.
+The corrected same-episode direct Runner + Packager verification completed all
+15 ordered body slots through actual END at seek 1. The isolated ZIP passed CRC
+and image verification with 15 valid 1440x2048 WebPs and exactly one episode
+document navigation; normal Catalog/Library were not changed. Evidence:
+`output/ho-live-be28109b/verification.json` (retained manifest alongside it).
+
+For all supported layouts, the Runner captures all body slots in order, excludes the
 lead/CI/PR/Good/Last wrappers, and accepts actual terminal END only after full
-body coverage. The Phase 03/05 audited ZIPs were rendered-canvas PNGs at
+body coverage. The original two layouts' Phase 03/05 audited ZIPs were rendered-canvas PNGs at
 934×1329; those are historical fallback artifacts. Later A10/B14 full runs
 verified source-native output for all 10 A pages and all 38 B pages at their
 respective observed profiles. Original response bytes remain unproven, so
