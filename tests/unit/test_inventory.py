@@ -8,6 +8,7 @@ from datetime import datetime
 import pytest
 import yaml
 
+from screenshot_crawler.catalog import ItemInput, SourceInput, SourceTargetInput, WorkInput
 from screenshot_crawler.catalog.service import JST, CatalogService
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader, InventoryLoadError
 from screenshot_crawler.management.inventory import (
@@ -330,6 +331,83 @@ def test_retry_only_policy_evidence_and_configuration(inventory_inputs, tmp_path
     assert grant.retry_at == "2026-10-24T16:00:00+09:00"
     assert grant.reason == "work_ticket_cooldown"
     assert all(g.retry_at is None for g in snapshot.grants if g.site == "magapoke")
+
+
+def test_inventory_does_not_show_elapsed_retry_as_next(inventory_inputs, tmp_path):
+    db, watchlist = inventory_inputs
+    config = tmp_path / "runtime.yaml"
+    config.write_text(
+        "sites:\n  zeblack:\n    work_ticket_cooldown_hours: 1\n",
+        encoding="utf-8",
+    )
+    snapshot = InventoryService().load(db, watchlist, now=NOW, runtime_path=config)
+    grant = next(
+        grant for grant in snapshot.grants
+        if grant.site == "zeblack" and grant.work_key == "sample-work-0000"
+    )
+    assert grant.retry_at is None
+    assert grant.reason == "ローカル待機制限なし・実サイト可否は不明"
+
+
+def test_inventory_shows_comicfuz_next_jst_midnight_then_hides_past_time(
+    inventory_inputs,
+) -> None:
+    db, watchlist_path = inventory_inputs
+    catalog = CatalogService(db)
+    work = catalog.create_work(WorkInput(work_key="comicfuz:2000", title="Fixture"))
+    item = catalog.create_item(ItemInput(kind="episode", order_label="第1話"), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="comicfuz",
+            external_id="2000:1",
+            discovery_key="comicfuz-inventory-fixture",
+            access_mode="quota",
+            available=True,
+        ),
+        item_id=item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(
+            backend="web",
+            locator="https://comic-fuz.com/manga/viewer/1",
+        ),
+        source_id=source.id,
+    )
+    catalog.record_quota_access_with_resource_state(
+        source.id,
+        work_id=work.id,
+        site="comicfuz",
+        resource="work_ticket",
+        consumed_at=datetime(2026, 10, 22, 9, tzinfo=JST),
+        access_granted_until=None,
+    )
+    WatchlistService(watchlist_path).add(
+        key="comicfuz-inventory-fixture",
+        work_key=work.work_key,
+        site="comicfuz",
+        url="https://comic-fuz.com/manga/2000",
+        label="Fixture",
+    )
+
+    before_reset = InventoryService().load(
+        db,
+        watchlist_path,
+        now=datetime(2026, 10, 22, 23, 59, tzinfo=JST),
+        runtime_path="missing-runtime",
+    )
+    pending = next(grant for grant in before_reset.grants if grant.work_key == work.work_key)
+    assert pending.retry_at == "2026-10-23T00:00:00+09:00"
+    assert pending.reason == "work_ticket_daily_reset"
+
+    after_reset = InventoryService().load(
+        db,
+        watchlist_path,
+        now=datetime(2026, 10, 23, 12, tzinfo=JST),
+        runtime_path="missing-runtime",
+    )
+    elapsed = next(grant for grant in after_reset.grants if grant.work_key == work.work_key)
+    assert elapsed.retry_at is None
+    assert elapsed.reason == "ローカル待機制限なし・実サイト可否は不明"
 
 
 @pytest.mark.parametrize("proven_empty", [False, True])

@@ -1,9 +1,10 @@
 """Public-list Discovery for ComicFUZ, independent of login state.
 
-The adapter consumes the public chapter metadata rendered by the work page and
-cross-checks it against the row DOM before returning any records. It never
-opens a chapter and deliberately treats every row without an exact public
-``無料`` badge as unknown.
+The adapter cross-checks public chapter metadata against the row DOM and emits
+access only from complete row-local evidence: exact visible ``無料`` is free,
+recognized visible S/G price icons are paid, and a fully joined row with a
+confirmed empty price/access region is quota. Hidden, incomplete, conflicting,
+or unfamiliar evidence remains unknown. Discovery never opens a chapter.
 """
 
 from __future__ import annotations
@@ -231,7 +232,7 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         target_parts: ComicFuzWorkParts,
     ) -> None:
         # Header account links change after hydration and do not prove episode
-        # access. The exact row-local public-free marker is checked separately.
+        # access. Row-local UI evidence below classifies each access state.
         identity = await page.evaluate(
             r"""() => {
               const canonical = document.querySelector('link[rel="canonical"]')?.href || null;
@@ -331,6 +332,29 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 return node === stopAt;
               };
               const seenRows = new Set();
+              const knownClass = token => {
+                const patterns = [
+                  /^Chapter_chapter__row(?:__[A-Za-z0-9_-]+)?$/,
+                  /^Chapter_chapter__thumbnail_wrapper__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__thumbnail__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__thumbnail_overlay__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__label__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__label_(advance|update)__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__detail__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__name__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__subName__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__updateDate__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__bottom__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__userAction__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__userAction_item__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__userAction_icon__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__userAction_text__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__price_free__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__price__[A-Za-z0-9_-]+$/,
+                  /^Chapter_chapter__price_gold__[A-Za-z0-9_-]+$/
+                ];
+                return patterns.some(pattern => pattern.test(token));
+              };
               const rows = headings.map((heading, index) => {
                 const detail = heading.parentElement;
                 const row = detail?.parentElement;
@@ -341,6 +365,57 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 if (row) seenRows.add(row);
                 const markers = row ? [...row.querySelectorAll('p[class*="Chapter_chapter__price_free__"]')]
                   .map(marker => ({text: marker.innerText.trim(), visible: isVisible(marker, container)})) : [];
+                const priceNodes = row ? [...row.querySelectorAll('[class*="Chapter_chapter__price"]')] : [];
+                const priceSlots = priceNodes.filter(node => node.matches('i[class*="Chapter_chapter__price__"]'));
+                const priceEvidence = priceSlots.map(slot => {
+                  const images = [...slot.querySelectorAll('img')].map(image => {
+                    let path = null;
+                    try { path = new URL(image.currentSrc || image.src, location.href).pathname; }
+                    catch (_) { /* malformed/unknown price image remains unclassified */ }
+                    const kind = image.alt === 'ゴールドメダル' && path === '/assets/manga_detail/gold.svg'
+                      ? 'gold'
+                      : image.alt === 'シルバーメダル' && path === '/assets/manga_detail/silver.svg'
+                        ? 'silver' : 'unknown';
+                    return {kind, visible: isVisible(image, container), loaded: image.complete && image.naturalWidth > 0};
+                  });
+                  return {visible: isVisible(slot, container), images};
+                });
+                const slotNodes = new Set(priceSlots);
+                const unknownPriceNodes = priceNodes.filter(node =>
+                  !node.matches('p[class*="Chapter_chapter__price_free__"]')
+                  && !slotNodes.has(node)
+                  && !priceSlots.some(slot => slot.contains(node))
+                ).length;
+                const thumbnail = row?.querySelector('div[class*="Chapter_chapter__thumbnail_wrapper__"]');
+                const unknownAccessMarkers = row ? [...row.querySelectorAll('*')].filter(node => {
+                  if (node.hasAttribute('aria-label') || node.hasAttribute('title') || node.hasAttribute('role')) return true;
+                  const style = getComputedStyle(node);
+                  if (style.backgroundImage !== 'none'
+                      || getComputedStyle(node, '::before').backgroundImage !== 'none'
+                      || getComputedStyle(node, '::after').backgroundImage !== 'none') return true;
+                  const tokens = [...node.classList];
+                  const chapterTokens = tokens.filter(token => token.startsWith('Chapter_chapter__'));
+                  if (chapterTokens.some(token => !knownClass(token))) return true;
+                  if (node.tagName === 'IMG') {
+                    if (thumbnail?.contains(node) && node.matches('img[class*="Chapter_chapter__thumbnail__"]')) return false;
+                    if (node.matches('img[class*="Chapter_chapter__userAction_icon__"]')) {
+                      let path = null;
+                      try { path = new URL(node.currentSrc || node.src, location.href).pathname; } catch (_) {}
+                      return !['/assets/manga_detail/comment.svg', '/assets/manga_detail/like.svg'].includes(path);
+                    }
+                    return !priceSlots.some(slot => slot.contains(node));
+                  }
+                  if (node.tagName.toLowerCase() === 'svg') return true;
+                  if (node.tagName === 'DIV') {
+                    return chapterTokens.length === 0;
+                  }
+                  if (node.tagName === 'P') {
+                    return !node.matches('p[class*="Chapter_chapter__subName__"], p[class*="Chapter_chapter__updateDate__"], p[class*="Chapter_chapter__userAction_text__"], p[class*="Chapter_chapter__price_free__"]');
+                  }
+                  if (node.tagName === 'H3') return !node.matches('h3[class*="Chapter_chapter__name__"]');
+                  if (node.tagName === 'I') return !node.matches('i[class*="Chapter_chapter__label__"], i[class*="Chapter_chapter__price__"]');
+                  return !['IMG'].includes(node.tagName);
+                }).length : 1;
                 return {
                   index,
                   label: heading.innerText.trim().replace(/\\s+/g, ' '),
@@ -348,7 +423,11 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                   headingCount,
                   duplicateRow,
                   visible: isVisible(row, container),
-                  markers
+                  markers,
+                  priceSlotCount: priceSlots.length,
+                  priceEvidence,
+                  unknownPriceNodes,
+                  unknownAccessMarkers
                 };
               });
               const controls = container.querySelectorAll('button,a[href],[role="button"],input[type="button"],input[type="submit"]').length;
@@ -376,6 +455,10 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError("ComicFUZ DOM chapter row is invalid")
             row_label = row.get("label")
             markers = row.get("markers")
+            price_evidence = row.get("priceEvidence")
+            price_slot_count = row.get("priceSlotCount")
+            unknown_price_nodes = row.get("unknownPriceNodes")
+            unknown_access_markers = row.get("unknownAccessMarkers")
             if (
                 row.get("index") != index
                 or row.get("chapterRowClass") is not True
@@ -385,6 +468,11 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 or not isinstance(row_label, str)
                 or " ".join(row_label.split()) != label
                 or not isinstance(markers, list)
+                or not isinstance(price_evidence, list)
+                or type(price_slot_count) is not int
+                or price_slot_count != len(price_evidence)
+                or type(unknown_price_nodes) is not int
+                or type(unknown_access_markers) is not int
             ):
                 raise DiscoveryIncompleteError(
                     "ComicFUZ chapter identity or row-local access evidence is inconsistent"
@@ -392,12 +480,48 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
             if any(not isinstance(marker, Mapping) for marker in markers):
                 raise DiscoveryIncompleteError("ComicFUZ free marker structure is invalid")
             visible_markers = [marker for marker in markers if marker.get("visible") is True]
-            if len(visible_markers) > 1:
+            if len(markers) > 1 or len(visible_markers) > 1:
                 raise DiscoveryIncompleteError("ComicFUZ has multiple visible free markers")
             if visible_markers and visible_markers[0].get("text") != "無料":
                 raise DiscoveryIncompleteError("ComicFUZ free marker is ambiguous")
+            access_mode = "unknown"
+            if unknown_access_markers > 0:
+                access_mode = "unknown"
+            elif (
+                unknown_price_nodes == 0
+                and not any(marker.get("visible") is not True for marker in markers)
+                and len(visible_markers) == 1
+                and price_slot_count == 0
+            ):
+                access_mode = "free"
+            elif (
+                not markers
+                and price_slot_count == 1
+                and unknown_price_nodes == 0
+            ):
+                slot = price_evidence[0]
+                images = slot.get("images") if isinstance(slot, Mapping) else None
+                kinds = [image.get("kind") for image in images if isinstance(image, Mapping)] if isinstance(images, list) else []
+                if (
+                    isinstance(slot, Mapping)
+                    and slot.get("visible") is True
+                    and isinstance(images, list)
+                    and len(images) == len(kinds)
+                    and all(image.get("visible") is True and image.get("loaded") is True
+                            for image in images if isinstance(image, Mapping))
+                    and kinds.count("gold") == 1
+                    and kinds.count("silver") <= 1
+                    and len(kinds) == kinds.count("gold") + kinds.count("silver")
+                ):
+                    access_mode = "paid"
+            elif (
+                not markers
+                and price_slot_count == 0
+                and unknown_price_nodes == 0
+            ):
+                access_mode = "quota"
             normalized_rows.append((chapter_id, label))
-            access.append("free" if len(visible_markers) == 1 else "unknown")
+            access.append(access_mode)
 
         return (
             target_parts.work_id,

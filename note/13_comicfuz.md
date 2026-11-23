@@ -67,6 +67,38 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
+## Work Ticket current status (2026-11-24; Phase 02 PASS, Phase 03 native research)
+
+Discovery recognizes an exact visible row-local `無料` marker as `free`, a
+single visible price slot containing the observed public gold/silver icon alt
+and matching static asset as `paid`, and a fully hydrated, joined row whose
+price/access region is genuinely empty as `quota`. Unknown, hidden, incomplete,
+conflicting, duplicate, or unfamiliar rights markers stay `unknown`. The
+classifier does not use first-party `pointConsumption` or `badge` fields.
+
+ComicFUZ Site Policy currently admits only `work_ticket` for quota, uses Work
+scope and a one-candidate-per-Work limit, and computes retry at the next
+00:00 JST boundary; the generic `work_ticket_cooldown_hours` value is ignored.
+Free remains direct. A source-level active episode grant is also direct and
+non-consuming, independently of the Work daily reset; a grant expiring exactly
+at the current time is not active. Normal Batch and explicit grant-only candidate selection
+are policy/planner features under test, but the ComicFUZ ticket-entry adapter
+is not implemented until Phase 03, so quota acquisition is not yet operational.
+Premium Ticket, coin, medal, and paid paths remain unsupported.
+
+Shared Planner and Executor use an opt-in, site-neutral unresolved-quota-history
+hook. Markerless or malformed quota attempts block another episode in the same
+Work across runs and dates. Only a confirmed persisted consumption with exact
+candidate/source/work/target binding writes a versioned confirmation marker to
+the existing CrawlRun `stop_reason`; a later capture failure remains resolved.
+This avoids a new Catalog table/schema migration. Retry timestamps in inventory
+are shown only while strictly in the future. Phase 02 tests and live evidence
+passed independent review with BLOCKING=0; verification is in
+`runbooks/comicfuz-work-ticket/PROGRESS.md`. Phase 03 is limited to native
+contract research until its synthetic/reviewer gate passes. Positive native
+consumption response, server consumed timestamp and grant expiry are still
+unverified; no charge control has been activated.
+
 ## Login-independent public-free access (2026-11-22)
 
 Discovery and public-free capture work with the existing shared-Chrome session
@@ -76,14 +108,16 @@ logged-in work 3140 before any records were emitted: the initial server-rendered
 sign-in link disappeared during hydration and the settled header showed
 `/mypage`. Login-header changes are unrelated to work/chapter identity.
 
-Access classification still requires exactly one visible exact row-local `無料`
-marker. Other rows remain `unknown`; login, account rights, rentals, stock and
-balances never independently prove free access. Capture still validates the
-complete same-work listing and exact target free row before reader navigation,
-then binds the existing native episode/title/page-role and visual-safety proofs.
-Only `auto`/`direct` remain supported; no ticket/charge/medal/purchase operation
-or login/logout action is added. CLI, configuration and output contracts do not
-change. No Core, Site Policy, Catalog schema or operational Watchlist is changed.
+Access classification uses a visible exact row-local `無料` marker for `free`,
+recognized S/G icons in the visible price slot for `paid`, and only a fully
+hydrated, identity-joined row with a genuinely empty price/access region for
+`quota`. Incomplete, hidden, conflicting or unfamiliar markers remain
+`unknown`; login, account rights, rentals, stock and balances never independently
+prove access. The existing capture adapter still validates the complete
+same-work listing and exact target free row before reader navigation, then
+binds the native episode/title/page-role and visual-safety proofs. Its
+site-local quota entry path remains deferred to Phase 03. No login/logout,
+Premium Ticket, coin, medal or paid operation is added.
 
 Live verification used the shared browser over CDP and a dedicated Page with an
 isolated Catalog under `.tmp/comicfuz-login-20261122/`. The old code reproduced
@@ -416,7 +450,7 @@ Verification selection (2026-10-17): 116 affected ComicFUZ Unit, browser Integra
 
 The accepted input is `https://comic-fuz.com/manga/<numeric-work-id>` with no query or the observed decorative `position=thumbnail` query. The adapter rejects other hosts, routes, fragments, ports, credentials, and query parameters. After navigation it requires the current URL and canonical link to remain on the requested work. Work identity is rechecked at every snapshot and immediately before the first emitted record; delayed route or canonical-link changes fail closed. Login state and account-header changes do not gate listing observation or free classification.
 
-The public Next.js `#__NEXT_DATA__` route `/manga/[mangaId]` supplies `props.pageProps.chapters`, grouped as objects with `chapters` arrays. The adapter reads only each chapter's `chapterId` and `chapterMainName`; other hydrated fields are not interpreted. It flattens the groups and joins every record by exact sequence and normalized label to headings under the unique `div[class*="title_detail_chapters__list__"]`. A heading must have the observed two-level detail/row parent, the row must contain exactly one chapter heading, and each row identity must be unique. The row-local `p[class*="Chapter_chapter__price_free__"]` is positive free evidence only when exactly one marker is visible and its exact text is `無料`; hidden markers do not prove free access. A row without one visible exact marker remains `unknown`; multiple visible or malformed markers invalidate the listing. Dates and resource fields are not used as free or expiry evidence.
+The public Next.js `#__NEXT_DATA__` route `/manga/[mangaId]` supplies `props.pageProps.chapters`, grouped as objects with `chapters` arrays. Discovery flattens those groups and joins every record by exact sequence and normalized label to headings under the unique `div[class*="title_detail_chapters__list__"]`. A heading must have the observed two-level detail/row parent, the row must contain exactly one chapter heading, and each row identity must be unique. Exactly one visible row-local `p[class*="Chapter_chapter__price_free__"]` with exact text `無料` proves `free`. A single visible price slot with the recognized public S/G icon alt and matching static asset proves `paid`; a fully joined row with a genuinely empty price/access region proves `quota`. Hidden, incomplete, malformed, conflicting, duplicate, or unfamiliar rights markers remain `unknown` or invalidate the listing. `pointConsumption`, `badge`, dates and account/resource fields are not access or expiry proof.
 
 The adapter requires nonempty groups, numeric unique chapter IDs, nonempty labels, exact hydration/DOM count and order, row visibility, no semantic paging/expand controls, stable repeated snapshots, and an unchanged snapshot after scrolling to the bottom. All records are buffered until every check passes because `DiscoveryService` upserts as the adapter yields. It emits all observed identities, including unknown rows, with composite external ID `<work-id>:<chapter-id>`, viewer target `/manga/viewer/<chapter-id>`, `kind=episode`, raw native chapter label, `free_until=None`, and `available=True`.
 
@@ -456,9 +490,9 @@ The first isolated normal Batch attempt for chapter 23325 (global position 3) fa
 
 Chapter 80641 (global position 33) initially had multiple normal-CLI failures after five captures with `ComicFUZ visible page spread has an unsupported shape`. A saved error-only snapshot showed a transient contiguous overlap `[3,4,5]` while a page turn was pending; the site-local wait-only fix now waits for the exact expected next spread under the existing deadline, without allowing overlap capture or relaxing detection/capture guards. A fresh normal Batch retry completed ten body JPEGs and reached positive END. The pre-package manifest snapshot is `output/comicfuz_experiment/phase05-tester-20261013/final-fix-80641/qa/manifest-before-package.json`; its audit passed at `.../qa/final-archive-manifest-audit.json`. Root independently audited the ZIP against both the manifest and the Phase 03 reference archive: 10 ordered 1353x1920 JPEGs, CRC PASS, 10 unique SHA-256 values, and all page payloads byte-equal to the reference. Archive SHA-256: `44c92fc64d3c7b3fbb2e8f1c8ff7959354510f370444280fec9c851cfade4836`. An earlier validator-logging diagnostic success remains timing-sensitive and is not treated as normal-CLI evidence. The successful retry verifies this sampled shape; it does not guarantee universal or long-term repeatability. The other two currently free candidates, chapters 23142 and 23002, were not crawled.
 
-## Phase 04: direct-only free Batch (PASS; independently reviewed)
+## Historical Phase 04 snapshot (2026-10-13; superseded by Phase 02 above)
 
-`ComicFuzSitePolicy` admits only sources where `site=comicfuz`, `available=true`, and `access_mode=free`; its only strategy is `direct`. Unavailable rows are skipped first. `unknown`, `quota`, `paid`, `owned`, `grant`, `rental`, and unrecognized modes are skipped. ComicFUZ exposes no quota resources or grant-only pass, and policy evaluation never reads a balance, grant, purchase, or resource state. The existing Catalog model accepts only its established access modes; grant/rental are covered at the policy boundary as unsupported inputs rather than persisted values.
+At the original Phase 04 checkpoint on `main`, `ComicFuzSitePolicy` admitted only sources where `site=comicfuz`, `available=true`, and `access_mode=free`; its only strategy was `direct`. The current Work Ticket branch extends Discovery and policy as described at the top of this note. The historical tests and live captures below describe the original free-only implementation and do not establish current quota entry support.
 
 The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses Catalog position and provisional archive numbering; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original site-specific Phase 04 did not change shared Core or Catalog schema; shared Catalog v7 now automatically reflects acquisition scope through Discovery, without a mandatory sync gate.
 

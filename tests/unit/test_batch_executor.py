@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -25,6 +26,7 @@ from screenshot_crawler.batch import (
 from screenshot_crawler.batch.archive_guard import ArchiveHistoryWarning
 from screenshot_crawler.batch.executor import (
     _cancel_task_bounded,
+    _persisted_consumption_for_run,
     _write_success_entry_trace,
 )
 from screenshot_crawler.batch.naming import archive_metadata_for_catalog
@@ -68,6 +70,7 @@ from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     ComicDaysSitePolicy,
+    ComicFuzSitePolicy,
     HanayumeSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
@@ -75,6 +78,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyRegistry,
     YounganimalSitePolicy,
 )
+from screenshot_crawler.watchlist import WatchlistService
 from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
@@ -326,6 +330,192 @@ def add_candidate(
         external_id=source.external_id,
         work_id=work.id,
     )
+
+
+def _add_comicfuz_quota_candidate(service: CatalogService) -> BatchCandidate:
+    work = service.create_work(WorkInput(work_key="houkago-basket", title="Fixture"))
+    item = service.create_item(ItemInput(kind="episode", order_label="第1話"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(
+            site="comicfuz",
+            external_id="2000:1",
+            discovery_key="comicfuz-test",
+            access_mode="quota",
+            available=True,
+            display_position=1,
+        ),
+        item_id=item.id,
+    )
+    target = service.create_source_target(
+        SourceTargetInput(
+            backend="web",
+            locator="https://comic-fuz.com/manga/viewer/1",
+        ),
+        source_id=source.id,
+    )
+    return BatchCandidate(
+        item_id=item.id,
+        source_id=source.id,
+        target_id=target.id,
+        site="comicfuz",
+        backend="web",
+        target_key="default",
+        locator=target.locator,
+        access_strategy="quota",
+        metadata=archive_metadata_for_catalog(work, item, source),
+        access_mode="quota",
+        consumes_quota=True,
+        quota_resource="work_ticket",
+        quota_scope="work",
+        quota_limit=1,
+        quota_commit_mode="after_observed_consumption",
+        external_id=source.external_id,
+        work_id=work.id,
+        artifact_prefix="001",
+    )
+
+
+def test_comicfuz_confirmation_marker_requires_native_identity_and_both_ledgers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_comicfuz_quota_candidate(service)
+    policy = ComicFuzSitePolicy()
+    adapter = SimpleNamespace(
+        get_access_consumption=lambda: AccessConsumption(True, "work_ticket", NOW)
+    )
+    service.record_quota_access_with_resource_state(
+        candidate.source_id,
+        work_id=candidate.work_id,
+        site="comicfuz",
+        resource="work_ticket",
+        consumed_at=NOW,
+        access_granted_until=None,
+    )
+
+    assert _persisted_consumption_for_run(service, candidate, policy, adapter) == NOW
+    assert _persisted_consumption_for_run(
+        service, replace(candidate, locator="https://comic-fuz.com/manga/viewer/2"), policy, adapter
+    ) is None
+    assert _persisted_consumption_for_run(
+        service, replace(candidate, work_id=candidate.work_id + 1), policy, adapter
+    ) is None
+
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "UPDATE quota_resource_states SET last_consumed_at=? WHERE work_id=? AND site=? AND resource=?",
+            ("2026-09-18T15:00:00+09:00", candidate.work_id, "comicfuz", "work_ticket"),
+        )
+    assert _persisted_consumption_for_run(service, candidate, policy, adapter) is None
+
+    error = RuntimeError("original capture failure")
+
+    def fail_source_read(_source_id):
+        raise OSError("local source read failed")
+
+    monkeypatch.setattr(service, "get_source", fail_source_read)
+    assert _persisted_consumption_for_run(
+        service, candidate, policy, adapter, error_to_annotate=error
+    ) is None
+    assert str(error) == "original capture failure"
+    assert any("local source read failed" in note for note in error.__notes__)
+
+
+@pytest.mark.asyncio
+async def test_comicfuz_daily_and_unknown_work_skips_do_not_create_crawl_runs(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_comicfuz_quota_candidate(service)
+    service.record_quota_access_with_resource_state(
+        candidate.source_id,
+        work_id=candidate.work_id,
+        site="comicfuz",
+        resource="work_ticket",
+        consumed_at=NOW,
+        access_granted_until=None,
+    )
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="comicfuz-test",
+        work_key="houkago-basket",
+        site="comicfuz",
+        url="https://comic-fuz.com/manga/2000",
+        label="Fixture",
+    )
+    executor = BatchExecutor(
+        service,
+        policies,
+        AdapterRegistry(),
+        library_dir=tmp_path / "Books",
+        watchlist=watchlist,
+    )
+
+    for operation in (
+        executor.execute_candidate,
+        executor.execute_grant_only_candidate,
+    ):
+        with pytest.raises(AccessResourceUnavailableError, match="work_ticket_daily_reset"):
+            await operation(None, candidate, now=NOW)  # type: ignore[arg-type]
+    assert service.list_crawl_runs() == []
+
+    grant_until = NOW + timedelta(days=2)
+    service.record_quota_access_with_resource_state(
+        candidate.source_id,
+        work_id=candidate.work_id,
+        site="comicfuz",
+        resource="work_ticket",
+        consumed_at=NOW,
+        access_granted_until=grant_until,
+    )
+    granted_source = service.get_source(candidate.source_id)
+    grant_decision = ComicFuzSitePolicy().evaluate(
+        granted_source, now=NOW + timedelta(minutes=1), quota_available=None
+    )
+    assert (grant_decision.access_strategy, grant_decision.consumes_quota) == (
+        "direct",
+        False,
+    )
+    direct_candidate = replace(
+        candidate,
+        access_strategy="direct",
+        consumes_quota=False,
+        quota_resource=None,
+        quota_scope=None,
+        quota_limit=None,
+        quota_commit_mode=None,
+    )
+    assert executor.resource_state_skip_reason(
+        direct_candidate,
+        policy=ComicFuzSitePolicy(),
+        now=NOW + timedelta(minutes=1),
+    ) is None
+
+    started = NOW + timedelta(minutes=1)
+    failed = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=candidate.target_id,
+        access_strategy="quota",
+        started_at=started,
+    )
+    service.mark_crawl_run_failed(
+        failed.id,
+        error_type="RuntimeError",
+        error_message="entry outcome unknown",
+        finished_at=started + timedelta(minutes=1),
+    )
+    after_reset = datetime(2026, 10, 14, 0, tzinfo=JST)
+    for operation in (
+        executor.execute_candidate,
+        executor.execute_grant_only_candidate,
+    ):
+        with pytest.raises(AccessResourceUnavailableError, match="prior_quota_attempt_unresolved"):
+            await operation(None, candidate, now=after_reset)  # type: ignore[arg-type]
+    assert service.list_crawl_runs() == [service.get_crawl_run(failed.id)]
 
 
 def _seed_proven_stale_status(

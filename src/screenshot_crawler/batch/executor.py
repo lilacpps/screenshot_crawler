@@ -382,6 +382,7 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
+        confirmed_consumption_at: datetime | None = None
         capture_manager = None
         session = None
         observer_cleanup: Callable[[], None] = lambda: None
@@ -537,6 +538,10 @@ class BatchExecutor:
             if adapter is not None:
                 _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
             consumption_checked = True
+            if adapter is not None:
+                confirmed_consumption_at = _persisted_consumption_for_run(
+                    self.catalog, candidate, policy, adapter
+                )
             if crawl_result.stop_reason == "quota_time_budget":
                 error = CandidateExecutionError("Reader time budget reached; committed pages retained for resume")
                 error.reason = "quota_time_budget"
@@ -583,7 +588,9 @@ class BatchExecutor:
                     state="present",
                 ),
                 page_count=len(crawl_result.pages),
-                stop_reason=crawl_result.stop_reason,
+                stop_reason=_with_consumption_confirmation(
+                    crawl_result.stop_reason, confirmed_consumption_at
+                ),
             )
             if session is not None:
                 try:
@@ -638,8 +645,19 @@ class BatchExecutor:
                         interrupted.add_note(
                             f"Could not record observed quota consumption: {recording_error}"
                         )
+                if adapter is not None and policy is not None:
+                    confirmed_consumption_at = _persisted_consumption_for_run(
+                        self.catalog, candidate, policy, adapter,
+                        error_to_annotate=interrupted,
+                    )
                 if run_id is not None:
-                    _record_failed_run(self.catalog, run_id, interrupted, crawl_result)
+                    _record_failed_run(
+                        self.catalog,
+                        run_id,
+                        interrupted,
+                        crawl_result,
+                        confirmed_consumption_at=confirmed_consumption_at,
+                    )
                 raise interrupted from exc
             if not consumption_checked and adapter is not None and policy is not None:
                 try:
@@ -648,8 +666,19 @@ class BatchExecutor:
                     )
                 except Exception as recording_error:  # noqa: BLE001
                     exc.add_note(f"Could not record observed quota consumption: {recording_error}")
+            if adapter is not None and policy is not None:
+                confirmed_consumption_at = _persisted_consumption_for_run(
+                    self.catalog, candidate, policy, adapter,
+                    error_to_annotate=exc,
+                )
             if run_id is not None:
-                _record_failed_run(self.catalog, run_id, exc, crawl_result)
+                _record_failed_run(
+                    self.catalog,
+                    run_id,
+                    exc,
+                    crawl_result,
+                    confirmed_consumption_at=confirmed_consumption_at,
+                )
             if isinstance(exc, AccessStopError):
                 raise BatchExecutionError(
                     f"Fatal access stop for item={candidate.item_id}, "
@@ -763,6 +792,35 @@ class BatchExecutor:
             if selected_policy.resource_state_scope(candidate.quota_resource) != "work":
                 return None
             item = self.catalog.get_item(candidate.item_id)
+            work_history_guard = getattr(
+                selected_policy, "guards_unresolved_quota_attempts_by_work", None
+            )
+            if callable(work_history_guard) and work_history_guard():
+                work_items = self.catalog.list_items(work_id=item.work_id)
+                item_work_ids = {work_item.id: work_item.work_id for work_item in work_items}
+                runs = [
+                    run
+                    for work_item in work_items
+                    for run in self.catalog.list_crawl_runs(item_id=work_item.id)
+                ]
+                source_ids = {run.source_id for run in runs}
+                sources_by_id = {
+                    source_id: self.catalog.get_source(source_id)
+                    for source_id in source_ids
+                }
+                targets_by_id = {
+                    run.target_id: self.catalog.get_source_target(run.target_id)
+                    for run in runs
+                }
+                unresolved_work_ids = selected_policy.unresolved_quota_attempt_work_ids(
+                    runs,
+                    item_work_ids=item_work_ids,
+                    sources_by_id=sources_by_id,
+                    targets_by_id=targets_by_id,
+                    now=current,
+                )
+                if item.work_id in unresolved_work_ids:
+                    return "prior_quota_attempt_unresolved"
             state = self.catalog.get_quota_resource_state(
                 item.work_id,
                 site=candidate.site,
@@ -1069,6 +1127,7 @@ class BatchExecutor:
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
         consumption_checked = False
+        confirmed_consumption_at: datetime | None = None
         observer_cleanup: Callable[[], None] = lambda: None
         try:
             if candidate.quota_resource is None:
@@ -1173,6 +1232,10 @@ class BatchExecutor:
                 self.catalog, candidate, policy, adapter
             )
             consumption_checked = True
+            if observed:
+                confirmed_consumption_at = _persisted_consumption_for_run(
+                    self.catalog, candidate, policy, adapter
+                )
             if not observed:
                 reason = policy.grant_only_unavailable_reason(candidate.quota_resource)
                 raise AccessResourceUnavailableError(reason)
@@ -1182,7 +1245,9 @@ class BatchExecutor:
             self.catalog.mark_crawl_run_succeeded(
                 run_id,
                 page_count=0,
-                stop_reason=crawl_result.stop_reason,
+                stop_reason=_with_consumption_confirmation(
+                    crawl_result.stop_reason, confirmed_consumption_at
+                ),
             )
             return GrantOnlyExecutionResult(
                 item_id=candidate.item_id,
@@ -1213,8 +1278,19 @@ class BatchExecutor:
                         interrupted.add_note(
                             f"Could not record observed quota consumption: {recording_error}"
                         )
+                if adapter is not None and policy is not None:
+                    confirmed_consumption_at = _persisted_consumption_for_run(
+                        self.catalog, candidate, policy, adapter,
+                        error_to_annotate=interrupted,
+                    )
                 if run_id is not None:
-                    _record_failed_run(self.catalog, run_id, interrupted, crawl_result)
+                    _record_failed_run(
+                        self.catalog,
+                        run_id,
+                        interrupted,
+                        crawl_result,
+                        confirmed_consumption_at=confirmed_consumption_at,
+                    )
                 raise interrupted from exc
             if not consumption_checked and adapter is not None and policy is not None:
                 try:
@@ -1223,8 +1299,19 @@ class BatchExecutor:
                     )
                 except Exception as recording_error:  # noqa: BLE001
                     exc.add_note(f"Could not record observed quota consumption: {recording_error}")
+            if adapter is not None and policy is not None:
+                confirmed_consumption_at = _persisted_consumption_for_run(
+                    self.catalog, candidate, policy, adapter,
+                    error_to_annotate=exc,
+                )
             if run_id is not None:
-                _record_failed_run(self.catalog, run_id, exc, crawl_result)
+                _record_failed_run(
+                    self.catalog,
+                    run_id,
+                    exc,
+                    crawl_result,
+                    confirmed_consumption_at=confirmed_consumption_at,
+                )
             if isinstance(exc, AccessStopError):
                 raise BatchExecutionError(
                     f"Fatal access stop for item={candidate.item_id}, "
@@ -1637,6 +1724,8 @@ def _record_failed_run(
     run_id: int,
     error: BaseException,
     crawl_result: RunResult | None,
+    *,
+    confirmed_consumption_at: datetime | None = None,
 ) -> None:
     page_count = len(crawl_result.pages) if crawl_result is not None else None
     stop_reason = (
@@ -1647,6 +1736,7 @@ def _record_failed_run(
     )
     if stop_reason is None and getattr(error, "access_stop", None) is not None:
         stop_reason = getattr(error.access_stop, "reason", None)
+    stop_reason = _with_consumption_confirmation(stop_reason, confirmed_consumption_at)
     try:
         catalog.mark_crawl_run_failed(
             run_id,
@@ -1657,6 +1747,80 @@ def _record_failed_run(
         )
     except Exception as recording_error:  # noqa: BLE001
         error.add_note(f"Could not record failed CrawlRun {run_id}: {recording_error}")
+
+
+def _persisted_consumption_for_run(
+    catalog: CatalogService,
+    candidate: BatchCandidate,
+    policy: SitePolicy,
+    adapter: SiteAdapter,
+    *,
+    error_to_annotate: BaseException | None = None,
+) -> datetime | None:
+    if (
+        not policy.records_confirmed_quota_attempts_in_run_history()
+        or not candidate.consumes_quota
+        or candidate.access_strategy != "quota"
+        or candidate.quota_resource is None
+        or policy.resource_state_scope(candidate.quota_resource) != "work"
+    ):
+        return None
+    try:
+        consumption = adapter.get_access_consumption()
+        consumed_at = getattr(consumption, "consumed_at", None)
+        if (
+            not getattr(consumption, "consumed", False)
+            or getattr(consumption, "resource", None) != candidate.quota_resource
+            or not isinstance(consumed_at, datetime)
+            or consumed_at.tzinfo is None
+            or consumed_at.utcoffset() is None
+        ):
+            return None
+        source = catalog.get_source(candidate.source_id)
+        item = catalog.get_item(candidate.item_id)
+        target = catalog.get_source_target(candidate.target_id)
+        work = catalog.get_work(item.work_id)
+        if (
+            source.id != candidate.source_id
+            or source.item_id != item.id
+            or source.site != candidate.site
+            or source.external_id != candidate.external_id
+            or (candidate.work_id is not None and candidate.work_id != item.work_id)
+            or target.id != candidate.target_id
+            or target.source_id != source.id
+            or target.backend != candidate.backend
+            or target.target_key != candidate.target_key
+            or target.locator != candidate.locator
+            or not policy.confirmed_quota_attempt_identity_matches(
+                candidate, item, source, target, work
+            )
+        ):
+            return None
+        persisted = _parse_access_grant(source.quota_started_at)
+        state = catalog.get_quota_resource_state(
+            item.work_id,
+            site=candidate.site,
+            resource=candidate.quota_resource,
+        )
+        state_consumed = _parse_access_grant(state.last_consumed_at) if state is not None else None
+        if persisted != consumed_at or state_consumed != consumed_at:
+            return None
+        return consumed_at
+    except Exception as exc:  # noqa: BLE001 - a failed proof read cannot replace the run error
+        if error_to_annotate is not None:
+            error_to_annotate.add_note(
+                f"Could not verify persisted quota consumption marker: {exc}"
+            )
+        return None
+
+
+def _with_consumption_confirmation(
+    stop_reason: str | None,
+    consumed_at: datetime | None,
+) -> str | None:
+    if consumed_at is None or consumed_at.tzinfo is None or consumed_at.utcoffset() is None:
+        return stop_reason
+    return f"access_consumption_confirmed:v1:{consumed_at.isoformat()}|{stop_reason or ''}"
 
 
 def _confirmed_grant_consumption(

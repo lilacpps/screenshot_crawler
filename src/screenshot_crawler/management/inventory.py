@@ -348,7 +348,7 @@ class InventoryService:
                                 resource=resource, last_consumed_at=last,
                                 cooldown_hours=cooldown,
                             )
-                            retry = value.isoformat() if value else None
+                            retry = value.isoformat() if value is not None and value > current else None
                             skip = policy.grant_only_skip_reason(
                                 resource=resource, last_consumed_at=last, now=current,
                                 cooldown_hours=cooldown,

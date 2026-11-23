@@ -40,6 +40,14 @@ def _listing_html(
     free_ids: set[str] | None = None,
     duplicate_free_ids: set[str] | None = None,
     hidden_free_ids: set[str] | None = None,
+    price_icons: dict[str, tuple[str, ...]] | None = None,
+    duplicate_price_slot_ids: set[str] | None = None,
+    hidden_price_ids: set[str] | None = None,
+    extra_svg_ids: set[str] | None = None,
+    extra_img_ids: set[str] | None = None,
+    extra_aria_ids: set[str] | None = None,
+    extra_title_ids: set[str] | None = None,
+    extra_background_ids: set[str] | None = None,
     canonical_work_id: str = WORK_ID,
     current_work_id: str = WORK_ID,
     signin: bool = True,
@@ -51,12 +59,33 @@ def _listing_html(
     free_ids = free_ids or set()
     duplicate_free_ids = duplicate_free_ids or set()
     hidden_free_ids = hidden_free_ids or set()
+    price_icons = price_icons or {}
+    duplicate_price_slot_ids = duplicate_price_slot_ids or set()
+    hidden_price_ids = hidden_price_ids or set()
+    extra_svg_ids = extra_svg_ids or set()
+    extra_img_ids = extra_img_ids or set()
+    extra_aria_ids = extra_aria_ids or set()
+    extra_title_ids = extra_title_ids or set()
+    extra_background_ids = extra_background_ids or set()
     records = [
         {"chapterId": chapter_id, "chapterMainName": label, "pointConsumption": 88}
         for chapter_id, label in chapters
     ]
     groups = [{"chapters": records[:2]}, {"chapters": records[2:]}]
     groups = [group for group in groups if group["chapters"]]
+    def _slot(kinds: tuple[str, ...], *, hidden: bool = False) -> str:
+        image_details = {
+            "gold": ("ゴールドメダル", "/assets/manga_detail/gold.svg"),
+            "silver": ("シルバーメダル", "/assets/manga_detail/silver.svg"),
+            "unknown": ("", "/assets/manga_detail/unknown.svg"),
+        }
+        images = "".join(
+            f'<img class="Chapter_chapter__price_gold__fixture" alt="{image_details[kind][0]}" src="{image_details[kind][1]}">'
+            for kind in kinds
+        )
+        style = ' style="display:none"' if hidden else ""
+        return f'<i class="Chapter_chapter__price__fixture"{style}>{images}</i>'
+
     rows = "".join(
         f'''<div class="Chapter_chapter__row false false">
           <div class="Chapter_chapter__detail__fixture">
@@ -64,6 +93,12 @@ def _listing_html(
             {('<p class="Chapter_chapter__price_free__fixture">無料</p>' if chapter_id in free_ids else '')}
             {('<p class="Chapter_chapter__price_free__fixture">無料</p>' if chapter_id in duplicate_free_ids else '')}
             {('<p class="Chapter_chapter__price_free__fixture" style="display:none">無料</p>' if chapter_id in hidden_free_ids else '')}
+            {''.join(_slot(price_icons[chapter_id], hidden=chapter_id in hidden_price_ids) for _ in range(1 + (chapter_id in duplicate_price_slot_ids)) if chapter_id in price_icons)}
+            {('<svg class="new-access-marker"><title>fixture</title></svg>' if chapter_id in extra_svg_ids else '')}
+            {('<img class="new-access-marker" src="/assets/manga_detail/new.svg">' if chapter_id in extra_img_ids else '')}
+            {('<div aria-label="access marker"></div>' if chapter_id in extra_aria_ids else '')}
+            {('<div title="access marker"></div>' if chapter_id in extra_title_ids else '')}
+            {('<div class="Chapter_chapter__detail__fixture" style="background-image:url(https://comic-fuz.com/assets/manga_detail/new.svg)"></div>' if chapter_id in extra_background_ids else '')}
           </div>
         </div>'''
         for chapter_id, label in chapters
@@ -110,7 +145,16 @@ def _listing_html(
 
 async def _run_discovery(browser_page, tmp_path: Path, html: str, *, scope=None, mode="full"):
     async def fulfill(route) -> None:
-        await route.fulfill(body=html, content_type="text/html; charset=utf-8")
+        path = route.request.url.split("?", 1)[0]
+        if path.endswith(("/assets/manga_detail/gold.svg", "/assets/manga_detail/silver.svg")):
+            await route.fulfill(
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>',
+                content_type="image/svg+xml",
+            )
+        elif route.request.resource_type == "image":
+            await route.abort()
+        else:
+            await route.fulfill(body=html, content_type="text/html; charset=utf-8")
 
     await browser_page.route(f"{BASE}/**", fulfill)
     catalog = CatalogService(tmp_path / "catalog.sqlite")
@@ -157,7 +201,7 @@ async def test_comicfuz_full_discovery_reconciles_catalog_and_global_positions(
     assert [source.external_id for source in sources] == [
         "1970:30", "1970:20", "1970:10", "1970:1"
     ]
-    assert [source.access_mode for source in sources] == ["unknown", "free", "unknown", "free"]
+    assert [source.access_mode for source in sources] == ["quota", "free", "quota", "free"]
     assert [source.display_position for source in sources] == [4, 3, 2, 1]
     assert [source.free_until for source in sources] == [None, None, None, None]
     targets_by_source = {
@@ -234,7 +278,7 @@ async def test_comicfuz_access_refresh_and_incomplete_full_preserve_catalog_hist
     assert second.complete is True
     refreshed = catalog.find_source("comicfuz", "1970:20")
     assert refreshed.id == source.id
-    assert refreshed.access_mode == "unknown"
+    assert refreshed.access_mode == "quota"
     assert refreshed.free_until is None
     assert catalog.get_item(item.id).status == "completed"
     assert catalog.get_item(item.id).completed_at == completion_time
@@ -312,6 +356,58 @@ async def test_comicfuz_hidden_free_marker_does_not_classify_source_as_free(
         browser_page,
         tmp_path,
         _listing_html([("3", "第3話"), ("2", "第2話")], hidden_free_ids={"3"}),
+    )
+    source = catalog.find_source("comicfuz", "1970:3")
+    assert result.complete is True
+    assert source is not None
+    assert source.access_mode == "unknown"
+
+
+async def test_comicfuz_price_markers_classify_gold_and_silver_combinations(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    chapters = [("5", "S and G"), ("4", "G only"), ("3", "Free"), ("2", "Blank")]
+    catalog, result, _service = await _run_discovery(
+        browser_page,
+        tmp_path,
+        _listing_html(
+            chapters,
+            free_ids={"3"},
+            price_icons={"5": ("silver", "gold"), "4": ("gold",)},
+        ),
+    )
+    assert result.complete is True
+    assert [source.access_mode for source in catalog.list_sources(site="comicfuz")] == [
+        "paid", "paid", "free", "quota"
+    ]
+
+
+@pytest.mark.parametrize(
+    "html_kwargs",
+    [
+        {"price_icons": {"3": ("silver",)}},
+        {"price_icons": {"3": ("gold",)}, "duplicate_price_slot_ids": {"3"}},
+        {"price_icons": {"3": ("unknown",)}},
+        {"price_icons": {"3": ("gold",)}, "hidden_price_ids": {"3"}},
+        {"price_icons": {"3": ("gold",)}, "free_ids": {"3"}},
+        {"extra_svg_ids": {"3"}},
+        {"extra_img_ids": {"3"}},
+        {"extra_aria_ids": {"3"}},
+        {"extra_title_ids": {"3"}},
+        {"extra_background_ids": {"3"}},
+    ],
+    ids=["silver-only", "multiple-price-slots", "unknown-price-icon", "hidden-price", "free-paid-conflict", "unknown-svg", "unknown-image", "aria-label", "title", "background-image"],
+)
+async def test_comicfuz_ambiguous_or_unknown_rights_evidence_stays_unknown(
+    browser_page,
+    tmp_path: Path,
+    html_kwargs,
+) -> None:
+    catalog, result, _service = await _run_discovery(
+        browser_page,
+        tmp_path,
+        _listing_html([("3", "第3話"), ("2", "第2話")], **html_kwargs),
     )
     source = catalog.find_source("comicfuz", "1970:3")
     assert result.complete is True
@@ -477,9 +573,10 @@ async def test_comicfuz_scope_sync_shrink_and_reexpand_preserves_history_and_ord
         site="comicfuz", now=datetime(2026, 10, 22, tzinfo=UTC)
     )
     assert [candidate.source_id for candidate in expanded_plan.candidates] == [
-        after_expand["1970:3"].id
+        after_expand["1970:3"].id,
+        after_expand["1970:4"].id,
     ]
-    assert [candidate.artifact_prefix for candidate in expanded_plan.candidates] == ["003"]
+    assert [candidate.artifact_prefix for candidate in expanded_plan.candidates] == ["003", "004"]
 
 
 async def test_comicfuz_incremental_uses_shared_known_streak_without_local_renumbering(
