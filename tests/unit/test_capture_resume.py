@@ -535,6 +535,77 @@ async def test_bookwalker_ordinary_direct_cannot_enable_resume_or_timer(tmp_path
     assert adapter._capture_session is session
 
 
+@pytest.mark.parametrize("change", [
+    "redraw", "continuous_redraw", "redraw_then_move", "current", "total", "content_id",
+    "layout", "missing_frame", "blank", "deadline",
+])
+async def test_bookwalker_checkpoint_rechecks_only_same_boundary_redraw(change):
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = "synthetic-cid"
+    adapter.page_change_timeout_ms = 100
+    base = {
+        "content_id": "synthetic-cid", "current": 39, "total": 342,
+        "signature": (123, 20),
+        "geometry": {
+            "actualCanvasId": "renderer", "contentVersion": 1, "connected": True,
+            "width": 100, "height": 100, "displayWidth": 100, "displayHeight": 100,
+        },
+    }
+    calls = 0
+    waits = []
+
+    async def ready(page):
+        if change == "deadline":
+            await asyncio.sleep(10)
+
+    async def observe(page):
+        nonlocal calls
+        calls += 1
+        value = {**base, "geometry": dict(base["geometry"])}
+        if calls > 1:
+            if change in {"redraw", "continuous_redraw", "redraw_then_move"}:
+                value["geometry"]["contentVersion"] = calls if change == "continuous_redraw" else 2
+                if change == "redraw_then_move" and calls > 2:
+                    value["current"] += 2
+            elif change in {"current", "total"}:
+                value[change] += 1
+            elif change == "content_id":
+                value[change] = "other-cid"
+            elif change == "layout":
+                value["geometry"]["displayWidth"] = 101
+            elif change == "missing_frame":
+                value["geometry"]["connected"] = False
+            elif change == "blank":
+                value["signature"] = (0, 0)
+        return value
+
+    async def wait(ms):
+        waits.append(ms)
+
+    adapter._wait_for_render_ready = ready
+    adapter._initial_page_observation = observe
+    page = SimpleNamespace(wait_for_timeout=wait)
+    if change == "redraw":
+        checkpoint = await adapter.get_resume_checkpoint(page)
+        assert checkpoint == {
+            "cid": "synthetic-cid", "current": 39, "total": 342,
+            "layout": [100, 100, 100, 100],
+        }
+        assert calls == 4
+        assert len(waits) == 1
+    else:
+        with pytest.raises(ResumeError, match="checkpoint frame is not stable"):
+            await adapter.get_resume_checkpoint(page)
+        expected_calls = {"continuous_redraw": 6, "redraw_then_move": 4, "deadline": 0}.get(change, 2)
+        assert calls == expected_calls
+        assert len(waits) == {"continuous_redraw": 2, "redraw_then_move": 1}.get(change, 0)
+        debug = (await adapter.collect_debug_metadata(page))["bookwalker_checkpoint"]
+        assert debug["reason"]
+        if change == "redraw_then_move":
+            assert debug["reason"] == "boundary_changed"
+            assert debug["boundary"]["current"] == 39
+
+
 @pytest.mark.parametrize("field,value", [("cid", "other"), ("total", 20), ("layout", [1, 2, 3, 4])])
 async def test_bookwalker_resume_refuses_changed_book_or_layout_before_moving(field, value):
     adapter = BookWalkerAdapter()

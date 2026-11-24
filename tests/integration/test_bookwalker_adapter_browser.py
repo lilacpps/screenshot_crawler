@@ -13,6 +13,7 @@ import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter
 import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
 from screenshot_crawler.core.errors import PageChangeTimeoutError
 from screenshot_crawler.core.models import ContentIdentity
+from screenshot_crawler.core.resume import ResumeError
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
     _PIXEL_EXACT_COMPARISON_SCRIPT,
@@ -300,6 +301,72 @@ async def test_resume_rejoins_saved_spread_without_home_and_waits_for_redraw(
     assert checkpoint["current"] == 4
     assert "Home" not in await browser_page.evaluate("window.__keys")
     assert await browser_page.evaluate("Array.from(document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)") == [80,40,70,255]
+
+
+@pytest.mark.parametrize("change", ["redraw", "continuous_redraw", "position", "layout"])
+async def test_checkpoint_frame_join_handles_same_page_repaint(
+    browser_page: Page, change: str,
+) -> None:
+    adapter = BookWalkerAdapter()
+    adapter._initial_content_id = PRODUCT_ID
+    adapter.page_change_timeout_ms = 3_000
+    await adapter.prepare_page(browser_page)
+
+    async def fulfill(route):
+        await route.fulfill(content_type="text/html", body="""
+          <span id="pageSliderCounter">39 / 342</span>
+          <div id="renderer"><div class="currentScreen">
+            <canvas width="100" height="100" style="width:100px;height:100px"></canvas>
+          </div></div>
+          <script>
+            window.repaint = () => {
+              const context = document.querySelector('canvas').getContext('2d');
+              context.fillStyle = 'rgb(20,40,60)';
+              context.fillRect(0,0,100,100);
+            };
+            window.repaint();
+          </script>
+        """)
+
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill)
+    await browser_page.goto(f"{VIEWER_BASE}?cid={PRODUCT_ID}")
+    observe = adapter._initial_page_observation
+    calls = 0
+
+    async def race(page):
+        nonlocal calls
+        value = await observe(page)
+        calls += 1
+        if calls == 1 or change == "continuous_redraw":
+            await page.evaluate("""change => {
+              window.repaint();
+              if (change === 'position') document.querySelector('#pageSliderCounter').textContent = '41 / 342';
+              if (change === 'layout') document.querySelector('canvas').style.width = '101px';
+            }""", change)
+        return value
+
+    adapter._initial_page_observation = race
+    if change == "redraw":
+        checkpoint = await adapter.get_resume_checkpoint(browser_page)
+        assert checkpoint == {
+            "cid": PRODUCT_ID, "current": 39, "total": 342,
+            "layout": [100, 100, 100, 100],
+        }
+        assert calls == 4
+    else:
+        with pytest.raises(ResumeError, match="checkpoint frame is not stable"):
+            await adapter.get_resume_checkpoint(browser_page)
+        assert calls == (6 if change == "continuous_redraw" else 2)
+    debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_checkpoint"]
+    assert debug["reason"] == {
+        "redraw": "stable", "continuous_redraw": "frame_changed",
+        "position": "boundary_changed", "layout": "boundary_changed",
+    }[change]
+    if change == "continuous_redraw":
+        assert debug["changed_fields"] == ["content_version"]
+    assert await browser_page.locator("#pageSliderCounter").inner_text() == (
+        "41 / 342" if change == "position" else "39 / 342"
+    )
 
 
 async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(

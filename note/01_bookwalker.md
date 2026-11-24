@@ -88,7 +88,53 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-11-23
+最終同期: 2026-11-24
+
+## quota checkpointの同一表示再描画確認（2026-11-24）
+
+`get_resume_checkpoint()` は描画待ち後の2回の観測を完全なframe join keyで照合する。
+同じCID・current/total・内部/CSS寸法のまま再描画が挟まった場合だけ、100ms後に
+描画待ちと新しい2回の観測をやり直す。初回込み最大3回、処理全体は既存の
+`page_change_timeout_ms`（14秒）以内。各観測のconnected canvas identity/content version、
+signature等を含む完全key一致を要求し、異なる2つのframeをそのまま承認しない。
+CID/current/total/layoutの変化、欠落・不正frame、空白は即停止する。再確認中に
+安定した別ページへ移った場合も初回に固定した境界との比較で拒否する。
+再入場・キー操作・captureの取り直しは行わず、Runnerの保存直前identity照合、
+既存のcapture proof、見開きall-or-none、quota記録・期限・resume layout比較は維持する。
+CLI/設定・manifest形式の追加はない。
+
+失敗診断の`adapter_debug.bookwalker_checkpoint`に最終2観測のkey値、attempts、reason、
+changed_fieldsを記録する。エラー文にもreason/attempts/changed_fieldsを含める
+（期限終了はreason=deadline）。診断値はproofの代替にはしない。
+
+2026-11-24 15:58:47 JSTのSource1913のquota Batchは、約70.8秒で
+`ResumeError: BookWalker checkpoint frame is not stable`により停止した。
+metricsの403/429/5xx/challengeは全て0件。manifestには37画像・21表示単位が確定し、
+最終checkpointは37/342、layout=[1904,985,1904,985]。失敗時は39/342の見開きで、
+native selectionは2-part、返却予定経路はreconstructed_jpegだったが未保存である。
+先頭の`capture=new saved=0`は開始時の表示であり、停止時の保存数ではない。
+`grant_unknown`等はこの失敗に続く通知で、quotaの再消費や画像破損の証拠ではない。
+修正前は失敗した2観測の値を記録しておらず、liveで不一致になったfieldは特定不能。
+同一ページの再描画で即停止する経路は人工browserで再現したが、実際の失敗fieldを
+contentVersionと断定しない。
+
+保存データは`read_session_manifest()`で全37画像のSHA-256、連番、21表示単位と
+再開参照内bindingとの一致をread-only検証した。検証前後の再開参照・全取得ファイルの
+SHA-256は不変。通常Catalogやquota履歴、既存画像・再開参照は変更していない。
+実サイトreaderの再入場、追加quotaを使う再実行は行っておらず、実まる読みでの
+再開成功は未確認。BookWalker固有checkpointのみの修正で、共通Coreの契約は変更しない。
+
+回帰検証はresume Unitと人工Chromiumで、同一pixelsの再描画がcontentVersionだけを
+変える場合の新しい完全frame join、一時的/継続的な不一致、CID/位置/総数/layout変更、
+欠落frame・空白・期限終了を対象とする。adapter/original/native capture、native source、
+purchased mapping、lossless JPEG、terminal、resumeと2つのBookWalker browser
+Integration fileは613 passed、0 skipped（179.57秒）。その後に再確認の組間で別ページへ
+移るUnitケースを追加し、最新のresume Unit全42件もPASS（8.81秒）、skip 0。
+`ruff check src tests`と変更した5ファイルの`git diff --check`はPASS。
+初回は既定の`pytest-of-kensu`一時directoryへの権限不足により68件のsetup errorが出たため、
+workspace内の専用`--basetemp`で関連選択全体を再実行し上記のPASSを確認した。
+既存のpytest-asyncio/Pillow等の非推奨warningは残る。full suiteはsite-local修正であるため、
+Research suiteはhelper未変更のため未実行。liveの未確認範囲は上記の通り。
 
 ## Two-part retained redraw recovery / Source 1916 (2026-11-21)
 
@@ -2174,6 +2220,8 @@ local quotaのcapacity/reset/記録時点/自動refund禁止は20.4から変更�
 最大8回のArrowRight/ArrowLeftで保存済み表示へ戻し、必要なら隣接表示との往復で描き直す。
 counter変化だけでは通さず、操作後のcanvas identity/content versionとsignatureの変化、
 通常render readiness、連続したframe joinを確認する。そこから通常のgo_nextで未保存表示へ進む。
+checkpoint作成時は上記「quota checkpointの同一表示再描画確認」の有界再確認を使い、
+異なるCID/位置/総数/layoutは再確認せず停止する。
 保存画像を再取得で置換せず、capture/END/source-nativeの既存proofは変更しない。
 
 利用者指定の購入済みCID `2532de3b-1769-4210-ab6e-2952e4ecbe08` でstrict direct entryを確認し、

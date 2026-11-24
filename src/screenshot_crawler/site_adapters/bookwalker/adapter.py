@@ -7381,21 +7381,71 @@ class BookWalkerAdapter(SiteAdapter):
     async def get_resume_checkpoint(self, page: Page) -> dict[str, Any]:
         from screenshot_crawler.core.resume import ResumeError
 
-        await self._wait_for_render_ready(page)
-        first = await self._initial_page_observation(page)
-        final = await self._initial_page_observation(page)
-        key = self._initial_frame_join_key(first)
-        if (key is None or key != self._initial_frame_join_key(final)
-            or not self._content_ids_match(final.get("content_id"), self._initial_content_id)
-            or type(final.get("current")) is not int or type(final.get("total")) is not int
-            or not 1 <= final["current"] <= final["total"]
-            or not final.get("signature") or final["signature"][1] <= 0):
-            raise ResumeError("BookWalker checkpoint frame is not stable")
-        geometry = final["geometry"]
-        return {
-            "cid": final["content_id"], "current": final["current"], "total": final["total"],
-            "layout": [geometry[k] for k in ("width", "height", "displayWidth", "displayHeight")],
-        }
+        fields = (
+            "cid", "current", "total", "canvas_id", "content_version",
+            "width", "height", "display_width", "display_height", "connected", "signature",
+        )
+        debug: dict[str, Any] = {"attempts": 0, "reason": "pending"}
+        self._capture_debug["bookwalker_checkpoint"] = debug
+        boundary = None
+
+        def fail(reason: str) -> None:
+            debug["reason"] = reason
+            raise ResumeError(
+                "BookWalker checkpoint frame is not stable "
+                f"(reason={reason}, attempts={debug['attempts']}, "
+                f"changed_fields={','.join(debug.get('changed_fields', []))})"
+            )
+
+        try:
+            # Readiness checks pixels, but a same-page repaint can still advance
+            # the renderer version immediately afterwards. Reobserve fresh frames
+            # without navigation, recapture, or accepting a mismatched frame pair.
+            async with asyncio.timeout(self.page_change_timeout_ms / 1000):
+                for attempt in range(3):
+                    debug["attempts"] = attempt + 1
+                    await self._wait_for_render_ready(page)
+                    first = await self._initial_page_observation(page)
+                    final = await self._initial_page_observation(page)
+                    keys = [self._initial_frame_join_key(value) for value in (first, final)]
+                    debug["frames"] = [
+                        dict(zip(fields, key, strict=True)) if key is not None else None
+                        for key in keys
+                    ]
+                    debug["changed_fields"] = (
+                        [name for name, a, b in zip(fields, *keys, strict=True) if a != b]
+                        if all(key is not None for key in keys) else []
+                    )
+                    for value, key in zip((first, final), keys, strict=True):
+                        if (key is None
+                            or not self._content_ids_match(value.get("content_id"), self._initial_content_id)
+                            or type(value.get("current")) is not int or type(value.get("total")) is not int
+                            or not 1 <= value["current"] <= value["total"]
+                            or not value.get("signature") or value["signature"][1] <= 0):
+                            fail("invalid_frame")
+                        # Pin book, position and layout across every observation;
+                        # a stable different page cannot commit the captured bytes.
+                        observed_boundary = key[:3] + key[5:9]
+                        if boundary is None:
+                            boundary = observed_boundary
+                            debug["boundary"] = dict(zip(
+                                fields[:3] + fields[5:9], boundary, strict=True,
+                            ))
+                        elif boundary != observed_boundary:
+                            fail("boundary_changed")
+                    if keys[0] == keys[1]:
+                        debug["reason"] = "stable"
+                        geometry = final["geometry"]
+                        return {
+                            "cid": final["content_id"], "current": final["current"], "total": final["total"],
+                            "layout": [geometry[k] for k in ("width", "height", "displayWidth", "displayHeight")],
+                        }
+                    if attempt < 2:
+                        await page.wait_for_timeout(100)
+                fail("frame_changed")
+        except TimeoutError as exc:
+            debug["reason"] = "deadline"
+            raise ResumeError("BookWalker checkpoint frame is not stable (reason=deadline)") from exc
 
     async def _restore_capture_position(self, page: Page) -> None:
         from screenshot_crawler.core.resume import ResumeError

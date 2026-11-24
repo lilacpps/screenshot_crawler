@@ -80,6 +80,15 @@ Restored counters alone, temporary canvas IDs, and cross-session artifact
 byte equality are not sufficient to decide which images to skip or replace.
 Saved artifacts remain immutable and the existing capture proof is unchanged.
 
+Checkpoint creation requires two equal complete frame keys after render readiness.
+A same-boundary repaint permits at most three fresh observation pairs, separated
+by 100 ms and bounded together by the existing page-change timeout. Every sample
+must keep the initial CID, counter/total and internal/CSS dimensions; missing or
+invalid frames and changed boundaries fail immediately. No navigation or capture
+retry occurs. Failure diagnostics include the last frame keys, attempts, reason
+and changed fields under `bookwalker_checkpoint`. The original capture proof and
+Runner's pre-commit identity check remain required.
+
 The quota integration starts one monotonic 590-second budget immediately
 before activating the strict maruyomi control. It closes only the dedicated
 reader Page at the limit and retains committed groups with `quota_time_budget`;
