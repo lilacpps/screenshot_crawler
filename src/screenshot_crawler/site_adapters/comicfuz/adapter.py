@@ -12,7 +12,6 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -48,6 +47,8 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
     find_ticket_modal_cta,
+    is_canonical_viewer_url,
+    is_target_viewer_url,
     is_ticket_viewer_url,
     parse_rental_expiry,
     read_native_ticket_snapshot,
@@ -1228,22 +1229,11 @@ class ComicFuzAdapter(SiteAdapter):
         return snapshot
 
     async def _reader_route_is_target(self, page: Page) -> bool:
-        try:
-            parsed = urlparse(page.url)
-        except ValueError:
+        if self._chapter_id is None or not is_target_viewer_url(
+            page.url, chapter_id=str(self._chapter_id)
+        ):
             return False
-        canonical_route = (
-            parsed.scheme.lower() == "https"
-            and parsed.hostname == SITE_HOST
-            and parsed.port is None
-            and parsed.username is None
-            and parsed.password is None
-            and parsed.path == f"/manga/viewer/{self._chapter_id}"
-            and not parsed.fragment
-        )
-        if not canonical_route:
-            return False
-        if not parsed.query:
+        if is_canonical_viewer_url(page.url, chapter_id=str(self._chapter_id)):
             return True
         return (
             self._ticket_entry_confirmed

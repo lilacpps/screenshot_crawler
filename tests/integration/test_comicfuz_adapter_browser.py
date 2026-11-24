@@ -151,6 +151,7 @@ def _work_ticket_listing_html(
     charge_available: bool = True,
     listing_ready_delay_ms: int = 0,
     hidden_duplicate_dialog: bool = False,
+    ticket_query: bool = True,
 ) -> str:
     next_data = {
         "page": "/manga/[mangaId]",
@@ -175,6 +176,9 @@ def _work_ticket_listing_html(
         if listing_ready_delay_ms > 0
         else "title_detail_chapters__list__fixture"
     )
+    viewer_route = f"/manga/viewer/{chapter_id}"
+    if ticket_query:
+        viewer_route += "?ticket=true"
     modal = f'''<div class="Dialog_modal__fixture" id="ticket-modal" style="display:none">
         <div class="Dialog_content__fixture">
           <div class="Dialog_chapter__fixture">
@@ -253,12 +257,16 @@ def _work_ticket_listing_html(
           const modal=document.querySelector('#ticket-modal');
           heading.addEventListener('click',()=>modal.style.display='block');
           document.querySelector('#ticket-cta').addEventListener('click',()=>{{
-            history.pushState({{}},'',`/manga/viewer/${{chapterId}}?ticket=true`);
-            fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
-              headers:{{'content-type':'text/plain'}},
-              body:new Uint8Array({request_values})}})
-              .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
-              .catch(()=>{{}});
+            if({json.dumps(ticket_query)}){{
+              history.pushState({{}},'',{json.dumps(viewer_route)});
+              fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+                headers:{{'content-type':'text/plain'}},
+                body:new Uint8Array({request_values})}})
+                .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+                .catch(()=>{{}});
+            }}else{{
+              window.location.assign({json.dumps(viewer_route)});
+            }}
           }});
           }})();
         </script></body></html>'''
@@ -706,12 +714,18 @@ async def _comicfuz_batch_fixture(
 
 
 @pytest.mark.parametrize("grant_only", [False, True], ids=["normal_batch", "grant_only"])
+@pytest.mark.parametrize(
+    "ticket_query",
+    [False, True],
+    ids=["canonical_viewer_route", "ticket_query_viewer_route"],
+)
 async def test_comicfuz_work_ticket_batch_entry_and_capture(
     browser_page,
     browser_context,
     tmp_path: Path,
     sync_legacy_unscoped_work,
     grant_only: bool,
+    ticket_query: bool,
 ) -> None:
     work_id, chapter_id = "3667", "76630"
     work_url = f"{BASE}/manga/{work_id}"
@@ -733,7 +747,17 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         viewer_html=viewer_html,
         listing_ready_delay_ms=350,
         hidden_duplicate_dialog=True,
+        ticket_query=ticket_query,
     )
+    viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    viewer_bootstrap_html = f'''<!doctype html><html><head><title>ComicFUZ viewer bootstrap</title></head>
+      <body><script>(()=>{{
+        const body=new Uint8Array({json.dumps(list(request_body))});
+        fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+          headers:{{'content-type':'text/plain'}},body}})
+          .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+          .catch(()=>{{}});
+      }})();</script></body></html>'''
     api_requests: list[bytes] = []
     work_page_visits: list[str] = []
 
@@ -745,6 +769,12 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
                 status=200,
                 content_type="text/html; charset=utf-8",
                 body=listing_html,
+            )
+        elif path == f"{BASE}/manga/viewer/{chapter_id}":
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=viewer_bootstrap_html,
             )
         elif path in {
             f"{BASE}/assets/manga_detail/charged.svg",

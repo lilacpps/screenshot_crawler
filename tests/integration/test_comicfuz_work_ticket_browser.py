@@ -222,6 +222,7 @@ async def _prepare_page(
     send_request: bool = True,
     rental_expiry_override: str | None = None,
     modal_variant: str = "valid",
+    viewer_url: str | None = None,
 ):
     expiry = rental_expiry_override or (
         datetime.now(UTC) + timedelta(hours=24)
@@ -285,7 +286,8 @@ async def _prepare_page(
           });
         }""",
         {
-            "viewerUrl": f"{BASE}/manga/viewer/{CHAPTER_ID}?ticket=true",
+            "viewerUrl": viewer_url
+            or f"{BASE}/manga/viewer/{CHAPTER_ID}?ticket=true",
             "apiUrl": api_url or f"https://{API_HOST}{API_PATH}",
             "bodyBytes": list(body),
             "workId": WORK_ID,
@@ -321,22 +323,32 @@ async def _prepare_page(
     return browser_page
 
 
-async def _post_ticket_again(page, body: bytes) -> str:
+async def _post_ticket_again(
+    page, body: bytes, *, api_url: str | None = None
+) -> str:
     return await page.evaluate(
-        """async body => {
+        """async ({body,apiUrl}) => {
           try {
-            await fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2', {
+            await fetch(apiUrl, {
               method:'POST',headers:{'content-type':'text/plain'},body:new Uint8Array(body)
             });
             return 'forwarded';
           } catch (_) { return 'blocked'; }
         }""",
-        list(body),
+        {
+            "body": list(body),
+            "apiUrl": api_url or f"https://{API_HOST}{API_PATH}",
+        },
     )
 
 
+@pytest.mark.parametrize(
+    "ticket_query",
+    [False, True],
+    ids=["canonical_viewer_route", "ticket_query_viewer_route"],
+)
 async def test_ticket_controller_succeeds_once_and_keeps_page_route_guard(
-    browser_page, browser_context
+    browser_page, browser_context, ticket_query: bool
 ) -> None:
     body = _request_body()
     downstream: list[bytes] = []
@@ -346,6 +358,11 @@ async def test_ticket_controller_succeeds_once_and_keeps_page_route_guard(
         body=body,
         downstream=downstream,
         inherit_viewer_ticket_default=True,
+        viewer_url=(
+            f"{BASE}/manga/viewer/{CHAPTER_ID}?ticket=true"
+            if ticket_query
+            else f"{BASE}/manga/viewer/{CHAPTER_ID}"
+        ),
     )
     controller = ComicFuzTicketEntry(
         work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
@@ -382,7 +399,6 @@ async def test_ticket_controller_succeeds_once_and_keeps_page_route_guard(
     assert post_state.is_ticket_available_prototype_default is True
     assert len(downstream) == 1 and downstream[0] == body
     assert [row.status for row in observations] == ["attempting", "confirmed"]
-
     with pytest.raises(UnknownPageStateError, match="already latched"):
         await controller.enter(
             page,
@@ -406,6 +422,56 @@ async def test_ticket_controller_succeeds_once_and_keeps_page_route_guard(
     )
     assert retry_result == "blocked"
     assert len(downstream) == 1
+
+
+@pytest.mark.parametrize(
+    "viewer_url",
+    [
+        f"{BASE}/manga/{WORK_ID}",
+        f"{BASE}/manga/viewer/{CHAPTER_ID}?ticket=true&unexpected=1",
+        f"{BASE}/manga/viewer/{CHAPTER_ID}?unexpected=1",
+        f"{BASE}/manga/viewer/{int(CHAPTER_ID) + 1}?ticket=true",
+        f"{BASE}/manga/viewer/{CHAPTER_ID}#fragment",
+    ],
+    ids=["work_page", "extra_ticket_query", "other_query", "wrong_chapter", "fragment"],
+)
+async def test_ticket_controller_rejects_unbound_viewer_route_and_preserves_first_reason(
+    browser_page, browser_context, viewer_url: str
+) -> None:
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=_request_body(),
+        downstream=downstream,
+        viewer_url=viewer_url,
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+
+    with pytest.raises(UnknownPageStateError, match="result is unknown"):
+        await controller.enter(
+            page,
+            chapter_label=CHAPTER_LABEL,
+            native_state=_pre_state(),
+            row_access_mode="quota",
+            attempt_reporter=observations.append,
+            grant_reporter=lambda grant: None,
+            click=lambda: page.get_by_text(CTA, exact=True).click(),
+        )
+
+    assert downstream == []
+    assert [row.status for row in observations] == ["attempting", "unknown"]
+    assert observations[-1].reason == "ticket_request_outside_target_operation"
+    assert await _post_ticket_again(
+        page,
+        _request_body(),
+        api_url=f"https://{API_HOST}{API_PATH}?unexpected=1",
+    ) == "blocked"
+    assert downstream == []
+    assert observations[-1].reason == "ticket_request_outside_target_operation"
 
 
 async def test_paid_point_viewer_request_is_aborted_before_network_send(

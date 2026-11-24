@@ -13,7 +13,9 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     decode_viewer_request,
     decode_viewer_response,
     is_canonical_viewer_api_request,
+    is_canonical_viewer_url,
     is_exact_ticket_request,
+    is_target_viewer_url,
     is_ticket_viewer_url,
     is_zero_cost_direct_request,
     parse_rental_expiry,
@@ -124,6 +126,34 @@ def test_ticket_viewer_url_requires_only_exact_ticket_query() -> None:
         "https://comic-fuz.com.evil.example/manga/viewer/76630?ticket=true",
     ):
         assert not is_ticket_viewer_url(url, chapter_id="76630")
+
+
+def test_target_viewer_url_accepts_only_canonical_or_exact_ticket_route() -> None:
+    canonical = "https://comic-fuz.com/manga/viewer/76630"
+    ticket = f"{canonical}?ticket=true"
+    assert is_canonical_viewer_url(canonical, chapter_id="76630")
+    assert is_target_viewer_url(canonical, chapter_id="76630")
+    assert not is_canonical_viewer_url(ticket, chapter_id="76630")
+    assert is_ticket_viewer_url(ticket, chapter_id="76630")
+    assert is_target_viewer_url(ticket, chapter_id="76630")
+
+    for url in (
+        "https://comic-fuz.com/manga/3667",
+        "https://comic-fuz.com/manga/viewer/76631",
+        "https://comic-fuz.com/manga/viewer/76631?ticket=true",
+        f"{canonical}?other=1",
+        f"{ticket}&other=1",
+        f"{ticket}&ticket=true",
+        f"{canonical}?",
+        f"{canonical}#",
+        f"{ticket}#section",
+        "https://comic-fuz.com:443/manga/viewer/76630",
+        "https://comic-fuz.com:9443/manga/viewer/76630?ticket=true",
+        "http://comic-fuz.com/manga/viewer/76630",
+        "https://user@comic-fuz.com/manga/viewer/76630",
+        "https://comic-fuz.com.evil.example/manga/viewer/76630",
+    ):
+        assert not is_target_viewer_url(url, chapter_id="76630")
 
 
 @pytest.mark.parametrize(

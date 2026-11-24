@@ -410,7 +410,31 @@ def parse_rental_expiry(value: object) -> datetime | None:
     return parsed
 
 
+def is_canonical_viewer_url(url: str, *, chapter_id: str) -> bool:
+    """Accept only the exact target viewer path without query or fragment."""
+
+    try:
+        parsed = urlparse(url)
+        return bool(
+            parsed.scheme.lower() == "https"
+            and parsed.hostname == "comic-fuz.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.path == f"/manga/viewer/{chapter_id}"
+            and not parsed.query
+            and not parsed.fragment
+            and not parsed.params
+            and "?" not in url
+            and "#" not in url
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def is_ticket_viewer_url(url: str, *, chapter_id: str) -> bool:
+    """Accept only the exact target viewer path with its one ticket query."""
+
     try:
         parsed = urlparse(url)
         return bool(
@@ -424,9 +448,18 @@ def is_ticket_viewer_url(url: str, *, chapter_id: str) -> bool:
             == [("ticket", "true")]
             and not parsed.fragment
             and not parsed.params
+            and "#" not in url
         )
-    except ValueError:
+    except (AttributeError, TypeError, ValueError):
         return False
+
+
+def is_target_viewer_url(url: str, *, chapter_id: str) -> bool:
+    """Accept the target's exact canonical route or exact ticket query route."""
+
+    return is_canonical_viewer_url(url, chapter_id=chapter_id) or is_ticket_viewer_url(
+        url, chapter_id=chapter_id
+    )
 
 
 async def read_native_ticket_snapshot(
@@ -453,14 +486,12 @@ async def read_native_ticket_snapshot(
             or (query and query != [("position", "thumbnail")])
         ):
             raise UnknownPageStateError("ComicFUZ ticket snapshot is outside the target work page")
-    if page_mode == "viewer":
-        canonical_viewer = f"https://comic-fuz.com/manga/viewer/{chapter_id}"
-        if page.url != canonical_viewer and not is_ticket_viewer_url(
-            page.url, chapter_id=chapter_id
-        ):
-            raise UnknownPageStateError(
-                "ComicFUZ ticket snapshot is outside the target viewer route"
-            )
+    if page_mode == "viewer" and not is_target_viewer_url(
+        page.url, chapter_id=chapter_id
+    ):
+        raise UnknownPageStateError(
+            "ComicFUZ ticket snapshot is outside the target viewer route"
+        )
 
     value = await page.evaluate(
         r"""({workId, chapterId, pageMode, ticketAvailableLabels, recoveryLabels,
@@ -1354,9 +1385,10 @@ class ComicFuzTicketEntry:
 
         def fail_route(reason: str) -> None:
             nonlocal route_failure
-            route_failure = reason
+            if route_failure is None:
+                route_failure = reason
             if operation_active and not response_future.done():
-                response_future.set_exception(UnknownPageStateError(reason))
+                response_future.set_exception(UnknownPageStateError(route_failure))
 
         async def route_viewer_api(route) -> None:
             nonlocal api_requests, consuming_requests, expected_request
@@ -1394,8 +1426,8 @@ class ComicFuzTicketEntry:
                 return
             if (
                 not is_main_frame
-                or not is_ticket_viewer_url(page_url, chapter_id=self.chapter_id)
-                or not is_ticket_viewer_url(frame_url, chapter_id=self.chapter_id)
+                or not is_target_viewer_url(page_url, chapter_id=self.chapter_id)
+                or not is_target_viewer_url(frame_url, chapter_id=self.chapter_id)
                 or click_started_at is None
                 or self._now() < click_started_at
             ):
@@ -1526,7 +1558,7 @@ class ComicFuzTicketEntry:
             ) as exc:
                 await self._mark_unknown(
                     attempt_reporter,
-                    "ticket_request_or_response_missing",
+                    route_failure or "ticket_request_or_response_missing",
                     cause=exc,
                 )
             if (
@@ -1535,7 +1567,10 @@ class ComicFuzTicketEntry:
                 or request_started_at is None
                 or route_failure is not None
             ):
-                await self._mark_unknown(attempt_reporter, "ticket_api_response_unconfirmed")
+                await self._mark_unknown(
+                    attempt_reporter,
+                    route_failure or "ticket_api_response_unconfirmed",
+                )
             try:
                 remaining_body_budget = min(
                     RESPONSE_BODY_TIMEOUT_MS / 1000,
@@ -1618,7 +1653,7 @@ class ComicFuzTicketEntry:
             )
             try:
                 await page.wait_for_url(
-                    lambda url: is_ticket_viewer_url(str(url), chapter_id=self.chapter_id),
+                    lambda url: is_target_viewer_url(str(url), chapter_id=self.chapter_id),
                     timeout=ACTION_TIMEOUT_MS,
                     wait_until="domcontentloaded",
                 )
@@ -1703,7 +1738,7 @@ class ComicFuzTicketEntry:
             if route_failure is not None:
                 await self._mark_unknown(
                     attempt_reporter,
-                    "additional_or_malformed_viewer_request_blocked",
+                    route_failure,
                 )
 
             self.consumption = AccessConsumption(
@@ -1732,7 +1767,8 @@ class ComicFuzTicketEntry:
                             resource_kind="work_ticket",
                             status="unknown",
                             observed_at=self._now(),
-                            reason="ticket_action_interrupted_or_proof_incomplete",
+                            reason=route_failure
+                            or "ticket_action_interrupted_or_proof_incomplete",
                         )
                     )
                 except Exception:  # noqa: BLE001, S110 - keep the original post-latch failure

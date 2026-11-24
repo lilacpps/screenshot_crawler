@@ -67,7 +67,27 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
-## Work Ticket current status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress)
+## Work Ticket current status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress; run4 outcome unknown)
+
+Latest Phase 04 accounting: Work3152 CrawlRun 4 has an unknown outcome and counts as one potential ticket use. One `useTicket=true` / zero-point request was observed, but no matched response status or positive native consumption proof was saved. Preserve the run and do not retry or alter its Catalog history. Work3667 remains quarantined. A later free-only Work3152 probe observed `40956` navigate from the work listing to its canonical viewer route before one false/zero-point API request; its response status was not captured. A separate non-consuming probe of quota target `46873` opened the exact Dialog after one row selection. Its visible CTA anchor href classified as the Work page without a ticket query; no React `href`/`as` props were found on its fiber ancestors. A bounded public bundle excerpt shows a generic chapter ticket branch but does not bind it to the modal CTA, so actual CTA navigation and post-click request order remain unverified. No CTA was clicked. These observations do not resolve run4. Current run details and sanitized artifacts are in the runbook progress ledger.
+
+The current synthetic route contract accepts only the exact canonical target
+viewer path or the exact same path with the sole query `ticket=true`. It rejects
+Work paths, wrong chapters, any other/extra query, empty query or fragment
+delimiters, explicit ports, credentials, and alternate schemes. The controller
+precheck, final navigation wait, native viewer snapshot, and adapter reader
+identity share this predicate. The first fixed route-failure reason is retained
+if a later route error occurs. Normal Batch and grant-only synthetic E2E cover
+both URL forms; the canonical positive branch performs a hard document
+navigation and makes one viewer API request from the new document. The live
+modal CTA was not clicked, so this verifies implementation behavior only, not
+the real CTA route or ticket response. These tests caused no additional live
+action; run4 remains unknown/potential use 1. The focused URL unit group passed
+26 cases, the ticket-controller browser group passed 63, and the normal/grant-
+only adapter E2E selection passed 4 (103 deselected, 0 skipped). Scoped Ruff,
+`py_compile`, and `git diff --check` passed. Independent review passed 39
+selected synthetic cases in total (including five hard-navigation/Work-replan
+cases), 0 skipped, BLOCKING=0; the affected Adapter Unit selection passed 9.
 
 Discovery recognizes an exact visible row-local `無料` marker as `free`, a
 single visible price slot containing the observed public gold/silver icon alt
@@ -133,8 +153,7 @@ and the event is not classified as a consuming request. The post-run Catalog has
 no Work 3152 quota start, grant expiry, resource state, or Artifact; the Item
 remains pending and the previous runs are unchanged. The separate non-consuming
 probe observed the exact native available state and modal without clicking the
-CTA. No further same-work or next-Work live action is authorized until a new
-Lead instruction. Details and sanitized artifacts are in the Phase 04 ledger.
+CTA. That sentence described the earlier checkpoint; later Lead-authorized non-consuming probes and the current stop state are recorded below and in the Phase 04 ledger.
 
 Current Phase 04 modal scope is based on the observed visible
 `div[class*="Dialog_modal__"]` root. The target title is a unique exact
@@ -245,9 +264,19 @@ DOMContentLoaded and one visible container with 25 headings 1.2 seconds later.
 The adapter now has a bounded presence wait before its unchanged strict
 snapshot. The attempt consumed zero tickets; sanitized metrics and diagnostic
 artifact paths are documented in `runbooks/comicfuz-work-ticket/PROGRESS.md`.
-No same-work retry or additional live action is authorized by this checkpoint;
-wait for Lead instruction. Full suite history and Phase 04 live-audit
-boundaries are tracked in that progress file.
+This described an earlier checkpoint. Later free-only observations and the current ticket stop state are recorded above and in the Phase 04 progress file. Full suite history and live-audit boundaries remain in that progress file.
+
+
+### Phase 04 non-consuming sequence evidence (2026-11-24)
+
+- Run4's exact allowlisted reason is `ticket_request_or_response_missing`. Its single decoded target request used `useTicket=true` with both point fields zero; the response status was not observed. The metrics API status=200 record is not attributed to that request. Treat this as unknown/potential consumption 1; DB absence of a grant/resource row is not a no-consumption proof. Do not retry the quota target or rewrite the run.
+- Current Work3152 availability/rental state was read on a separate non-consuming Page. Availability remained true with the recognized charge presentation; rental was the known inherited empty default. This current snapshot does not negate a possible earlier consumption.
+- A free-only probe on Work3152 used one canonical Work navigation and the nine Catalog-known free sources as the full candidate set. The normal bootstrap was decoded as false/zero cost with `chapterId` omitted and `chapterArgument` present, on the Work main frame, HTTP 200. Only selected source `3152:40956` was row-clicked after exact live `free` classification, native/runtime identity/order join, and known runtime point type/amount defaults of zero. Its UI `isReading` prop was false; source `3152:40905` was the one candidate with `isReading=true`. The UI click navigated to the canonical viewer route before one main-frame `useTicket=false`, point-zero request. No Dialog appeared; no charge CTA or other row was clicked. The viewer request's response status was not captured, so the free-path observation proves route order but not response success.
+- For `3667:76561`, an earlier over-broad diagnostic guard aborted two unrecognized Work-page bootstrap requests before hydration and no row was selected. Its readiness failure may have resulted from the diagnostic abort. A follow-up Work3152 free probe passed the ordinary zero-cost bootstrap before installing a strict zero-envelope guard after free proof.
+- A diagnostic-only envelope parser passed 3 synthetic acceptance and 11 rejection cases. Production ticket decoding remains unchanged and strict. It retains `chapterId`/device omission as unknown and never treats `chapterArgument` as chapter or resource authority.
+- A quota-row route probe used one Work3152 navigation and one `46873` row selection. Native state matched strict quota preconditions. The unique React chapter prop exposed `onSelect`, while `isReading` was absent; it was not interpreted as false. The user-authorized non-consuming row selection opened an exact Dialog with one enabled charge CTA, one direct price `1`, matching target title and only known controls. The page remained on the Work route; the guarded interval forwarded and blocked zero viewer API requests. CTA and other-control clicks were zero.
+- The visible modal CTA anchor classified as the Work route with no `ticket`, `free`, `paid`, or `chapterId` query; no `href`/`as` props appeared among its React fiber ancestors. Public `5061` and viewer-route assets were fetched without credentials or referrer and stored only as SHA-256, size, and bounded sanitized excerpts. The generic `chapter` ticket branch excerpt is not bound to the modal CTA. The exact CTA navigation/request order remains unknown. No raw URL/query, headers, request/response body, image body, or Catalog data was saved. Sanitized artifact: `.tmp/comicfuz-work-ticket/evidence/phase04-ticket-link-route-3152-46873.json`; metadata scan found none of the prohibited raw fields.
+- Evidence is sanitized under `.tmp/comicfuz-work-ticket/evidence/phase04-free-transition-3667-76561.json`, `.tmp/comicfuz-work-ticket/evidence/phase04-3152-and-3667-nonconsume-diagnostics.json`, and `.tmp/comicfuz-work-ticket/evidence/phase04-ticket-link-route-3152-46873.json`. These probes did not read/save image bodies, invoke paid/premium/ticket controls, write Catalog state, or resolve the run4 outcome. No further ticket or site action is authorized without a new Lead instruction.
 
 ## Login-independent public-free access (2026-11-22)
 

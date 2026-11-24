@@ -1,6 +1,28 @@
 # ComicFUZ free adapter
 
-## Work Ticket status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress)
+## Work Ticket status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress; run4 outcome unknown)
+
+The latest isolated Work3152 quota run (CrawlRun 4) observed a decoded `useTicket=true` / zero-point request without a matched response. Its consumption result is unknown and must be counted as one potential ticket use; preserve its history and do not retry or repair it from the current charge badge. Work3667 remains quarantined. A separate free-only Work3152 row selection reached the canonical viewer route, followed by one `useTicket=false` / zero-point request; its response status was not observed. A later non-consuming selection of quota target `46873` opened the exact charge Dialog, but the visible CTA anchor href classified as the Work route without query, and no React `href`/`as` props were found. Public static excerpts show a generic chapter ticket branch but do not bind it to the modal CTA; actual CTA navigation and request ordering remain unverified. The CTA was not clicked. No further quota/ticket action is authorized by this checkpoint.
+
+Current synthetic URL contract: the selected viewer target accepts either the
+exact canonical `https://comic-fuz.com/manga/viewer/<chapterId>` URL or that
+same exact path with only `ticket=true`. Work URLs, a different chapter,
+additional/empty query or fragment delimiters, credentials, explicit ports,
+alternate schemes, and other query values fail closed. The request precheck,
+final navigation wait, native viewer snapshot, and adapter reader identity use
+the same predicate. A route failure retains its first fixed reason token even
+if a later request also fails. Canonical and ticket-query paths pass synthetic
+normal Batch/grant-only tests; at least one canonical path uses a hard document
+navigation and issues the API once from the new document. This is synthetic
+verification, not evidence of the live modal CTA's navigation or of a real
+ticket response. The focused URL unit group passed 26 cases, the controller
+browser group passed 63, and the normal/grant-only adapter E2E selection passed
+4 (103 deselected, 0 skipped). Scoped Ruff, `py_compile`, and
+`git diff --check` passed. Independent review passed 39 selected synthetic
+cases in total, including five hard-navigation/Work-replan cases (0 skipped,
+BLOCKING=0); the affected Adapter Unit selection passed 9. Run4 remains
+unknown/potential use 1; no new CLI or live action was performed for this
+correction.
 
 Discovery now classifies visible row-local `無料` as `free`, recognized visible
 S/G coin/medal marks as `paid`, and a fully hydrated row with a confirmed blank
@@ -92,9 +114,7 @@ passed, 0 skipped), BLOCKING=0; the controller browser file had 53 passed and
 the Batch E2E selection had 3 passed. The current post-correction results are
 57 controller browser cases, 64 affected Unit cases, 3 adapter E2E cases, and
 independent review of 17 modal plus 3 adapter cases (20 passed, 0 skipped).
-Scoped Ruff, `git diff --check`, `py_compile`, and `compileall` passed. No real
-ticket has been used. Do not run another live action without a separate Lead
-instruction. Actual post-consumption response values and grant expiry remain
+Scoped Ruff, `git diff --check`, `py_compile`, and `compileall` passed. No ticket consumption is confirmed; run4 remains unknown/potential 1. Do not run another live action without a separate Lead instruction. Actual post-consumption response values and grant expiry remain
 unverified. See the progress ledger for the sanitized request-observer
 artifact and exact run evidence.
 
