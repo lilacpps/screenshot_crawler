@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import zipfile
 from dataclasses import replace
@@ -706,12 +707,18 @@ def _ticket_viewer_html(
     chapter_label: str = EPISODE_TITLE,
     relative_rental: bool = False,
     empty_ssr: bool = False,
+    body_count: int = 2,
+    no_extra_tail: bool = False,
 ) -> str:
     html = _viewer_html(
         _jpeg_bytes(),
         empty_ssr=empty_ssr,
         bind_title_fiber=empty_ssr,
         latest_end="valid",
+        first_page_blank=True,
+        first_mode_body_page_count=body_count,
+        true_mode_body_page_count=body_count,
+        no_extra_tail=no_extra_tail,
         native_title=chapter_label,
         viewer_title=chapter_label,
     )
@@ -935,16 +942,30 @@ async def _comicfuz_batch_fixture(
     return catalog, discovery, target, plan, candidate, executor, seen, watchlist
 
 
-@pytest.mark.parametrize("grant_only", [False, True], ids=["normal_batch", "grant_only"])
 @pytest.mark.parametrize(
-    "relative_rental",
-    [False, True],
-    ids=["absolute_expiry", "relative_current_entry"],
-)
-@pytest.mark.parametrize(
-    "ticket_query",
-    [False, True],
-    ids=["canonical_viewer_route", "ticket_query_viewer_route"],
+    ("grant_only", "relative_rental", "ticket_query", "body_count", "no_extra_tail"),
+    [
+        (False, False, False, 2, False),
+        (False, False, True, 2, False),
+        (False, True, False, 2, False),
+        (False, True, True, 2, False),
+        (True, False, False, 2, False),
+        (True, False, True, 2, False),
+        (True, True, False, 2, False),
+        (True, True, True, 2, False),
+        (False, True, False, 11, True),
+    ],
+    ids=[
+        "normal_absolute_canonical",
+        "normal_absolute_ticket_query",
+        "normal_relative_canonical",
+        "normal_relative_ticket_query",
+        "grant_only_absolute_canonical",
+        "grant_only_absolute_ticket_query",
+        "grant_only_relative_canonical",
+        "grant_only_relative_ticket_query",
+        "normal_relative_empty_ssr_no_extra_11_body_blank_first",
+    ],
 )
 async def test_comicfuz_work_ticket_batch_entry_and_capture(
     browser_page,
@@ -954,6 +975,8 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
     grant_only: bool,
     relative_rental: bool,
     ticket_query: bool,
+    body_count: int,
+    no_extra_tail: bool,
 ) -> None:
     work_id, chapter_id = "3667", "76630"
     work_url = f"{BASE}/manga/{work_id}"
@@ -974,6 +997,8 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         chapter_label=chapter_label,
         relative_rental=relative_rental,
         empty_ssr=not grant_only and relative_rental,
+        body_count=body_count,
+        no_extra_tail=no_extra_tail,
     )
     listing_html = _work_ticket_listing_html(
         work_id=work_id,
@@ -1106,16 +1131,44 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
             candidate,
             output_root=tmp_path / "normal-output",
             library_dir=tmp_path / "library",
-            max_pages=5,
+            max_pages=max(5, body_count),
             now=now,
         )
         run = catalog.get_crawl_run(result.crawl_run_id)
-        assert result.stop_reason == "end" and result.page_count == 2
-        assert run.status == "succeeded" and run.page_count == 2
+        assert result.stop_reason == "end" and result.page_count == body_count
+        assert run.status == "succeeded" and run.page_count == body_count
         assert "access_consumption_confirmed:" in (run.stop_reason or "")
         assert catalog.get_item(candidate.item_id).status == "completed"
         artifacts = catalog.list_artifacts(item_id=candidate.item_id)
         assert len(artifacts) == 1 and artifacts[0].format == "zip"
+        with zipfile.ZipFile(result.archive_path) as archive:
+            names = archive.namelist()
+            assert len(names) == body_count
+            if no_extra_tail:
+                assert names == [f"page-{number:04d}.png" for number in range(1, 12)]
+                assert archive.testzip() is None
+                for name in names:
+                    payload = archive.read(name)
+                    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+                    # The fixture is a blob URL without a first-party response body;
+                    # ComicFUZ's validated canvas fallback emits PNG captures.
+                    with Image.open(BytesIO(payload)) as image:
+                        assert image.format == "PNG" and image.size == (96, 144)
+                        image.load()
+                assert adapter._viewer_pages is not None
+                assert len(adapter._viewer_pages) == body_count + 2
+                assert [page["role"] for page in adapter._viewer_pages] == [
+                    *(["image"] * body_count), "google_ads", "last_page",
+                ]
+                assert adapter._body_page_indices == tuple(range(body_count))
+                assert adapter._extra_page_index is None
+                assert adapter._is_first_page_blank is True
+                assert adapter._captured_indices == list(range(body_count))
+                assert adapter._last_captured_group == (9, 10)
+                assert adapter._ended is True
+                archive_digest = hashlib.sha256(result.archive_path.read_bytes()).hexdigest()
+                assert artifacts[0].sha256 == archive_digest
+                assert artifacts[0].byte_size == result.archive_path.stat().st_size
         assert adapter.get_access_consumption().consumed is True
         if relative_rental:
             assert adapter._ticket_reader_binding_matches(browser_page)
