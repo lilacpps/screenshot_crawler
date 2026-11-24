@@ -49,6 +49,10 @@ TICKET_RECOVERY = "0\u6642\u306b\u56de\u5fa9!"
 TICKET_RECOVERY_UI_FALLBACK = "0\u6642\u306b\u56de\u5fa9\uff01"
 TICKET_CTA = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
 TICKET_APP = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
+RENTAL_ROW_ROOT_CLASSES = (
+    "Chapter_chapter__wJPBe",
+    "Chapter_chapter__alreadyViewed__BYLMn",
+)
 EPISODE_TITLE = "第31話"
 
 
@@ -301,6 +305,8 @@ def _relative_rental_listing_html(
     native_point_amount: int | str | None = 30,
     row_runtime_same_chapter: bool = True,
     row_runtime_same_point: bool = True,
+    row_root_class_tokens: tuple[str, ...] = RENTAL_ROW_ROOT_CLASSES,
+    false_descendant: bool = False,
 ) -> str:
     native_point = (
         {} if native_point_amount is None else {"amount": native_point_amount}
@@ -321,15 +327,18 @@ def _relative_rental_listing_html(
     )
     charge_image = "charged.svg" if ticket_available else "charge.svg"
     charge_label = TICKET_AVAILABLE if ticket_available else TICKET_RECOVERY
+    row_root_classes = " ".join(row_root_class_tokens)
+    false_descendant_markup = '<span class="false"></span>' if false_descendant else ""
     return f'''<!doctype html><html><head><title>Selected ComicFUZ Work</title>
       <link rel="canonical" href="{BASE}/manga/{work_id}">
       <script id="__NEXT_DATA__" type="application/json">{json.dumps(data, ensure_ascii=False)}</script>
       </head><body><div class="title_detail_chapters__list__fixture">
-        <div class="Chapter_chapter__wJPBe Chapter_chapter__alreadyViewed__BYLMn">
+        <div class="{row_root_classes}">
           <div class="Chapter_chapter__detail__fixture">
             <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
             <p class="Chapter_chapter__price_free__fixture">免費_PLACEHOLDER</p>
             <p class="Chapter_chapter__rentalPeriod__fixture">{rental_value}</p>
+            {false_descendant_markup}
           </div>
         </div>
       </div>
@@ -1375,17 +1384,38 @@ async def test_comicfuz_relative_rental_row_rejects_hidden_ancestor(browser_page
 
 
 @pytest.mark.parametrize(
-    ("native_amount", "row_same_chapter", "row_same_point", "expected_state"),
+    (
+        "native_amount",
+        "row_same_chapter",
+        "row_same_point",
+        "row_root_class_tokens",
+        "false_descendant",
+        "expected_state",
+    ),
     [
-        (30, True, True, None),
-        (30, False, True, "listing_runtime_chapter_reference_mismatch"),
-        (30, False, False, "listing_runtime_chapter_reference_mismatch"),
-        ("30", True, True, "listing_runtime_point_amount_mismatch"),
-        (-1, True, True, "listing_runtime_point_amount_mismatch"),
-        (None, True, True, "listing_runtime_point_amount_mismatch"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES, False, None),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("false",), False, None),
+        (30, True, True, (RENTAL_ROW_ROOT_CLASSES[0],), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("true",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("null",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("undefined",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("mystery",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES, True, "rental_listing_row_not_exact"),
+        (30, False, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_chapter_reference_mismatch"),
+        (30, False, False, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_chapter_reference_mismatch"),
+        ("30", True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
+        (-1, True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
+        (None, True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
     ],
     ids=[
         "three_layer_ssr30_runtime_default_zero",
+        "rental_root_cosmetic_false_token",
+        "rental_root_missing_mandatory_token",
+        "rental_root_extra_true_token",
+        "rental_root_extra_null_token",
+        "rental_root_extra_undefined_token",
+        "rental_root_extra_unknown_token",
+        "rental_descendant_false_token",
         "row_chapter_object_drift",
         "row_chapter_and_point_object_drift",
         "ssr_amount_string",
@@ -1398,6 +1428,8 @@ async def test_comicfuz_rental_listing_requires_runtime_refs_and_valid_ssr_amoun
     native_amount: int | str | None,
     row_same_chapter: bool,
     row_same_point: bool,
+    row_root_class_tokens: tuple[str, ...],
+    false_descendant: bool,
     expected_state: str | None,
 ) -> None:
     from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
@@ -1414,6 +1446,8 @@ async def test_comicfuz_rental_listing_requires_runtime_refs_and_valid_ssr_amoun
         native_point_amount=native_amount,
         row_runtime_same_chapter=row_same_chapter,
         row_runtime_same_point=row_same_point,
+        row_root_class_tokens=row_root_class_tokens,
+        false_descendant=false_descendant,
     )
 
     async def site_route(route) -> None:
@@ -1508,6 +1542,7 @@ async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
         chapter_id=chapter_id,
         chapter_label=label,
         rental_value=rental,
+        row_root_class_tokens=RENTAL_ROW_ROOT_CLASSES + ("false",),
     )
     current_listing = [initial_quota_listing]
     work_visits: list[str] = []

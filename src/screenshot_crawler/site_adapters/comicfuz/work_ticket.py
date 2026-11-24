@@ -38,6 +38,22 @@ TICKET_CANCEL_LABEL = "\u30ad\u30e3\u30f3\u30bb\u30eb"
 TICKET_APP_LABEL = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
 TICKET_COMMENTS_LABEL = "\u30b3\u30e1\u30f3\u30c8\u4e00\u89a7\u3078"
 TICKET_CHARGE_ALT = "\u30c1\u30e3\u30fc\u30b8"
+_RENTAL_ROW_ROOT_CLASS_TOKENS = frozenset({
+    "Chapter_chapter__wJPBe",
+    "Chapter_chapter__alreadyViewed__BYLMn",
+})
+_RENTAL_ROW_COSMETIC_ROOT_TOKEN = "false"
+
+
+def _has_exact_rental_row_root_class_tokens(value: object) -> bool:
+    if not isinstance(value, list) or any(type(token) is not str for token in value):
+        return False
+    tokens = set(value)
+    if len(tokens) != len(value):
+        return False
+    return tokens == _RENTAL_ROW_ROOT_CLASS_TOKENS or tokens == (
+        _RENTAL_ROW_ROOT_CLASS_TOKENS | {_RENTAL_ROW_COSMETIC_ROOT_TOKEN}
+    )
 
 
 class ComicFuzTicketNotAttemptedError(AccessResourceUnavailableError):
@@ -554,7 +570,8 @@ async def read_native_ticket_snapshot(
 
     value = await page.evaluate(
         r"""({workId, chapterId, pageMode, ticketAvailableLabels, recoveryLabels,
-            availableFallback, recoveryFallback, chargeAlt}) => {
+            availableFallback, recoveryFallback, chargeAlt, rentalRootClassTokens,
+            rentalRootCosmeticToken}) => {
           const fiberOf = element => {
             const key = Object.keys(element || {}).find(name => name.startsWith('__reactFiber$'));
             return key ? element[key] : null;
@@ -785,9 +802,15 @@ async def read_native_ticket_snapshot(
             if (pageMode === 'rental_listing') {
               const row = heading?.parentElement?.parentElement || null;
               const rowTokens = row ? [...row.classList] : [];
-              const exactRootTokens = new Set([
-                'Chapter_chapter__wJPBe', 'Chapter_chapter__alreadyViewed__BYLMn'
-              ]);
+              const mandatoryRootTokens = new Set(rentalRootClassTokens);
+              const hasExactRootTokens = tokens => {
+                const tokenSet = new Set(tokens);
+                if (tokenSet.size !== tokens.length
+                    || ![...mandatoryRootTokens].every(token => tokenSet.has(token))) return false;
+                return tokenSet.size === mandatoryRootTokens.size
+                  || (tokenSet.size === mandatoryRootTokens.size + 1
+                    && tokenSet.has(rentalRootCosmeticToken));
+              };
               const visibleWithin = element => !!row && row.contains(element) && visible(element);
               const freeNodes = row ? [...row.querySelectorAll('p[class*="Chapter_chapter__price_free__"]')] : [];
               const visibleFree = freeNodes.filter(node => visibleWithin(node));
@@ -829,8 +852,8 @@ async def read_native_ticket_snapshot(
                     || getComputedStyle(node, '::before').backgroundImage !== 'none'
                     || getComputedStyle(node, '::after').backgroundImage !== 'none') return true;
                 const tokens = [...node.classList];
-                if (node === row) return tokens.length !== exactRootTokens.size
-                  || tokens.some(token => !exactRootTokens.has(token));
+                if (node === row) return !hasExactRootTokens(tokens);
+                if (tokens.includes(rentalRootCosmeticToken)) return true;
                 const chapterTokens = tokens.filter(token => token.startsWith('Chapter_chapter__'));
                 if (chapterTokens.some(token => !knownClass(token))) return true;
                 if (node.tagName === 'IMG') {
@@ -853,8 +876,7 @@ async def read_native_ticket_snapshot(
                 return true;
               }).length : 1;
               rentalRowValidated = !!row
-                && rowTokens.length === exactRootTokens.size
-                && rowTokens.every(token => exactRootTokens.has(token))
+                && hasExactRootTokens(rowTokens)
                 && freeNodes.length === 1 && visibleFree.length === 1
                 && normalizeLabel(visibleFree[0].innerText) === '無料'
                 && rentalNodes.length === 1 && visibleRental.length === 1
@@ -1075,7 +1097,9 @@ async def read_native_ticket_snapshot(
          "recoveryLabels": sorted(TICKET_RECOVERY_LABELS),
          "availableFallback": TICKET_AVAILABLE_UI_FALLBACK,
          "recoveryFallback": TICKET_RECOVERY_UI_FALLBACK,
-         "chargeAlt": TICKET_CHARGE_ALT},
+         "chargeAlt": TICKET_CHARGE_ALT,
+         "rentalRootClassTokens": sorted(_RENTAL_ROW_ROOT_CLASS_TOKENS),
+         "rentalRootCosmeticToken": _RENTAL_ROW_COSMETIC_ROOT_TOKEN},
     )
     if not isinstance(value, Mapping) or value.get("state") != "ok":
         state = value.get("state") if isinstance(value, Mapping) else "malformed_projection"
@@ -1199,12 +1223,9 @@ async def read_native_ticket_snapshot(
             page_mode == "rental_listing"
             and (
                 value.get("rentalRowValidated") is not True
-                or not isinstance(value.get("rowRootClassTokens"), list)
-                or set(value.get("rowRootClassTokens", [])) != {
-                    "Chapter_chapter__wJPBe",
-                    "Chapter_chapter__alreadyViewed__BYLMn",
-                }
-                or len(value.get("rowRootClassTokens", [])) != 2
+                or not _has_exact_rental_row_root_class_tokens(
+                    value.get("rowRootClassTokens")
+                )
                 or type(point_amount) is not int
                 or point_amount != 0
                 or (point_amount_present is not True and not (
