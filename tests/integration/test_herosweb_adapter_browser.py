@@ -686,6 +686,7 @@ def _run_config(
 
 def _make_herosweb_batch(
     tmp_path: Path,
+    *, rented: bool = False,
 ) -> tuple[CatalogService, BatchExecutor, object]:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
@@ -700,7 +701,8 @@ def _make_herosweb_batch(
             site="herosweb",
             external_id=f"{WORK_A}:{EPISODE_A}",
             discovery_key="herosweb-fixture",
-            access_mode="free",
+            access_mode="quota" if rented else "free",
+            access_granted_until="2099-11-24T12:00:00+09:00" if rented else None,
             available=True,
             display_position=1,
         ),
@@ -1491,7 +1493,9 @@ async def test_herosweb_native_materializer_error_falls_back_without_losing_body
 
 
 @pytest.mark.parametrize(
-    ("body_count", "native_source"), [(10, False), (10, True), (15, False), (15, True)]
+    ("body_count", "native_source", "rented"),
+    [(10, False, False), (10, True, False), (15, False, False), (15, True, False),
+     (10, True, True)],
 )
 async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     browser_page: Page,
@@ -1499,6 +1503,7 @@ async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     monkeypatch: pytest.MonkeyPatch,
     native_source: bool,
     body_count: int,
+    rented: bool,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requests = await _install_live_fixture(
@@ -1517,7 +1522,7 @@ async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     )
     monkeypatch.setattr(adapter_module, "RANGE_PACING_MS", 20)
     monkeypatch.setattr(adapter_module, "MAX_VIEWER_SETTLE_SECONDS", 3)
-    catalog, executor, candidate = _make_herosweb_batch(tmp_path)
+    catalog, executor, candidate = _make_herosweb_batch(tmp_path, rented=rented)
 
     result = await executor.execute_candidate(
         browser_page,
@@ -1543,7 +1548,9 @@ async def test_herosweb_free_direct_batch_completes_through_catalog_and_zip(
     target = catalog.get_source_target(candidate.target_id)
     assert item.status == "completed"
     assert target.locator == EPISODE_URL_A
-    assert (source.quota_started_at, source.access_granted_until) == (None, None)
+    assert (source.quota_started_at, source.access_granted_until) == (
+        None, "2099-11-24T12:00:00+09:00" if rented else None,
+    )
     assert len(catalog.list_artifacts(item_id=candidate.item_id, state="present")) == 1
     assert len(catalog.list_crawl_runs(item_id=candidate.item_id, status="succeeded")) == 1
     with zipfile.ZipFile(result.archive_path) as archive:

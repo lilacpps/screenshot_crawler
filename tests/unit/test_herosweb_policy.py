@@ -65,7 +65,6 @@ def test_policy_allows_only_available_free_as_direct_without_resource_state() ->
 @pytest.mark.parametrize(
     ("access_mode", "reason"),
     [
-        ("quota", "quota_not_supported"),
         ("paid", "paid_not_supported"),
         ("unknown", "unknown"),
         ("owned", "owned_not_supported"),
@@ -74,7 +73,7 @@ def test_policy_allows_only_available_free_as_direct_without_resource_state() ->
         ("future_mode", "unsupported_access_mode"),
     ],
 )
-def test_policy_rejects_every_nonfree_mode_even_with_stock_or_active_grant(
+def test_policy_rejects_unsupported_modes_even_with_stock_or_active_grant(
     access_mode: str, reason: str
 ) -> None:
     source = _source(access_mode)
@@ -95,6 +94,32 @@ def test_policy_rejects_every_nonfree_mode_even_with_stock_or_active_grant(
     assert decision.quota_resource is None
     assert decision.pending_quota is (access_mode == "quota")
     assert (source.quota_started_at, source.access_granted_until) == prior_state
+
+
+@pytest.mark.parametrize(
+    ("grant", "eligible"),
+    [(ACTIVE_GRANT, True), (NOW.isoformat(), False), (None, False),
+     ("2026-11-21T12:00:00+09:00", False), ("2099-11-22T12:00:00", False),
+     ("invalid", False)],
+)
+def test_quota_requires_future_aware_grant_and_never_consumes_tickets(grant, eligible):
+    decision = HeroswebSitePolicy().evaluate(
+        _source("quota", access_granted_until=grant), now=NOW, quota_available=100,
+    )
+    assert decision.eligible is eligible
+    assert decision.access_strategy == ("direct" if eligible else None)
+    assert decision.reason == ("active_rental" if eligible else "quota_not_supported")
+    assert decision.pending_quota is (not eligible)
+    assert not decision.consumes_quota
+    assert decision.quota_resource is None
+    assert not HeroswebSitePolicy().evaluate(
+        _source("quota", available=False, access_granted_until=grant),
+        now=NOW, quota_available=100,
+    ).eligible
+    assert not HeroswebSitePolicy().evaluate(
+        _source("quota", access_granted_until=grant),
+        now=NOW.replace(tzinfo=None), quota_available=100,
+    ).eligible
 
 
 def test_policy_rejects_unavailable_free_without_mutating_grants() -> None:

@@ -1,5 +1,32 @@
 # Discovery / Catalog / Batch Design
 
+## HERO'S WEB manually acquired rentals (2026-11-24)
+
+Discovery recognizes the authenticated exact-row `eliRentStat` structure and
+`レンタル中 閲覧期限 D日+H時間` display. It retains `access_mode=quota` and
+records a finite scheduling grant in the existing `access_granted_until`, using
+the scan start plus the displayed duration minus one hour for rounding. The
+observed profiles are 3-day and 15-day rentals; hours must be 0–23 and the
+displayed duration cannot exceed 15 days. A nonpositive conservative duration
+produces no active grant. This is not an exact site expiry or a new debit.
+Known free/quota/paid observations explicitly replace or clear the previous
+grant; unknown observations preserve it. Full and Incremental both refresh
+every validated range and retain existing Item status/history.
+
+The visible authenticated owner may show this rental while the observed
+zero-area hidden public list retains the exact quota-icon pair. Only this
+access difference is accepted, with positive same-document auth and identical
+ordered episode identity/title/date/other metadata. All existing root, style,
+range, stability and navigation checks remain required.
+
+Site Policy admits an available quota Source only while its aware finite grant
+is future, selecting `direct` with no resource consumption. Expired/unproven
+quota remains ineligible. Identity-bound Batch entry still requires the exact
+current episode/Work and actual usable Viewer, with charge/login gates and
+non-GET requests blocked. Manual crawl retains its free-only preflight. No
+automatic ticket use, resource pass, grant-only action or Catalog schema change
+is introduced.
+
 ## Normal Batch single retry (2026-11-22)
 
 Normal CLI/GUI Batch gives an eligible acquisition timeout one fresh-page retry:

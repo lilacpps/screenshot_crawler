@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import ClassVar
@@ -222,7 +223,7 @@ def _page_html(*, base: bool, row_count: int, defer_rows: bool = False) -> str:
 
 
 def _authenticated_page_html(
-    *, base: bool, delay_auth_header_ms: int = 0
+    *, base: bool, delay_auth_header_ms: int = 0, rented: bool = False,
 ) -> str:
     latest = f'<a class="series-sort-link mode-new" href="{BASE}/new">最新話から</a>'
     selected_href = f"{BASE}/1" if base else BASE
@@ -257,10 +258,16 @@ def _authenticated_page_html(
             '</div></div>' + badge + '</a></div>'
         )
     row_html = "".join(rows)
+    rental = (
+        '<div class="series-eplist-item-access"><div>'
+        '<span class="series-eplist-item-access-text" data-e2e="eliRentStat">'
+        'レンタル中<br>閲覧期限<br>2日+23時間</span></div></div>'
+    )
+    owner_html = row_html.replace(quota, rental) if rented else row_html
     canonical = BASE if base else f"{BASE}/1"
     listing = (
         '<div class="series-eplist mode-user mode-has-eps">'
-        f'<div class="series-eplist-default mode-last">{row_html}</div></div>'
+        f'<div class="series-eplist-default mode-last">{owner_html}</div></div>'
         '<div class="series-eplist" style="display:none">'
         f'<div class="series-eplist-default mode-last" style="width:0;height:0;overflow:hidden">'
         f'{row_html}</div></div>'
@@ -685,8 +692,11 @@ async def test_herosweb_discovery_guard_blocks_real_local_redirect_before_target
         await server.wait_closed()
 
 
+@pytest.mark.parametrize("rented", [False, True])
 async def test_herosweb_authenticated_listing_checks_session_and_classifies_observed_access(
     browser_page: Page,
+    tmp_path,
+    rented: bool,
 ) -> None:
     page = browser_page
     paths: list[str] = []
@@ -712,12 +722,12 @@ async def test_herosweb_authenticated_listing_checks_session_and_classifies_obse
         elif path == f"/series/{WORK_ID}":
             await route.fulfill(
                 status=200, headers={"content-type": "text/html"},
-                body=_authenticated_page_html(base=True),
+                body=_authenticated_page_html(base=True, rented=rented),
             )
         elif path == f"/series/{WORK_ID}/1":
             await route.fulfill(
                 status=200, headers={"content-type": "text/html"},
-                body=_authenticated_page_html(base=False, delay_auth_header_ms=600),
+                body=_authenticated_page_html(base=False, delay_auth_header_ms=600, rented=rented),
             )
         else:
             await route.fulfill(status=404, body="unexpected path")
@@ -739,16 +749,42 @@ async def test_herosweb_authenticated_listing_checks_session_and_classifies_obse
         label="Fixture Work",
     )
     try:
+        before = datetime.now(discovery_module.JST)
         records = [
             record async for record in HeroswebDiscoveryAdapter().iter_records(page, target, "full")
         ]
         assert [record.source.access_mode for record in records] == ["paid", "quota", "free"]
         assert [record.source.global_display_position for record in records] == [3, 2, 1]
+        source = records[1].source
+        if rented:
+            assert before + timedelta(hours=70) <= source.access_granted_until
+            assert source.access_granted_until <= datetime.now(discovery_module.JST) + timedelta(hours=70)
+        else:
+            assert source.access_granted_until is None
+        assert source.access_granted_until_observed
         assert paths.count("/api/auth/session") == 2
         assert paths.count(f"/series/{WORK_ID}") == 1
         assert paths.count(f"/series/{WORK_ID}/1") == 1
         assert blocked_posts == ["/api/missions", "/api/missions"]
         assert fixture_posts == []
+
+        # Exercise actual reconciliation: a later complete quota observation
+        # explicitly clears a rental, including on Incremental, preserving Item state.
+        catalog = CatalogService(tmp_path / "rental-catalog.sqlite")
+        service = DiscoveryService(catalog, _herosweb_registry())
+        result = await service.discover(page, target, mode="full")
+        assert result.complete is True
+        saved = catalog.list_sources(site="herosweb")
+        quota_source = next(s for s in saved if s.external_id.endswith("0000000000002"))
+        assert bool(quota_source.access_granted_until) is rented
+        item_id = quota_source.item_id
+        catalog.mark_item_completed(item_id)
+        rented = False
+        await service.discover(page, target, mode="incremental")
+        refreshed = catalog.get_source(quota_source.id)
+        assert refreshed.access_granted_until is None
+        assert refreshed.quota_started_at is None
+        assert catalog.get_item(item_id).status == "completed"
     finally:
         page.remove_listener("request", observe_request)
         await page.unroute("https://heros-web.com/**", fulfill)

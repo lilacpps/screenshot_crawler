@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from datetime import datetime, timedelta
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
@@ -16,6 +18,8 @@ from screenshot_crawler.site_adapters.herosweb.discovery import (
     HeroswebDiscoveryAdapter,
     _classify_access,
     _CurrentDocumentAuth,
+    _records_from_rows,
+    _rental_remaining,
     _validate_snapshot,
     _validate_work_header_snapshot,
     _work_title,
@@ -141,6 +145,69 @@ def _quota_access_children() -> list[dict[str, object]]:
             ),
         )
     ]
+
+
+def _rental_row(label: str = "レンタル中 閲覧期限 2日+23時間") -> dict[str, object]:
+    return {
+        **_snapshot_row(),
+        "accessText": label,
+        "freeLabels": [{"text": label, "modeFree": False}],
+        "accessChildren": [_access_node("DIV", children=(
+            _access_node(
+                "SPAN", classes=("series-eplist-item-access-text",), text=label,
+                data_e2e="eliRentStat", data_attributes=("data-e2e",),
+                children=(_access_node("BR"), _access_node("BR")),
+            ),
+        ))],
+    }
+
+
+@pytest.mark.parametrize(
+    ("label", "hours"),
+    [("レンタル中 閲覧期限 14日+23時間", 358),
+     ("レンタル中 閲覧期限 2日+23時間", 70),
+     ("レンタル中 閲覧期限 0日+1時間", 0),
+     ("レンタル中 閲覧期限 0日+0時間", 0)],
+)
+def test_authenticated_rental_uses_quota_and_finite_conservative_grant(label, hours):
+    raw = _rental_row(label)
+    assert _classify_access(raw, authenticated=False) == "unknown"
+    assert _classify_access(raw, authenticated=True) == "quota"
+    assert _rental_remaining(raw, authenticated=True) == timedelta(hours=hours)
+    observed_at = datetime.fromisoformat("2026-11-24T12:00:00+09:00")
+    row = HeroswebDiscoveryAdapter._parse_row(
+        raw, first_position=61, work_id=WORK_ID, authenticated=True,
+    )
+    source = _records_from_rows(
+        [row], work_id=WORK_ID, work_title="Fixture Work", observed_at=observed_at,
+    )[0].source
+    assert source.access_granted_until == (
+        observed_at + timedelta(hours=hours) if hours else None
+    )
+    assert source.access_granted_until_observed is True
+
+
+@pytest.mark.parametrize("fault", ["marker", "class", "breaks", "extra", "quota", "paid", "hours", "days"])
+def test_rental_rejects_unobserved_or_conflicting_access_tree(fault):
+    raw = deepcopy(_rental_row())
+    label_node = raw["accessChildren"][0]["children"][0]
+    if fault == "marker":
+        label_node["dataE2e"] = "eliMemFreeBadge"
+    elif fault == "class":
+        label_node["classTokens"].append("mode-free")
+    elif fault == "breaks":
+        label_node["children"].pop()
+    elif fault == "extra":
+        raw["accessChildren"].append(_access_node("SPAN"))
+    elif fault == "quota":
+        raw["quotaIcons"] = [{"dataE2e": "eliWfIcon"}]
+    elif fault == "paid":
+        raw["paidParents"] = ["series-eplist-item-access-paid"]
+    else:
+        raw = _rental_row("レンタル中 閲覧期限 2日+24時間" if fault == "hours"
+                          else "レンタル中 閲覧期限 99日+0時間")
+    assert _classify_access(raw, authenticated=True) == "unknown"
+    assert _rental_remaining(raw, authenticated=True) is None
 
 
 def test_herosweb_urls_reject_unsafe_or_ambiguous_inputs() -> None:
@@ -691,10 +758,19 @@ def _authenticated_snapshot(*roots: dict[str, object]) -> dict[str, object]:
     }
 
 
-def test_herosweb_authenticated_root_mirror_requires_exact_current_owner_and_records() -> None:
-    row = _snapshot_row()
+@pytest.mark.parametrize("rented", [False, True])
+def test_herosweb_authenticated_root_mirror_requires_exact_current_owner_and_records(rented) -> None:
+    row = _rental_row() if rented else _snapshot_row()
+    public_row = {
+        **_snapshot_row(), "accessText": "", "freeLabels": [],
+        "accessChildren": _quota_access_children(),
+        "quotaIcons": [
+            {"class": "series-eplist-item-access-icon", "dataE2e": marker}
+            for marker in ("eliWfIcon", "eliIfIcon")
+        ],
+    } if rented else row
     owner = _authenticated_root(width=578, height=2232.6, rows=[row])
-    mirror = _authenticated_root(width=0, height=0, rows=[row], mirror=True)
+    mirror = _authenticated_root(width=0, height=0, rows=[public_row], mirror=True)
     title, rows = _validate_snapshot(
         _authenticated_snapshot(owner, mirror),
         expected_url=f"{BASE}/3",
@@ -704,8 +780,14 @@ def test_herosweb_authenticated_root_mirror_requires_exact_current_owner_and_rec
     )
     assert title == "Fixture Work"
     assert [(item.episode_id, item.global_position, item.access_mode) for item in rows] == [
-        ("0000000000001", 61, "free")
+        ("0000000000001", 61, "quota" if rented else "free")
     ]
+    if rented:
+        with pytest.raises(DiscoveryIncompleteError, match="mirror diverges"):
+            _validate_snapshot(
+                _authenticated_snapshot(owner, mirror), expected_url=f"{BASE}/3",
+                work_id=WORK_ID, first_position=61, authenticated=False,
+            )
 
     duplicate_rendered = _authenticated_root(width=300, height=400, rows=[row], mirror=True)
     with pytest.raises(DiscoveryIncompleteError, match="owner is not unique"):

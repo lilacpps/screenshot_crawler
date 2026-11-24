@@ -1,4 +1,4 @@
-"""Free-only direct Batch selection for HERO'S WEB."""
+"""Free and already-granted direct Batch selection for HERO'S WEB."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from screenshot_crawler.site_policies.base import (
 
 
 class HeroswebSitePolicy(SitePolicy):
-    """Allow only currently available sources classified as directly free."""
+    """Allow free sources and finite active rentals without consuming tickets."""
 
     site = "herosweb"
 
@@ -27,11 +27,19 @@ class HeroswebSitePolicy(SitePolicy):
         now: datetime,
         quota_available: int | None,
     ) -> PolicyDecision:
-        del now, quota_available
+        del quota_available
         if not source.available:
             return PolicyDecision(False, None, "unavailable")
         if source.access_mode == "free":
             return PolicyDecision(True, "direct", "free")
+        if source.access_mode == "quota" and now.tzinfo is not None and now.utcoffset() is not None:
+            try:
+                grant = datetime.fromisoformat(source.access_granted_until or "")
+            except (TypeError, ValueError):
+                grant = None
+            if (grant is not None and grant.tzinfo is not None
+                    and grant.utcoffset() is not None and grant > now):
+                return PolicyDecision(True, "direct", "active_rental")
         reasons = {
             "quota": "quota_not_supported",
             "paid": "paid_not_supported",

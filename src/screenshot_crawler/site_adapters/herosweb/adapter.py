@@ -1239,7 +1239,7 @@ class HeroswebEpisodeRouteGuard:
 
 
 class HeroswebAdapter(SiteAdapter):
-    """Capture only freshly proven, directly free HERO'S WEB episodes."""
+    """Capture free episodes and identity-bound, directly readable Batch targets."""
 
     page_change_timeout_ms = PAGE_CHANGE_TIMEOUT_MS
 
@@ -1375,7 +1375,7 @@ class HeroswebAdapter(SiteAdapter):
         self._work_id = header_work_id
 
         if self._expected_work_id is not None and self._access_strategy == "direct":
-            # Batch already selected a free Source. Verify the current exact
+            # Batch selected a free or active-rental Source. Verify the current exact
             # episode gate and Viewer instead of traversing the Work listing.
             await self._validate_episode_entry(page)
             self._free_proof = {

@@ -55,7 +55,21 @@ Only exact row-scoped evidence is classified:
 
 Ticket/quota, waiting, coin, purchase, login, and rights-acquisition actions
 are not implemented. Listing presence determines `available`; it does not
-invent a grant or expiry.
+invent a grant or expiry from presence alone.
+
+Authenticated `eliRentStat` rows with the observed exact span/two-BR tree and
+`レンタル中 閲覧期限 D日+H時間` display retain `quota` and supply a finite
+grant: scan start + displayed duration - one hour for rounding. The displayed
+duration is bounded to 15 days and hours to 0–23; a nonpositive conservative
+bound supplies no active grant. Known free/quota/paid observations explicitly
+clear or replace the old grant; unknown evidence preserves it. This supports
+manual ticket rentals without performing a ticket action. The grant is a
+conservative scheduling bound, not an exact site expiry.
+
+Only for this positively authenticated rental may the zero-area hidden public
+list retain the exact quota pair while the visible owner shows the rental.
+Ordered identity and all non-access metadata must still match exactly;
+all root/style/stability/navigation checks remain enforced.
 
 The exact expected main-document GET is fetched with redirects and retries
 disabled, then the original non-redirect response is forwarded unchanged for
@@ -211,10 +225,12 @@ Original response bytes remain unproven. See
 `runbooks/herosweb-free/PROGRESS.md` for test results and attempt history.
 ## Direct-only Batch policy (Phase 04)
 
-`HeroswebSitePolicy` selects only `available` sources whose current catalog
-mode is `free`, using the `direct` strategy. Quota, paid, unknown, owned,
-rental, grant and unavailable modes are skipped, including sources with a
-previous grant or positive quota state. It does not expose ticket/resource
+`HeroswebSitePolicy` selects available free sources and quota sources with an
+aware future `access_granted_until`, using `direct` without consumption.
+Expired or unproven quota, paid, unknown, owned, rental, grant and unavailable
+modes are skipped. Actual episode/Work/Viewer and gate checks remain the final
+entry authority; manual crawl retains the fresh free-only preflight.
+It does not expose ticket/resource
 passes, grant-only execution or entitlement mutation. Runtime settings use a
 1500 ms page-turn delay and 5000 ms inter-candidate delay.
 

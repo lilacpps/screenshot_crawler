@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
@@ -44,6 +44,7 @@ RANGE_PATH = re.compile(
 EPISODE_PATH = re.compile(r"^/episodes/(?P<episode_id>[0-9a-f]{13})/?$")
 RANGE_LABEL = re.compile(r"^(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
 POSITIVE_PRICE = re.compile(r"^[1-9][0-9]{0,15}$")
+RENTAL_LABEL = re.compile(r"^レンタル中 閲覧期限 (?P<days>[0-9]{1,2})日\+(?P<hours>[0-9]{1,2})時間$")
 DATE_FORMAT = "%Y/%m/%d"
 
 WORK_SELECTOR = ".series-h"
@@ -90,6 +91,7 @@ class _ListingRow:
     published_at: datetime | None
     access_mode: str
     global_position: int
+    rental_remaining: timedelta | None = None
 
 
 class _CurrentDocumentAuth:
@@ -357,6 +359,8 @@ def _classify_access(raw: dict[str, object], *, authenticated: bool = False) -> 
         return "unknown"
     if _is_quota_badge(raw):
         return "quota"
+    if _rental_remaining(raw, authenticated=authenticated) is not None:
+        return "quota"
     if len(labels) == 1 and not parents and not items:
         label = labels[0]
         label_text = label.get("text") if isinstance(label, dict) else None
@@ -453,6 +457,70 @@ def _has_free_access_tree(raw: dict[str, object], label: str | None) -> bool:
         data_attributes=["data-e2e"],
     )
     return label_children == []
+
+
+def _rental_remaining(raw: dict[str, object], *, authenticated: bool) -> timedelta | None:
+    """Recognize the authenticated rental tree, allowing one hour for rounding."""
+
+    label = raw.get("accessText")
+    if not authenticated or not isinstance(label, str):
+        return None
+    match = RENTAL_LABEL.fullmatch(label)
+    if (
+        match is None
+        or raw.get("accessCount") != 1
+        or raw.get("freeLabels") != [{"text": label, "modeFree": False}]
+        or raw.get("paidParents") != []
+        or raw.get("paidItems") != []
+        or raw.get("quotaIcons") != []
+    ):
+        return None
+    days, hours = int(match["days"]), int(match["hours"])
+    duration = timedelta(days=days, hours=hours)
+    if hours > 23 or duration > timedelta(days=15):
+        return None
+    children = raw.get("accessChildren")
+    if not isinstance(children, list) or len(children) != 1:
+        return None
+    wrapper = _access_node_base(children[0], tag="DIV", class_tokens=set(), text="")
+    if not isinstance(wrapper, list) or len(wrapper) != 1:
+        return None
+    breaks = _access_node_base(
+        wrapper[0], tag="SPAN", class_tokens={"series-eplist-item-access-text"},
+        text=label, data_e2e="eliRentStat", data_attributes=["data-e2e"],
+    )
+    if (
+        not isinstance(breaks, list)
+        or len(breaks) != 2
+        or any(_access_node_base(node, tag="BR", class_tokens=set(), text="") != []
+               for node in breaks)
+    ):
+        return None
+    return max(timedelta(0), duration - timedelta(hours=1))
+
+
+def _matching_mirror_rows(
+    owner: list[dict[str, object]], mirror: list[dict[str, object]], *, authenticated: bool,
+) -> bool:
+    if len(owner) != len(mirror):
+        return False
+    access_fields = {
+        "accessCount", "accessText", "accessChildren", "freeLabels",
+        "paidParents", "paidItems", "quotaIcons",
+    }
+    for current, hidden in zip(owner, mirror, strict=True):
+        if current == hidden:
+            continue
+        # The observed hidden public list retains quota icons for rented rows.
+        # Identity, ordering and all non-access metadata must still match exactly.
+        if (
+            _rental_remaining(current, authenticated=authenticated) is None
+            or not _is_quota_badge(hidden)
+            or {k: v for k, v in current.items() if k not in access_fields}
+            != {k: v for k, v in hidden.items() if k not in access_fields}
+        ):
+            return False
+    return True
 
 
 def _has_quota_access_tree(raw: dict[str, object]) -> bool:
@@ -1105,7 +1173,7 @@ def _validate_snapshot(
         raise DiscoveryIncompleteError("HERO'S WEB listing owner is not stably CSS-visible")
 
     if zero_roots:
-        mirror, mirror_raw_rows, mirror_rows = zero_roots[0]
+        mirror, mirror_raw_rows, _mirror_rows = zero_roots[0]
         mirror_parents = [item["classTokens"] for item in mirror["parentChain"]]
         mirror_styles = mirror["styleChain"]
         mirror_style_pattern = (
@@ -1124,8 +1192,9 @@ def _validate_snapshot(
             not owner_is_authenticated_shape
             or mirror_parents != [["series-eplist"], ["series-eplist-main"]]
             or not mirror_style_pattern
-            or mirror_raw_rows != owner_raw_rows
-            or mirror_rows != owner_rows
+            or not _matching_mirror_rows(
+                owner_raw_rows, mirror_raw_rows, authenticated=authenticated,
+            )
         ):
             raise DiscoveryIncompleteError("HERO'S WEB zero-area listing mirror diverges from its owner")
     if len(parsed_roots) != len(positive_roots) + len(zero_roots):
@@ -1159,7 +1228,7 @@ def _validate_work_header_snapshot(
 
 
 def _records_from_rows(
-    rows: Sequence[_ListingRow], *, work_id: str, work_title: str
+    rows: Sequence[_ListingRow], *, work_id: str, work_title: str, observed_at: datetime,
 ) -> list[DiscoveredRecord]:
     if not rows or len(rows) > MAX_LISTING_ROWS:
         raise DiscoveryIncompleteError("HERO'S WEB listing is empty or exceeds its row guard")
@@ -1179,6 +1248,10 @@ def _records_from_rows(
                 external_id=f"{work_id}:{row.episode_id}",
                 url=f"https://heros-web.com/episodes/{row.episode_id}",
                 access_mode=row.access_mode,
+                access_granted_until=(
+                    observed_at + row.rental_remaining if row.rental_remaining else None
+                ),
+                access_granted_until_observed=row.access_mode in {"free", "quota", "paid"},
                 published_at=row.published_at,
                 available=True,
                 global_display_position=row.global_position,
@@ -1276,6 +1349,7 @@ class HeroswebDiscoveryAdapter(DiscoveryAdapter):
         return record_listing_preview(target, f"herosweb-work:{work_id}", records), records
 
     async def _read_all_records(self, page: Page, target: WatchlistTarget) -> list[DiscoveredRecord]:
+        observed_at = datetime.now(JST)
         work_id = parse_herosweb_work_url(target.url)
         work_url = f"https://heros-web.com/series/{work_id}" if work_id else None
         if target.site != "herosweb" or work_url is None or target.url != work_url:
@@ -1350,7 +1424,9 @@ class HeroswebDiscoveryAdapter(DiscoveryAdapter):
             expected_total = ranges[-1].end_position
             if len(rows) != expected_total or len(seen_ids) != expected_total:
                 raise DiscoveryIncompleteError("HERO'S WEB ranges do not cover their declared total")
-            return _records_from_rows(rows, work_id=work_id, work_title=title)
+            return _records_from_rows(
+                rows, work_id=work_id, work_title=title, observed_at=observed_at,
+            )
         except DiscoveryIncompleteError:
             raise
         except AccessStopError as exc:
@@ -1458,6 +1534,7 @@ class HeroswebDiscoveryAdapter(DiscoveryAdapter):
             published_at=published_at,
             access_mode=_classify_access(raw, authenticated=authenticated),
             global_position=first_position,
+            rental_remaining=_rental_remaining(raw, authenticated=authenticated),
         )
 
     async def iter_records(

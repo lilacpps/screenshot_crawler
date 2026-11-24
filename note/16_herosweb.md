@@ -30,7 +30,8 @@ evidence.
 Authenticated range pages can contain a current owner and a duplicate mirror.
 The owner must be exactly one CSS-visible positive-size root. One zero-size
 mirror is accepted only beneath the observed plain `.series-eplist` parent
-with a `block / none / block` style chain and complete ordered row equality.
+with a `block / none / block` style chain and complete ordered row equality,
+apart from the exact authenticated rental/public-quota difference below.
 The authenticated owner may instead be beneath the observed
 `.series-eplist.mode-user.mode-has-eps` wrapper. Anonymous roots are also
 under the plain `.series-eplist` wrapper, not direct children of
@@ -54,9 +55,25 @@ Access classification is exact-row scoped:
   `.series-eplist-item-access-icon[data-e2e="eliWfIcon"]` and
   `eliIfIcon` markers, without competing signals. Partial, duplicate,
   conflicting or unfamiliar structures remain `unknown`.
+- An authenticated exact `eliRentStat` span, with two plain BR children and
+  no competing signals, recognizes `レンタル中 閲覧期限 D日+H時間` as an
+  already acquired rental. It stays `quota`; Discovery records
+  `access_granted_until = scan start + displayed duration - 1 hour`, allowing
+  one hour for display rounding. Hours must be 0–23 and the total at most 15
+  days. A nonpositive conservative bound gives no active grant. This bound is
+  a scheduling expiry, not the exact native expiry. The observed 3-day and
+  15-day displays are supported. Fresh known free/quota/paid observations
+  explicitly clear or replace grants; unknown evidence preserves them.
+
+For a positive current authenticated session, the visible owner can display
+this exact rental while the hidden public list retains its exact quota pair.
+Only that access difference is allowed; ordered identity, title, date and all
+other row metadata remain identical. Anonymous rental differences, malformed
+rental trees, unrelated differences and competing signals fail closed.
 
 The adapter uses only naturally emitted site data. Presence in the complete
-listing supports `available=True`; it invents no grant or expiry. It does not
+listing supports `available=True`; only the explicit rental proof supplies a
+finite grant. It does not
 open a ticket, wait, coin, purchase, login or rights-acquisition flow.
 
 The exact expected main-document GET is fetched with redirects/retries
@@ -157,24 +174,61 @@ not establish that such recovery is impossible.
 
 ## Direct-only Batch policy (Phase 04)
 
-`HeroswebSitePolicy` allows only `available=True` sources with `access_mode`
-`free`, using the existing `direct` strategy and catalog ordering. Quota,
-paid, unknown, owned, rental, grant and unavailable sources are ineligible,
-even when a source has an active grant or positive quota state. This policy
-does not expose access resources, ticket passes, grant-only passes or grant
-mutation. The CLI Batch adapter and policy registries include `herosweb`;
+`HeroswebSitePolicy` allows `available=True` free Sources and quota Sources
+with an aware future `access_granted_until`, using `direct` and catalog
+ordering. The latter has reason `active_rental` and never consumes quota.
+Quota without an active grant, paid, unknown, owned, rental, grant and
+unavailable modes remain ineligible. This policy does not expose access
+resources, ticket passes or grant-only passes. Discovery alone refreshes the
+already acquired rental grant. The CLI Batch adapter and policy registries include `herosweb`;
 runtime uses 1500 ms page turns and 5000 ms between candidates.
-For GUI Inventory, available quota Sources set the existing display-only
+For GUI Inventory, available quota Sources without an active rental set the existing display-only
 `pending_quota` flag and appear as `quota`/Quota対象残. The shared Inventory
 projection maps `paid_not_supported` to `paid`/有償未取得. They retain the
 `quota_not_supported`/`paid_not_supported` rejection reasons and remain
-ineligible for Batch, with no supported resources. Known quota/paid Sources
-are no longer counted as unknown/要確認. No Catalog rewrite or Discovery is
-required; restart an already-running GUI to load the changed code.
-Read-only operational Inventory verification on 2026-11-23 confirmed quota 66,
+ineligible for Batch without an active rental, with no supported resources.
+Active quota rentals project as direct/取得対象. Known quota/paid Sources
+are no longer counted as unknown/要確認. The earlier display-only correction
+required no rediscovery; rental eligibility requires fresh Discovery to
+observe its grant. Restart an already-running GUI to load the changed policy.
+Historical read-only Inventory verification on 2026-11-23 confirmed quota 66,
 paid 2 and unknown 0. Inventory/Policy Unit and Qt-offscreen model validation
 passed (74 tests in total); no real-site or Catalog write was performed for
 this display change.
+
+On 2026-11-24, read-only CDP observation of the sole registered HERO Work,
+`0f023839d7bca` (神無き世界のカミサマ活動), confirmed eight exact rental rows
+on range 3: seven displayed `14日+23時間` and one `2日+23時間`. Their hidden
+public counterparts retained quota icons. Corrected Discovery validated all
+87 rows (19 free / 66 quota / 2 paid / 0 unknown). A standard Full Discovery
+for `kannaki-sekaino-kamisama-katsudou-herosweb` refreshed the normal Catalog
+with zero new Sources; read-only Batch Plan then selected exactly eight
+`quota -> direct` candidates and zero consuming candidates. Item/Source IDs,
+display positions, acquisition flags, quota-start timestamps, all Item statuses
+and notes, and Run/Artifact counts matched the pre-refresh snapshot (19
+completed / 68 pending). No download or new ticket use was performed.
+An isolated identity-bound direct entry for episode `b1c81842dc890` reached
+CONTENT with 24 body slots and exactly one episode navigation, no Work listing
+navigation and no write/navigation violation. This verifies current entry,
+not a full live END/ZIP acquisition of a rented episode. Synthetic coverage
+checks rental Batch through END/ZIP/Catalog. Local evidence is under
+`.tmp/hero-grant/` (`catalog-audit.json`, `rental-entry-proof.json`, CLI logs).
+
+Rental-change validation: Hero Discovery/Policy Unit, Inventory and both Hero
+browser Integration files ran together: 197 passed, 1 failed, 0 skipped.
+The existing
+`test_herosweb_discovery_aborts_real_redirect_before_followup_request` fails
+its final Page URL assertion when its mocked transport forwards a 302 to the
+browser. A separate process loading the unchanged HEAD Discovery reproduced
+the same failure (1 failed); this fixture/redirect issue remains unresolved.
+The production transport's separate real-local-HTTP redirect guard tests
+passed. Batch/Discovery boundary Unit files added 109 passing cases, with no
+skips. `ruff check src tests` passes. Full suite and Research/Probe were not
+run because shared production/capture contracts were unchanged. The first
+combined run was interrupted during investigation of buffered test output;
+the reported 198-case run completed. No full live rental END/ZIP run was
+performed; live verification stops at usable first-body entry and normal
+Catalog/Planner eligibility.
 
 Identity-bound Batch `direct` entry stays on the canonical Catalog episode
 URL. It verifies the current episode/Work header, rejects visible charge/login
