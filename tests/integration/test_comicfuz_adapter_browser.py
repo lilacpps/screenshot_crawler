@@ -148,6 +148,7 @@ def _work_ticket_listing_html(
     request_body: bytes,
     viewer_html: str,
     charge_available: bool = True,
+    listing_ready_delay_ms: int = 0,
 ) -> str:
     next_data = {
         "page": "/manga/[mangaId]",
@@ -167,10 +168,15 @@ def _work_ticket_listing_html(
     }
     request_values = list(request_body)
     viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    listing_class = (
+        "title_detail_chapters__pending__fixture"
+        if listing_ready_delay_ms > 0
+        else "title_detail_chapters__list__fixture"
+    )
     return f'''<!doctype html><html><head><title>Verified ComicFUZ Work</title>
       <link rel="canonical" href="{BASE}/manga/{work_id}">
       <script id="__NEXT_DATA__" type="application/json">{json.dumps(next_data)}</script>
-      </head><body><div class="title_detail_chapters__list__fixture">
+      </head><body><div id="ticket-list" class="{listing_class}">
         <div class="Chapter_chapter__row__fixture"><div class="Chapter_chapter__detail__fixture">
           <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
         </div></div></div>
@@ -183,6 +189,13 @@ def _work_ticket_listing_html(
         <script>
           (() => {{
           const chargeAvailable={json.dumps(charge_available)};
+          const listingReadyDelayMs={listing_ready_delay_ms};
+          if(listingReadyDelayMs>0){{
+            setTimeout(()=>{{
+              const list=document.querySelector('#ticket-list');
+              list.className='title_detail_chapters__list__fixture';
+            }},listingReadyDelayMs);
+          }}
           const workId={json.dumps(work_id)}, chapterId={json.dumps(chapter_id)};
           const chapterLabel={json.dumps(chapter_label)};
           const mangaPrototype=chargeAvailable?{{}}:{{isTicketAvailable:false,chargeStatus:''}};
@@ -691,6 +704,7 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         chapter_label=chapter_label,
         request_body=request_body,
         viewer_html=viewer_html,
+        listing_ready_delay_ms=350,
     )
     api_requests: list[bytes] = []
     work_page_visits: list[str] = []

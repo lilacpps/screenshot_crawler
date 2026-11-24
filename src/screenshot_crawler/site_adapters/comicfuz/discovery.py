@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, urlparse
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.models import (
@@ -607,6 +608,180 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
             access[0],
             matching_indices[0],
         )
+
+    async def wait_for_target_row_hydration(
+        self,
+        page: Page,
+        *,
+        work_id: str,
+        chapter_id: str,
+        timeout_ms: int = WAIT_TIMEOUT_MS,
+    ) -> None:
+        """Wait for the selected heading and its shared runtime message to mount.
+
+        This is presence-only. Access classification remains in
+        ``observe_target_row`` and the strict native ticket snapshot.
+        """
+
+        if (
+            not re.fullmatch(r"[0-9]+", work_id)
+            or not re.fullmatch(r"[0-9]+", chapter_id)
+            or type(timeout_ms) is not int
+            or timeout_ms < 1
+        ):
+            raise DiscoveryIncompleteError("ComicFUZ ticket listing readiness input is invalid")
+        if self._same_work_page(page.url, f"/manga/{work_id}") is not True:
+            raise DiscoveryIncompleteError("ComicFUZ ticket listing readiness is outside the target work")
+
+        readiness_script = r"""({selector, headingSelector, chargeSelector, workId, chapterId}) => {
+          const state = (name, reason = '') => ({state:name, reason});
+          const current = new URL(location.href);
+          const validSearch = search => {
+            const values = [...search.entries()];
+            return values.length === 0 || (values.length === 1
+              && values[0][0] === 'position' && values[0][1] === 'thumbnail');
+          };
+          if (current.hostname !== 'comic-fuz.com'
+              || current.pathname !== `/manga/${workId}` || current.hash
+              || !validSearch(current.searchParams)) return state('invalid', 'route');
+          const canonical = document.querySelector('link[rel="canonical"]')?.href;
+          if (canonical) {
+            let parsed;
+            try { parsed = new URL(canonical); }
+            catch (_) { return state('invalid', 'canonical'); }
+            if (parsed.hostname !== 'comic-fuz.com'
+                || parsed.pathname !== `/manga/${workId}` || parsed.hash
+                || !validSearch(parsed.searchParams)) return state('invalid', 'canonical');
+          }
+          const containers = [...document.querySelectorAll(selector)];
+          if (containers.length > 1) return state('invalid', 'container_ambiguous');
+          const nextNode = document.querySelector('#__NEXT_DATA__');
+          if (!nextNode?.textContent) return state('wait');
+          let next;
+          try { next = JSON.parse(nextNode.textContent); }
+          catch (_) { return state('invalid', 'native_data'); }
+          if (next?.page !== '/manga/[mangaId]'
+              || String(next?.query?.mangaId ?? '') !== workId)
+            return state('invalid', 'native_work');
+          const groups = next?.props?.pageProps?.chapters;
+          if (!Array.isArray(groups)) return state('invalid', 'native_chapters');
+          const nativeChapters = groups.flatMap(group =>
+            Array.isArray(group?.chapters) ? group.chapters : []);
+          const targetIndices = nativeChapters.map((chapter, index) =>
+            String(chapter?.chapterId ?? '') === chapterId ? index : -1)
+            .filter(index => index >= 0);
+          if (targetIndices.length !== 1) return state('invalid', 'native_target');
+
+          if (containers.length === 0) return state('wait');
+          const container = containers[0];
+          const containerStyle = getComputedStyle(container);
+          if (!container.getClientRects().length || containerStyle.display === 'none'
+              || containerStyle.visibility === 'hidden'
+              || containerStyle.visibility === 'collapse'
+              || Number(containerStyle.opacity) === 0) return state('wait');
+
+          const headings = [...container.querySelectorAll(headingSelector)];
+          const heading = headings[targetIndices[0]];
+          if (!heading) return state('wait');
+          const fiberOf = element => {
+            const key = Object.keys(element || {}).find(name => name.startsWith('__reactFiber$'));
+            return key ? element[key] : null;
+          };
+          const chapterProps = [];
+          for (let node = fiberOf(heading), depth = 0; node && depth < 35;
+               node = node.return, depth++) {
+            const chapter = node.memoizedProps?.chapter;
+            if (chapter && typeof chapter === 'object' && !chapterProps.includes(chapter))
+              chapterProps.push(chapter);
+          }
+          if (chapterProps.length === 0) return state('wait');
+          if (chapterProps.length !== 1
+              || String(chapterProps[0].chapterId ?? '') !== chapterId)
+            return state('invalid', 'heading_target');
+
+          const webDataFrom = element => {
+            const values = [];
+            for (let node = fiberOf(element), depth = 0; node && depth < 35;
+                 node = node.return, depth++) {
+              const value = node.memoizedProps?.webMangaViewerData;
+              if (value && typeof value === 'object' && !values.includes(value))
+                values.push(value);
+            }
+            return values;
+          };
+          const headingData = webDataFrom(heading);
+          if (headingData.length === 0) return state('wait');
+          if (headingData.length !== 1) return state('invalid', 'heading_data');
+          const webData = headingData[0];
+          if (!webData.manga || typeof webData.manga !== 'object'
+              || String(webData.manga.mangaId ?? '') !== workId
+              || !Array.isArray(webData.chapters)) return state('invalid', 'runtime_work');
+          const runtimeChapters = webData.chapters.flatMap(group =>
+            Array.isArray(group?.chapters) ? group.chapters : []);
+          if (runtimeChapters.length !== nativeChapters.length)
+            return state('invalid', 'runtime_count');
+          const runtimeMatches = runtimeChapters.filter(chapter =>
+            String(chapter?.chapterId ?? '') === chapterId);
+          if (runtimeMatches.length !== 1) return state('invalid', 'runtime_target');
+
+          const charges = [...document.querySelectorAll(chargeSelector)].filter(element => {
+            if (!element.getClientRects().length) return false;
+            const style = getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden'
+              && style.visibility !== 'collapse' && Number(style.opacity) !== 0;
+          });
+          if (charges.length === 0) return state('wait');
+          if (charges.length !== 1) return state('invalid', 'charge_count');
+          const chargeData = webDataFrom(charges[0]);
+          if (chargeData.length === 0) return state('wait');
+          if (chargeData.length !== 1 || chargeData[0] !== headingData[0])
+            return state('invalid', 'data_identity');
+          return state('ready');
+        }"""
+        args = {
+            "selector": LIST_SELECTOR,
+            "headingSelector": 'h3[class*="Chapter_chapter__name__"]',
+            "chargeSelector": 'div[class*="Charge_charge__"]',
+            "workId": work_id,
+            "chapterId": chapter_id,
+        }
+        try:
+            handle = await page.wait_for_function(
+                f"args => {{ const value = ({readiness_script})(args); "
+                "return value.state === 'wait' ? false : value; }",
+                arg=args,
+                polling=100,
+                timeout=timeout_ms,
+            )
+        except PlaywrightTimeoutError as exc:
+            raise DiscoveryIncompleteError(
+                "ComicFUZ ticket target listing did not hydrate within its bounded wait"
+            ) from exc
+        try:
+            result = await handle.json_value()
+        finally:
+            await handle.dispose()
+        if not isinstance(result, Mapping) or result.get("state") != "ready":
+            reason = result.get("reason") if isinstance(result, Mapping) else None
+            messages = {
+                "route": "ComicFUZ ticket listing route changed during hydration",
+                "canonical": "ComicFUZ ticket listing canonical work changed",
+                "container_ambiguous": "ComicFUZ chapter list container is ambiguous",
+                "native_data": "ComicFUZ first-party chapter data is invalid",
+                "native_work": "ComicFUZ first-party work identity changed",
+                "native_chapters": "ComicFUZ first-party chapter groups are invalid",
+                "native_target": "ComicFUZ target chapter is missing or duplicated",
+                "heading_target": "ComicFUZ target heading identity is ambiguous",
+                "heading_data": "ComicFUZ target heading runtime data is ambiguous",
+                "charge_count": "ComicFUZ visible charge component is ambiguous",
+                "data_identity": "ComicFUZ target heading and charge runtime data differ",
+                "runtime_work": "ComicFUZ runtime work data is incomplete or mismatched",
+                "runtime_count": "ComicFUZ runtime chapter count disagrees with native listing",
+                "runtime_target": "ComicFUZ runtime target chapter is missing or duplicated",
+            }
+            raise DiscoveryIncompleteError(
+                messages.get(reason, "ComicFUZ ticket listing readiness returned an unknown state")
+            )
 
     def _records_from_snapshot(
         self,

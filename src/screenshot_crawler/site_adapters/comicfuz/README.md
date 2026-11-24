@@ -1,6 +1,6 @@
 # ComicFUZ free adapter
 
-## Work Ticket status (2026-11-24; Phase 02 and Gate03 PASS, Phase 04 in progress)
+## Work Ticket status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress)
 
 Discovery now classifies visible row-local `無料` as `free`, recognized visible
 S/G coin/medal marks as `paid`, and a fully hydrated row with a confirmed blank
@@ -28,23 +28,42 @@ SSR omissions are not filled in. The original Phase 03 synthetic listing
 fixture had a different shape; its correction now passes the focused listing
 projection tests. The initial adapter E2E timeout was a synthetic fixture
 global-`const` collision during `document.write`, fixed by IIFE-scoping the
-listing script; no production guard was loosened.
+listing script; no production guard was loosened. The first isolated CLI attempt
+on `3667:76588` stopped in `observe_target_row`'s `_snapshot` list-container
+lookup before strict access classification, modal, controller, or charge
+action because the listing had not hydrated (the stored error text says the
+container is ambiguous, but the bounded DOM count actually observed zero). A
+bounded DOM diagnostic observed zero matching containers after DOMContentLoaded and one visible
+container with 25 headings 1.2 seconds later. Quota entry now waits for the
+target list/heading and known runtime-message presence before the unchanged
+strict snapshot; active-grant direct navigation remains unchanged. The helper
+checks observable route, SSR work/target identity and complete runtime
+work/count/target contradictions; full chapter-ID order remains the strict
+snapshot's authority. The wait does not classify access or weaken
+identity/unknown checks. Readiness review passed with BLOCKING=0. The attempt left one failed
+pre-action run in the isolated Catalog; preserve it and quarantine work 3667.
+The CLI attempt forwarded no ticket API request and consumed zero tickets. Its
+sanitized metrics and bounded diagnostic paths are in the work-ticket PROGRESS
+file.
 See
 [`runbooks/comicfuz-work-ticket/PROGRESS.md`](../../../../runbooks/comicfuz-work-ticket/PROGRESS.md)
 for gates, test results, and remaining native consumption/expiry evidence. Gate
-02 and Gate03 passed independent review with BLOCKING=0. Latest focused
-controller/listing tests pass (60 passed); normal Batch, grant-only, and
-unavailable-Work replan synthetic E2E pass (3 passed). Independent review also
-passed the 18-case listing projection group and the 3 adapter E2E cases. Review
+02 and Gate03 passed independent review with BLOCKING=0. Current readiness
+tests pass (5 passed; 35 deselected), including DOM+runtime delay,
+runtime-only delay, timeout with no action, duplicate-container rejection and
+known runtime mismatch before Charge mount. Delayed-list normal Batch,
+grant-only, and unavailable-Work replan E2E pass (3 passed; 102 deselected).
+Independent review passed the 18-case listing projection group, 3 adapter E2E
+cases and 2 readiness additions. Review
 coverage verifies a capped/timed native response read, rejection of
 noncanonical requests before forwarding, terminal abort of in-flight and later
 ticket requests after cancellation, and a typed no-action skip that replans
 from one unavailable Work to another eligible Work. Ticket consumption is
 first committed without a grant expiry; an observed expiry is attached only
-after fresh final-time validation. No live charge has been clicked and no real
-ticket has been consumed. The first isolated grant-only action is pending final
-review/Lead go-ahead; actual consume response values and real grant expiry are
-still unverified.
+after fresh final-time validation. The isolated CLI attempt stopped before the
+charge control, so no real ticket was consumed. Do not retry work 3667; wait
+for a new Lead instruction before the next isolated live operation. Actual
+consume response values and real grant expiry remain unverified.
 
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 

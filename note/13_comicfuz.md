@@ -67,7 +67,7 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
-## Work Ticket current status (2026-11-24; Phase 02 and Gate03 PASS, Phase 04 in progress)
+## Work Ticket current status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress)
 
 Discovery recognizes an exact visible row-local `無料` marker as `free`, a
 single visible price slot containing the observed public gold/silver icon alt
@@ -105,9 +105,27 @@ runtime chapter through the same object referenced by the heading and Charge
 component, and rejects missing, duplicated, mismatched, or separate messages.
 The initial synthetic adapter timeout was caused by a duplicate global
 `webMangaViewerData` declaration in listing/viewer fixture scripts; the listing
-fixture is now IIFE-scoped. The current focused regression passes. No live
-charge control has been activated and no real ticket has been consumed; the
-first isolated grant-only action is pending final review/Lead go-ahead.
+fixture is now IIFE-scoped. The first isolated `3667:76588` grant-only CLI run
+failed inside `observe_target_row`'s `_snapshot` at the list-container lookup
+before strict access classification, modal, controller, or charge action: the
+visible list had not hydrated by the immediate snapshot. A bounded diagnostic
+observed zero matching containers just after DOMContentLoaded and one visible
+container with 25 headings 1.2 seconds later. The adapter now waits up to its
+existing bounded timeout for the selected list/heading and known runtime
+message to attach; already observed route, duplicate-container, SSR work/target,
+or runtime identity/count/target contradictions fail immediately. Full chapter
+ID-order comparison remains in the subsequent strict snapshot. Strict access
+classification and ticket proof checks are unchanged. Synthetic tests cover
+DOM+runtime delay, runtime-only delay, timeout without action, duplicate
+containers, and invalid runtime data before Charge mounts; delayed-list normal
+Batch, grant-only, and unavailable-work replan pass. Independent readiness
+review reports BLOCKING=0. The isolated attempt left one failed pre-action
+`DiscoveryIncompleteError` CrawlRun in `%TEMP%/cfzgt1/catalog.sqlite`; its item
+is pending and source/resource/grant/artifact state is empty. Preserve this
+run and keep work 3667 quarantined; do not retry it. The attempt consumed zero
+tickets, but no real post-consumption state or expiry has been verified. The
+next live operation requires a new Lead instruction and a different allowed
+work in the same isolated Catalog.
 
 The public first-party client binds `/v1/web_manga_viewer_2` to
 `WebMangaViewer2Request` and `WebMangaViewer2Response`; the similarly named
@@ -165,11 +183,21 @@ in React props. The generated Manga prototype defaults are
 access predicate. The default interpretation is restricted to this observed
 generated-message shape; a missing or plain empty object stays unknown. No image
 body or ticket response was read during that probe. Live consume response
-values, server time and a real grant expiry remain unverified. The Gate03
-independent review passed; current synthetic listing projection, normal and
-grant-only Batch, and unavailable-Work replan tests pass. Full suite history
-and Phase 04 live-audit boundaries are tracked in
-`runbooks/comicfuz-work-ticket/PROGRESS.md`.
+values, server time and a real grant expiry remain unverified. Gate03 passed
+independent review. The bounded Phase 04 readiness review also passed with
+BLOCKING=0; synthetic tests cover delayed DOM/runtime, runtime-only delay,
+timeout without action, duplicate-container rejection and known runtime
+contradictions. One isolated CLI attempt on `3667:76588` failed before row
+observation or charge action with `DiscoveryIncompleteError`; the failed
+CrawlRun remains in the isolated Catalog and work 3667 is quarantined. A
+read-only DOM count observed zero matching containers immediately after
+DOMContentLoaded and one visible container with 25 headings 1.2 seconds later.
+The adapter now has a bounded presence wait before its unchanged strict
+snapshot. The attempt consumed zero tickets; sanitized metrics and diagnostic
+artifact paths are documented in `runbooks/comicfuz-work-ticket/PROGRESS.md`.
+No same-work retry or additional live action is authorized by this checkpoint;
+wait for Lead instruction. Full suite history and Phase 04 live-audit
+boundaries are tracked in that progress file.
 
 ## Login-independent public-free access (2026-11-22)
 

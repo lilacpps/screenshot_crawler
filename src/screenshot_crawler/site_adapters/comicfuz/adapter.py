@@ -381,7 +381,13 @@ class ComicFuzAdapter(SiteAdapter):
         work_parts = parse_comicfuz_work_url(page.url)
         if work_parts is None or work_parts.work_id != self._work_id:
             raise UnknownPageStateError("ComicFUZ ticket entry did not start on its work page")
-        row = await ComicFuzDiscoveryAdapter().observe_target_row(
+        discovery = ComicFuzDiscoveryAdapter()
+        await discovery.wait_for_target_row_hydration(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+        )
+        row = await discovery.observe_target_row(
             page,
             work_id=self._work_id,
             chapter_id=self._chapter_id,

@@ -7,8 +7,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.comicfuz import work_ticket as work_ticket_module
 from screenshot_crawler.site_adapters.comicfuz.adapter import ComicFuzAdapter
+from screenshot_crawler.site_adapters.comicfuz.discovery import ComicFuzDiscoveryAdapter
 from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     API_HOST,
     API_PATH,
@@ -985,6 +987,207 @@ async def test_listing_snapshot_rejects_incomplete_or_contradictory_runtime_data
         await read_native_ticket_snapshot(
             browser_page, work_id=WORK_ID, chapter_id=CHAPTER_ID, page_mode="listing"
         )
+
+
+@pytest.mark.parametrize("delay_kind", ["dom_and_runtime", "runtime_only"])
+async def test_ticket_listing_readiness_waits_for_delayed_dom_and_runtime(
+    browser_page, delay_kind: str
+) -> None:
+    work_id, chapter_id = "3667", "76588"
+    target_url = f"{BASE}/manga/{work_id}"
+    native = {
+        "page": "/manga/[mangaId]",
+        "query": {"mangaId": work_id},
+        "props": {"pageProps": {"chapters": [{"chapters": [{"chapterId": chapter_id}]}]}},
+    }
+    runtime_attach = f"""
+      const chapter={{chapterId:{chapter_id}}};
+      const webMangaViewerData={{manga:{{mangaId:{work_id}}},chapters:[{{chapters:[chapter]}}]}};
+      const heading=document.querySelector('h3');
+      heading.__reactFiber$target={{memoizedProps:{{chapter}},
+        return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
+      document.querySelector('.Charge_charge__fixture').__reactFiber$charge={{
+        memoizedProps:{{webMangaViewerData}},return:null}};
+      window.__hydrationComplete=true;
+    """
+    if delay_kind == "dom_and_runtime":
+        body = f"""
+          <script>
+            window.__ticketClicks=0;
+            setTimeout(()=>{{
+              const list=document.createElement('div');
+              list.className='title_detail_chapters__list__fixture';
+              list.innerHTML='<h3 class="Chapter_chapter__name__fixture">Synthetic target</h3>';
+              const charge=document.createElement('div');
+              charge.className='Charge_charge__fixture';
+              const button=document.createElement('button');
+              button.textContent='charge control fixture';
+              button.addEventListener('click',()=>window.__ticketClicks++);
+              charge.append(button);
+              document.body.append(list,charge);
+              {runtime_attach}
+            }},350);
+          </script>
+        """
+    else:
+        body = f"""
+          <div class="title_detail_chapters__list__fixture">
+            <h3 class="Chapter_chapter__name__fixture">Synthetic target</h3>
+          </div>
+          <div class="Charge_charge__fixture"><button>charge control fixture</button></div>
+          <script>
+            window.__ticketClicks=0;
+            document.querySelector('button').addEventListener('click',()=>window.__ticketClicks++);
+            setTimeout(()=>{{{runtime_attach}}},350);
+          </script>
+        """
+    html = f'''<!doctype html><html><head>
+      <link rel="canonical" href="{target_url}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(native)}</script>
+      </head><body>{body}</body></html>'''
+
+    async def listing(route) -> None:
+        await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+
+    await browser_page.route(target_url, listing)
+    api_requests: list[bool] = []
+    browser_page.on(
+        "request",
+        lambda request: api_requests.append(True)
+        if f"{API_HOST}{API_PATH}" in request.url
+        else None,
+    )
+    await browser_page.route(f"https://{API_HOST}{API_PATH}**", lambda route: route.abort())
+    await browser_page.goto(target_url, wait_until="commit")
+    expected_initial_list_count = 0 if delay_kind == "dom_and_runtime" else 1
+    assert (
+        await browser_page.locator('div[class*="title_detail_chapters__list__"]').count()
+        == expected_initial_list_count
+    )
+
+    await ComicFuzDiscoveryAdapter().wait_for_target_row_hydration(
+        browser_page, work_id=work_id, chapter_id=chapter_id, timeout_ms=1500
+    )
+
+    assert await browser_page.evaluate("window.__hydrationComplete") is True
+    assert await browser_page.locator('div[class*="title_detail_chapters__list__"]').count() == 1
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert api_requests == []
+
+
+async def test_ticket_listing_readiness_rejects_runtime_mismatch_before_charge_mount(
+    browser_page,
+) -> None:
+    work_id, chapter_id = "3667", "76588"
+    target_url = f"{BASE}/manga/{work_id}"
+    native = {
+        "page": "/manga/[mangaId]",
+        "query": {"mangaId": work_id},
+        "props": {"pageProps": {"chapters": [{"chapters": [{"chapterId": chapter_id}]}]}},
+    }
+    html = f'''<!doctype html><html><head>
+      <link rel="canonical" href="{target_url}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(native)}</script>
+      </head><body>
+        <div class="title_detail_chapters__list__fixture">
+          <h3 class="Chapter_chapter__name__fixture">Synthetic target</h3>
+        </div>
+        <script>
+          window.__ticketClicks=0;
+          const chapter={{chapterId:{chapter_id}}};
+          const webMangaViewerData={{manga:{{mangaId:9999}},chapters:[{{chapters:[chapter]}}]}};
+          document.querySelector('h3').__reactFiber$target={{memoizedProps:{{chapter}},
+            return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
+        </script>
+      </body></html>'''
+
+    await browser_page.route(
+        target_url,
+        lambda route: route.fulfill(status=200, content_type="text/html", body=html),
+    )
+    api_requests: list[bool] = []
+    browser_page.on(
+        "request",
+        lambda request: api_requests.append(True)
+        if f"{API_HOST}{API_PATH}" in request.url
+        else None,
+    )
+    await browser_page.route(f"https://{API_HOST}{API_PATH}**", lambda route: route.abort())
+    await browser_page.goto(target_url, wait_until="commit")
+
+    with pytest.raises(DiscoveryIncompleteError, match="runtime work data is incomplete"):
+        await ComicFuzDiscoveryAdapter().wait_for_target_row_hydration(
+            browser_page, work_id=work_id, chapter_id=chapter_id, timeout_ms=250
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert api_requests == []
+
+
+async def test_ticket_listing_readiness_timeout_does_not_click_or_request(browser_page) -> None:
+    work_id, chapter_id = "3667", "76588"
+    target_url = f"{BASE}/manga/{work_id}"
+
+    async def listing(route) -> None:
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body="<!doctype html><html><body><script>window.__ticketClicks=0</script></body></html>",
+        )
+
+    await browser_page.route(target_url, listing)
+    api_requests: list[bool] = []
+    browser_page.on(
+        "request",
+        lambda request: api_requests.append(True)
+        if f"{API_HOST}{API_PATH}" in request.url
+        else None,
+    )
+    await browser_page.route(f"https://{API_HOST}{API_PATH}**", lambda route: route.abort())
+    await browser_page.goto(target_url, wait_until="commit")
+
+    with pytest.raises(DiscoveryIncompleteError, match="did not hydrate"):
+        await ComicFuzDiscoveryAdapter().wait_for_target_row_hydration(
+            browser_page, work_id=work_id, chapter_id=chapter_id, timeout_ms=100
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert api_requests == []
+
+
+async def test_ticket_listing_readiness_rejects_duplicate_container_immediately(browser_page) -> None:
+    work_id, chapter_id = "3667", "76588"
+    target_url = f"{BASE}/manga/{work_id}"
+
+    async def listing(route) -> None:
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body="""<!doctype html><html><body>
+              <div class="title_detail_chapters__list__one"></div>
+              <div class="title_detail_chapters__list__two"></div>
+              <script>window.__ticketClicks=0</script>
+            </body></html>""",
+        )
+
+    await browser_page.route(target_url, listing)
+    api_requests: list[bool] = []
+    browser_page.on(
+        "request",
+        lambda request: api_requests.append(True)
+        if f"{API_HOST}{API_PATH}" in request.url
+        else None,
+    )
+    await browser_page.route(f"https://{API_HOST}{API_PATH}**", lambda route: route.abort())
+    await browser_page.goto(target_url, wait_until="commit")
+
+    with pytest.raises(DiscoveryIncompleteError, match="chapter list container is ambiguous"):
+        await ComicFuzDiscoveryAdapter().wait_for_target_row_hydration(
+            browser_page, work_id=work_id, chapter_id=chapter_id, timeout_ms=1000
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert api_requests == []
 
 async def test_entry_only_page_does_not_attach_image_response_observer(browser_page) -> None:
     adapter = ComicFuzAdapter()
