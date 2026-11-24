@@ -15,6 +15,7 @@ from screenshot_crawler.management.inventory import (
     InventoryService,
     _access,
     default_policy_registry,
+    display_run_result,
     display_time,
 )
 from screenshot_crawler.watchlist.reconcile import ScopeReconciler
@@ -233,6 +234,24 @@ def test_policy_registry_matches_cli_and_errors_stay_unknown(inventory_inputs):
     for value in (None, "invalid", "2026-10-23T00:00:00"):
         assert display_time(value) in {"—", "不明（日時不正）"}
     assert display_time("2026-10-23T00:00:00+00:00") == "2026-10-23 09:00 JST"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "—"),
+        ("capture", "capture"),
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33.940579+09:00|capture", "capture"),
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33+09:00|capture|END", "capture|END"),
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33+09:00|", ""),
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33|capture", "access_consumption_confirmed:v1:2026-11-24T17:11:33|capture"),
+        ("access_consumption_confirmed:v1:not-a-time|capture", "access_consumption_confirmed:v1:not-a-time|capture"),
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33+09:00", "access_consumption_confirmed:v1:2026-11-24T17:11:33+09:00"),
+        ("access_consumption_confirmed:v2:2026-11-24T17:11:33+09:00|capture", "access_consumption_confirmed:v2:2026-11-24T17:11:33+09:00|capture"),
+    ],
+)
+def test_display_run_result_strips_only_valid_versioned_marker(value, expected):
+    assert display_run_result(value) == expected
 
 
 def test_expiry_paid_rental_multiple_resources_and_site_slots(inventory_inputs):

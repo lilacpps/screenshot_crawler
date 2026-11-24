@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from screenshot_crawler.management.inventory import display_time
+from screenshot_crawler.management.inventory import display_run_result, display_time
 from screenshot_crawler.management.models import HISTORY_STATUSES, InventorySnapshot, KeyInventory
 
 from .model import TreeNode
@@ -351,7 +351,7 @@ class DetailPane(QWidget):
             "Item": item.item_title or item.order_label or item.order_key or str(item.id),
             "Status": f"{item.status}（{_item_status_label(item.status)}）",
             "直近 CrawlRun": (f"{run_status} / {display_time(run.finished_at or run.started_at)}" if run else "—"),
-            "Result": run.stop_reason if run else "—",
+            "Result": display_run_result(run.stop_reason) if run else "—",
             "Error": run.error_message if run and run.error_message else "—",
             "Artifact": "; ".join(f"{a.kind}:{a.format} ({a.state})" for a in artifacts) or "—",
             "保存先": "; ".join(_text(a.locator) for a in artifacts) or "—",

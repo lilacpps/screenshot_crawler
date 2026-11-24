@@ -61,6 +61,25 @@ def display_time(value: str | datetime | None) -> str:
         return "不明（日時不正）"
 
 
+def display_run_result(value: str | None) -> str:
+    """Hide only a valid internal consumption marker from the inventory UI."""
+    if value is None:
+        return "—"
+    prefix = "access_consumption_confirmed:v1:"
+    if not value.startswith(prefix):
+        return value
+    timestamp, separator, reason = value[len(prefix):].partition("|")
+    if not separator:
+        return value
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return value
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return value
+    return reason
+
+
 def _scope_change_reason(target, proof, sync, sources=()) -> str:
     """Warn about actual pending range edits, never about numbering/sync stamps."""
     if proof is not None:
