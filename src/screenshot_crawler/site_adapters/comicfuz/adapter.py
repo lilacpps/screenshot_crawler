@@ -10,6 +10,7 @@ import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,6 +47,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     API_PATH,
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
+    TicketEntryProof,
     find_ticket_modal_cta,
     is_canonical_viewer_url,
     is_target_viewer_url,
@@ -59,6 +61,27 @@ from screenshot_crawler.watchlist.models import WatchlistTarget
 _COMPOSITE_ID = re.compile(r"^(?P<work>[0-9]+):(?P<chapter>[0-9]+)$")
 _PAGE_LABEL = re.compile(r"^page_(?P<number>[0-9]+)$")
 _BLOB_PREFIX = "blob:https://comic-fuz.com/"
+
+
+@dataclass(frozen=True, slots=True)
+class _TicketReaderBinding:
+    controller: ComicFuzTicketEntry
+    proof: TicketEntryProof
+    page: Page
+    work_id: str
+    chapter_id: str
+    external_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _EmptySsrReaderIdentity:
+    binding: _TicketReaderBinding
+    work_id: str
+    chapter_id: str
+    episode_title: str
+    episode_subtitle: str
+    work_title: str
+    viewer_title: str
 def _cleanup_observer_on_failure(
     method: Callable[..., Awaitable[Any]],
 ) -> Callable[..., Awaitable[Any]]:
@@ -158,6 +181,8 @@ class ComicFuzAdapter(SiteAdapter):
         self._existing_access_grant_until: datetime | None = None
         self._ticket_entry: ComicFuzTicketEntry | None = None
         self._ticket_entry_confirmed = False
+        self._ticket_reader_binding: _TicketReaderBinding | None = None
+        self._empty_ssr_reader_identity: _EmptySsrReaderIdentity | None = None
         self._access_consumption = AccessConsumption()
         self._episode_title: str | None = None
         self._expected_episode_title: str | None = None
@@ -339,6 +364,8 @@ class ComicFuzAdapter(SiteAdapter):
         self._direct_rental_guard_page = None
         self._ticket_entry = None
         self._ticket_entry_confirmed = False
+        self._ticket_reader_binding = None
+        self._empty_ssr_reader_identity = None
         self._access_consumption = AccessConsumption()
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
@@ -378,6 +405,8 @@ class ComicFuzAdapter(SiteAdapter):
             chapter_id=self._chapter_id,
             external_id=f"{self._work_id}:{self._chapter_id}",
         )
+        self._ticket_reader_binding = None
+        self._empty_ssr_reader_identity = None
         self._access_consumption = AccessConsumption()
 
     def _ticket_not_attempted(self, reason: str) -> None:
@@ -517,10 +546,54 @@ class ComicFuzAdapter(SiteAdapter):
             )
         finally:
             self._access_consumption = self._ticket_entry.consumption
+        proof = self._ticket_entry.proof
+        consumption = self._ticket_entry.consumption
+        expected_external_id = f"{self._work_id}:{self._chapter_id}"
+        if not (
+            isinstance(proof, TicketEntryProof)
+            and self._ticket_entry.work_id == self._work_id
+            and self._ticket_entry.chapter_id == self._chapter_id
+            and self._ticket_entry.external_id == expected_external_id
+            and consumption.consumed is True
+            and consumption.resource == "work_ticket"
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ ticket entry lacks an exact bound consumption proof"
+            )
+        self._ticket_reader_binding = _TicketReaderBinding(
+            controller=self._ticket_entry,
+            proof=proof,
+            page=page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            external_id=expected_external_id,
+        )
         self._ticket_entry_confirmed = True
         self._access_consumption = self._ticket_entry.consumption
         self._expected_episode_title = row.label
         return row.label
+
+    def _ticket_reader_binding_matches(self, page: Page) -> bool:
+        binding = self._ticket_reader_binding
+        controller = self._ticket_entry
+        return bool(
+            self._ticket_entry_confirmed
+            and self._access_strategy == "quota"
+            and self._quota_resource == "work_ticket"
+            and binding is not None
+            and controller is binding.controller
+            and controller.proof is binding.proof
+            and controller.consumption.consumed is True
+            and controller.consumption.resource == "work_ticket"
+            and controller.consumption.consumed_at == binding.proof.request_started_at
+            and binding.page is page
+            and binding.work_id == self._work_id
+            and binding.chapter_id == self._chapter_id
+            and binding.external_id == f"{self._work_id}:{self._chapter_id}"
+            and controller.work_id == binding.work_id
+            and controller.chapter_id == binding.chapter_id
+            and controller.external_id == binding.external_id
+        )
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         """Choose the minimum observed entry route for free, grant, or ticket."""
@@ -581,6 +654,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._advance_pending = False
         self._ended = False
         self._initialized = False
+        self._empty_ssr_reader_identity = None
 
         work_url = self._preflight_work_url or f"https://{SITE_HOST}/manga/{self._work_id}"
         if self._access_strategy == "quota":
@@ -756,6 +830,7 @@ class ComicFuzAdapter(SiteAdapter):
         await self._validate_reader_identity(
             page,
             allow_cached_manifest_at_end=bool(terminal_candidate and self._viewer_pages),
+            terminal_title=terminal_candidate.get("title") if terminal_candidate else None,
         )
         rows = await self._active_page_rows(page)
         if rows:
@@ -889,6 +964,7 @@ class ComicFuzAdapter(SiteAdapter):
             await self._validate_reader_identity(
                 page,
                 allow_cached_manifest_at_end=bool(terminal_candidate and self._viewer_pages),
+                terminal_title=terminal_candidate.get("title") if terminal_candidate else None,
             )
             rows = [
                 row for row in await self._all_page_rows(page) if row["active"]
@@ -1163,11 +1239,71 @@ class ComicFuzAdapter(SiteAdapter):
         *,
         allow_initial_manifest_loading: bool = False,
         allow_cached_manifest_at_end: bool = False,
+        terminal_title: str | None = None,
     ) -> bool:
         self._assert_direct_rental_guard_healthy()
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader route differs from the verified target")
         snapshot = await self._read_viewer_snapshot(page)
+        if (
+            snapshot.get("ssr_mode") == "full"
+            and snapshot.get("legacy_manifest_state") == "malformed"
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ first-party viewer page-role manifest is malformed"
+            )
+        empty_ssr = snapshot.get("ssr_mode") == "empty_viewer"
+        if empty_ssr:
+            if not self._ticket_reader_binding_matches(page):
+                raise UnknownPageStateError(
+                    "ComicFUZ empty viewer SSR is not bound to a confirmed ticket entry"
+                )
+            runtime_state = snapshot.get("runtime_state")
+            if runtime_state == "missing":
+                cached = await self._empty_ssr_identity_for_end(
+                    page,
+                    snapshot,
+                    allow_cached_manifest_at_end=allow_cached_manifest_at_end,
+                    terminal_title=terminal_title,
+                )
+                if cached is not None:
+                    snapshot.update(cached)
+                elif allow_initial_manifest_loading and not self._initialized:
+                    return False
+                else:
+                    raise UnknownPageStateError(
+                        "ComicFUZ ticket viewer runtime identity is unavailable"
+                    )
+            elif runtime_state != "valid":
+                raise UnknownPageStateError(
+                    "ComicFUZ ticket viewer runtime identity is ambiguous or malformed"
+                )
+            if snapshot.get("runtime_state") == "valid":
+                identity = {
+                    "chapter_id": snapshot.get("runtime_chapter_id"),
+                    "work_id": snapshot.get("runtime_work_id"),
+                    "episode_title": snapshot.get("runtime_episode_title"),
+                    "episode_subtitle": snapshot.get("runtime_episode_subtitle"),
+                    "work_title": snapshot.get("runtime_work_title"),
+                    "viewer_chapter_id": snapshot.get("runtime_chapter_id"),
+                    "pages": snapshot.get("runtime_pages"),
+                    "is_first_page_blank": snapshot.get("runtime_is_first_page_blank"),
+                }
+                snapshot.update(identity)
+            else:
+                identity = {
+                    "chapter_id": snapshot.get("cached_chapter_id"),
+                    "work_id": snapshot.get("cached_work_id"),
+                    "episode_title": snapshot.get("cached_episode_title"),
+                    "episode_subtitle": snapshot.get("cached_episode_subtitle"),
+                    "work_title": snapshot.get("cached_work_title"),
+                    "viewer_chapter_id": snapshot.get("cached_chapter_id"),
+                    "pages": None,
+                    "is_first_page_blank": None,
+                }
+                snapshot.update(identity)
+        elif snapshot.get("ssr_mode") != "full":
+            raise UnknownPageStateError("ComicFUZ first-party viewer SSR is malformed")
         if (
             snapshot.get("chapter_id") != self._chapter_id
             or snapshot.get("work_id") != self._work_id
@@ -1180,6 +1316,14 @@ class ComicFuzAdapter(SiteAdapter):
         if not isinstance(subtitle, str):
             raise UnknownPageStateError("ComicFUZ first-party episode subtitle is malformed")
         expected_viewer_title = " ".join(f"{self._expected_episode_title} {subtitle}".split())
+        if (
+            empty_ssr
+            and snapshot.get("runtime_state") == "valid"
+            and snapshot.get("runtime_dom_title") != expected_viewer_title
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ ticket viewer title differs from its bound native chapter"
+            )
         if self._expected_viewer_title is None:
             self._expected_viewer_title = expected_viewer_title
         elif self._expected_viewer_title != expected_viewer_title:
@@ -1238,73 +1382,290 @@ class ComicFuzAdapter(SiteAdapter):
             current_title = await self._read_episode_title(page)
             if current_title != self._episode_title:
                 raise UnknownPageStateError("ComicFUZ episode title changed during the crawl")
+        if empty_ssr and snapshot.get("runtime_state") == "valid":
+            binding = self._ticket_reader_binding
+            if binding is None:
+                raise UnknownPageStateError("ComicFUZ ticket reader binding disappeared")
+            self._empty_ssr_reader_identity = _EmptySsrReaderIdentity(
+                binding=binding,
+                work_id=self._work_id or "",
+                chapter_id=self._chapter_id or "",
+                episode_title=self._expected_episode_title or "",
+                episode_subtitle=subtitle,
+                work_title=work_title,
+                viewer_title=self._expected_viewer_title,
+            )
         return manifest_available
+
+    async def _empty_ssr_identity_for_end(
+        self,
+        page: Page,
+        snapshot: dict[str, Any],
+        *,
+        allow_cached_manifest_at_end: bool,
+        terminal_title: str | None,
+    ) -> dict[str, str] | None:
+        cached = self._empty_ssr_reader_identity
+        binding = self._ticket_reader_binding
+        if not (
+            allow_cached_manifest_at_end
+            and cached is not None
+            and binding is cached.binding
+            and self._ticket_reader_binding_matches(page)
+            and snapshot.get("ssr_mode") == "empty_viewer"
+            and terminal_title == cached.viewer_title
+            and self._episode_title == cached.viewer_title
+            and self._expected_viewer_title == cached.viewer_title
+            and self._viewer_pages is not None
+            and self._captured_indices == list(self._body_page_indices)
+            and self._work_id == cached.work_id
+            and self._chapter_id == cached.chapter_id
+        ):
+            return None
+        if await self._read_episode_title(page) != cached.viewer_title:
+            return None
+        if not await self._terminal_body_shells_clear(page):
+            return None
+        return {
+            "cached_work_id": cached.work_id,
+            "cached_chapter_id": cached.chapter_id,
+            "cached_episode_title": cached.episode_title,
+            "cached_episode_subtitle": cached.episode_subtitle,
+            "cached_work_title": cached.work_title,
+        }
 
     async def _read_viewer_snapshot(self, page: Page) -> dict[str, Any]:
         try:
             snapshot = await asyncio.wait_for(
                 page.evaluate(
-                    r"""() => {
+                    r"""args => {
+                      const own = (value, key) => value !== null && typeof value === 'object'
+                        && Object.prototype.hasOwnProperty.call(value, key);
+                      const isObject = value => value !== null && typeof value === 'object'
+                        && !Array.isArray(value);
+                      const norm = value => String(value || '').trim().replace(/\s+/g, ' ');
+                      const emptyPlainObject = value => isObject(value)
+                        && Object.getPrototypeOf(value) === Object.prototype
+                        && Object.keys(value).length === 0;
+                      const scripts = [...document.querySelectorAll('#__NEXT_DATA__')];
                       let next = null;
-                      try {
-                        next = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || 'null');
-                      } catch { return null; }
-                      const props = next?.props?.pageProps || {};
-                      const data = props.data || {};
-                      let web = null;
-                      for (const element of document.querySelectorAll('img[class*="G54Y0W_page"]')) {
-                        let fiberKey = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
+                      let ssrMode = 'invalid';
+                      let props = null, pageProps = null, data = null;
+                      if (scripts.length === 1 && scripts[0].tagName === 'SCRIPT'
+                          && scripts[0].type === 'application/json') {
+                        try { next = JSON.parse(scripts[0].textContent || ''); }
+                        catch (_) { next = null; }
+                      }
+                      if (isObject(next) && isObject(next.props)) {
+                        props = next.props;
+                        pageProps = own(props, 'pageProps') ? props.pageProps : null;
+                        data = isObject(pageProps) && own(pageProps, 'data') ? pageProps.data : null;
+                        const exactEmptyViewer = next.page === '/manga/viewer/[chapterId]'
+                          && own(next, 'query') && emptyPlainObject(next.query)
+                          && own(props, 'pageProps') && emptyPlainObject(pageProps);
+                        ssrMode = exactEmptyViewer ? 'empty_viewer' : 'full';
+                      }
+                      const images = [...document.querySelectorAll('img[class*="G54Y0W_page"]')];
+                      const titleElements = [...document.querySelectorAll(args.titleSelector)];
+                      const visible = element => {
+                        if (!element || element.getClientRects().length === 0) return false;
+                        for (let node = element; node; node = node.parentElement) {
+                          const style = getComputedStyle(node);
+                          if (node.hidden || style.display === 'none'
+                              || style.visibility === 'hidden' || style.visibility === 'collapse'
+                              || Number(style.opacity) === 0) return false;
+                        }
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                      };
+                      const visibleTitles = titleElements.filter(visible);
+                      const domTitle = visibleTitles.length === 1
+                        ? norm(visibleTitles[0].innerText) : null;
+                      const refs = new Set();
+                      let firstImageWeb = null;
+                      let malformedRuntimeProp = false;
+                      const collect = element => {
+                        const fiberKey = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
                         let fiber = fiberKey ? element[fiberKey] : null;
                         for (let depth = 0; fiber && depth < 35; depth++, fiber = fiber.return) {
-                          const candidate = fiber.memoizedProps?.webMangaViewerData;
-                          if (candidate && typeof candidate === 'object') { web = candidate; break; }
-                        }
-                        if (web) break;
-                      }
-                      let pages = null;
-                      let viewerChapterId = null;
-                      let isFirstPageBlank = null;
-                      if (web) {
-                        viewerChapterId = String(web.chapterId ?? '');
-                        const sourcePages = web.viewerData?.pages;
-                        if (!Array.isArray(sourcePages)) return null;
-                        const firstPageBlank = web.viewerData?.isFirstPageBlank;
-                        if (typeof firstPageBlank === 'boolean') isFirstPageBlank = firstPageBlank;
-                        pages = sourcePages.map(slot => {
-                          if (!slot || typeof slot !== 'object') return {role:'unsupported'};
-                          const slotKeys = Object.keys(slot);
-                          if (slotKeys.length !== 1) return {role:'unsupported'};
-                          if (slotKeys[0] === 'image') {
-                            const image = slot.image;
-                            if (!image || typeof image !== 'object') return {role:'unsupported'};
-                            const ownsExtra = Object.prototype.hasOwnProperty.call(image, 'isExtraPage');
-                            const ownsLink = Object.prototype.hasOwnProperty.call(image, 'urlScheme');
-                            const link = image.urlScheme;
-                            return {
-                              role:'image',
-                              is_extra: ownsExtra ? image.isExtraPage : null,
-                              has_link: ownsLink && typeof link === 'string' && link.trim().length > 0,
-                              link_metadata_valid: !ownsLink || (typeof link === 'string' && link.trim().length > 0),
-                              width: Number(image.imageWidth), height: Number(image.imageHeight)
-                            };
+                          const props = fiber.memoizedProps;
+                          if (isObject(props) && own(props, 'webMangaViewerData')) {
+                            const candidate = props.webMangaViewerData;
+                            if (isObject(candidate)) refs.add(candidate);
+                            else malformedRuntimeProp = true;
+                            if (images.includes(element) && firstImageWeb === null
+                                && candidate !== null && typeof candidate === 'object')
+                              firstImageWeb = candidate;
                           }
-                          if (slotKeys[0] === 'googleAds') return {role:'google_ads'};
-                          if (slotKeys[0] === 'lastPage') return {role:'last_page'};
-                          return {role:'unsupported'};
-                        });
-                      }
-                      return {
-                        chapter_id: String(props.chapterId ?? ''),
-                        work_id: String(data.mangaId ?? ''),
-                        episode_title: typeof data.chapterMainName === 'string' ? data.chapterMainName.trim() : '',
-                        episode_subtitle: data.chapterSubName == null ? '' : (
-                          typeof data.chapterSubName === 'string' ? data.chapterSubName.trim() : null),
-                        work_title: typeof data.mangaName === 'string' ? data.mangaName.trim() : '',
-                        viewer_chapter_id: viewerChapterId,
-                        is_first_page_blank: isFirstPageBlank,
-                        pages
+                        }
                       };
-                    }"""
+                      for (const image of images) collect(image);
+                      for (const title of titleElements) collect(title);
+                      const web = refs.size === 1 ? [...refs][0] : null;
+                      let runtimeState = malformedRuntimeProp ? 'invalid'
+                        : (refs.size > 1 || visibleTitles.length > 1 ? 'ambiguous'
+                          : (refs.size === 0 ? 'missing' : 'invalid'));
+                      let runtime = null;
+                      const mapPages = sourcePages => sourcePages.map(slot => {
+                        if (!isObject(slot)) return {role:'unsupported'};
+                        const keys = Object.keys(slot);
+                        if (keys.length !== 1) return {role:'unsupported'};
+                        if (keys[0] === 'image') {
+                          const image = slot.image;
+                          if (!isObject(image)) return {role:'unsupported'};
+                          const ownsExtra = own(image, 'isExtraPage');
+                          const ownsLink = own(image, 'urlScheme');
+                          const link = image.urlScheme;
+                          return {
+                            role:'image',
+                            is_extra: ownsExtra ? image.isExtraPage : null,
+                            has_link: ownsLink && typeof link === 'string' && link.trim().length > 0,
+                            link_metadata_valid: !ownsLink || (typeof link === 'string' && link.trim().length > 0),
+                            width: Number(image.imageWidth), height: Number(image.imageHeight)
+                          };
+                        }
+                        if (keys[0] === 'googleAds') return {role:'google_ads'};
+                        if (keys[0] === 'lastPage') return {role:'last_page'};
+                        return {role:'unsupported'};
+                      });
+                      let legacyPages = null;
+                      let legacyViewerChapterId = null;
+                      let legacyFirstPageBlank = null;
+                      let legacyManifestState = 'missing';
+                      const legacySource = firstImageWeb?.viewerData?.pages;
+                      if (Array.isArray(legacySource)) {
+                        legacyManifestState = 'valid';
+                        legacyViewerChapterId = String(firstImageWeb.chapterId ?? '');
+                        legacyPages = mapPages(legacySource);
+                        const flag = firstImageWeb.viewerData?.isFirstPageBlank;
+                        if (typeof flag === 'boolean') legacyFirstPageBlank = flag;
+                      } else if (firstImageWeb !== null) {
+                        legacyManifestState = 'malformed';
+                      }
+                      if (web) {
+                        const manga = web.manga;
+                        const groups = web.chapters;
+                        const sourcePages = web.viewerData?.pages;
+                        const groupsComplete = Array.isArray(groups) && groups.length > 0
+                          && Array.from({length:groups.length}, (_, i) => i).every(i => own(groups, i)
+                            && isObject(groups[i]) && Array.isArray(groups[i].chapters)
+                            && groups[i].chapters.length > 0
+                            && Array.from({length:groups[i].chapters.length}, (_, j) => j)
+                              .every(j => own(groups[i].chapters, j)
+                                && isObject(groups[i].chapters[j])
+                                && own(groups[i].chapters[j], 'chapterId')
+                                && Number.isSafeInteger(groups[i].chapters[j].chapterId)
+                                && groups[i].chapters[j].chapterId > 0));
+                        const chapters = groupsComplete
+                          ? groups.flatMap(group => group.chapters) : [];
+                        const chapterIds = chapters.map(chapter => chapter.chapterId);
+                        const chapterIdsUnique = new Set(chapterIds).size === chapterIds.length;
+                        const matches = chapters.filter(chapter =>
+                          chapter.chapterId === args.targetChapterId);
+                        let subtitle = null;
+                        let subtitleValid = false;
+                        if (matches.length === 1) {
+                          const chapter = matches[0];
+                          if (own(chapter, 'chapterSubName')
+                              && typeof chapter.chapterSubName === 'string') {
+                            subtitle = chapter.chapterSubName;
+                            subtitleValid = true;
+                          } else if (!own(chapter, 'chapterSubName')
+                              && 'chapterSubName' in chapter) {
+                            const prototype = Object.getPrototypeOf(chapter);
+                            const descriptor = prototype
+                              ? Object.getOwnPropertyDescriptor(prototype, 'chapterSubName') : null;
+                            if (descriptor && own(descriptor, 'value')
+                                && descriptor.value === '' && typeof descriptor.value === 'string') {
+                              subtitle = '';
+                              subtitleValid = true;
+                            }
+                          }
+                        }
+                        const target = matches.length === 1 ? matches[0] : null;
+                        const mangaIdValid = isObject(manga) && own(manga, 'mangaId')
+                          && Number.isSafeInteger(manga.mangaId)
+                          && manga.mangaId === args.targetWorkId;
+                        const mangaNameValid = isObject(manga) && own(manga, 'mangaName')
+                          && typeof manga.mangaName === 'string' && manga.mangaName.trim().length > 0;
+                        const webChapterValid = own(web, 'chapterId')
+                          && Number.isSafeInteger(web.chapterId)
+                          && web.chapterId === args.targetChapterId;
+                        const chapterNameValid = target !== null && own(target, 'chapterMainName')
+                          && typeof target.chapterMainName === 'string'
+                          && target.chapterMainName.trim().length > 0;
+                        const pageFlag = web.viewerData?.isFirstPageBlank;
+                        const pageShapeValid = Array.isArray(sourcePages)
+                          && typeof pageFlag === 'boolean';
+                        const nativeIdentityValid = mangaIdValid && mangaNameValid && webChapterValid
+                          && groupsComplete && chapterIdsUnique && matches.length === 1 && chapterNameValid
+                          && norm(target?.chapterMainName) === args.expectedEpisodeTitle
+                          && subtitleValid && pageShapeValid;
+                        const valid = nativeIdentityValid
+                          && visibleTitles.length === 1 && domTitle !== null;
+                        if (malformedRuntimeProp) runtimeState = 'invalid';
+                        else if (refs.size > 1 || visibleTitles.length > 1) runtimeState = 'ambiguous';
+                        else if (refs.size === 0) runtimeState = 'missing';
+                        else if (!nativeIdentityValid) runtimeState = 'invalid';
+                        else if (visibleTitles.length === 0 || domTitle === null) runtimeState = 'missing';
+                        else runtimeState = valid ? 'valid' : 'invalid';
+                        if (valid) {
+                          runtime = {
+                            work_id:String(manga.mangaId),
+                            chapter_id:String(web.chapterId),
+                            episode_title:norm(target.chapterMainName),
+                            episode_subtitle:norm(subtitle),
+                            work_title:norm(manga.mangaName),
+                            pages:mapPages(sourcePages),
+                            is_first_page_blank:pageFlag,
+                            viewer_chapter_id:String(web.chapterId),
+                            dom_title:domTitle,
+                            chapter_count:chapters.length
+                          };
+                        }
+                      }
+                      const runtimeValid = runtime !== null && refs.size === 1
+                        && !malformedRuntimeProp;
+                      const ssrData = isObject(data) ? data : null;
+                      const ssrChapterId = isObject(pageProps) && own(pageProps, 'chapterId')
+                        ? String(pageProps.chapterId ?? '') : '';
+                      const ssrWorkId = ssrData && own(ssrData, 'mangaId')
+                        ? String(ssrData.mangaId ?? '') : '';
+                      return {
+                        ssr_mode:ssrMode,
+                        legacy_manifest_state:legacyManifestState,
+                        ssr_page:isObject(next) && typeof next.page === 'string' ? next.page : null,
+                        chapter_id:ssrChapterId,
+                        work_id:ssrWorkId,
+                        episode_title:ssrData && typeof ssrData.chapterMainName === 'string'
+                          ? norm(ssrData.chapterMainName) : '',
+                        episode_subtitle:ssrData && ssrData.chapterSubName == null ? ''
+                          : (ssrData && typeof ssrData.chapterSubName === 'string'
+                            ? norm(ssrData.chapterSubName) : null),
+                        work_title:ssrData && typeof ssrData.mangaName === 'string'
+                          ? norm(ssrData.mangaName) : '',
+                        viewer_chapter_id:legacyViewerChapterId,
+                        is_first_page_blank:legacyFirstPageBlank,
+                        pages:legacyPages,
+                        runtime_state:runtimeValid ? 'valid' : runtimeState,
+                        runtime_work_id:runtime?.work_id ?? null,
+                        runtime_chapter_id:runtime?.chapter_id ?? null,
+                        runtime_episode_title:runtime?.episode_title ?? null,
+                        runtime_episode_subtitle:runtime?.episode_subtitle ?? null,
+                        runtime_work_title:runtime?.work_title ?? null,
+                        runtime_pages:runtime?.pages ?? null,
+                        runtime_is_first_page_blank:runtime?.is_first_page_blank ?? null,
+                        runtime_dom_title:runtime?.dom_title ?? null,
+                        runtime_chapter_count:runtime?.chapter_count ?? null,
+                        runtime_reference_count:refs.size
+                      };
+                    }""",
+                    {
+                        "titleSelector": self.viewer_title_selector,
+                        "targetChapterId": int(self._chapter_id or "0"),
+                        "targetWorkId": int(self._work_id or "0"),
+                        "expectedEpisodeTitle": self._expected_episode_title or "",
+                    },
                 ),
                 timeout=3,
             )
@@ -1327,7 +1688,7 @@ class ComicFuzAdapter(SiteAdapter):
         if is_canonical_viewer_url(page.url, chapter_id=str(self._chapter_id)):
             return True
         return (
-            self._ticket_entry_confirmed
+            self._ticket_reader_binding_matches(page)
             and self._quota_resource == "work_ticket"
             and is_ticket_viewer_url(page.url, chapter_id=str(self._chapter_id))
         )
