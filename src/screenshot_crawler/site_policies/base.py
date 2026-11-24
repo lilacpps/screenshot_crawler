@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from screenshot_crawler.catalog.models import Source
+from screenshot_crawler.catalog.models import Source, SourceTarget
 
 BatchAccessStrategy = Literal["direct", "quota"]
 BatchOrdering = Literal["catalog", "published_at", "display_position"]
@@ -97,6 +97,48 @@ class SitePolicy(ABC):
         """Return source IDs with durable quota attempts that remain uncertain."""
 
         del runs
+        return frozenset()
+
+    def guards_unresolved_quota_attempts_by_work(self) -> bool:
+        """Whether this policy has quota attempts that must block a whole Work."""
+
+        return False
+
+    def records_confirmed_quota_attempts_in_run_history(self) -> bool:
+        """Persist successful consumption proof in a terminal run's stop reason."""
+
+        return False
+
+    def confirmed_quota_attempt_identity_matches(
+        self,
+        candidate: object,
+        item: object,
+        source: Source,
+        target: SourceTarget,
+        work: object,
+    ) -> bool:
+        """Validate native candidate/source/target/Work binding before marking."""
+
+        del candidate, item, source, target, work
+        return False
+
+    def unresolved_quota_attempt_work_ids(
+        self,
+        runs: Collection[object],
+        *,
+        item_work_ids: Mapping[int, int],
+        sources_by_id: Mapping[int, Source],
+        targets_by_id: Mapping[int, SourceTarget],
+        now: datetime,
+    ) -> frozenset[int]:
+        """Return Work IDs with quota outcomes that remain uncertain.
+
+        This opt-in history hook is separate from source-scoped guards. Policies
+        must bind a positive consumption to the exact source and run interval;
+        an unrelated prior grant cannot resolve an uncertain attempt.
+        """
+
+        del runs, item_work_ids, sources_by_id, targets_by_id, now
         return frozenset()
 
     def defer_quota_access_to_grant_phase(self) -> bool:

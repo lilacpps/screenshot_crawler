@@ -1,24 +1,168 @@
 # ComicFUZ free adapter
 
+## Work Ticket status (2026-11-25; Phases 01-04 PASS; Final Reviewer BLOCKING=0; three confirmed uses, two potential uses)
+
+Work3500 run6, Work3315 run12, and Work1970 run15 are three confirmed uses. Work3152 run4 and Work3342 run5 remain unchanged unknown/potential uses (one each); Work3667 remains quarantined. Work3500 run10 and Work3315 run14 completed non-consuming direct capture; Work3152 run11 completed a genuine free capture. Run12 is a confirmed-consumption failure before capture and is preserved. After explicit user approval, Work1970:74891 completed normal quota Run15 on the same Page through positive END, ZIP and Completed; the independent Tester audit passed the 18-page archive, native role/group map, Manifest ordering and database/source-ledger bindings. Its relative rental was `残り3日`; no absolute expiry or finite grant was recorded. The optional observer direct-request counter was not the request-pairing authority, and SSR/runtime mode was not retained, so Run15 does not independently verify the empty-SSR fallback. No further ticket action is authorized; see the work-ticket progress ledger for full details.
+
+## Current B direct rental revalidation (synthetic and non-consuming live capture verified)
+
+A past aware `quota_started_at` with no finite source grant is a planning hint for a non-consuming `direct` + `work_ticket` revalidation. The adapter validates only the selected Work row; recognized current free/paid/quota access produces a typed no-action skip, while unknown presentation remains a hard error. The positive B row requires the exact observed native work/chapter join, already-viewed row presentation, visible free marker plus matching positive relative-rental label, no additional price/access marker, the same exact `webMangaViewerData` object for heading and Charge, and exact work/chapter identity and order. The row root must have exactly the two observed Chapter class tokens, optionally plus the single literal `false` token; that token is accepted only on the root as cosmetic. Unknown or extra root tokens and descendant `false` remain rejected. For `rental_listing`, the selected row Chapter and runtime Chapter must be the same object, as must their point metadata; the row/runtime generated point type and amount must be known numeric zero. The separate SSR target point amount must be an own nonnegative integer but need not equal the current runtime zero; SSR type remains absent when absent and is never filled from a runtime default. The SSR amount's domain meaning is unverified and it is not used as current price or rights authority. Ticket availability may be true or false independently of the rental. Other price/access markers remain unknown and are not relaxed.
+
+The adapter makes one strict canonical viewer request with `useTicket=false` and both point amounts zero. It creates no ticket consumption, source grant, expiry, or resource-state record. A page-lifetime guard rejects later consuming requests and is checked through capture and output metadata. Work3500 run10 completed this direct path through positive END, ZIP, and Completed while preserving the source quota timestamp and Work ledger; the independent Tester audit matched the 12 PNG bodies, ordered native body prefix, groups, archive and database state. Work3500 run7 failed at the strict point comparison, run8 at `rental_listing_row_not_exact`, and run9 at the native body-prefix role check. Those runs are preserved and are not retried. The run8 offline row-root observation and the narrow class-token correction are detailed below.
+
+The run9 non-consuming role probe observed the stable native tail `[unlinked_extra, unlinked_extra, linked_extra, google_ads, last_page]` after body indices 0-11. That probe sampled role metadata only and did not capture page-turn groups. Run10 actual normal direct capture and independent archive audit verified blank-first `(11 body, 12 unlinked extra) -> (13 unlinked extra, 14 linked extra) -> END`; the nonblank final-body-only `(10,11) -> (12,13) -> (14) -> END` alignment remains synthetic-only. A later one-sample non-consuming Work3315 role probe observed 11 body slots followed directly by `[google_ads, last_page]`, with `is_first_page_blank=true`. Run14 then captured all 11 body pages on that same existing rental, followed by the two terminal slots and positive END/ZIP/Completed; independent audit verified the archive and native role/group map. This live capture used non-consuming direct access and does not verify a fresh quota-consuming entry. The adapter accepts only that exact no-extra tail with a nonempty contiguous body prefix. It requires an odd body count when the first page is blank and an even body count when it is not; the blank-first 11-body layout is both live-observed and captured, while the nonblank parity and capture remain synthetic-tested. No extra turn is allowed for this shape. The UUL and no-extra paths keep native body indices and capture prefix unchanged. Initial restore for extra tails retains its narrow rewind allowance. Capture, identity, advancement and END retain their strict history checks. The no-extra correction passed independent review with source BLOCKING=0; the reviewer selected 10 Unit and 11 browser cases, with no skips.
+
+Current synthetic URL contract: the selected viewer target accepts either the
+exact canonical `https://comic-fuz.com/manga/viewer/<chapterId>` URL or that
+same exact path with only `ticket=true`. Work URLs, a different chapter,
+additional/empty query or fragment delimiters, credentials, explicit ports,
+alternate schemes, and other query values fail closed. The request precheck,
+final navigation wait, native viewer snapshot, and adapter reader identity use
+the same predicate. A route failure retains its first fixed reason token even
+if a later request also fails. Canonical and ticket-query paths pass synthetic
+normal Batch/grant-only tests; at least one canonical path uses a hard document
+navigation and issues the API once from the new document. This is synthetic
+verification, not evidence of the live modal CTA's navigation or of a real
+ticket response. The focused URL unit group passed 26 cases, the controller
+browser group passed 63, and the normal/grant-only adapter E2E selection passed
+4 (103 deselected, 0 skipped). Scoped Ruff, `py_compile`, and
+`git diff --check` passed. Independent review passed 39 selected synthetic
+cases in total, including five hard-navigation/Work-replan cases (0 skipped,
+BLOCKING=0); the affected Adapter Unit selection passed 9. Run4 remains
+unknown/potential use 1; no new CLI or live action was performed for this
+correction.
+
+Discovery now classifies visible row-local `無料` as `free`, recognized visible
+S/G coin/medal marks as `paid`, and a fully hydrated row with a confirmed blank
+price slot as `quota`; any hidden, missing, conflicting, or unfamiliar access
+marker remains `unknown`. The Site Policy admits only `work_ticket` for quota,
+scoped to one attempt per Work, and uses the next 00:00 JST boundary rather
+than a 23-hour duration. Planner and Executor block unresolved quota attempts
+for every episode in that Work. Normal Batch and explicit grant-only selection
+are implemented for normal Batch and grant-only through a site-local,
+same-Page controller. A quota attempt validates the one Catalog-selected row,
+clicks only the exact visible `チャージで読む` control once, and decodes the
+matching `/v1/web_manga_viewer_2` request/response pair. Normal Batch continues
+through the existing viewer/capture/END path; grant-only stops before source
+image observation, image read/save, ZIP, Artifact, or Completed status. Premium
+Ticket, coins, medals, and paid actions remain unsupported. No Catalog schema
+change was made. Phase 02 live listing work 3667 matched between a logged-in
+context and an isolated anonymous context (25 rows: free 1, paid 1, quota 23);
+no ticket was used. A later canonical free-viewer probe confirmed the native
+React fields used for the controller's pre/post state, also without a ticket.
+The isolated Phase 04 listing preflight then confirmed that Charge state is
+read from the shared runtime `webMangaViewerData` object, while the Charge
+component's direct props contain only availability and label. The adapter joins
+the same exact chapter from that object referenced by both heading and Charge;
+SSR omissions are not filled in. The original Phase 03 synthetic listing
+fixture had a different shape; its correction now passes the focused listing
+projection tests. The initial adapter E2E timeout was a synthetic fixture
+global-`const` collision during `document.write`, fixed by IIFE-scoping the
+listing script; no production guard was loosened. The first isolated CLI attempt
+on `3667:76588` stopped in `observe_target_row`'s `_snapshot` list-container
+lookup before strict access classification, modal, controller, or charge
+action because the listing had not hydrated (the stored error text says the
+container is ambiguous, but the bounded DOM count actually observed zero). A
+bounded DOM diagnostic observed zero matching containers after DOMContentLoaded and one visible
+container with 25 headings 1.2 seconds later. Quota entry now waits for the
+target list/heading and known runtime-message presence before the unchanged
+strict snapshot; active-grant direct navigation remains unchanged. The helper
+checks observable route, SSR work/target identity and complete runtime
+work/count/target contradictions; full chapter-ID order remains the strict
+snapshot's authority. The wait does not classify access or weaken
+identity/unknown checks. Readiness review passed with BLOCKING=0. The attempt left one failed
+pre-action run in the isolated Catalog; preserve it and quarantine work 3667.
+The CLI attempt forwarded no ticket API request and consumed zero tickets. Its
+sanitized metrics and bounded diagnostic paths are in the work-ticket PROGRESS
+file.
+See
+[`runbooks/comicfuz-work-ticket/PROGRESS.md`](../../../../runbooks/comicfuz-work-ticket/PROGRESS.md)
+for gates, test results, and remaining native consumption/expiry evidence. Gate
+02 and Gate03 passed independent review with BLOCKING=0. Current readiness
+tests pass (5 passed; 35 deselected), including DOM+runtime delay,
+runtime-only delay, timeout with no action, duplicate-container rejection and
+known runtime mismatch before Charge mount. Delayed-list normal Batch,
+grant-only, and unavailable-Work replan E2E pass (3 passed; 102 deselected).
+Independent review passed the 18-case listing projection group, 3 adapter E2E
+cases and 2 readiness additions. Review
+coverage verifies a capped/timed native response read, rejection of
+noncanonical requests before forwarding, terminal abort of in-flight and later
+ticket requests after cancellation, and a typed no-action skip that replans
+from one unavailable Work to another eligible Work. Ticket consumption is
+first committed without a grant expiry; an observed expiry is attached only
+after fresh final-time validation. The isolated 3667 attempt remains quarantined. The first Work 3152 CLI attempt ended with the typed
+`target_ticket_modal_not_exact` no-action sentinel. After the reviewed modal
+scope correction, one Lead-authorized reattempt also ended with the same
+pre-click sentinel. A passive Page observer recorded one canonical viewer
+endpoint POST/200, but the strict request decoder returned unknown, so
+chapter/useTicket/point flags are not established and the event is not treated
+as consumption. The post-run Catalog still has no source quota start, grant,
+Work resource state, or Artifact; the Item remains pending and the previous
+runs are unchanged. The bounded non-consuming probe observed the exact
+`Dialog_modal` root and target `p` title; the read validator, trusted-click
+arming, and final CTA locator share that scope and visible-state contract.
+The post-run non-consuming modal diagnosis found one remaining shape
+mismatch: the Dialog exposes both a classless app-caption anchor and the known
+app-flow button, while the previous inspector permitted only the button. The
+exact ticket title/CTA/price and all other allowed controls matched; only the
+app-control count/shape made the modal non-exact. The shared inspector now accepts only that exact app-caption pair: one
+classless `A` and one `BUTTON` with the known
+`Dialog_appflow__button__` prefix. Third controls, unknown classes/tags, and
+unknown captions still fail closed. The same rule gates modal reading, trusted
+click arming, and final CTA selection; other ticket proof checks are unchanged.
+The latest synthetic controller browser module passed 57 cases, the affected
+ComicFUZ Unit group passed 64 cases, and the adapter normal/grant-only/
+unavailable-work selection passed 3. Independent review covered 17 modal cases
+and 3 adapter E2E cases (20 passed, 142 deselected, 0 skipped), BLOCKING=0. At
+that earlier modal-scope checkpoint no CTA had been clicked and no later live
+action had run; subsequent run4/run5 outcomes and the current stop state are
+summarized above and in the progress ledger. See the ledger for the safe
+projection.
+Historical prior modal-scope gate, before the app-caption pair correction:
+independent review covered 13 synthetic cases plus 3 Batch E2E cases (16
+passed, 0 skipped), BLOCKING=0; the controller browser file had 53 passed and
+the Batch E2E selection had 3 passed. The current post-correction results are
+57 controller browser cases, 64 affected Unit cases, 3 adapter E2E cases, and
+independent review of 17 modal plus 3 adapter cases (20 passed, 0 skipped).
+These earlier modal-scope checks did not resolve ticket consumption. Current
+accounting is run4 and run5 unknown, one potential use each (aggregate 2); do
+not retry either Work. Run5 had a matched ticket request/HTTP 200, but no saved
+positive native proof. Actual native consumption response and absolute grant
+expiry remain unverified. See the progress ledger for the exact run evidence.
+
+The current controller has a synthetic-only branch for a same-operation
+relative rental marker exactly matching `残り<positive integer>日`. A fresh
+matched response and exact-target React state must agree on the marker and
+complete zero-point metadata. The relative value permits only current entry;
+it is not converted into an absolute expiry and does not create a future
+source grant. A separate non-consuming Work3342 snapshot observed `残り2日`,
+but the strict listing snapshot rejected it with
+`listing_runtime_point_amount_mismatch`; that snapshot is not run5's response
+proof. Targeted results: 37 unit tests; 72 controller-browser tests plus one
+separately selected preexisting-relative case; and 8 normal Batch/grant-only
+Adapter E2E cases passed. Existing pytest-asyncio deprecation warnings only.
+No additional ticket action occurred. See the progress ledger for evidence
+limits and current stop conditions.
+
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 
 2026-10-17 isolated normal-CLI verification for work 3140 / chapter 81136 (第98話 無敵の魔法): full Discovery observed 233 records, with 134 free candidates and 99 unknown skips. `batch run --limit 1` reached positive END, produced 29 JPEG pages, a present Artifact, and Completed status. All ZIP members decoded; CRC and 29 unique payload hashes passed. The first two pages are 1512x2150 and the remaining 27 are 1351x1920. Catalog Artifact SHA-256 and byte size match the archive. First/middle/last samples were visually inspected; the last saved image is the work relationship chart, while all three marked extras are excluded. Evidence and archive audit are isolated under `output/comicfuz-3140-role-probe/`. No pre-package Manifest copy was retained in this run, so member-to-Manifest comparison is not claimed. The other 133 free candidates were not crawled. Login/resource/purchase flows remain unsupported and were not used.
 
 Verification selection (2026-10-17): 116 affected ComicFUZ Unit, browser Integration, and CLI tests passed in five isolated groups, with zero skips; `ruff check src tests` and `git diff --check` passed. An earlier combined invocation stopped making progress and was terminated; it is not counted as a pass. Separate focused runs also passed. Full suite was omitted for this site-local change; separate Research tests were omitted because no durable PoC/research helper changed. The normal-CLI live and archive audit above are separate from synthetic tests.
 
-Discovery requires a canonical public work URL, unchanged work identity, and a stable exact join between first-party `#__NEXT_DATA__` chapter IDs/labels and the rendered list. Login state and account-header changes do not block Discovery. It emits every current row. Exactly one visible row-local `無料` marker means `free`; all other access remains `unknown`. Resource, ticket, charge, medal, purchase, and account-entitlement fields are outside this implementation. Full-list global positions are assigned from the validated native list before any bounded selection.
+Discovery requires a canonical public work URL, unchanged work identity, and a stable exact join between first-party `#__NEXT_DATA__` chapter IDs/labels and the rendered list. Login state and account-header changes do not block Discovery. It emits every current row. Exactly one visible row-local `無料` marker means `free`; a recognized visible S/G icon within the single price slot means `paid`; a fully joined row with a confirmed empty price/access region means `quota`. Hidden, incomplete, conflicting or unfamiliar markers remain `unknown`. Full-list global positions are assigned from the validated native list before any bounded selection.
 
 The manual crawl adapter requires an exact `<work-id>:<chapter-id>` target and first visits the same-work public listing. It buffers and validates that complete listing and requires the target's exact current `無料` row before opening its viewer route. Exact route and first-party hydration (`mangaId`, `chapterMainName`, `mangaName`) are rechecked during capture, independently of login state; the main title must match the freshly verified free row after the same Python `split/join` whitespace normalization used by Discovery. This absorbs ideographic/repeated whitespace, not character, punctuation or ID differences. The reader title must match that main title plus the bound optional native subtitle after whitespace normalization. The validated `mangaName` supplies the work title in output metadata. Manual runs require `COMICFUZ_WORK_URL` in the environment file. The adapter does not open a reader route first to discover access.
 
-The supported reader manifest has a contiguous prefix of ordinary unlinked image descriptors, followed by either one linked `isExtraPage=true` image or exactly three extra images with link-presence sequence `(true, false, true)`, then exactly `googleAds` and `lastPage`. The three-extra shape was observed on work 3140, chapter 81136 (第98話): body indices 0-28, extra indices 29-31, and terminal slots 32-33. Visual inspection identified the extras as an official-X promotion, a volume promotion, and another-work recommendation. Only the ordinary prefix is captured; its work-related introductory/relationship charts are retained. Descriptor indices and dimensions must join exactly to rendered `page_N` identities. Any final mixed spread must be fully ready; only its body half is saved.
+The supported reader manifest has a contiguous prefix of ordinary unlinked image descriptors, followed by one of the exact native extra tails `[linked extra]`, `[linked, unlinked, linked]`, or `[unlinked, unlinked, linked]`, then exactly `googleAds` and `lastPage`. A separate no-extra shape is exactly the body prefix followed by `googleAds` and `lastPage`, with no extra page boundary. It requires at least one body; blank-first requires an odd body count and nonblank-first an even body count. Work3315 chapter 66009 exposed an 11-body blank-first no-extra shape; Run14 later captured all 11 body pages in order and reached positive END/ZIP/Completed during non-consuming direct access to its existing rental, with independent archive audit. This capture does not verify a fresh quota-consuming ticket entry. The legacy three-extra shape was observed on work 3140, chapter 81136 (第98話): body indices 0-28, extra indices 29-31, and terminal slots 32-33. Visual inspection identified those extras as an official-X promotion, a volume promotion, and another-work recommendation. The UUL shape was observed read-only on Work3500 chapter 65256: body indices 0-11, unlinked extra indices 12-13, linked extra 14, then terminal slots 15-16. The role probe's four snapshots were identical; it did not capture page-turn groups or save images. Only the ordinary prefix is captured; its work-related introductory/relationship charts are retained. Descriptor indices and dimensions must join exactly to rendered `page_N` identities. Any final mixed spread must be fully ready; only its body half is saved.
 
-For the three-extra shape, the adapter supports two observed layouts after all body indices are captured. A final `(body, first linked extra)` spread is followed by the remaining `(unlinked extra, linked extra)` pair. A final body-only spread is followed by `(first linked extra, unlinked extra)` and then the final single `(linked extra)`. Each exact extra group is AD, never capture, with at most one turn per group and two extra-group turns total. The group history binds the preceding rendered group and expected native indices/roles; skipped or repeated groups cannot advance. A repeated last group times out. Missing/clipped halves, unsafe pixels, body gaps, changed manifests, other extra/link sequences, and unverified terminal states fail closed. This supports the observed shapes only, not arbitrary `isExtraPage` semantics.
+For the legacy `(linked, unlinked, linked)` shape, the adapter supports two observed layouts after all body indices are captured: final `(body, first linked extra)` then `(unlinked extra, linked extra)`, or final body-only then `(linked extra, unlinked extra)` then `(linked extra)`. For UUL, Run10 actual blank-first capture verified final `(body, first unlinked extra)` then `(unlinked extra, linked extra)` and positive END. The nonblank final-body-only then `(unlinked extra, unlinked extra)` then `(linked extra)` layout remains synthetic-only; Run9 role samples did not include page-turn groups. Each exact extra group is AD, never capture, with at most one turn per group and two extra-group turns total. The no-extra shape has no extra group or AD turn; blank-first requires an odd body count and nonblank-first an even body count, checked before capture. Run14 verified the blank-first 11-body no-extra sequence through END/ZIP/Completed with non-consuming direct access. The nonblank 10-body no-extra flow remains synthetic-only. The group history binds the preceding rendered group and expected native indices/roles; skipped or repeated groups cannot advance. A repeated last group times out. Missing/clipped halves, unsafe pixels, body gaps, changed manifests, other extra/link sequences, and unverified terminal states fail closed. Only the exact extra tails and no-extra form above are supported; arbitrary `isExtraPage` semantics are not accepted.
 
 Live normal CLI Batch for work 3140 / chapter 81871 (SSSオフショット101) completed through positive END using an isolated Catalog/Watchlist/output under `.tmp/comicfuz-81871-20261122/`. Its manifest has body 0, extras 1-3, then terminal slots 4-5; the observed groups are `(0,) -> (1,2) -> (3,) -> END`. The ZIP contains exactly one decodable 1351x1920 JPEG. CRC and Catalog Artifact hash/size checks passed, and its payload matches the same-chapter native body evidence. The final pre-package Manifest was not retained. This verifies the reported episode; other pending chapters were not run.
 
 END still requires the entire body prefix to be captured, matching episode identity, and cleared or matching inactive image shells. A positive panel can be the original next-chapter panel, or the observed no-next latest-episode panel: exactly one visible last-page root, direct three-action block with exact labels お気に入り / いいね / コメント, exactly one visible direct recommendation block with the expected heading, and exactly one shown matching viewer title. Additional same-class account sections such as チャージが回復した作品 do not count as that recommendation block; duplicate matching recommendation blocks still fail. The latter title may be below the viewport; hidden titles and ambiguous/partial panels are rejected. It requires no next-chapter link/panel, never infers END from their absence, and never clicks any action or recommendation. First-party `chapterMainName` remains bound to the freshly verified listing label. Optional `chapterSubName` is bound separately; the viewer title must match the whitespace-normalized main title plus subtitle. Absent/null subtitles are empty; other non-string subtitles and subtitle drift fail closed.
 
-During `wait_for_change` only, the adapter tolerates a bounded transition snapshot of three or four rows when page advance is pending, the rows form a duplicate-free contiguous subset of the exact prior and next rendered groups, both groups are represented, and at least one row is not ready. This covers body transitions and the exact next extra group in the two supported layouts, only with a validated manifest and all body pages captured before extra-only groups. Native index/role and available descriptor dimensions remain bound; any ready image still passes the usual source and visual-safety checks. The adapter resets stability and waits within the existing deadline; it never captures this overlap. All other wide shapes fail closed, and detection, identity, initialization, and capture retain their strict supported-shape checks. Synthetic browser cases cover both extra layouts, three/four-image overlaps, persistent overlap timeout with no Artifact/ZIP, malformed indices/roles, all-ready wide rejection, unsafe ready pixels and wrong native dimensions. Earlier independent review and normal CLI chapter-80641 evidence are in the progress ledger; the new chapter-82123 and chapter-81871 live verifications are summarized above. These observations do not guarantee all ComicFUZ layouts or future runs.
+During `wait_for_change` only, the adapter tolerates a bounded transition snapshot of three or four rows when page advance is pending, the rows form a duplicate-free contiguous subset of the exact prior and next rendered groups, both groups are represented, and at least one row is not ready. This covers body transitions and the exact next extra group in the observed blank-first UUL layout; the nonblank UUL group alignment remains synthetic-only. All cases require a validated manifest and all body pages captured before extra-only groups. Native index/role and available descriptor dimensions remain bound; any ready image still passes the usual source and visual-safety checks. The adapter resets stability and waits within the existing deadline; it never captures this overlap. All other wide shapes fail closed, and detection, identity, initialization, and capture retain their strict supported-shape checks.
 
 When predicting the next final body group for transition waiting, a complete body/body pair remains exactly two body images. The first extra is appended only when one final body image remains. This applies to both native opening modes and prevents the chapter-80350 failure where a valid final body pair was incorrectly predicted as three images. No overlap is captured and the readiness, native-role/dimension and positive-END guards are unchanged.
 
@@ -32,8 +176,14 @@ When the current page image is associated with a ComicFUZ viewer-delivered blob 
 
 Viewer image response observation is limited to 16 entries, with a 2-second read deadline and 4 MiB `Content-Length` and post-read caps. Playwright `Response.body()` buffers before returning, so the post-read cap cannot limit memory already allocated by Playwright; the header cap and deadline are the available safeguards. Failed, timed-out, duplicate, END, error, and page-close reads are canceled or cleared. The first-party projection omits signed image URLs, so same-dimension descriptor substitution cannot be independently ruled out through a descriptor-to-blob URL hash comparison; native index, role, title, dimensions, current image binding, and geometry are still checked. The site-local AccessProfile observes the public site, `api.comic-fuz.com`, and the observed image host for existing AccessGuard policy; no charge/resource API is called by the adapter.
 
-The adapter is registered for manual `crawl` and normal Batch. Batch policy selects only Catalog sources with `available=true` and `access_mode=free`, always using `direct`; unknown, quota, paid, owned, and unavailable states are skipped. It exposes no resource or grant-only passes. Manual crawl requires `COMICFUZ_WORK_URL`. Batch reads that value when supplied and otherwise derives the canonical same-work listing URL from the validated composite Catalog identity; a supplied URL must match that work. In either path the adapter validates the listing and exact free row before opening the requested viewer. Normal Catalog planning retains Discovery's global `display_position` as the archive prefix, and standard Batch owns ZIP/Artifact/Completed lifecycle without site-specific Core changes.
+The adapter is registered for manual `crawl` and normal Batch. Site Policy can select `free` direct candidates and `quota` candidates for `work_ticket`; paid, owned, unknown and unavailable states are skipped. Normal and grant-only both use the ComicFUZ site-local quota entry/controller. Manual crawl requires `COMICFUZ_WORK_URL`. Batch reads that value when supplied and otherwise derives the canonical same-work listing URL from the validated composite Catalog identity; a supplied URL must match that work. Existing free/direct access retains its complete-listing and exact-free-row preflight. Quota entry instead visits the one selected work page, verifies the exact target row and modal, and makes its single charge attempt; it does not scan other chapters or do another full Discovery pass. An observed active source grant goes directly to the canonical viewer route. Normal Catalog planning retains Discovery's global `display_position` as the archive prefix, and standard Batch owns ZIP/Artifact/Completed lifecycle without site-specific Core changes.
 
 The adapter uses the existing shared Playwright page/CDP session and does not launch Chrome or modify shared Core. Any route change before the verified END fails closed; the adapter does not accept `NEXT_CONTENT`. Focused synthetic browser tests cover the body-plus-linked-extra mixed spread, role variants rejected before output, preflight denial in logged-in and anonymous sessions, delayed first-party manifest attachment and old-image transitions, restore/rewind, work/episode/title drift, unknown tail, `max_pages`, partial spreads, source read deadlines/caps, CSS visual effects, byte preservation, native PNG fallback, and mutation during capture. During initialization only, initial stability and rewind waits may also defer a temporary loss after the first manifest read, within their existing deadlines. Every poll rechecks route and work/chapter/title metadata; a missing manifest resets stability and skips image processing. The original manifest stays bound and must match exactly when it returns. Permanent loss times out and changed data fails immediately. After initialization, detect/capture still reject disappearance; this is not a general cached-manifest capture path.
 
 For the reported work 3140 / chapter 73083 (Episode.79), the saved production failure had zero saved pages and no initialized content context; its diagnostic HTML already contained opening images 0-3. A fresh pre-fix runner and isolated CLI retry both completed without reproducing the gap, so the exact timing cause is inferred rather than directly observed again. Deterministic browser tests exercise delayed first attachment, single/pair opening gaps, rewind gaps, permanent absence, changed manifests, metadata drift, and strict post-initialization rejection. Post-fix CLI/Executor verification completed with 29 1351x1920 JPEGs and positive END using isolated Catalog/Watchlist/output under `.tmp/comicfuz-73083-20261122/verified/`. ZIP order and every SHA-256/dimension match the saved pre-package Manifest; CRC, decoding and Catalog Artifact hash/size passed. Other pending episodes were not run. The older anonymous chapter-80641 ten-page live evidence and independent audits remain in the progress ledger.
+
+## Same-page empty-SSR ticket reader identity (synthetic-only correction)
+
+Work3315 run12 positively confirmed ticket consumption, then failed before capture because the canonical viewer document retained an exact but empty Next.js `query`/`pageProps` shell after the hard navigation. A separate non-consuming viewer probe established the runtime React metadata shape, but it is not same-operation evidence for run12. The adapter now uses that runtime authority only after the exact confirmed quota `work_ticket` proof is bound to the same controller, proof object, Page, work/chapter/external ID, and request timestamp. It requires a single valid Next data script, exact viewer route and own empty objects, one shared complete `webMangaViewerData` object across all image/H2 refs, exact work/chapter identity, unique chapter IDs, typed title/subtitle and page manifest, and one visible title matching the native episode. Conflicts, malformed objects, ambiguous refs, and malformed full-SSR manifests remain immediate failures; only missing runtime/title during bounded initialization waits. END caching is restricted to the same binding after complete body capture and matching positive END. The correction passed focused synthetic tests. Run15 consuming capture succeeded, but the observer did not retain SSR/runtime mode, so this specific empty-SSR fallback remains live-unverified.
+
+Run12 used the schema-decoded `isTicketAvailable=false` default when that protobuf field was omitted on wire; explicit encoded-false presence is not claimed, and no other absent field is filled. Run15's matched exact target request used `useTicket=true` with both point fields zero and paired to HTTP 200 in the independent request audit; the persisted consumption marker matches the source and Work ledger. It completed the same-Page normal capture through END/ZIP/Completed. The observer's optional direct-request count was not used as this pairing proof, and SSR/runtime mode was not retained; therefore the empty-SSR fallback remains synthetic-only. The relative marker `残り3日` did not become an absolute expiry (`access_granted_until=NULL`). Work3152 run4 and Work3342 run5 remain potential uses; no further ticket action is authorized.

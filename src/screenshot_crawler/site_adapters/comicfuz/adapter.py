@@ -10,8 +10,9 @@ import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -25,7 +26,12 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessAttemptObservation,
+    AccessConsumption,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.comicfuz.access import comicfuz_access_profile
 from screenshot_crawler.site_adapters.comicfuz.discovery import (
     SITE_HOST,
@@ -36,11 +42,46 @@ from screenshot_crawler.site_adapters.comicfuz.discovery import (
 from screenshot_crawler.site_adapters.comicfuz.native_capture import (
     capture_comicfuz_source_bytes,
 )
+from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+    API_HOST,
+    API_PATH,
+    ComicFuzTicketEntry,
+    ComicFuzTicketNotAttemptedError,
+    TicketEntryProof,
+    find_ticket_modal_cta,
+    is_canonical_viewer_url,
+    is_target_viewer_url,
+    is_ticket_viewer_url,
+    open_direct_relative_rental_viewer,
+    parse_rental_expiry,
+    read_native_ticket_snapshot,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
 _COMPOSITE_ID = re.compile(r"^(?P<work>[0-9]+):(?P<chapter>[0-9]+)$")
 _PAGE_LABEL = re.compile(r"^page_(?P<number>[0-9]+)$")
 _BLOB_PREFIX = "blob:https://comic-fuz.com/"
+
+
+@dataclass(frozen=True, slots=True)
+class _TicketReaderBinding:
+    controller: ComicFuzTicketEntry
+    proof: TicketEntryProof
+    page: Page
+    work_id: str
+    chapter_id: str
+    external_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _EmptySsrReaderIdentity:
+    binding: _TicketReaderBinding
+    work_id: str
+    chapter_id: str
+    episode_title: str
+    episode_subtitle: str
+    work_title: str
+    viewer_title: str
 def _cleanup_observer_on_failure(
     method: Callable[..., Awaitable[Any]],
 ) -> Callable[..., Awaitable[Any]]:
@@ -57,10 +98,10 @@ def _cleanup_observer_on_failure(
     return wrapped
 
 
-def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
-    """Accept only the live-verified body-prefix / extra / reader-tail shapes."""
+def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int | None]:
+    """Accept only the verified body-prefix and exact native reader tails."""
 
-    if not isinstance(pages, list) or len(pages) < 4:
+    if not isinstance(pages, list) or len(pages) < 3:
         raise UnknownPageStateError("ComicFUZ viewer page-role manifest is incomplete")
     roles: list[str] = []
     for slot in pages:
@@ -94,15 +135,17 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
         else:
             raise UnknownPageStateError("ComicFUZ viewer contains an unsupported page role")
 
-    extra_positions = [index for index, role in enumerate(roles) if role == "linked_extra"]
-    if not extra_positions:
-        raise UnknownPageStateError("ComicFUZ viewer must expose a linked extra-page marker")
-    extra_index = extra_positions[0]
+    extra_positions = [index for index, role in enumerate(roles) if role != "body_candidate"]
+    extra_index = extra_positions[0] if extra_positions else len(roles)
     if extra_index < 1 or roles[:extra_index] != ["body_candidate"] * extra_index:
         raise UnknownPageStateError("ComicFUZ body pages are not a contiguous unlinked prefix")
-    if roles[extra_index:] not in (
+    tail = roles[extra_index:]
+    if tail == ["google_ads", "last_page"]:
+        return tuple(range(extra_index)), None
+    if tail not in (
         ["linked_extra", "google_ads", "last_page"],
         ["linked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
+        ["unlinked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
     ):
         raise UnknownPageStateError("ComicFUZ viewer tail differs from the verified layout")
     return tuple(range(extra_index)), extra_index
@@ -132,6 +175,16 @@ class ComicFuzAdapter(SiteAdapter):
         self._chapter_id: str | None = None
         self._target_url: str | None = None
         self._access_strategy: AccessStrategy = "auto"
+        self._quota_resource: str | None = None
+        self._direct_rental_revalidation = False
+        self._direct_rental_guard_check: Callable[[], None] | None = None
+        self._direct_rental_guard_page: Page | None = None
+        self._existing_access_grant_until: datetime | None = None
+        self._ticket_entry: ComicFuzTicketEntry | None = None
+        self._ticket_entry_confirmed = False
+        self._ticket_reader_binding: _TicketReaderBinding | None = None
+        self._empty_ssr_reader_identity: _EmptySsrReaderIdentity | None = None
+        self._access_consumption = AccessConsumption()
         self._episode_title: str | None = None
         self._expected_episode_title: str | None = None
         self._expected_viewer_title: str | None = None
@@ -161,6 +214,30 @@ class ComicFuzAdapter(SiteAdapter):
         self._bound_page = page
         page.on("response", self._handle_source_response)
         page.on("close", self._on_page_closed)
+
+    async def prepare_entry_only_page(self, page: Page) -> None:
+        """Keep only Page lifecycle tracking; grant-only never reads image bodies."""
+
+        await self._cleanup_source_observer()
+        self._bound_page = page
+        page.on("close", self._on_page_closed)
+
+    def configure_existing_access_grant(
+        self, access_granted_until: datetime | None
+    ) -> None:
+        if (
+            isinstance(access_granted_until, datetime)
+            and access_granted_until.tzinfo is not None
+            and access_granted_until.utcoffset() is not None
+        ):
+            self._existing_access_grant_until = access_granted_until
+        else:
+            self._existing_access_grant_until = None
+
+    def get_access_consumption(self) -> AccessConsumption:
+        if self._ticket_entry is not None and self._ticket_entry.consumption.consumed:
+            return self._ticket_entry.consumption
+        return self._access_consumption
 
     async def _cleanup_source_observer(self) -> None:
         page = self._bound_page
@@ -268,8 +345,259 @@ class ComicFuzAdapter(SiteAdapter):
         self._chapter_id = match.group("chapter")
         self._target_url = f"https://{SITE_HOST}/manga/viewer/{self._chapter_id}"
 
+    async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
+        if access_strategy not in {"auto", "direct", "quota"}:
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ supports access_strategy='auto', 'direct', or 'quota'"
+            )
+        if (
+            self._direct_rental_guard_check is not None
+            and self._direct_rental_guard_page is page
+            and not page.is_closed()
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ direct rental Page must close before adapter reconfiguration"
+            )
+        self._access_strategy = access_strategy
+        self._quota_resource = None
+        self._direct_rental_revalidation = False
+        self._direct_rental_guard_check = None
+        self._direct_rental_guard_page = None
+        self._ticket_entry = None
+        self._ticket_entry_confirmed = False
+        self._ticket_reader_binding = None
+        self._empty_ssr_reader_identity = None
+        self._access_consumption = AccessConsumption()
+
+    async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
+        del page
+        if self._access_strategy == "direct":
+            if quota_resource not in {None, "work_ticket"}:
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ direct access supports only the selected work_ticket revalidation context"
+                )
+            if quota_resource == "work_ticket":
+                if self._work_id is None or self._chapter_id is None:
+                    raise UnknownPageStateError(
+                        "ComicFUZ direct rental revalidation requires a configured target identity"
+                    )
+                self._quota_resource = quota_resource
+                self._direct_rental_revalidation = True
+            return
+        if self._access_strategy != "quota":
+            if quota_resource is not None:
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ quota resource requires access_strategy='quota'"
+                )
+            return
+        if quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ quota access supports only quota_resource='work_ticket'"
+            )
+        if self._work_id is None or self._chapter_id is None:
+            raise UnknownPageStateError(
+                "ComicFUZ Work Ticket requires a configured Catalog target identity"
+            )
+        if self._ticket_entry is not None:
+            raise UnknownPageStateError("ComicFUZ Work Ticket entry is already configured")
+        self._quota_resource = quota_resource
+        self._ticket_entry = ComicFuzTicketEntry(
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            external_id=f"{self._work_id}:{self._chapter_id}",
+        )
+        self._ticket_reader_binding = None
+        self._empty_ssr_reader_identity = None
+        self._access_consumption = AccessConsumption()
+
+    def _ticket_not_attempted(self, reason: str) -> None:
+        if self._work_id is None or self._chapter_id is None:
+            raise UnknownPageStateError("ComicFUZ ticket target identity is unavailable")
+        self.report_access_attempt(
+            AccessAttemptObservation(
+                site="comicfuz",
+                external_id=f"{self._work_id}:{self._chapter_id}",
+                resource="work_ticket",
+                resource_kind="work_ticket",
+                status="not_attempted",
+                observed_at=datetime.now(UTC),
+                reason=reason,
+            )
+        )
+        raise ComicFuzTicketNotAttemptedError(reason)
+
+    async def _initialize_work_ticket_entry(self, page: Page) -> str:
+        """Open one Catalog-selected row and confirm exactly its ticket entry."""
+
+        if (
+            self._work_id is None
+            or self._chapter_id is None
+            or self._ticket_entry is None
+            or self._quota_resource != "work_ticket"
+        ):
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ ticket entry requires a configured work_ticket target"
+            )
+        work_parts = parse_comicfuz_work_url(page.url)
+        if work_parts is None or work_parts.work_id != self._work_id:
+            raise UnknownPageStateError("ComicFUZ ticket entry did not start on its work page")
+        discovery = ComicFuzDiscoveryAdapter()
+        await discovery.wait_for_target_row_hydration(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+        )
+        row = await discovery.observe_target_row(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+        )
+        if row.access_mode in {"free", "paid"}:
+            self._ticket_not_attempted(f"target_access_{row.access_mode}")
+        if row.access_mode != "quota":
+            raise UnknownPageStateError("ComicFUZ selected ticket row is not classified")
+
+        native = await read_native_ticket_snapshot(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            page_mode="listing",
+        )
+        if " ".join(native.chapter_label.split()) != row.label:
+            raise UnknownPageStateError("ComicFUZ native target label differs from its listing row")
+        now = datetime.now(UTC)
+        if native.rental_value:
+            if not native.rental_present:
+                raise UnknownPageStateError("ComicFUZ target rental lacks native field presence")
+            expiry = parse_rental_expiry(native.rental_value)
+            if expiry is None:
+                raise UnknownPageStateError("ComicFUZ target rental expiry is unavailable")
+            if expiry > now:
+                self.report_confirmed_access_grant(
+                    ConfirmedAccessGrant(
+                        site="comicfuz",
+                        external_id=f"{self._work_id}:{self._chapter_id}",
+                        observed_at=now,
+                        access_granted_until=expiry,
+                        expiry_evidence="site_absolute_expiry",
+                    )
+                )
+                self._ticket_not_attempted("target_has_active_rental")
+        if not (
+            native.point_type == 0
+            and native.point_amount > 0
+            and native.is_charge_needed_present
+            and native.is_charge_needed
+            and native.is_ticket_available_present
+            and native.is_ticket_available
+            and native.charge_status_present
+            and native.charge_status in {"\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"}
+        ):
+            self._ticket_not_attempted("work_ticket_unavailable")
+
+        heading = page.locator('h3[class*="Chapter_chapter__name__"]').nth(row.index)
+        if (
+            row.index < 0
+            or await page.locator('h3[class*="Chapter_chapter__name__"]').count() <= row.index
+            or not await heading.is_visible()
+            or " ".join((await heading.inner_text()).split()) != row.label
+        ):
+            raise UnknownPageStateError("ComicFUZ selected row position changed before modal open")
+        original_url = page.url
+        blocked_selection_requests: list[bool] = []
+
+        async def block_unexpected_viewer_api(route) -> None:
+            blocked_selection_requests.append(True)
+            await route.abort("blockedbyclient")
+
+        route_pattern = f"https://{API_HOST}{API_PATH}**"
+        await page.route(route_pattern, block_unexpected_viewer_api)
+        try:
+            await heading.click()
+            await page.wait_for_timeout(100)
+        finally:
+            with suppress(Exception):
+                await page.unroute(route_pattern, block_unexpected_viewer_api)
+        if blocked_selection_requests or page.url != original_url:
+            raise UnknownPageStateError(
+                "ComicFUZ row selection changed route or requested the viewer API unexpectedly"
+            )
+        after_modal = await read_native_ticket_snapshot(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            page_mode="listing",
+        )
+        if after_modal != native:
+            raise UnknownPageStateError("ComicFUZ native ticket state changed before the CTA")
+
+        async def click_charge_cta() -> None:
+            cta = await find_ticket_modal_cta(page, chapter_label=row.label)
+            await cta.click()
+
+        try:
+            await self._ticket_entry.enter(
+                page,
+                chapter_label=row.label,
+                native_state=after_modal,
+                row_access_mode=row.access_mode,
+                attempt_reporter=self.report_access_attempt,
+                grant_reporter=self.report_confirmed_access_grant,
+                click=click_charge_cta,
+            )
+        finally:
+            self._access_consumption = self._ticket_entry.consumption
+        proof = self._ticket_entry.proof
+        consumption = self._ticket_entry.consumption
+        expected_external_id = f"{self._work_id}:{self._chapter_id}"
+        if not (
+            isinstance(proof, TicketEntryProof)
+            and self._ticket_entry.work_id == self._work_id
+            and self._ticket_entry.chapter_id == self._chapter_id
+            and self._ticket_entry.external_id == expected_external_id
+            and consumption.consumed is True
+            and consumption.resource == "work_ticket"
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ ticket entry lacks an exact bound consumption proof"
+            )
+        self._ticket_reader_binding = _TicketReaderBinding(
+            controller=self._ticket_entry,
+            proof=proof,
+            page=page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            external_id=expected_external_id,
+        )
+        self._ticket_entry_confirmed = True
+        self._access_consumption = self._ticket_entry.consumption
+        self._expected_episode_title = row.label
+        return row.label
+
+    def _ticket_reader_binding_matches(self, page: Page) -> bool:
+        binding = self._ticket_reader_binding
+        controller = self._ticket_entry
+        return bool(
+            self._ticket_entry_confirmed
+            and self._access_strategy == "quota"
+            and self._quota_resource == "work_ticket"
+            and binding is not None
+            and controller is binding.controller
+            and controller.proof is binding.proof
+            and controller.consumption.consumed is True
+            and controller.consumption.resource == "work_ticket"
+            and controller.consumption.consumed_at == binding.proof.request_started_at
+            and binding.page is page
+            and binding.work_id == self._work_id
+            and binding.chapter_id == self._chapter_id
+            and binding.external_id == f"{self._work_id}:{self._chapter_id}"
+            and controller.work_id == binding.work_id
+            and controller.chapter_id == binding.chapter_id
+            and controller.external_id == binding.external_id
+        )
+
     def resolve_initial_navigation_url(self, source_url: str) -> str:
-        """Route through the same-work public listing before any reader entry."""
+        """Choose the minimum observed entry route for free, grant, or ticket."""
 
         chapter_id = parse_comicfuz_episode_url(source_url)
         if chapter_id is None:
@@ -299,15 +627,15 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "ComicFUZ source URL is not the exact configured viewer route"
             )
+        if self._access_strategy == "quota":
+            return work_url
+        if (
+            self._access_strategy == "direct"
+            and self._existing_access_grant_until is not None
+            and self._existing_access_grant_until > datetime.now(UTC)
+        ):
+            return self._target_url
         return work_url
-
-    async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
-        if access_strategy not in {"auto", "direct"}:
-            raise UnsupportedAccessStrategyError(
-                "ComicFUZ public-free crawl supports access_strategy='auto' or 'direct' only"
-            )
-        self._access_strategy = access_strategy
 
     @_cleanup_observer_on_failure
     async def initialize(self, page: Page) -> None:
@@ -327,37 +655,126 @@ class ComicFuzAdapter(SiteAdapter):
         self._advance_pending = False
         self._ended = False
         self._initialized = False
+        self._empty_ssr_reader_identity = None
 
         work_url = self._preflight_work_url or f"https://{SITE_HOST}/manga/{self._work_id}"
-        target = WatchlistTarget(
-            key=f"comicfuz-preflight-{self._work_id}",
-            work_key=f"comicfuz:{self._work_id}",
-            site="comicfuz",
-            url=work_url,
-            label=f"ComicFUZ {self._work_id}",
-        )
-        records = [
-            record async for record in ComicFuzDiscoveryAdapter().iter_records(page, target, "full")
-        ]
-        matches = [
-            record
-            for record in records
-            if record.source.external_id == f"{self._work_id}:{self._chapter_id}"
-        ]
-        if len(matches) != 1 or matches[0].source.access_mode != "free":
-            raise UnknownPageStateError(
-                "ComicFUZ target episode lacks exact current public-free listing evidence"
+        if self._access_strategy == "quota":
+            expected_episode_title = await self._initialize_work_ticket_entry(page)
+        elif self._direct_rental_revalidation:
+            if self._quota_resource != "work_ticket":
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ direct rental context lost its work_ticket resource"
+                )
+            work_parts = parse_comicfuz_work_url(page.url)
+            if work_parts is None or work_parts.work_id != self._work_id:
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental revalidation did not start on its target Work page"
+                )
+            discovery = ComicFuzDiscoveryAdapter()
+            await discovery.wait_for_target_row_hydration(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
             )
-        if matches[0].source.url != self._target_url:
-            raise UnknownPageStateError(
-                "ComicFUZ free-list target route did not match the reader URL"
+            row = await discovery.observe_target_row(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
             )
-        expected_episode_title = matches[0].item.order_label
-        if not isinstance(expected_episode_title, str) or not expected_episode_title.strip():
-            raise UnknownPageStateError("ComicFUZ preflight episode label is unavailable")
-        self._expected_episode_title = expected_episode_title
+            if row.access_mode in {"free", "paid", "quota"}:
+                self._ticket_not_attempted(f"current_access_{row.access_mode}")
+            if row.access_mode != "unknown":
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental target has an unsupported current access state"
+                )
+            native = await read_native_ticket_snapshot(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+                page_mode="rental_listing",
+            )
+            if (
+                row.chapter_id != self._chapter_id
+                or row.index < 0
+                or " ".join(native.chapter_label.split()) != row.label
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental target differs from its current native row"
+                )
+            def install_direct_rental_guard(check: Callable[[], None]) -> None:
+                self._direct_rental_guard_check = check
+                self._direct_rental_guard_page = page
 
-        await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
+            direct_result = await open_direct_relative_rental_viewer(
+                page,
+                pre_state=native,
+                on_guard_installed=install_direct_rental_guard,
+            )
+            expected_episode_title = direct_result.snapshot.chapter_label
+        elif (
+            self._access_strategy == "direct"
+            and self._existing_access_grant_until is not None
+            and self._existing_access_grant_until > datetime.now(UTC)
+        ):
+            if page.url != self._target_url:
+                raise UnknownPageStateError("ComicFUZ existing grant did not open its canonical viewer")
+            native = await read_native_ticket_snapshot(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+                page_mode="viewer",
+            )
+            expiry = parse_rental_expiry(native.rental_value)
+            now = datetime.now(UTC)
+            if (
+                not native.rental_present
+                or expiry is None
+                or expiry <= now
+                or native.chapter_label.strip() == ""
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ existing direct grant is not confirmed by the live target viewer"
+                )
+            self.report_confirmed_access_grant(
+                ConfirmedAccessGrant(
+                    site="comicfuz",
+                    external_id=f"{self._work_id}:{self._chapter_id}",
+                    observed_at=now,
+                    access_granted_until=expiry,
+                    expiry_evidence="site_absolute_expiry",
+                )
+            )
+            expected_episode_title = native.chapter_label
+        else:
+            target = WatchlistTarget(
+                key=f"comicfuz-preflight-{self._work_id}",
+                work_key=f"comicfuz:{self._work_id}",
+                site="comicfuz",
+                url=work_url,
+                label=f"ComicFUZ {self._work_id}",
+            )
+            records = [
+                record
+                async for record in ComicFuzDiscoveryAdapter().iter_records(page, target, "full")
+            ]
+            matches = [
+                record
+                for record in records
+                if record.source.external_id == f"{self._work_id}:{self._chapter_id}"
+            ]
+            if len(matches) != 1 or matches[0].source.access_mode != "free":
+                raise UnknownPageStateError(
+                    "ComicFUZ target episode lacks exact current public-free listing evidence"
+                )
+            if matches[0].source.url != self._target_url:
+                raise UnknownPageStateError(
+                    "ComicFUZ free-list target route did not match the reader URL"
+                )
+            expected_episode_title = matches[0].item.order_label
+            if not isinstance(expected_episode_title, str) or not expected_episode_title.strip():
+                raise UnknownPageStateError("ComicFUZ preflight episode label is unavailable")
+            await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
+        self._expected_episode_title = expected_episode_title
         manifest_deadline = (
             asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         )
@@ -369,9 +786,11 @@ class ComicFuzAdapter(SiteAdapter):
             raise PageChangeTimeoutError(
                 "ComicFUZ first-party viewer page-role manifest did not become available"
             )
-        first = await self._wait_for_stable_body(page)
+        first = await self._wait_for_stable_body(page, allow_initial_rewind=True)
         if tuple(row["number"] for row in first) != self._initial_body_indices:
-            first = await self._rewind_to_first_body(page, first)
+            first = await self._rewind_to_first_body(
+                page, first, allow_initial_rewind=True
+            )
         if tuple(row["number"] for row in first) != self._initial_body_indices:
             raise UnknownPageStateError("ComicFUZ reader did not restore to its first body page")
         self._episode_title = await self._read_episode_title(page)
@@ -383,7 +802,17 @@ class ComicFuzAdapter(SiteAdapter):
             )
         self._initialized = True
 
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Confirm a ticket entry without invoking the image response observer."""
+
+        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ grant-only entry requires quota/work_ticket"
+            )
+        await self._initialize_work_ticket_entry(page)
+
     def get_output_metadata(self) -> dict[str, str | None]:
+        self._assert_direct_rental_guard_healthy()
         return {
             "title": self._output_title,
             "author": None,
@@ -393,6 +822,7 @@ class ComicFuzAdapter(SiteAdapter):
 
     @_cleanup_observer_on_failure
     async def detect_state(self, page: Page) -> PageState:
+        self._assert_direct_rental_guard_healthy()
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError(
                 "ComicFUZ left the configured free episode before verified END"
@@ -401,6 +831,7 @@ class ComicFuzAdapter(SiteAdapter):
         await self._validate_reader_identity(
             page,
             allow_cached_manifest_at_end=bool(terminal_candidate and self._viewer_pages),
+            terminal_title=terminal_candidate.get("title") if terminal_candidate else None,
         )
         rows = await self._active_page_rows(page)
         if rows:
@@ -456,6 +887,7 @@ class ComicFuzAdapter(SiteAdapter):
         return targets[0]
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -466,6 +898,7 @@ class ComicFuzAdapter(SiteAdapter):
         return tuple(locator.nth(int(row["index"])) for row in self._body_rows(rows))
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -483,6 +916,7 @@ class ComicFuzAdapter(SiteAdapter):
         )
 
     async def get_content_context(self, page: Page) -> ContentContext:
+        self._assert_direct_rental_guard_healthy()
         chapter_id = parse_comicfuz_episode_url(page.url)
         if chapter_id is None:
             chapter_id = self._chapter_id
@@ -518,6 +952,7 @@ class ComicFuzAdapter(SiteAdapter):
         page: Page,
         previous_identity: ContentIdentity | None,
     ) -> None:
+        self._assert_direct_rental_guard_healthy()
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         previous_signature: tuple[object, ...] | None = None
         stable_checks = 0
@@ -530,6 +965,7 @@ class ComicFuzAdapter(SiteAdapter):
             await self._validate_reader_identity(
                 page,
                 allow_cached_manifest_at_end=bool(terminal_candidate and self._viewer_pages),
+                terminal_title=terminal_candidate.get("title") if terminal_candidate else None,
             )
             rows = [
                 row for row in await self._all_page_rows(page) if row["active"]
@@ -641,6 +1077,7 @@ class ComicFuzAdapter(SiteAdapter):
 
     @_cleanup_observer_on_failure
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -678,6 +1115,7 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError("ComicFUZ page changed during capture")
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader identity changed during capture")
+        self._assert_direct_rental_guard_healthy()
         await self._validate_reader_identity(page)
         if numbers != tuple(
             range(len(self._captured_indices), len(self._captured_indices) + len(numbers))
@@ -802,10 +1240,71 @@ class ComicFuzAdapter(SiteAdapter):
         *,
         allow_initial_manifest_loading: bool = False,
         allow_cached_manifest_at_end: bool = False,
+        terminal_title: str | None = None,
     ) -> bool:
+        self._assert_direct_rental_guard_healthy()
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader route differs from the verified target")
         snapshot = await self._read_viewer_snapshot(page)
+        if (
+            snapshot.get("ssr_mode") == "full"
+            and snapshot.get("legacy_manifest_state") == "malformed"
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ first-party viewer page-role manifest is malformed"
+            )
+        empty_ssr = snapshot.get("ssr_mode") == "empty_viewer"
+        if empty_ssr:
+            if not self._ticket_reader_binding_matches(page):
+                raise UnknownPageStateError(
+                    "ComicFUZ empty viewer SSR is not bound to a confirmed ticket entry"
+                )
+            runtime_state = snapshot.get("runtime_state")
+            if runtime_state == "missing":
+                cached = await self._empty_ssr_identity_for_end(
+                    page,
+                    snapshot,
+                    allow_cached_manifest_at_end=allow_cached_manifest_at_end,
+                    terminal_title=terminal_title,
+                )
+                if cached is not None:
+                    snapshot.update(cached)
+                elif allow_initial_manifest_loading and not self._initialized:
+                    return False
+                else:
+                    raise UnknownPageStateError(
+                        "ComicFUZ ticket viewer runtime identity is unavailable"
+                    )
+            elif runtime_state != "valid":
+                raise UnknownPageStateError(
+                    "ComicFUZ ticket viewer runtime identity is ambiguous or malformed"
+                )
+            if snapshot.get("runtime_state") == "valid":
+                identity = {
+                    "chapter_id": snapshot.get("runtime_chapter_id"),
+                    "work_id": snapshot.get("runtime_work_id"),
+                    "episode_title": snapshot.get("runtime_episode_title"),
+                    "episode_subtitle": snapshot.get("runtime_episode_subtitle"),
+                    "work_title": snapshot.get("runtime_work_title"),
+                    "viewer_chapter_id": snapshot.get("runtime_chapter_id"),
+                    "pages": snapshot.get("runtime_pages"),
+                    "is_first_page_blank": snapshot.get("runtime_is_first_page_blank"),
+                }
+                snapshot.update(identity)
+            else:
+                identity = {
+                    "chapter_id": snapshot.get("cached_chapter_id"),
+                    "work_id": snapshot.get("cached_work_id"),
+                    "episode_title": snapshot.get("cached_episode_title"),
+                    "episode_subtitle": snapshot.get("cached_episode_subtitle"),
+                    "work_title": snapshot.get("cached_work_title"),
+                    "viewer_chapter_id": snapshot.get("cached_chapter_id"),
+                    "pages": None,
+                    "is_first_page_blank": None,
+                }
+                snapshot.update(identity)
+        elif snapshot.get("ssr_mode") != "full":
+            raise UnknownPageStateError("ComicFUZ first-party viewer SSR is malformed")
         if (
             snapshot.get("chapter_id") != self._chapter_id
             or snapshot.get("work_id") != self._work_id
@@ -818,6 +1317,14 @@ class ComicFuzAdapter(SiteAdapter):
         if not isinstance(subtitle, str):
             raise UnknownPageStateError("ComicFUZ first-party episode subtitle is malformed")
         expected_viewer_title = " ".join(f"{self._expected_episode_title} {subtitle}".split())
+        if (
+            empty_ssr
+            and snapshot.get("runtime_state") == "valid"
+            and snapshot.get("runtime_dom_title") != expected_viewer_title
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ ticket viewer title differs from its bound native chapter"
+            )
         if self._expected_viewer_title is None:
             self._expected_viewer_title = expected_viewer_title
         elif self._expected_viewer_title != expected_viewer_title:
@@ -841,6 +1348,10 @@ class ComicFuzAdapter(SiteAdapter):
             body_indices, extra_index = _classify_viewer_pages(pages)
             if self._chapter_id != snapshot.get("viewer_chapter_id"):
                 raise UnknownPageStateError("ComicFUZ viewer page list belongs to another episode")
+            if extra_index is None and len(body_indices) % 2 != (1 if is_first_page_blank else 0):
+                raise UnknownPageStateError(
+                    "ComicFUZ body-page parity conflicts with the first-page layout"
+                )
             initial_body_indices = (0,) if is_first_page_blank else (0, 1)
             if not set(initial_body_indices).issubset(body_indices):
                 raise UnknownPageStateError(
@@ -876,73 +1387,290 @@ class ComicFuzAdapter(SiteAdapter):
             current_title = await self._read_episode_title(page)
             if current_title != self._episode_title:
                 raise UnknownPageStateError("ComicFUZ episode title changed during the crawl")
+        if empty_ssr and snapshot.get("runtime_state") == "valid":
+            binding = self._ticket_reader_binding
+            if binding is None:
+                raise UnknownPageStateError("ComicFUZ ticket reader binding disappeared")
+            self._empty_ssr_reader_identity = _EmptySsrReaderIdentity(
+                binding=binding,
+                work_id=self._work_id or "",
+                chapter_id=self._chapter_id or "",
+                episode_title=self._expected_episode_title or "",
+                episode_subtitle=subtitle,
+                work_title=work_title,
+                viewer_title=self._expected_viewer_title,
+            )
         return manifest_available
+
+    async def _empty_ssr_identity_for_end(
+        self,
+        page: Page,
+        snapshot: dict[str, Any],
+        *,
+        allow_cached_manifest_at_end: bool,
+        terminal_title: str | None,
+    ) -> dict[str, str] | None:
+        cached = self._empty_ssr_reader_identity
+        binding = self._ticket_reader_binding
+        if not (
+            allow_cached_manifest_at_end
+            and cached is not None
+            and binding is cached.binding
+            and self._ticket_reader_binding_matches(page)
+            and snapshot.get("ssr_mode") == "empty_viewer"
+            and terminal_title == cached.viewer_title
+            and self._episode_title == cached.viewer_title
+            and self._expected_viewer_title == cached.viewer_title
+            and self._viewer_pages is not None
+            and self._captured_indices == list(self._body_page_indices)
+            and self._work_id == cached.work_id
+            and self._chapter_id == cached.chapter_id
+        ):
+            return None
+        if await self._read_episode_title(page) != cached.viewer_title:
+            return None
+        if not await self._terminal_body_shells_clear(page):
+            return None
+        return {
+            "cached_work_id": cached.work_id,
+            "cached_chapter_id": cached.chapter_id,
+            "cached_episode_title": cached.episode_title,
+            "cached_episode_subtitle": cached.episode_subtitle,
+            "cached_work_title": cached.work_title,
+        }
 
     async def _read_viewer_snapshot(self, page: Page) -> dict[str, Any]:
         try:
             snapshot = await asyncio.wait_for(
                 page.evaluate(
-                    r"""() => {
+                    r"""args => {
+                      const own = (value, key) => value !== null && typeof value === 'object'
+                        && Object.prototype.hasOwnProperty.call(value, key);
+                      const isObject = value => value !== null && typeof value === 'object'
+                        && !Array.isArray(value);
+                      const norm = value => String(value || '').trim().replace(/\s+/g, ' ');
+                      const emptyPlainObject = value => isObject(value)
+                        && Object.getPrototypeOf(value) === Object.prototype
+                        && Object.keys(value).length === 0;
+                      const scripts = [...document.querySelectorAll('#__NEXT_DATA__')];
                       let next = null;
-                      try {
-                        next = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || 'null');
-                      } catch { return null; }
-                      const props = next?.props?.pageProps || {};
-                      const data = props.data || {};
-                      let web = null;
-                      for (const element of document.querySelectorAll('img[class*="G54Y0W_page"]')) {
-                        let fiberKey = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
+                      let ssrMode = 'invalid';
+                      let props = null, pageProps = null, data = null;
+                      if (scripts.length === 1 && scripts[0].tagName === 'SCRIPT'
+                          && scripts[0].type === 'application/json') {
+                        try { next = JSON.parse(scripts[0].textContent || ''); }
+                        catch (_) { next = null; }
+                      }
+                      if (isObject(next) && isObject(next.props)) {
+                        props = next.props;
+                        pageProps = own(props, 'pageProps') ? props.pageProps : null;
+                        data = isObject(pageProps) && own(pageProps, 'data') ? pageProps.data : null;
+                        const exactEmptyViewer = next.page === '/manga/viewer/[chapterId]'
+                          && own(next, 'query') && emptyPlainObject(next.query)
+                          && own(props, 'pageProps') && emptyPlainObject(pageProps);
+                        ssrMode = exactEmptyViewer ? 'empty_viewer' : 'full';
+                      }
+                      const images = [...document.querySelectorAll('img[class*="G54Y0W_page"]')];
+                      const titleElements = [...document.querySelectorAll(args.titleSelector)];
+                      const visible = element => {
+                        if (!element || element.getClientRects().length === 0) return false;
+                        for (let node = element; node; node = node.parentElement) {
+                          const style = getComputedStyle(node);
+                          if (node.hidden || style.display === 'none'
+                              || style.visibility === 'hidden' || style.visibility === 'collapse'
+                              || Number(style.opacity) === 0) return false;
+                        }
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                      };
+                      const visibleTitles = titleElements.filter(visible);
+                      const domTitle = visibleTitles.length === 1
+                        ? norm(visibleTitles[0].innerText) : null;
+                      const refs = new Set();
+                      let firstImageWeb = null;
+                      let malformedRuntimeProp = false;
+                      const collect = element => {
+                        const fiberKey = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
                         let fiber = fiberKey ? element[fiberKey] : null;
                         for (let depth = 0; fiber && depth < 35; depth++, fiber = fiber.return) {
-                          const candidate = fiber.memoizedProps?.webMangaViewerData;
-                          if (candidate && typeof candidate === 'object') { web = candidate; break; }
-                        }
-                        if (web) break;
-                      }
-                      let pages = null;
-                      let viewerChapterId = null;
-                      let isFirstPageBlank = null;
-                      if (web) {
-                        viewerChapterId = String(web.chapterId ?? '');
-                        const sourcePages = web.viewerData?.pages;
-                        if (!Array.isArray(sourcePages)) return null;
-                        const firstPageBlank = web.viewerData?.isFirstPageBlank;
-                        if (typeof firstPageBlank === 'boolean') isFirstPageBlank = firstPageBlank;
-                        pages = sourcePages.map(slot => {
-                          if (!slot || typeof slot !== 'object') return {role:'unsupported'};
-                          const slotKeys = Object.keys(slot);
-                          if (slotKeys.length !== 1) return {role:'unsupported'};
-                          if (slotKeys[0] === 'image') {
-                            const image = slot.image;
-                            if (!image || typeof image !== 'object') return {role:'unsupported'};
-                            const ownsExtra = Object.prototype.hasOwnProperty.call(image, 'isExtraPage');
-                            const ownsLink = Object.prototype.hasOwnProperty.call(image, 'urlScheme');
-                            const link = image.urlScheme;
-                            return {
-                              role:'image',
-                              is_extra: ownsExtra ? image.isExtraPage : null,
-                              has_link: ownsLink && typeof link === 'string' && link.trim().length > 0,
-                              link_metadata_valid: !ownsLink || (typeof link === 'string' && link.trim().length > 0),
-                              width: Number(image.imageWidth), height: Number(image.imageHeight)
-                            };
+                          const props = fiber.memoizedProps;
+                          if (isObject(props) && own(props, 'webMangaViewerData')) {
+                            const candidate = props.webMangaViewerData;
+                            if (isObject(candidate)) refs.add(candidate);
+                            else malformedRuntimeProp = true;
+                            if (images.includes(element) && firstImageWeb === null
+                                && candidate !== null && typeof candidate === 'object')
+                              firstImageWeb = candidate;
                           }
-                          if (slotKeys[0] === 'googleAds') return {role:'google_ads'};
-                          if (slotKeys[0] === 'lastPage') return {role:'last_page'};
-                          return {role:'unsupported'};
-                        });
-                      }
-                      return {
-                        chapter_id: String(props.chapterId ?? ''),
-                        work_id: String(data.mangaId ?? ''),
-                        episode_title: typeof data.chapterMainName === 'string' ? data.chapterMainName.trim() : '',
-                        episode_subtitle: data.chapterSubName == null ? '' : (
-                          typeof data.chapterSubName === 'string' ? data.chapterSubName.trim() : null),
-                        work_title: typeof data.mangaName === 'string' ? data.mangaName.trim() : '',
-                        viewer_chapter_id: viewerChapterId,
-                        is_first_page_blank: isFirstPageBlank,
-                        pages
+                        }
                       };
-                    }"""
+                      for (const image of images) collect(image);
+                      for (const title of titleElements) collect(title);
+                      const web = refs.size === 1 ? [...refs][0] : null;
+                      let runtimeState = malformedRuntimeProp ? 'invalid'
+                        : (refs.size > 1 || visibleTitles.length > 1 ? 'ambiguous'
+                          : (refs.size === 0 ? 'missing' : 'invalid'));
+                      let runtime = null;
+                      const mapPages = sourcePages => sourcePages.map(slot => {
+                        if (!isObject(slot)) return {role:'unsupported'};
+                        const keys = Object.keys(slot);
+                        if (keys.length !== 1) return {role:'unsupported'};
+                        if (keys[0] === 'image') {
+                          const image = slot.image;
+                          if (!isObject(image)) return {role:'unsupported'};
+                          const ownsExtra = own(image, 'isExtraPage');
+                          const ownsLink = own(image, 'urlScheme');
+                          const link = image.urlScheme;
+                          return {
+                            role:'image',
+                            is_extra: ownsExtra ? image.isExtraPage : null,
+                            has_link: ownsLink && typeof link === 'string' && link.trim().length > 0,
+                            link_metadata_valid: !ownsLink || (typeof link === 'string' && link.trim().length > 0),
+                            width: Number(image.imageWidth), height: Number(image.imageHeight)
+                          };
+                        }
+                        if (keys[0] === 'googleAds') return {role:'google_ads'};
+                        if (keys[0] === 'lastPage') return {role:'last_page'};
+                        return {role:'unsupported'};
+                      });
+                      let legacyPages = null;
+                      let legacyViewerChapterId = null;
+                      let legacyFirstPageBlank = null;
+                      let legacyManifestState = 'missing';
+                      const legacySource = firstImageWeb?.viewerData?.pages;
+                      if (Array.isArray(legacySource)) {
+                        legacyManifestState = 'valid';
+                        legacyViewerChapterId = String(firstImageWeb.chapterId ?? '');
+                        legacyPages = mapPages(legacySource);
+                        const flag = firstImageWeb.viewerData?.isFirstPageBlank;
+                        if (typeof flag === 'boolean') legacyFirstPageBlank = flag;
+                      } else if (firstImageWeb !== null) {
+                        legacyManifestState = 'malformed';
+                      }
+                      if (web) {
+                        const manga = web.manga;
+                        const groups = web.chapters;
+                        const sourcePages = web.viewerData?.pages;
+                        const groupsComplete = Array.isArray(groups) && groups.length > 0
+                          && Array.from({length:groups.length}, (_, i) => i).every(i => own(groups, i)
+                            && isObject(groups[i]) && Array.isArray(groups[i].chapters)
+                            && groups[i].chapters.length > 0
+                            && Array.from({length:groups[i].chapters.length}, (_, j) => j)
+                              .every(j => own(groups[i].chapters, j)
+                                && isObject(groups[i].chapters[j])
+                                && own(groups[i].chapters[j], 'chapterId')
+                                && Number.isSafeInteger(groups[i].chapters[j].chapterId)
+                                && groups[i].chapters[j].chapterId > 0));
+                        const chapters = groupsComplete
+                          ? groups.flatMap(group => group.chapters) : [];
+                        const chapterIds = chapters.map(chapter => chapter.chapterId);
+                        const chapterIdsUnique = new Set(chapterIds).size === chapterIds.length;
+                        const matches = chapters.filter(chapter =>
+                          chapter.chapterId === args.targetChapterId);
+                        let subtitle = null;
+                        let subtitleValid = false;
+                        if (matches.length === 1) {
+                          const chapter = matches[0];
+                          if (own(chapter, 'chapterSubName')
+                              && typeof chapter.chapterSubName === 'string') {
+                            subtitle = chapter.chapterSubName;
+                            subtitleValid = true;
+                          } else if (!own(chapter, 'chapterSubName')
+                              && 'chapterSubName' in chapter) {
+                            const prototype = Object.getPrototypeOf(chapter);
+                            const descriptor = prototype
+                              ? Object.getOwnPropertyDescriptor(prototype, 'chapterSubName') : null;
+                            if (descriptor && own(descriptor, 'value')
+                                && descriptor.value === '' && typeof descriptor.value === 'string') {
+                              subtitle = '';
+                              subtitleValid = true;
+                            }
+                          }
+                        }
+                        const target = matches.length === 1 ? matches[0] : null;
+                        const mangaIdValid = isObject(manga) && own(manga, 'mangaId')
+                          && Number.isSafeInteger(manga.mangaId)
+                          && manga.mangaId === args.targetWorkId;
+                        const mangaNameValid = isObject(manga) && own(manga, 'mangaName')
+                          && typeof manga.mangaName === 'string' && manga.mangaName.trim().length > 0;
+                        const webChapterValid = own(web, 'chapterId')
+                          && Number.isSafeInteger(web.chapterId)
+                          && web.chapterId === args.targetChapterId;
+                        const chapterNameValid = target !== null && own(target, 'chapterMainName')
+                          && typeof target.chapterMainName === 'string'
+                          && target.chapterMainName.trim().length > 0;
+                        const pageFlag = web.viewerData?.isFirstPageBlank;
+                        const pageShapeValid = Array.isArray(sourcePages)
+                          && typeof pageFlag === 'boolean';
+                        const nativeIdentityValid = mangaIdValid && mangaNameValid && webChapterValid
+                          && groupsComplete && chapterIdsUnique && matches.length === 1 && chapterNameValid
+                          && norm(target?.chapterMainName) === args.expectedEpisodeTitle
+                          && subtitleValid && pageShapeValid;
+                        const valid = nativeIdentityValid
+                          && visibleTitles.length === 1 && domTitle !== null;
+                        if (malformedRuntimeProp) runtimeState = 'invalid';
+                        else if (refs.size > 1 || visibleTitles.length > 1) runtimeState = 'ambiguous';
+                        else if (refs.size === 0) runtimeState = 'missing';
+                        else if (!nativeIdentityValid) runtimeState = 'invalid';
+                        else if (visibleTitles.length === 0 || domTitle === null) runtimeState = 'missing';
+                        else runtimeState = valid ? 'valid' : 'invalid';
+                        if (valid) {
+                          runtime = {
+                            work_id:String(manga.mangaId),
+                            chapter_id:String(web.chapterId),
+                            episode_title:norm(target.chapterMainName),
+                            episode_subtitle:norm(subtitle),
+                            work_title:norm(manga.mangaName),
+                            pages:mapPages(sourcePages),
+                            is_first_page_blank:pageFlag,
+                            viewer_chapter_id:String(web.chapterId),
+                            dom_title:domTitle,
+                            chapter_count:chapters.length
+                          };
+                        }
+                      }
+                      const runtimeValid = runtime !== null && refs.size === 1
+                        && !malformedRuntimeProp;
+                      const ssrData = isObject(data) ? data : null;
+                      const ssrChapterId = isObject(pageProps) && own(pageProps, 'chapterId')
+                        ? String(pageProps.chapterId ?? '') : '';
+                      const ssrWorkId = ssrData && own(ssrData, 'mangaId')
+                        ? String(ssrData.mangaId ?? '') : '';
+                      return {
+                        ssr_mode:ssrMode,
+                        legacy_manifest_state:legacyManifestState,
+                        ssr_page:isObject(next) && typeof next.page === 'string' ? next.page : null,
+                        chapter_id:ssrChapterId,
+                        work_id:ssrWorkId,
+                        episode_title:ssrData && typeof ssrData.chapterMainName === 'string'
+                          ? norm(ssrData.chapterMainName) : '',
+                        episode_subtitle:ssrData && ssrData.chapterSubName == null ? ''
+                          : (ssrData && typeof ssrData.chapterSubName === 'string'
+                            ? norm(ssrData.chapterSubName) : null),
+                        work_title:ssrData && typeof ssrData.mangaName === 'string'
+                          ? norm(ssrData.mangaName) : '',
+                        viewer_chapter_id:legacyViewerChapterId,
+                        is_first_page_blank:legacyFirstPageBlank,
+                        pages:legacyPages,
+                        runtime_state:runtimeValid ? 'valid' : runtimeState,
+                        runtime_work_id:runtime?.work_id ?? null,
+                        runtime_chapter_id:runtime?.chapter_id ?? null,
+                        runtime_episode_title:runtime?.episode_title ?? null,
+                        runtime_episode_subtitle:runtime?.episode_subtitle ?? null,
+                        runtime_work_title:runtime?.work_title ?? null,
+                        runtime_pages:runtime?.pages ?? null,
+                        runtime_is_first_page_blank:runtime?.is_first_page_blank ?? null,
+                        runtime_dom_title:runtime?.dom_title ?? null,
+                        runtime_chapter_count:runtime?.chapter_count ?? null,
+                        runtime_reference_count:refs.size
+                      };
+                    }""",
+                    {
+                        "titleSelector": self.viewer_title_selector,
+                        "targetChapterId": int(self._chapter_id or "0"),
+                        "targetWorkId": int(self._work_id or "0"),
+                        "expectedEpisodeTitle": self._expected_episode_title or "",
+                    },
                 ),
                 timeout=3,
             )
@@ -957,19 +1685,17 @@ class ComicFuzAdapter(SiteAdapter):
         return snapshot
 
     async def _reader_route_is_target(self, page: Page) -> bool:
-        try:
-            parsed = urlparse(page.url)
-        except ValueError:
+        self._assert_direct_rental_guard_healthy()
+        if self._chapter_id is None or not is_target_viewer_url(
+            page.url, chapter_id=str(self._chapter_id)
+        ):
             return False
+        if is_canonical_viewer_url(page.url, chapter_id=str(self._chapter_id)):
+            return True
         return (
-            parsed.scheme.lower() == "https"
-            and parsed.hostname == SITE_HOST
-            and parsed.port is None
-            and parsed.username is None
-            and parsed.password is None
-            and parsed.path == f"/manga/viewer/{self._chapter_id}"
-            and not parsed.query
-            and not parsed.fragment
+            self._ticket_reader_binding_matches(page)
+            and self._quota_resource == "work_ticket"
+            and is_ticket_viewer_url(page.url, chapter_id=str(self._chapter_id))
         )
 
     async def _read_episode_title(self, page: Page) -> str | None:
@@ -1114,18 +1840,45 @@ class ComicFuzAdapter(SiteAdapter):
         rows.sort(key=lambda row: float(row["x"]), reverse=True)
         return rows
 
-    async def _active_page_rows(self, page: Page) -> list[dict[str, Any]]:
+    async def _active_page_rows(
+        self,
+        page: Page,
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> list[dict[str, Any]]:
         rows = [row for row in await self._all_page_rows(page) if row["active"]]
         if rows:
-            self._validate_page_group(rows)
+            self._validate_page_group(rows, allow_initial_rewind=allow_initial_rewind)
         return rows
 
     @staticmethod
     def _body_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if row.get("role") == "body"]
 
+    def _manifest_role_at(self, index: int) -> str | None:
+        if self._viewer_pages is None or index < 0 or index >= len(self._viewer_pages):
+            return None
+        if index in self._body_page_indices:
+            return "body"
+        slot = self._viewer_pages[index]
+        if slot.get("role") != "image" or slot.get("is_extra") is not True:
+            return None
+        linked = slot.get("has_link")
+        if type(linked) is not bool:
+            return None
+        return "linked_extra" if linked else "unlinked_extra"
+
+    def _native_extra_tail_roles(self) -> tuple[str | None, ...]:
+        extra = self._extra_page_index
+        if extra is None or self._viewer_pages is None or len(self._viewer_pages) < extra + 3:
+            return ()
+        return tuple(
+            self._manifest_role_at(index)
+            for index in range(extra, len(self._viewer_pages) - 2)
+        )
+
     def _expected_extra_tail_group(self) -> tuple[int, ...]:
-        """Return only the next group in the two observed three-extra layouts."""
+        """Return only the next group in the three supported extra-tail layouts."""
         extra = self._extra_page_index
         if (
             extra is None
@@ -1133,6 +1886,26 @@ class ComicFuzAdapter(SiteAdapter):
             or len(self._viewer_pages) != extra + 5
             or self._captured_indices != list(self._body_page_indices)
         ):
+            return ()
+        tail_roles = self._native_extra_tail_roles()
+        if tail_roles == ("unlinked_extra", "unlinked_extra", "linked_extra"):
+            if self._advanced_extra_groups:
+                if (
+                    self._advanced_extra_groups == ((extra, extra + 1),)
+                    and self._last_rendered_group == (extra, extra + 1)
+                ):
+                    return (extra + 2,)
+                return ()
+            if self._last_rendered_group == (extra - 1, extra):
+                return (extra + 1, extra + 2)
+            if (
+                self._last_captured_group
+                and self._last_rendered_group == self._last_captured_group
+                and self._last_captured_group[-1] == extra - 1
+            ):
+                return (extra, extra + 1)
+            return ()
+        if tail_roles != ("linked_extra", "unlinked_extra", "linked_extra"):
             return ()
         if self._advanced_extra_groups:
             if (
@@ -1159,6 +1932,7 @@ class ComicFuzAdapter(SiteAdapter):
             self._advanced_extra_groups
             and numbers == self._advanced_extra_groups[-1] == self._last_rendered_group
         )
+        expected_roles = tuple(self._manifest_role_at(number) for number in numbers)
         if (
             not numbers
             or extra is None
@@ -1166,10 +1940,8 @@ class ComicFuzAdapter(SiteAdapter):
             or len(self._viewer_pages) != extra + 5
             or self._captured_indices != list(self._body_page_indices)
             or (numbers != self._expected_extra_tail_group() and not stale)
-            or [row.get("role") for row in rows] != [
-                "unlinked_extra" if number == extra + 1 else "linked_extra"
-                for number in numbers
-            ]
+            or any(role is None for role in expected_roles)
+            or tuple(row.get("role") for row in rows) != expected_roles
         ):
             raise UnknownPageStateError("ComicFUZ extra tail is out of sequence")
 
@@ -1257,6 +2029,10 @@ class ComicFuzAdapter(SiteAdapter):
                 self._validate_page_row(row)
         return True
 
+    def _assert_direct_rental_guard_healthy(self) -> None:
+        if self._direct_rental_guard_check is not None:
+            self._direct_rental_guard_check()
+
     async def _terminal_body_shells_clear(self, page: Page) -> bool:
         shells = [row for row in await self._all_page_rows(page) if row["shown"]]
         if not shells:
@@ -1281,8 +2057,12 @@ class ComicFuzAdapter(SiteAdapter):
                 return False
         return True
 
-    @staticmethod
-    def _validate_page_group(rows: list[dict[str, Any]]) -> None:
+    def _validate_page_group(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> None:
         if not rows or len(rows) > 2:
             raise UnknownPageStateError("ComicFUZ visible page spread has an unsupported shape")
         for row in rows:
@@ -1293,19 +2073,87 @@ class ComicFuzAdapter(SiteAdapter):
         if len(rows) == 2 and numbers[1] != numbers[0] + 1:
             raise UnknownPageStateError("ComicFUZ spread page identities are not contiguous")
         roles = [row.get("role") for row in rows]
-        if roles not in (
+        initial_uul_rewind = bool(
+            allow_initial_rewind
+            and not self._initialized
+            and not self._captured_indices
+            and self._native_extra_tail_roles()
+            == ("unlinked_extra", "unlinked_extra", "linked_extra")
+        )
+        if roles in (
             ["body"], ["body", "body"], ["unlinked_extra", "linked_extra"],
             ["linked_extra", "unlinked_extra"], ["linked_extra"],
         ):
-            if roles == ["body", "linked_extra"]:
-                if rows[1].get("number") != rows[0].get("number") + 1:
-                    raise UnknownPageStateError(
-                        "ComicFUZ linked extra is not joined to the final spread"
-                    )
-            else:
+            return
+        if roles == ["body", "linked_extra"]:
+            if numbers[1] != numbers[0] + 1:
                 raise UnknownPageStateError(
-                    "ComicFUZ spread contains an unsupported page-role sequence"
+                    "ComicFUZ linked extra is not joined to the final spread"
                 )
+            return
+        if roles == ["body", "unlinked_extra"]:
+            extra = self._extra_page_index
+            body_indices = self._body_page_indices
+            numbers_tuple = tuple(numbers)
+            before_last_body = bool(
+                extra is not None
+                and self._native_extra_tail_roles()
+                    == ("unlinked_extra", "unlinked_extra", "linked_extra")
+                and numbers_tuple == (extra - 1, extra)
+                and tuple(self._captured_indices) == body_indices[:-1]
+                and self._expected_body_group() == (extra - 1,)
+            )
+            captured_last_body = bool(
+                extra is not None
+                and self._native_extra_tail_roles()
+                    == ("unlinked_extra", "unlinked_extra", "linked_extra")
+                and numbers_tuple == (extra - 1, extra)
+                and tuple(self._captured_indices) == body_indices
+                and self._last_captured_group == (extra - 1,)
+                and self._last_rendered_group == numbers_tuple
+            )
+            initial_final_body_and_extra = bool(
+                initial_uul_rewind
+                and extra is not None
+                and numbers_tuple == (extra - 1, extra)
+            )
+            if not (before_last_body or captured_last_body or initial_final_body_and_extra):
+                raise UnknownPageStateError(
+                    "ComicFUZ unlinked extra is not joined to the expected final body page"
+                )
+            return
+        if roles == ["unlinked_extra", "unlinked_extra"]:
+            extra = self._extra_page_index
+            numbers_tuple = tuple(numbers)
+            stale_advanced_group = bool(
+                self._advanced_extra_groups
+                and numbers_tuple == self._advanced_extra_groups[-1] == self._last_rendered_group
+            )
+            initial_unlinked_pair = bool(
+                initial_uul_rewind
+                and extra is not None
+                and numbers_tuple == (extra, extra + 1)
+            )
+            if (
+                extra is None
+                or self._native_extra_tail_roles()
+                    != ("unlinked_extra", "unlinked_extra", "linked_extra")
+                or (
+                    tuple(self._captured_indices) != self._body_page_indices
+                    and not initial_unlinked_pair
+                )
+                or numbers_tuple != (extra, extra + 1)
+                or (
+                    numbers_tuple != self._expected_extra_tail_group()
+                    and not stale_advanced_group
+                    and not initial_unlinked_pair
+                )
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ unlinked extra pair is not the expected post-body tail group"
+                )
+            return
+        raise UnknownPageStateError("ComicFUZ spread contains an unsupported page-role sequence")
 
     @staticmethod
     def _validate_page_row(row: dict[str, Any]) -> None:
@@ -1462,7 +2310,12 @@ class ComicFuzAdapter(SiteAdapter):
             },
         )
 
-    async def _wait_for_stable_body(self, page: Page) -> list[dict[str, Any]]:
+    async def _wait_for_stable_body(
+        self,
+        page: Page,
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> list[dict[str, Any]]:
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         previous: tuple[object, ...] | None = None
         stable = 0
@@ -1472,9 +2325,12 @@ class ComicFuzAdapter(SiteAdapter):
                 stable = 0
                 await page.wait_for_timeout(self.render_poll_ms)
                 continue
-            rows = await self._active_page_rows(page)
+            rows = await self._active_page_rows(
+                page,
+                allow_initial_rewind=allow_initial_rewind,
+            )
             if rows and all(row["ready"] for row in rows):
-                self._validate_page_group(rows)
+                self._validate_page_group(rows, allow_initial_rewind=allow_initial_rewind)
                 numbers = tuple(int(row["number"]) for row in rows)
                 if self._is_incomplete_initial_group(numbers):
                     previous = None
@@ -1500,8 +2356,16 @@ class ComicFuzAdapter(SiteAdapter):
         )
 
     async def _rewind_to_first_body(
-        self, page: Page, rows: list[dict[str, Any]]
+        self,
+        page: Page,
+        rows: list[dict[str, Any]],
+        *,
+        allow_initial_rewind: bool = False,
     ) -> list[dict[str, Any]]:
+        if allow_initial_rewind and (self._initialized or self._captured_indices):
+            raise UnknownPageStateError(
+                "ComicFUZ initial rewind allowance is unavailable after capture"
+            )
         previous = rows
         for _ in range(self.max_rewind_turns):
             numbers = tuple(int(row["number"]) for row in previous)
@@ -1520,8 +2384,15 @@ class ComicFuzAdapter(SiteAdapter):
                     prior_signature = None
                     await page.wait_for_timeout(self.render_poll_ms)
                     continue
-                current = await self._active_page_rows(page)
+                current = await self._active_page_rows(
+                    page,
+                    allow_initial_rewind=allow_initial_rewind,
+                )
                 if current and all(row["ready"] for row in current):
+                    self._validate_page_group(
+                        current,
+                        allow_initial_rewind=allow_initial_rewind,
+                    )
                     current_signature = self._body_signature(current)
                     stable = stable + 1 if current_signature == prior_signature else 0
                     if stable >= self.render_stable_checks and current_signature != signature:

@@ -4263,6 +4263,31 @@ quota persistence. The same observer is installed for normal and grant-only
 execution. Piccoma uses existing `CrawlRun` history as a conservative
 unresolved-attempt guard, so no Catalog schema change was added.
 
+Site Policies may separately opt into a site-neutral unresolved quota-attempt
+guard scoped to a Work. Planner uses the policy hook to skip every quota
+candidate in a Work with unresolved history. The CLI calls the Executor's local
+gate before creating a Page for normal and grant-only runs; the Executor also
+rechecks history internally before entry. The hook receives
+bounded run/item/source/target identity context and defaults to no blocked Work.
+For the ComicFUZ opt-in, only an exact, persisted consumption proven by both
+the source grant timestamp and matching Work/resource ledger receives a
+versioned confirmation marker in the existing `CrawlRun.stop_reason`. The
+marker preserves the original stop reason, is bound to the immutable run and
+native candidate/source/work/target identity, and lets confirmed consumption
+remain resolved after later capture failure or a newer consumption. Missing,
+malformed, future, mismatched, or unconfirmed history remains blocked across
+restarts and dates. No Catalog schema was added. GUI display currently exposes
+the internal marker only when it is not an exact valid aware-ISO v1 marker.
+Inventory's `display_run_result()` hides that valid marker prefix and shows its
+original stop reason, preserving any further `|` characters. `None` displays as
+an em dash; malformed, naive, separator-free, and unknown-version values remain
+visible unchanged. This is a presentation-only projection: the Catalog retains
+the original marker and no run, source, or resource state is changed.
+
+Policy retry timestamps are hints, not proof of availability. Inventory now
+shows a retry time only when it is strictly later than the current aware clock;
+past timestamps are omitted instead of being presented as a future check.
+
 The public Piccoma-specific CLI flag, GUI checkbox and extra opt-in prompt were
 removed. GUI-created normal Piccoma requests and grant-only `all` /
 `binge_ticket` requests sign the exact internal consent bit in `inputs-v2`;

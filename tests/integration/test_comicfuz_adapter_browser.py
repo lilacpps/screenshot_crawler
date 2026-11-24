@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import zipfile
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from screenshot_crawler import cli
 from screenshot_crawler.batch import (
     BatchExecutor,
     BatchPlanner,
@@ -29,9 +32,15 @@ from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings
+from screenshot_crawler.site_adapters.base import AccessConsumption
 from screenshot_crawler.site_adapters.comicfuz import (
     ComicFuzAdapter,
     ComicFuzDiscoveryAdapter,
+)
+from screenshot_crawler.site_adapters.comicfuz.adapter import _TicketReaderBinding
+from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+    ComicFuzTicketEntry,
+    TicketEntryProof,
 )
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import ComicFuzSitePolicy, SitePolicyRegistry
@@ -43,6 +52,15 @@ BASE = "https://comic-fuz.com"
 WORK_URL = f"{BASE}/manga/1970?position=thumbnail"
 VIEWER_URL = f"{BASE}/manga/viewer/80641"
 NOW = datetime(2026, 10, 13, 12, tzinfo=JST)
+TICKET_AVAILABLE = "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"
+TICKET_RECOVERY = "0\u6642\u306b\u56de\u5fa9!"
+TICKET_RECOVERY_UI_FALLBACK = "0\u6642\u306b\u56de\u5fa9\uff01"
+TICKET_CTA = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
+TICKET_APP = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
+RENTAL_ROW_ROOT_CLASSES = (
+    "Chapter_chapter__wJPBe",
+    "Chapter_chapter__alreadyViewed__BYLMn",
+)
 EPISODE_TITLE = "第31話"
 
 
@@ -51,6 +69,74 @@ def _jpeg_bytes(color: tuple[int, int, int] = (38, 121, 205)) -> bytes:
     output = BytesIO()
     image.save(output, format="JPEG", quality=91)
     return output.getvalue()
+
+
+def _ticket_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _ticket_uint(field: int, value: int) -> bytes:
+    return _ticket_varint(field << 3) + _ticket_varint(value)
+
+
+def _ticket_bytes(field: int, value: bytes) -> bytes:
+    return _ticket_varint((field << 3) | 2) + _ticket_varint(len(value)) + value
+
+
+def _ticket_request(chapter_id: int) -> bytes:
+    return _ticket_bytes(1, _ticket_uint(3, 2)) + _ticket_uint(2, 1) + _ticket_bytes(
+        3, b""
+    ) + _ticket_uint(4, chapter_id)
+
+
+def _ticket_response(
+    *,
+    work_id: int,
+    chapter_id: int,
+    expiry: str,
+    point_amount: int = 30,
+    point_present: bool = True,
+) -> bytes:
+    manga = (
+        _ticket_uint(1, work_id)
+        + _ticket_uint(13, 1)
+        + _ticket_bytes(18, TICKET_RECOVERY.encode())
+    )
+    point = _ticket_uint(2, point_amount) if point_amount else b""
+    chapter = _ticket_uint(1, chapter_id)
+    if point_present:
+        chapter += _ticket_bytes(5, point)
+    chapter += _ticket_bytes(10, expiry.encode())
+    groups = _ticket_bytes(2, chapter)
+    viewer_page = _ticket_bytes(1, b"synthetic-page")
+    viewer_data = _ticket_bytes(2, viewer_page)
+    return (
+        _ticket_bytes(2, viewer_data)
+        + _ticket_bytes(5, groups)
+        + _ticket_bytes(11, manga)
+        + _ticket_uint(12, chapter_id)
+    )
+
+
+def _direct_viewer_request(
+    chapter_id: int,
+    *,
+    use_ticket: bool = False,
+    point_free: int = 0,
+    point_paid: int = 0,
+) -> bytes:
+    device = _ticket_uint(3, 2)
+    # Proto3 omits false useTicket; point costs are present and explicitly zero.
+    consume_point = _ticket_uint(1, point_free) + _ticket_uint(2, point_paid)
+    request = _ticket_bytes(1, device)
+    if use_ticket:
+        request += _ticket_uint(2, 1)
+    return request + _ticket_bytes(3, consume_point) + _ticket_uint(4, chapter_id)
 
 
 def _work_html(
@@ -89,9 +175,224 @@ def _work_html(
       <style>body{{min-height:1200px}}</style></body></html>'''
 
 
+def _work_ticket_listing_html(
+    *,
+    work_id: str,
+    chapter_id: str,
+    chapter_label: str,
+    request_body: bytes,
+    viewer_html: str,
+    charge_available: bool = True,
+    listing_ready_delay_ms: int = 0,
+    hidden_duplicate_dialog: bool = False,
+    ticket_query: bool = True,
+) -> str:
+    next_data = {
+        "page": "/manga/[mangaId]",
+        "query": {"mangaId": work_id},
+        "props": {
+            "pageProps": {
+                "chapters": [
+                    {
+                        "chapters": [
+                            {"chapterId": chapter_id, "chapterMainName": chapter_label,
+                             "pointConsumption": {"amount": 30}}
+                        ]
+                    }
+                ]
+            }
+        },
+    }
+    request_values = list(request_body)
+    viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    listing_class = (
+        "title_detail_chapters__pending__fixture"
+        if listing_ready_delay_ms > 0
+        else "title_detail_chapters__list__fixture"
+    )
+    viewer_route = f"/manga/viewer/{chapter_id}"
+    if ticket_query:
+        viewer_route += "?ticket=true"
+    modal = f'''<div class="Dialog_modal__fixture" id="ticket-modal" style="display:none">
+        <div class="Dialog_content__fixture">
+          <div class="Dialog_chapter__fixture">
+            <p class="Dialog_chapter__mainText__fixture">{chapter_label}</p>
+          </div>
+          <div class="Dialog_items__fixture"><div class="Dialog_items__item__fixture">
+            <span class="Dialog_items__icon__fixture"></span>
+            <p class="Dialog_items__amount__fixture">1</p>
+          </div></div>
+          <div class="Dialog_buttons__fixture">
+            <a class="Dialog_buttons__active__fixture" id="ticket-cta">{TICKET_CTA}</a>
+            <a>{TICKET_APP}</a>
+            <button class="Dialog_appflow__button__fixture">{TICKET_APP}</button>
+            <a class="Dialog_buttons__active__fixture">コメント一覧へ</a>
+            <a class="Dialog_buttons__cancel__fixture">キャンセル</a>
+          </div>
+        </div>
+      </div>'''
+    hidden_modal = (
+        modal.replace(
+            'class="Dialog_modal__fixture"',
+            'class="Dialog_modal__hidden__fixture" style="opacity:0"',
+            1,
+        )
+        if hidden_duplicate_dialog
+        else ""
+    )
+    return f'''<!doctype html><html><head><title>Verified ComicFUZ Work</title>
+      <link rel="canonical" href="{BASE}/manga/{work_id}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(next_data)}</script>
+      </head><body><div id="ticket-list" class="{listing_class}">
+        <div class="Chapter_chapter__row__fixture"><div class="Chapter_chapter__detail__fixture">
+          <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
+        </div></div></div>
+        <div class="Charge_charge__charged__fixture"><img alt="チャージ"
+          src="/assets/manga_detail/charged.svg"><p>{TICKET_AVAILABLE}</p></div>
+        <button class="page-control__fixture">Background control</button>
+        {modal}{hidden_modal}
+        <script>
+          (() => {{
+          const chargeAvailable={json.dumps(charge_available)};
+          const listingReadyDelayMs={listing_ready_delay_ms};
+          if(listingReadyDelayMs>0){{
+            setTimeout(()=>{{
+              const list=document.querySelector('#ticket-list');
+              list.className='title_detail_chapters__list__fixture';
+            }},listingReadyDelayMs);
+          }}
+          const workId={json.dumps(work_id)}, chapterId={json.dumps(chapter_id)};
+          const chapterLabel={json.dumps(chapter_label)};
+          const mangaPrototype=chargeAvailable?{{}}:{{isTicketAvailable:false,chargeStatus:''}};
+          const manga=Object.assign(Object.create(mangaPrototype),{{
+            mangaId:Number(workId),isChargeNeeded:true
+          }});
+          if(chargeAvailable){{manga.isTicketAvailable=true;manga.chargeStatus={json.dumps(TICKET_AVAILABLE)};}}
+          const point=Object.assign(Object.create({{type:0}}),{{amount:30}});
+          const chapter=Object.assign(Object.create({{endOfRentalPeriod:''}}),{{
+            chapterId:Number(chapterId),chapterMainName:chapterLabel,pointConsumption:point
+          }});
+          const webMangaViewerData={{manga,chapters:[{{chapters:[chapter]}}]}};
+          const heading=document.querySelector('h3');
+          heading.__reactFiber$target={{memoizedProps:{{chapter}},
+            return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
+          const chargeBadge=document.querySelector('.Charge_charge__charged__fixture');
+          const chargeLabel=chargeAvailable?manga.chargeStatus:'{TICKET_RECOVERY_UI_FALLBACK}';
+          chargeBadge.className=chargeAvailable
+            ?'Charge_charge__charged__fixture':'Charge_charge__not_charged__fixture';
+          chargeBadge.querySelector('img').src=chargeAvailable
+            ?'/assets/manga_detail/charged.svg':'/assets/manga_detail/charge.svg';
+          chargeBadge.querySelector('p').textContent=chargeLabel;
+          const chargeDataFiber={{memoizedProps:{{webMangaViewerData}},return:null}};
+          const chargePropsFiber={{memoizedProps:{{isTicketAvailable:!!manga.isTicketAvailable,
+            labelText:manga.chargeStatus||''}},return:chargeDataFiber}};
+          chargeBadge.__reactFiber$host={{memoizedProps:{{className:chargeBadge.className}},
+            return:chargePropsFiber}};
+          const modal=document.querySelector('#ticket-modal');
+          heading.addEventListener('click',()=>modal.style.display='block');
+          document.querySelector('#ticket-cta').addEventListener('click',()=>{{
+            if({json.dumps(ticket_query)}){{
+              history.pushState({{}},'',{json.dumps(viewer_route)});
+              fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+                headers:{{'content-type':'text/plain'}},
+                body:new Uint8Array({request_values})}})
+                .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+                .catch(()=>{{}});
+            }}else{{
+              window.location.assign({json.dumps(viewer_route)});
+            }}
+          }});
+          }})();
+        </script></body></html>'''
+
+
+def _relative_rental_listing_html(
+    *, work_id: str, chapter_id: str, chapter_label: str, rental_value: str,
+    ticket_available: bool = False,
+    point_amount: int = 0,
+    native_point_amount: int | str | None = 30,
+    row_runtime_same_chapter: bool = True,
+    row_runtime_same_point: bool = True,
+    row_root_class_tokens: tuple[str, ...] = RENTAL_ROW_ROOT_CLASSES,
+    false_descendant: bool = False,
+) -> str:
+    native_point = (
+        {} if native_point_amount is None else {"amount": native_point_amount}
+    )
+    data = {
+        "page": "/manga/[mangaId]",
+        "query": {"mangaId": work_id},
+        "props": {"pageProps": {"chapters": [{"chapters": [{
+            "chapterId": chapter_id,
+            "chapterMainName": chapter_label,
+            "pointConsumption": native_point,
+        }]}]}},
+    }
+    charge_class = (
+        "Charge_charge__charged__fixture"
+        if ticket_available
+        else "Charge_charge__JSGmu undefined"
+    )
+    charge_image = "charged.svg" if ticket_available else "charge.svg"
+    charge_label = TICKET_AVAILABLE if ticket_available else TICKET_RECOVERY
+    row_root_classes = " ".join(row_root_class_tokens)
+    false_descendant_markup = '<span class="false"></span>' if false_descendant else ""
+    return f'''<!doctype html><html><head><title>Selected ComicFUZ Work</title>
+      <link rel="canonical" href="{BASE}/manga/{work_id}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(data, ensure_ascii=False)}</script>
+      </head><body><div class="title_detail_chapters__list__fixture">
+        <div class="{row_root_classes}">
+          <div class="Chapter_chapter__detail__fixture">
+            <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
+            <p class="Chapter_chapter__price_free__fixture">免費_PLACEHOLDER</p>
+            <p class="Chapter_chapter__rentalPeriod__fixture">{rental_value}</p>
+            {false_descendant_markup}
+          </div>
+        </div>
+      </div>
+      <div class="{charge_class}">
+        <img alt="\u30c1\u30e3\u30fc\u30b8" src="/assets/manga_detail/{charge_image}">
+        <p>{charge_label}</p>
+      </div>
+      <script>(()=>{{
+        const workId={json.dumps(work_id)}, chapterId={json.dumps(chapter_id)};
+        const label={json.dumps(chapter_label)}, rental={json.dumps(rental_value, ensure_ascii=False)};
+        const ticketAvailable={json.dumps(ticket_available)};
+        const manga=Object.assign(Object.create(ticketAvailable?{{}}:{{isTicketAvailable:false}}),{{
+          mangaId:Number(workId),isChargeNeeded:true
+        }});
+        if(ticketAvailable){{manga.isTicketAvailable=true;manga.chargeStatus={json.dumps(TICKET_AVAILABLE)};}}
+        else manga.chargeStatus={json.dumps(TICKET_RECOVERY)};
+        const point=Object.create({{type:0,amount:{point_amount}}});
+        const chapter=Object.assign(Object.create({{endOfRentalPeriod:''}}),{{
+          chapterId:Number(chapterId),chapterMainName:label,pointConsumption:point,
+          endOfRentalPeriod:rental
+        }});
+        const rowPoint={json.dumps(row_runtime_same_point)}?point:
+          Object.create({{type:0,amount:{point_amount}}});
+        const rowChapter={json.dumps(row_runtime_same_chapter)}?chapter:
+          Object.assign(Object.create(Object.getPrototypeOf(chapter)),chapter,
+            {{pointConsumption:rowPoint}});
+        const webMangaViewerData={{manga,chapters:[{{chapters:[chapter]}}]}};
+        const heading=document.querySelector('h3');
+        heading.__reactFiber$target={{memoizedProps:{{chapter:rowChapter}},
+          return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
+        const badge=document.querySelector('div[class*="Charge_charge__"]');
+        const chargeData={{memoizedProps:{{webMangaViewerData}},return:null}};
+        const chargeProps={{memoizedProps:{{isTicketAvailable:!!manga.isTicketAvailable,
+          labelText:ticketAvailable?manga.chargeStatus:''}},return:chargeData}};
+        badge.__reactFiber$host={{memoizedProps:{{className:badge.className}},return:chargeProps}};
+      }})();</script></body></html>'''.replace(
+        "免費_PLACEHOLDER", "\u7121\u6599"
+    )
+
+
+
 def _viewer_html(
     jpeg: bytes,
     *,
+    empty_ssr: bool = False,
+    bind_title_fiber: bool = False,
     viewer_title: str = EPISODE_TITLE,
     native_title: str = EPISODE_TITLE,
     sign_in: bool = True,
@@ -115,25 +416,37 @@ def _viewer_html(
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
+    extra_tail_unlinked_pair: bool = False,
+    no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
 ) -> str:
+    if no_extra_tail and (extra_tail or extra_tail_unlinked_pair):
+        raise ValueError("no-extra tail cannot be combined with an extra-image tail")
     encoded = base64.b64encode(jpeg).decode("ascii")
-    next_data = {
-        "page": "/manga/viewer/[chapterId]",
-        "props": {
-            "pageProps": {
-                "chapterId": "80641",
-                "data": {
-                    "mangaId": "1970",
-                    "chapterMainName": native_title,
-                    "chapterSubName": native_subtitle,
-                    "mangaName": "Verified ComicFUZ Work",
+    next_data = (
+        {
+            "page": "/manga/viewer/[chapterId]",
+            "query": {},
+            "props": {"pageProps": {}},
+        }
+        if empty_ssr
+        else {
+            "page": "/manga/viewer/[chapterId]",
+            "props": {
+                "pageProps": {
+                    "chapterId": "80641",
+                    "data": {
+                        "mangaId": "1970",
+                        "chapterMainName": native_title,
+                        "chapterSubName": native_subtitle,
+                        "mangaName": "Verified ComicFUZ Work",
+                    },
                 },
-            }
-        },
-    }
+            },
+        }
+    )
     next_data_json = json.dumps(next_data, ensure_ascii=False).replace("</", "<\\/")
     if native_subtitle and viewer_title == EPISODE_TITLE:
         viewer_title = f"{EPISODE_TITLE}　{native_subtitle}"
@@ -165,13 +478,21 @@ def _viewer_html(
             image_groups[last_state].append(body_descriptor_count)
         if not first_pair_mode and missing_second_page:
             image_groups[1] = [1]
-        if extra_tail:
+        if extra_tail_unlinked_pair:
+            if body_descriptor_count in image_groups[last_state]:
+                image_groups[last_state + 1] = [body_descriptor_count + 1, body_descriptor_count + 2]
+            else:
+                image_groups[last_state + 1] = [body_descriptor_count, body_descriptor_count + 1]
+                image_groups[last_state + 2] = [body_descriptor_count + 2]
+        elif extra_tail:
             remaining_extras = [n for n in range(body_descriptor_count, body_descriptor_count + 3)
                                 if n not in image_groups[last_state]]
             for start in range(0, len(remaining_extras), 2):
                 image_groups[max(image_groups) + 1] = remaining_extras[start:start + 2]
     terminal_state = max(image_groups) + 1 if image_groups else 0
-    native_page_count = body_descriptor_count + (5 if extra_tail else 3)
+    native_page_count = body_descriptor_count + (
+        2 if no_extra_tail else (5 if extra_tail or extra_tail_unlinked_pair else 3)
+    )
     counter_values = [
         f"{group[0] + 1}/{native_page_count}" for _state, group in image_groups.items()
     ] + [f"{native_page_count}/{native_page_count}"]
@@ -200,14 +521,25 @@ def _viewer_html(
         const pageDescriptors = Array.from({{length:{body_descriptor_count}}}, (_, index) => ({{
           image:{{imageWidth:{97 if descriptor_width_mismatch else 96},imageHeight:144}}
         }}));
-        pageDescriptors.push(
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
-          {{googleAds:{{}}}}, {{lastPage:{{}}}}
-        );
-        if ({str(extra_tail).lower()}) pageDescriptors.splice(pageDescriptors.length - 2, 0,
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}}
-        );
+        if ({str(extra_tail_unlinked_pair).lower()}) {{
+          pageDescriptors.push(
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{googleAds:{{}}}}, {{lastPage:{{}}}}
+          );
+        }} else if ({str(no_extra_tail).lower()}) {{
+          pageDescriptors.push({{googleAds:{{}}}}, {{lastPage:{{}}}});
+        }} else {{
+          pageDescriptors.push(
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{googleAds:{{}}}}, {{lastPage:{{}}}}
+          );
+          if ({str(extra_tail).lower()}) pageDescriptors.splice(pageDescriptors.length - 2, 0,
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}}
+          );
+        }}
         const viewerData = {{pages:pageDescriptors}};
         if ({str(first_page_blank_inherited).lower()})
           Object.setPrototypeOf(viewerData, {{isFirstPageBlank:false}});
@@ -319,6 +651,12 @@ def _viewer_html(
               <h2 class="title_detail_viewer__detail__info__viewerTitle__GrN4D" style="position:absolute;left:120px;top:600px">{viewer_title}</h2>
             </div>`;
           }}
+          if ({str(bind_title_fiber).lower()}) {{
+            for (const title of reader.querySelectorAll(
+              'h2[class*="title_detail_viewer__detail__info__viewerTitle"]')) {{
+              title['__reactFiber$fixture'] = {{memoizedProps:{{webMangaViewerData}},return:null}};
+            }}
+          }}
         }}
         if ({delayed_manifest_ms} > 0) setTimeout(() => {{
           for (const image of reader.querySelectorAll('img.G54Y0W_page'))
@@ -361,6 +699,102 @@ def _viewer_html(
       </script></body></html>"""
 
 
+def _ticket_viewer_html(
+    *,
+    work_id: str,
+    chapter_id: str,
+    expiry: str,
+    chapter_label: str = EPISODE_TITLE,
+    relative_rental: bool = False,
+    empty_ssr: bool = False,
+    body_count: int = 2,
+    no_extra_tail: bool = False,
+) -> str:
+    html = _viewer_html(
+        _jpeg_bytes(),
+        empty_ssr=empty_ssr,
+        bind_title_fiber=empty_ssr,
+        latest_end="valid",
+        first_page_blank=True,
+        first_mode_body_page_count=body_count,
+        true_mode_body_page_count=body_count,
+        no_extra_tail=no_extra_tail,
+        native_title=chapter_label,
+        viewer_title=chapter_label,
+    )
+    html = html.replace("80641", chapter_id).replace("1970", work_id)
+    old = f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData}};"
+    point_consumption = (
+        "Object.create({type:0,amount:0})"
+        if relative_rental
+        else "{type:0,amount:30}"
+    )
+    if empty_ssr:
+        native_data = (
+            "const targetChapter=Object.assign(Object.create({chapterSubName:''}),{"
+            f"chapterId:{chapter_id},chapterMainName:{json.dumps(chapter_label)},"
+            f"pointConsumption:{point_consumption},isRead:true,"
+            f"endOfRentalPeriod:{json.dumps(expiry)}}});"
+            f"const webMangaViewerData = {{chapterId:{chapter_id},viewerData,"
+            f"manga:{{mangaId:{work_id},mangaName:'Verified ComicFUZ Work',"
+            f"isChargeNeeded:true,isTicketAvailable:false,"
+            f"chargeStatus:{json.dumps(TICKET_RECOVERY)}}},"
+            "chapters:[{chapters:[targetChapter]}]};"
+        )
+    else:
+        native_data = (
+            f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData,"
+            f"manga:{{mangaId:'{work_id}',isChargeNeeded:true,isTicketAvailable:false,"
+            f"chargeStatus:{json.dumps(TICKET_RECOVERY)}}},"
+            f"chapters:[{{chapters:[{{chapterId:'{chapter_id}',"
+            f"chapterMainName:{json.dumps(chapter_label)},"
+            f"pointConsumption:{point_consumption},isRead:true,"
+            f"endOfRentalPeriod:{json.dumps(expiry)}}}]}}]}};"
+        )
+    if old not in html:
+        raise AssertionError("Synthetic viewer fixture lost its native React data marker")
+    return html.replace(old, native_data)
+
+
+async def _install_synthetic_ticket_binding(
+    adapter: ComicFuzAdapter,
+    page,
+    *,
+    work_id: str = "3667",
+    chapter_id: str = "76630",
+    chapter_label: str = "Ticket target episode",
+) -> None:
+    await adapter.configure_target_identity(
+        f"{work_id}:{chapter_id}", "synthetic-managed-work-key"
+    )
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, "work_ticket")
+    controller = adapter._ticket_entry
+    assert controller is not None
+    observed_at = datetime.now(JST)
+    proof = TicketEntryProof(
+        request_started_at=observed_at,
+        confirmed_at=observed_at,
+        access_granted_until=None,
+    )
+    controller.proof = proof
+    controller.consumption = AccessConsumption(
+        consumed=True,
+        resource="work_ticket",
+        consumed_at=observed_at,
+    )
+    adapter._ticket_entry_confirmed = True
+    adapter._ticket_reader_binding = _TicketReaderBinding(
+        controller=controller,
+        proof=proof,
+        page=page,
+        work_id=work_id,
+        chapter_id=chapter_id,
+        external_id=f"{work_id}:{chapter_id}",
+    )
+    adapter._expected_episode_title = chapter_label
+
+
 async def _route_comicfuz(
     page,
     *,
@@ -389,6 +823,8 @@ async def _route_comicfuz(
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
+    extra_tail_unlinked_pair: bool = False,
+    no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
@@ -419,6 +855,8 @@ async def _route_comicfuz(
         persistent_transition_overlap=persistent_transition_overlap,
         transition_overlap_variant=transition_overlap_variant,
         extra_tail=extra_tail,
+        extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        no_extra_tail=no_extra_tail,
         latest_end=latest_end,
         stuck_extra_tail=stuck_extra_tail,
         native_subtitle=native_subtitle,
@@ -485,8 +923,12 @@ async def _comicfuz_batch_fixture(
 
         adapters.register("comicfuz", create_adapter)
     plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(site="comicfuz")
-    assert len(plan.candidates) == 1
-    candidate = plan.candidates[0]
+    free_candidates = [
+        candidate for candidate in plan.candidates
+        if candidate.external_id == "1970:80641"
+    ]
+    assert len(free_candidates) == 1
+    candidate = free_candidates[0]
     assert candidate.external_id == "1970:80641"
     assert candidate.artifact_prefix == "003"
     executor_kwargs = {
@@ -500,13 +942,1385 @@ async def _comicfuz_batch_fixture(
     return catalog, discovery, target, plan, candidate, executor, seen, watchlist
 
 
-@pytest.mark.parametrize(("extra_tail", "latest_end", "body_count"), [
-    (False, "none", 2), (True, "none", 2), (True, "valid", 2), (False, "valid", 2),
-    (True, "account_recommendations", 2), (True, "none", 1), (True, "account_recommendations", 1),
-])
+@pytest.mark.parametrize(
+    ("grant_only", "relative_rental", "ticket_query", "body_count", "no_extra_tail"),
+    [
+        (False, False, False, 2, False),
+        (False, False, True, 2, False),
+        (False, True, False, 2, False),
+        (False, True, True, 2, False),
+        (True, False, False, 2, False),
+        (True, False, True, 2, False),
+        (True, True, False, 2, False),
+        (True, True, True, 2, False),
+        (False, True, False, 11, True),
+    ],
+    ids=[
+        "normal_absolute_canonical",
+        "normal_absolute_ticket_query",
+        "normal_relative_canonical",
+        "normal_relative_ticket_query",
+        "grant_only_absolute_canonical",
+        "grant_only_absolute_ticket_query",
+        "grant_only_relative_canonical",
+        "grant_only_relative_ticket_query",
+        "normal_relative_empty_ssr_no_extra_11_body_blank_first",
+    ],
+)
+async def test_comicfuz_work_ticket_batch_entry_and_capture(
+    browser_page,
+    browser_context,
+    tmp_path: Path,
+    sync_legacy_unscoped_work,
+    grant_only: bool,
+    relative_rental: bool,
+    ticket_query: bool,
+    body_count: int,
+    no_extra_tail: bool,
+) -> None:
+    work_id, chapter_id = "3667", "76630"
+    work_url = f"{BASE}/manga/{work_id}"
+    chapter_label = "Ticket target episode"
+    now = datetime.now(JST)
+    expiry = "残り2日" if relative_rental else (now + timedelta(days=1)).isoformat()
+    request_body = _ticket_request(int(chapter_id))
+    response_body = _ticket_response(
+        work_id=int(work_id),
+        chapter_id=int(chapter_id),
+        expiry=expiry,
+        point_amount=0 if relative_rental else 30,
+    )
+    viewer_html = _ticket_viewer_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry=expiry,
+        chapter_label=chapter_label,
+        relative_rental=relative_rental,
+        empty_ssr=not grant_only and relative_rental,
+        body_count=body_count,
+        no_extra_tail=no_extra_tail,
+    )
+    listing_html = _work_ticket_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=chapter_label,
+        request_body=request_body,
+        viewer_html=viewer_html,
+        listing_ready_delay_ms=350,
+        hidden_duplicate_dialog=True,
+        ticket_query=ticket_query,
+    )
+    viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    viewer_bootstrap_html = f'''<!doctype html><html><head><title>ComicFUZ viewer bootstrap</title></head>
+      <body><script>(()=>{{
+        const body=new Uint8Array({json.dumps(list(request_body))});
+        fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+          headers:{{'content-type':'text/plain'}},body}})
+          .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+          .catch(()=>{{}});
+      }})();</script></body></html>'''
+    api_requests: list[bytes] = []
+    work_page_visits: list[str] = []
+
+    async def comicfuz_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == work_url:
+            work_page_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=listing_html,
+            )
+        elif path == f"{BASE}/manga/viewer/{chapter_id}":
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=viewer_bootstrap_html,
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        api_requests.append(route.request.post_data_buffer or b"")
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=response_body,
+        )
+
+    await browser_page.route(f"{BASE}/**", comicfuz_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    catalog = CatalogService(tmp_path / "ticket-catalog.sqlite")
+    target = WatchlistTarget(
+        key="comicfuz-ticket-target",
+        work_key="stable-series-slug",
+        site="comicfuz",
+        url=work_url,
+        label="Ticket target work",
+    )
+    discovery_registry = DiscoveryAdapterRegistry()
+    discovery_registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, discovery_registry)
+    discovered = await discovery.discover(browser_page, target, "full")
+    assert discovered.complete is True
+    watchlist = sync_legacy_unscoped_work(catalog, target)
+
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now
+    )
+    candidates = [
+        candidate
+        for candidate in plan.candidates
+        if candidate.external_id == f"{work_id}:{chapter_id}"
+    ]
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.access_strategy == "quota"
+    assert candidate.quota_resource == "work_ticket"
+
+    adapter = ComicFuzAdapter()
+    adapters = AdapterRegistry()
+    adapters.register("comicfuz", lambda: adapter)
+    attempt_observations = []
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        library_dir=tmp_path / "library",
+        watchlist=watchlist,
+        access_attempt_sink=attempt_observations.append,
+    )
+    if grant_only:
+        result = await executor.execute_grant_only_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "grant-only-output",
+            now=now,
+        )
+        run = catalog.get_crawl_run(result.crawl_run_id)
+        assert result.resource_consumed is True
+        assert result.resource == "work_ticket"
+        assert run.status == "succeeded" and run.page_count == 0
+        assert catalog.get_item(candidate.item_id).status == "pending"
+        assert catalog.list_artifacts(item_id=candidate.item_id) == []
+        assert adapter.get_access_consumption().consumed is True
+        if relative_rental:
+            assert adapter.get_access_consumption().access_granted_until is None
+        else:
+            assert adapter.get_access_consumption().access_granted_until is not None
+        assert adapter._source_response_tasks == {}
+        assert adapter._source_responses == {}
+    else:
+        result = await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "normal-output",
+            library_dir=tmp_path / "library",
+            max_pages=max(5, body_count),
+            now=now,
+        )
+        run = catalog.get_crawl_run(result.crawl_run_id)
+        assert result.stop_reason == "end" and result.page_count == body_count
+        assert run.status == "succeeded" and run.page_count == body_count
+        assert "access_consumption_confirmed:" in (run.stop_reason or "")
+        assert catalog.get_item(candidate.item_id).status == "completed"
+        artifacts = catalog.list_artifacts(item_id=candidate.item_id)
+        assert len(artifacts) == 1 and artifacts[0].format == "zip"
+        with zipfile.ZipFile(result.archive_path) as archive:
+            names = archive.namelist()
+            assert len(names) == body_count
+            if no_extra_tail:
+                assert names == [f"page-{number:04d}.png" for number in range(1, 12)]
+                assert archive.testzip() is None
+                for name in names:
+                    payload = archive.read(name)
+                    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+                    # The fixture is a blob URL without a first-party response body;
+                    # ComicFUZ's validated canvas fallback emits PNG captures.
+                    with Image.open(BytesIO(payload)) as image:
+                        assert image.format == "PNG" and image.size == (96, 144)
+                        image.load()
+                assert adapter._viewer_pages is not None
+                assert len(adapter._viewer_pages) == body_count + 2
+                assert [page["role"] for page in adapter._viewer_pages] == [
+                    *(["image"] * body_count), "google_ads", "last_page",
+                ]
+                assert adapter._body_page_indices == tuple(range(body_count))
+                assert adapter._extra_page_index is None
+                assert adapter._is_first_page_blank is True
+                assert adapter._captured_indices == list(range(body_count))
+                assert adapter._last_captured_group == (9, 10)
+                assert adapter._ended is True
+                archive_digest = hashlib.sha256(result.archive_path.read_bytes()).hexdigest()
+                assert artifacts[0].sha256 == archive_digest
+                assert artifacts[0].byte_size == result.archive_path.stat().st_size
+        assert adapter.get_access_consumption().consumed is True
+        if relative_rental:
+            assert adapter._ticket_reader_binding_matches(browser_page)
+            assert adapter._empty_ssr_reader_identity is not None
+            assert (
+                adapter._empty_ssr_reader_identity.binding.proof
+                is adapter._ticket_entry.proof
+            )
+        if relative_rental:
+            assert adapter.get_access_consumption().access_granted_until is None
+        else:
+            assert adapter.get_access_consumption().access_granted_until is not None
+    if relative_rental:
+        assert catalog.get_source(candidate.source_id).access_granted_until is None
+    assert api_requests == [request_body]
+    assert len(work_page_visits) == 2
+    assert [observation.status for observation in attempt_observations] == [
+        "attempting",
+        "confirmed",
+    ]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "duplicate_next_data",
+        "malformed_next_data",
+        "conflicting_query",
+        "conflicting_page_props",
+        "bad_runtime_prop",
+        "duplicate_runtime_object",
+        "duplicate_non_target_chapter_id",
+        "ambiguous_runtime_without_title",
+        "duplicate_title",
+        "wrong_work_id",
+        "wrong_work_id_without_title",
+        "wrong_chapter_id",
+        "duplicate_non_target_chapter_id_without_title",
+        "bad_runtime_prop_without_title",
+        "missing_subtitle_default",
+        "dom_title_mismatch",
+        "missing_binding",
+        "other_page_binding",
+        "changed_proof_object",
+        "changed_consumption_timestamp",
+        "changed_controller",
+        "direct_context",
+        "auto_context",
+        "missing_resource_context",
+    ],
+)
+async def test_comicfuz_empty_ssr_ticket_reader_authority_fails_closed(
+    browser_page,
+    variant: str,
+) -> None:
+    work_id, chapter_id = "3667", "76630"
+    chapter_label = "Ticket target episode"
+    html = _ticket_viewer_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry="\u6b8b\u308a2\u65e5",
+        chapter_label=chapter_label,
+        relative_rental=True,
+        empty_ssr=True,
+    )
+
+    async def route_viewer(route) -> None:
+        await route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
+
+    await browser_page.route(f"{BASE}/manga/viewer/{chapter_id}**", route_viewer)
+    await browser_page.goto(f"{BASE}/manga/viewer/{chapter_id}?ticket=true")
+    if variant == "duplicate_next_data":
+        await browser_page.evaluate(
+            """() => document.body.append(document.querySelector('#__NEXT_DATA__').cloneNode(true))"""
+        )
+    elif variant == "malformed_next_data":
+        await browser_page.locator("#__NEXT_DATA__").evaluate("element => { element.textContent = '{'; }")
+    elif variant == "conflicting_query":
+        await browser_page.locator("#__NEXT_DATA__").evaluate(
+            """element => { const data=JSON.parse(element.textContent); data.query={chapterId:'76630'};
+              element.textContent=JSON.stringify(data); }"""
+        )
+    elif variant == "conflicting_page_props":
+        await browser_page.locator("#__NEXT_DATA__").evaluate(
+            """element => { const data=JSON.parse(element.textContent);
+              data.props.pageProps={chapterId:'76630'}; element.textContent=JSON.stringify(data); }"""
+        )
+    elif variant in {"bad_runtime_prop", "bad_runtime_prop_without_title"}:
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              image[key].memoizedProps.webMangaViewerData=null; }"""
+        )
+    elif variant == "duplicate_runtime_object":
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const fiberKey=Object.keys(image).find(key=>key.startsWith('__reactFiber$'));
+              const web=image[fiberKey].memoizedProps.webMangaViewerData;
+              image[fiberKey].memoizedProps.webMangaViewerData={...web,manga:{...web.manga}}; }"""
+        )
+    elif variant == "ambiguous_runtime_without_title":
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              const web=image[key].memoizedProps.webMangaViewerData;
+              image[key].memoizedProps.webMangaViewerData={...web,manga:{...web.manga}}; }"""
+        )
+        await browser_page.locator("h2[class*='title_detail_viewer__detail__info__viewerTitle']") \
+            .evaluate("element => { element.style.display = 'none'; }")
+    elif variant in {
+        "duplicate_non_target_chapter_id",
+        "duplicate_non_target_chapter_id_without_title",
+    }:
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              const chapters=image[key].memoizedProps.webMangaViewerData.chapters[0].chapters;
+              chapters.push({...chapters[0],chapterId:777});
+              chapters.push({...chapters[0],chapterId:777}); }"""
+        )
+    elif variant == "duplicate_title":
+        await browser_page.locator("h2[class*='title_detail_viewer__detail__info__viewerTitle']") \
+            .evaluate("element => element.after(element.cloneNode(true))")
+    elif variant in {"wrong_work_id", "wrong_work_id_without_title"}:
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              image[key].memoizedProps.webMangaViewerData.manga.mangaId=999; }"""
+        )
+    elif variant == "wrong_chapter_id":
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              image[key].memoizedProps.webMangaViewerData.chapterId=999; }"""
+        )
+    elif variant == "missing_subtitle_default":
+        await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+            """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+              const chapter=image[key].memoizedProps.webMangaViewerData.chapters[0].chapters[0];
+              Object.setPrototypeOf(chapter,{}); }"""
+        )
+    elif variant == "dom_title_mismatch":
+        await browser_page.locator("h2[class*='title_detail_viewer__detail__info__viewerTitle']") \
+            .evaluate("element => { element.textContent = 'Different episode'; }")
+    if variant in {
+        "wrong_work_id_without_title",
+        "duplicate_non_target_chapter_id_without_title",
+        "bad_runtime_prop_without_title",
+    }:
+        await browser_page.locator("h2[class*='title_detail_viewer__detail__info__viewerTitle']") \
+            .evaluate("element => { element.style.display = 'none'; }")
+
+    adapter = ComicFuzAdapter()
+    await _install_synthetic_ticket_binding(adapter, browser_page)
+    if variant == "missing_binding":
+        adapter._ticket_entry_confirmed = False
+        adapter._ticket_reader_binding = None
+    elif variant == "other_page_binding":
+        assert adapter._ticket_reader_binding is not None
+        adapter._ticket_reader_binding = replace(adapter._ticket_reader_binding, page=object())
+    elif variant == "changed_proof_object":
+        assert adapter._ticket_entry is not None
+        adapter._ticket_entry.proof = TicketEntryProof(
+            request_started_at=NOW,
+            confirmed_at=NOW + timedelta(seconds=1),
+            access_granted_until=None,
+        )
+    elif variant == "changed_consumption_timestamp":
+        assert adapter._ticket_entry is not None
+        adapter._ticket_entry.consumption = AccessConsumption(
+            consumed=True,
+            resource="work_ticket",
+            consumed_at=NOW + timedelta(seconds=1),
+        )
+    elif variant == "changed_controller":
+        assert adapter._ticket_entry is not None
+        adapter._ticket_entry = ComicFuzTicketEntry(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            external_id=f"{work_id}:{chapter_id}",
+        )
+    elif variant == "direct_context":
+        adapter._access_strategy = "direct"
+    elif variant == "auto_context":
+        adapter._access_strategy = "auto"
+    elif variant == "missing_resource_context":
+        adapter._quota_resource = None
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter._validate_reader_identity(
+            browser_page,
+            allow_initial_manifest_loading=True,
+        )
+
+
+@pytest.mark.parametrize("stage", ["initial_manifest", "cached_at_end"])
+async def test_comicfuz_full_ssr_malformed_viewer_manifest_never_becomes_loading_or_cache(
+    browser_page,
+    stage: str,
+) -> None:
+    work_id, chapter_id = "3667", "76630"
+    chapter_label = "Ticket target episode"
+    html = _ticket_viewer_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry="\u6b8b\u308a2\u65e5",
+        chapter_label=chapter_label,
+        relative_rental=True,
+    )
+
+    async def route_viewer(route) -> None:
+        await route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
+
+    await browser_page.route(f"{BASE}/manga/viewer/{chapter_id}**", route_viewer)
+    await browser_page.goto(f"{BASE}/manga/viewer/{chapter_id}")
+    adapter = ComicFuzAdapter()
+    await adapter.configure_target_identity(
+        f"{work_id}:{chapter_id}", "synthetic-managed-work-key"
+    )
+    await adapter.configure_run(browser_page, "auto")
+    adapter._expected_episode_title = chapter_label
+    if stage == "cached_at_end":
+        assert await adapter._validate_reader_identity(
+            browser_page,
+            allow_initial_manifest_loading=True,
+        )
+        adapter._episode_title = chapter_label
+        adapter._captured_indices = list(adapter._body_page_indices)
+    await browser_page.locator("img[class*='G54Y0W_page']").first.evaluate(
+        """image => { const key=Object.keys(image).find(name=>name.startsWith('__reactFiber$'));
+          image[key].memoizedProps.webMangaViewerData.viewerData.pages=null; }"""
+    )
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter._validate_reader_identity(
+            browser_page,
+            allow_initial_manifest_loading=True,
+            allow_cached_manifest_at_end=stage == "cached_at_end",
+            terminal_title=chapter_label if stage == "cached_at_end" else None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("complete_capture", "terminal_title", "should_pass"),
+    [
+        (True, "Ticket target episode", True),
+        (False, "Ticket target episode", False),
+        (True, "Another episode", False),
+    ],
+    ids=["complete-positive-end-cache", "partial-body-no-cache", "wrong-end-title-no-cache"],
+)
+async def test_comicfuz_empty_ssr_manifest_cache_is_end_only_and_bound(
+    browser_page,
+    complete_capture: bool,
+    terminal_title: str,
+    should_pass: bool,
+) -> None:
+    work_id, chapter_id = "3667", "76630"
+    chapter_label = "Ticket target episode"
+    html = _ticket_viewer_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry="\u6b8b\u308a2\u65e5",
+        chapter_label=chapter_label,
+        relative_rental=True,
+        empty_ssr=True,
+    )
+
+    async def route_viewer(route) -> None:
+        await route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
+
+    await browser_page.route(f"{BASE}/manga/viewer/{chapter_id}**", route_viewer)
+    await browser_page.goto(f"{BASE}/manga/viewer/{chapter_id}?ticket=true")
+    adapter = ComicFuzAdapter()
+    await _install_synthetic_ticket_binding(adapter, browser_page)
+    assert await adapter._validate_reader_identity(
+        browser_page,
+        allow_initial_manifest_loading=True,
+    )
+    assert adapter._empty_ssr_reader_identity is not None
+    adapter._episode_title = chapter_label
+    adapter._captured_indices = (
+        list(adapter._body_page_indices)
+        if complete_capture
+        else list(adapter._body_page_indices[:-1])
+    )
+    await browser_page.evaluate(
+        """() => {
+          const elements = [
+            ...document.querySelectorAll('img[class*="G54Y0W_page"]'),
+            ...document.querySelectorAll('h2[class*="title_detail_viewer__detail__info__viewerTitle"]')
+          ];
+          for (const element of elements) {
+            for (const key of Object.keys(element))
+              if (key.startsWith('__reactFiber$')) delete element[key];
+            if (element.tagName === 'IMG') element.remove();
+          }
+        }"""
+    )
+    if should_pass:
+        assert not await adapter._validate_reader_identity(
+            browser_page,
+            allow_cached_manifest_at_end=True,
+            terminal_title=terminal_title,
+        )
+    else:
+        with pytest.raises(UnknownPageStateError):
+            await adapter._validate_reader_identity(
+                browser_page,
+                allow_cached_manifest_at_end=True,
+                terminal_title=terminal_title,
+            )
+
+
+@pytest.mark.parametrize(
+    (
+        "ticket_available", "use_ticket", "point_free", "point_paid",
+        "rental_value", "chapter_point_amount", "response_variant",
+    ),
+    [
+        (False, False, 0, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (True, False, 0, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (False, True, 0, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (True, True, 0, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (False, False, 1, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (True, False, 1, 0, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (False, False, 0, 1, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (True, False, 0, 1, "\u6b8b\u308a2\u65e5", 0, "valid"),
+        (False, False, 0, 0, "\u6b8b\u308a0\u65e5", 0, "valid"),
+        (True, False, 0, 0, "\u6b8b\u308a0\u65e5", 0, "valid"),
+        (False, False, 0, 0, "\u6b8b\u308a2\u65e5", 30, "valid"),
+        (True, False, 0, 0, "\u6b8b\u308a2\u65e5", 30, "valid"),
+        (False, False, 0, 0, "\u6b8b\u308a2\u65e5", 0, "wrong_chapter"),
+        (True, False, 0, 0, "\u6b8b\u308a2\u65e5", 0, "rental_mismatch"),
+        (False, False, 0, 0, "\u6b8b\u308a2\u65e5", 0, "missing_point"),
+    ],
+    ids=[
+        "zero_cost_ticket_unavailable", "zero_cost_ticket_available",
+        "ticket_request_unavailable", "ticket_request_available",
+        "free_point_unavailable", "free_point_available",
+        "paid_point_unavailable", "paid_point_available",
+        "nonpositive_rental_unavailable", "nonpositive_rental_available",
+        "nonzero_chapter_cost_unavailable", "nonzero_chapter_cost_available",
+        "response_wrong_chapter", "response_rental_mismatch", "response_missing_point",
+    ],
+)
+async def test_comicfuz_direct_past_ticket_revalidates_relative_rental_without_ticket(
+    browser_page,
+    browser_context,
+    ticket_available: bool,
+    use_ticket: bool,
+    point_free: int,
+    point_paid: int,
+    rental_value: str,
+    chapter_point_amount: int,
+    response_variant: str,
+) -> None:
+    work_id, chapter_id = "3342", "46741"
+    chapter_label = "Target rental episode"
+    rental = rental_value
+    work_url = f"{BASE}/manga/{work_id}"
+    request_body = _direct_viewer_request(
+        int(chapter_id),
+        use_ticket=use_ticket,
+        point_free=point_free,
+        point_paid=point_paid,
+    )
+    response_chapter_id = int(chapter_id) + (1 if response_variant == "wrong_chapter" else 0)
+    response_expiry = (
+        "\u6b8b\u308a3\u65e5" if response_variant == "rental_mismatch" else rental
+    )
+    response_body = _ticket_response(
+        work_id=int(work_id),
+        chapter_id=response_chapter_id,
+        expiry=response_expiry,
+        point_amount=0,
+        point_present=response_variant != "missing_point",
+    )
+    viewer_html = _ticket_viewer_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry=rental,
+        chapter_label=chapter_label,
+        relative_rental=True,
+    )
+    viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    bootstrap_html = f'''<!doctype html><html><head><title>Viewer bootstrap</title></head>
+      <body><script>(()=>{{
+        fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+          headers:{{'content-type':'text/plain'}},body:new Uint8Array({list(request_body)})}})
+          .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+          .catch(()=>{{}});
+      }})();</script></body></html>'''
+    listing_html = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=chapter_label,
+        rental_value=rental,
+        ticket_available=ticket_available,
+        point_amount=chapter_point_amount,
+    )
+    work_visits: list[str] = []
+    api_requests: list[bytes] = []
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == work_url:
+            work_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=listing_html,
+            )
+        elif path == f"{BASE}/manga/viewer/{chapter_id}":
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=bootstrap_html,
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        api_requests.append(route.request.post_data_buffer or b"")
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=response_body,
+        )
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    adapter = ComicFuzAdapter(preflight_work_url=work_url)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_target_identity(f"{work_id}:{chapter_id}", "stable-series-slug")
+    await adapter.configure_run(browser_page, "direct")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    initial_url = adapter.resolve_initial_navigation_url(
+        f"{BASE}/manga/viewer/{chapter_id}"
+    )
+    assert initial_url == work_url
+
+    await browser_page.goto(initial_url, wait_until="commit")
+    if use_ticket or point_free or point_paid:
+        with pytest.raises(UnknownPageStateError, match="direct_viewer_request_not_zero_cost_exact"):
+            await adapter.initialize(browser_page)
+        assert browser_page.url == f"{BASE}/manga/viewer/{chapter_id}"
+        assert work_visits == [work_url]
+        assert api_requests == []
+        assert adapter.get_access_consumption().consumed is False
+        assert adapter._ticket_entry is None
+        return
+    if rental_value != "\u6b8b\u308a2\u65e5" or chapter_point_amount != 0:
+        with pytest.raises(UnknownPageStateError):
+            await adapter.initialize(browser_page)
+        assert browser_page.url == work_url
+        assert work_visits == [work_url]
+        assert api_requests == []
+        assert adapter.get_access_consumption().consumed is False
+        assert adapter._ticket_entry is None
+        return
+    if response_variant != "valid":
+        with pytest.raises(UnknownPageStateError):
+            await adapter.initialize(browser_page)
+        assert api_requests == [request_body]
+        assert adapter.get_access_consumption().consumed is False
+        assert adapter._ticket_entry is None
+        return
+    await adapter.initialize(browser_page)
+
+    assert browser_page.url == f"{BASE}/manga/viewer/{chapter_id}"
+    assert work_visits == [work_url]
+    assert api_requests == [request_body]
+    assert adapter.get_access_consumption().consumed is False
+    assert adapter._ticket_entry is None
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    identity = await adapter.get_content_identity(browser_page)
+    assert await adapter.capture_page(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    second_identity = await adapter.get_content_identity(browser_page)
+    assert await adapter.capture_page(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, second_identity)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    late_ticket_request = _ticket_request(int(chapter_id))
+    await browser_page.evaluate(
+        """async body => {
+          try {
+            await fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2', {
+              method:'POST', headers:{'content-type':'text/plain'},
+              body:new Uint8Array(body)
+            });
+          } catch (_) {}
+        }""",
+        list(late_ticket_request),
+    )
+    assert api_requests == [request_body]
+    with pytest.raises(UnknownPageStateError, match="direct viewer route failed"):
+        adapter.get_output_metadata()
+
+
+async def test_comicfuz_direct_rental_route_stays_terminal_after_cancel(
+    browser_page,
+    browser_context,
+) -> None:
+    work_id, chapter_id = "3342", "46741"
+    chapter_label = "Target rental episode"
+    rental = "\u6b8b\u308a2\u65e5"
+    work_url = f"{BASE}/manga/{work_id}"
+    request_body = _direct_viewer_request(
+        int(chapter_id), use_ticket=False, point_free=0, point_paid=0
+    )
+    response_body = _ticket_response(
+        work_id=int(work_id), chapter_id=int(chapter_id), expiry=rental, point_amount=0
+    )
+    viewer_html_js = json.dumps(
+        _ticket_viewer_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            expiry=rental,
+            chapter_label=chapter_label,
+            relative_rental=True,
+        )
+    ).replace("</", "<\\/")
+    bootstrap_html = f'''<!doctype html><html><body><script>(()=>{{
+      fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+        headers:{{'content-type':'text/plain'}},body:new Uint8Array({list(request_body)})}})
+        .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+        .catch(()=>{{}});
+    }})();</script></body></html>'''
+    listing_html = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=chapter_label,
+        rental_value=rental,
+    )
+    request_started = asyncio.Event()
+    release_response = asyncio.Event()
+    api_requests: list[bytes] = []
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == work_url:
+            await route.fulfill(
+                status=200, content_type="text/html; charset=utf-8", body=listing_html
+            )
+        elif path == f"{BASE}/manga/viewer/{chapter_id}":
+            await route.fulfill(
+                status=200, content_type="text/html; charset=utf-8", body=bootstrap_html
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        api_requests.append(route.request.post_data_buffer or b"")
+        request_started.set()
+        await release_response.wait()
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=response_body,
+        )
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    adapter = ComicFuzAdapter(preflight_work_url=work_url)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_target_identity(f"{work_id}:{chapter_id}", "stable-series-slug")
+    await adapter.configure_run(browser_page, "direct")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    await browser_page.goto(work_url, wait_until="commit")
+
+    operation = asyncio.create_task(adapter.initialize(browser_page))
+    try:
+        await asyncio.wait_for(request_started.wait(), timeout=5)
+        operation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+
+        late_ticket_request = _ticket_request(int(chapter_id))
+        await browser_page.evaluate(
+            """async body => {
+              try {
+                await fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2', {
+                  method:'POST', headers:{'content-type':'text/plain'},
+                  body:new Uint8Array(body)
+                });
+              } catch (_) {}
+            }""",
+            list(late_ticket_request),
+        )
+        assert api_requests == [request_body]
+        with pytest.raises(UnknownPageStateError, match="direct viewer route failed"):
+            adapter.get_output_metadata()
+    finally:
+        release_response.set()
+        if not operation.done():
+            operation.cancel()
+
+
+async def test_comicfuz_relative_rental_row_rejects_hidden_ancestor(browser_page) -> None:
+    from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+        read_native_ticket_snapshot,
+    )
+
+    work_id, chapter_id = "3342", "46741"
+    url = f"{BASE}/manga/{work_id}"
+    html = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label="Target rental episode",
+        rental_value="\u6b8b\u308a2\u65e5",
+    )
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == url:
+            await route.fulfill(
+                status=200, content_type="text/html; charset=utf-8", body=html
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_page.goto(url, wait_until="domcontentloaded")
+    await browser_page.locator('div[class*="title_detail_chapters__list__"]').evaluate(
+        "element => { element.style.opacity = '0'; }"
+    )
+    with pytest.raises(UnknownPageStateError):
+        await read_native_ticket_snapshot(
+            browser_page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="rental_listing",
+        )
+
+
+@pytest.mark.parametrize(
+    (
+        "native_amount",
+        "row_same_chapter",
+        "row_same_point",
+        "row_root_class_tokens",
+        "false_descendant",
+        "expected_state",
+    ),
+    [
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES, False, None),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("false",), False, None),
+        (30, True, True, (RENTAL_ROW_ROOT_CLASSES[0],), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("true",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("null",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("undefined",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("mystery",), False, "rental_listing_row_not_exact"),
+        (30, True, True, RENTAL_ROW_ROOT_CLASSES, True, "rental_listing_row_not_exact"),
+        (30, False, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_chapter_reference_mismatch"),
+        (30, False, False, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_chapter_reference_mismatch"),
+        ("30", True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
+        (-1, True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
+        (None, True, True, RENTAL_ROW_ROOT_CLASSES, False, "listing_runtime_point_amount_mismatch"),
+    ],
+    ids=[
+        "three_layer_ssr30_runtime_default_zero",
+        "rental_root_cosmetic_false_token",
+        "rental_root_missing_mandatory_token",
+        "rental_root_extra_true_token",
+        "rental_root_extra_null_token",
+        "rental_root_extra_undefined_token",
+        "rental_root_extra_unknown_token",
+        "rental_descendant_false_token",
+        "row_chapter_object_drift",
+        "row_chapter_and_point_object_drift",
+        "ssr_amount_string",
+        "ssr_amount_negative",
+        "ssr_amount_missing",
+    ],
+)
+async def test_comicfuz_rental_listing_requires_runtime_refs_and_valid_ssr_amount(
+    browser_page,
+    native_amount: int | str | None,
+    row_same_chapter: bool,
+    row_same_point: bool,
+    row_root_class_tokens: tuple[str, ...],
+    false_descendant: bool,
+    expected_state: str | None,
+) -> None:
+    from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+        read_native_ticket_snapshot,
+    )
+
+    work_id, chapter_id = "3342", "46741"
+    url = f"{BASE}/manga/{work_id}"
+    html = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label="Target rental episode",
+        rental_value="\u6b8b\u308a2\u65e5",
+        native_point_amount=native_amount,
+        row_runtime_same_chapter=row_same_chapter,
+        row_runtime_same_point=row_same_point,
+        row_root_class_tokens=row_root_class_tokens,
+        false_descendant=false_descendant,
+    )
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == url:
+            await route.fulfill(
+                status=200, content_type="text/html; charset=utf-8", body=html
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_page.goto(url, wait_until="domcontentloaded")
+    if expected_state is None:
+        snapshot = await read_native_ticket_snapshot(
+            browser_page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="rental_listing",
+        )
+        assert snapshot.point_amount == 0
+        assert snapshot.point_amount_present is False
+        assert snapshot.point_amount_prototype_default_zero is True
+        assert snapshot.point_type_present is False
+        assert snapshot.point_type_prototype_default_zero is True
+        return
+
+    with pytest.raises(UnknownPageStateError, match=expected_state):
+        await read_native_ticket_snapshot(
+            browser_page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="rental_listing",
+        )
+
+
+async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
+    browser_page,
+    browser_context,
+    tmp_path: Path,
+    sync_legacy_unscoped_work,
+) -> None:
+    work_id, chapter_id = "3342", "46741"
+    work_url = f"{BASE}/manga/{work_id}"
+    label = "Target rental episode"
+    now = datetime.now(JST)
+    rental = "\u6b8b\u308a2\u65e5"
+    direct_request = _direct_viewer_request(
+        int(chapter_id), use_ticket=False, point_free=0, point_paid=0
+    )
+    response_body = _ticket_response(
+        work_id=int(work_id), chapter_id=int(chapter_id), expiry=rental, point_amount=0
+    )
+    viewer_html_js = json.dumps(
+        _ticket_viewer_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            expiry=rental,
+            chapter_label=label,
+            relative_rental=True,
+        )
+    ).replace("</", "<\\/")
+    viewer_bootstrap = f'''<!doctype html><html><body><script>(()=>{{
+      fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+        headers:{{'content-type':'text/plain'}},body:new Uint8Array({list(direct_request)})}})
+        .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+        .catch(()=>{{}});
+    }})();</script></body></html>'''
+    initial_quota_listing = _work_ticket_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=label,
+        request_body=_ticket_request(int(chapter_id)),
+        viewer_html=_ticket_viewer_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            expiry=(now + timedelta(days=1)).isoformat(),
+            chapter_label=label,
+        ),
+    )
+    current_relative_rental_listing = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=label,
+        rental_value=rental,
+        row_root_class_tokens=RENTAL_ROW_ROOT_CLASSES + ("false",),
+    )
+    current_listing = [initial_quota_listing]
+    work_visits: list[str] = []
+    viewer_visits: list[str] = []
+    api_requests: list[bytes] = []
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == work_url:
+            work_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=current_listing[0],
+            )
+        elif path == f"{BASE}/manga/viewer/{chapter_id}":
+            viewer_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=viewer_bootstrap,
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        api_requests.append(route.request.post_data_buffer or b"")
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=response_body,
+        )
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    catalog = CatalogService(tmp_path / "relative-rental-batch.sqlite")
+    target = WatchlistTarget(
+        key="comicfuz-relative-rental-batch",
+        work_key="after-work-slug",
+        site="comicfuz",
+        url=work_url,
+        label="Relative rental batch target",
+    )
+    registry = DiscoveryAdapterRegistry()
+    registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, registry)
+    result = await discovery.discover(browser_page, target, "full")
+    assert result.complete is True
+    watchlist = sync_legacy_unscoped_work(catalog, target)
+    source = catalog.get_source_by_external_id("comicfuz", f"{work_id}:{chapter_id}")
+    assert source.access_mode == "quota"
+    quota_started_at = now - timedelta(days=2)
+    catalog.record_quota_access(
+        source.id,
+        quota_started_at=quota_started_at,
+        access_granted_until=None,
+    )
+    before_source = catalog.get_source(source.id)
+    before_work_state = catalog.get_quota_resource_state(
+        source_item_work_id := catalog.get_item(source.item_id).work_id,
+        site="comicfuz",
+        resource="work_ticket",
+    )
+    assert before_work_state is None
+
+    current_listing[0] = current_relative_rental_listing
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now
+    )
+    assert len(plan.candidates) == 1
+    candidate = plan.candidates[0]
+    assert candidate.external_id == f"{work_id}:{chapter_id}"
+    assert candidate.access_strategy == "direct"
+    assert candidate.quota_resource == "work_ticket"
+    assert candidate.consumes_quota is False
+    adapter = ComicFuzAdapter()
+    adapters = AdapterRegistry()
+    adapters.register("comicfuz", lambda: adapter)
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        library_dir=tmp_path / "relative-rental-library",
+        watchlist=watchlist,
+    )
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "relative-rental-output",
+        library_dir=tmp_path / "relative-rental-library",
+        max_pages=5,
+        now=now,
+    )
+
+    run = catalog.get_crawl_run(result.crawl_run_id)
+    after_source = catalog.get_source(source.id)
+    assert result.stop_reason == "end" and result.page_count == 2
+    assert run.status == "succeeded" and run.page_count == 2
+    assert "access_consumption_confirmed:" not in (run.stop_reason or "")
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    artifacts = catalog.list_artifacts(item_id=candidate.item_id)
+    assert len(artifacts) == 1 and artifacts[0].format == "zip"
+    assert before_source.quota_started_at == after_source.quota_started_at
+    assert before_source.access_granted_until is None
+    assert after_source.access_granted_until is None
+    assert catalog.get_quota_resource_state(
+        source_item_work_id, site="comicfuz", resource="work_ticket"
+    ) is None
+    assert adapter.get_access_consumption().consumed is False
+    assert api_requests == [direct_request]
+    assert viewer_visits == [f"{BASE}/manga/viewer/{chapter_id}"]
+    assert len(work_visits) == 2
+
+
+async def test_unavailable_work_ticket_skips_only_that_work_and_replans(
+    browser_page,
+    browser_context,
+    tmp_path: Path,
+    sync_legacy_unscoped_work,
+) -> None:
+    work_data = [
+        ("3667", "76630", "Unavailable target", False),
+        ("3152", "49007", "Available target", True),
+    ]
+    now = datetime.now(JST)
+    expiry = (now + timedelta(days=1)).isoformat()
+    listings: dict[str, str] = {}
+    targets = []
+    for work_id, chapter_id, label, charge_available in work_data:
+        request_body = _ticket_request(int(chapter_id))
+        viewer_html = _ticket_viewer_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            expiry=expiry,
+            chapter_label=label,
+        )
+        listings[f"{BASE}/manga/{work_id}"] = _work_ticket_listing_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            chapter_label=label,
+            request_body=request_body,
+            viewer_html=viewer_html,
+            charge_available=charge_available,
+        )
+        targets.append(
+            WatchlistTarget(
+                key=f"comicfuz-ticket-{work_id}",
+                work_key=f"series-{work_id}",
+                site="comicfuz",
+                url=f"{BASE}/manga/{work_id}",
+                label=f"Ticket target {work_id}",
+            )
+        )
+    work_page_visits: list[str] = []
+    viewer_navigations: list[str] = []
+    api_requests: list[bytes] = []
+
+    async def comicfuz_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path in listings:
+            work_page_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=listings[path],
+            )
+        elif path.startswith(f"{BASE}/manga/viewer/"):
+            viewer_navigations.append(path)
+            await route.fulfill(status=404, body="unexpected viewer navigation")
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        request_body = route.request.post_data_buffer or b""
+        api_requests.append(request_body)
+        expected = _ticket_request(49007)
+        if request_body != expected:
+            await route.abort("blockedbyclient")
+            return
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=_ticket_response(work_id=3152, chapter_id=49007, expiry=expiry),
+        )
+
+    await browser_page.route(f"{BASE}/**", comicfuz_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    catalog = CatalogService(tmp_path / "unavailable-catalog.sqlite")
+    discovery_registry = DiscoveryAdapterRegistry()
+    discovery_registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, discovery_registry)
+    watchlist = None
+    for target in targets:
+        discovered = await discovery.discover(browser_page, target, "full")
+        assert discovered.complete is True
+        watchlist = sync_legacy_unscoped_work(catalog, target)
+    assert watchlist is not None
+    catalog.record_quota_access(
+        catalog.get_source_by_external_id("comicfuz", "3667:76630").id,
+        quota_started_at=now - timedelta(days=2),
+        access_granted_until=None,
+    )
+
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now
+    )
+    candidates = sorted(plan.candidates, key=lambda candidate: candidate.work_id or 0)
+    assert [candidate.external_id for candidate in candidates] == ["3667:76630", "3152:49007"]
+    assert [(candidate.access_strategy, candidate.quota_resource) for candidate in candidates] == [
+        ("direct", "work_ticket"),
+        ("quota", "work_ticket"),
+    ]
+    attempts = []
+    adapters = AdapterRegistry()
+    adapters.register("comicfuz", ComicFuzAdapter)
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        library_dir=tmp_path / "unavailable-library",
+        watchlist=watchlist,
+        access_attempt_sink=attempts.append,
+    )
+
+    class Session:
+        async def new_page(self):
+            page = await browser_context.new_page()
+            await page.route(f"{BASE}/**", comicfuz_route)
+            return page
+
+        async def close_page(self, page):
+            await page.close()
+
+    args = cli._parser().parse_args(["batch", "run", "--site", "comicfuz"])
+    args.output_root = tmp_path / "unavailable-output"
+    args.library_dir = tmp_path / "unavailable-library"
+    args.max_pages = 5
+    args.max_same_content = 2
+    args.keep_open = False
+    assert await cli._execute_batch_candidates(
+        args,
+        Session(),
+        executor,
+        candidates,
+        phase="ComicFUZ ticket no-action fixture",
+        inter_candidate_delay_ms=0,
+    ) == (2, True)
+
+    runs = catalog.list_crawl_runs()
+    unavailable_run = next(run for run in runs if run.external_id_snapshot == "3667:76630")
+    successful_run = next(run for run in runs if run.external_id_snapshot == "3152:49007")
+    assert unavailable_run.status == "failed" and unavailable_run.page_count is None
+    assert unavailable_run.stop_reason == "comicfuz_work_ticket_not_attempted"
+    assert unavailable_run.error_type == "ComicFuzTicketNotAttemptedError"
+    assert successful_run.status == "succeeded" and successful_run.page_count == 2
+    assert [observation.status for observation in attempts] == [
+        "not_attempted",
+        "attempting",
+        "confirmed",
+    ]
+    assert len(api_requests) == 1 and api_requests[0] == _ticket_request(49007)
+    assert viewer_navigations == []
+    assert set(work_page_visits) == {target.url for target in targets}
+    replanned = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now + timedelta(minutes=1)
+    )
+    assert any(candidate.external_id == "3667:76630" for candidate in replanned.candidates)
+
+
+@pytest.mark.parametrize(
+    (
+        "extra_tail", "latest_end", "body_count", "extra_tail_unlinked_pair",
+        "first_blank", "no_extra_tail",
+    ),
+    [
+        (False, "none", 2, False, True, False), (True, "none", 2, False, True, False),
+        (True, "valid", 2, False, True, False), (False, "valid", 2, False, True, False),
+        (True, "account_recommendations", 2, False, True, False),
+        (True, "none", 1, False, True, False),
+        (True, "account_recommendations", 1, False, True, False),
+        (True, "none", 12, True, True, False),
+        (True, "none", 12, True, False, False),
+        (False, "valid", 11, False, True, True),
+        (False, "valid", 10, False, False, True),
+    ],
+    ids=[
+        "body-only", "legacy-extra-tail", "legacy-next-chapter-end", "latest-end",
+        "legacy-extra-account-recommendation", "legacy-single-body", "legacy-single-body-end",
+        "unlinked-pair-tail-blank-first", "unlinked-pair-tail-nonblank-first",
+        "no-extra-tail-blank-first-odd-body", "no-extra-tail-nonblank-first-even-body",
+    ],
+)
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
     browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str,
-    body_count: int,
+    body_count: int, extra_tail_unlinked_pair: bool, first_blank: bool, no_extra_tail: bool,
 ) -> None:
     (
         catalog,
@@ -520,6 +2334,10 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     ) = await _comicfuz_batch_fixture(
         browser_page, tmp_path, sync_legacy_unscoped_work,
         extra_tail=extra_tail, latest_end=latest_end,
+        extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        no_extra_tail=no_extra_tail,
+        first_page_blank=first_blank,
+        first_mode_body_page_count=body_count,
         true_mode_body_page_count=body_count,
         native_subtitle="Fixture subtitle" if latest_end == "valid" else "",
     )
@@ -529,7 +2347,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         candidate,
         output_root=tmp_path / "batch-output",
         library_dir=tmp_path / "library",
-        max_pages=5,
+        max_pages=max(5, body_count),
         now=NOW,
     )
 
@@ -554,11 +2372,12 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     assert catalog.get_item(candidate.item_id).status == "completed"
     assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1
     assert all(entry.item_id != candidate.item_id for entry in replanned.candidates)
-    assert len(plan.candidates) == 1
+    assert sum(candidate.external_id == "1970:80641" for candidate in plan.candidates) == 1
 
 
 @pytest.mark.parametrize("failure", [
     "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail", "stuck_single_extra_tail",
+    "uul_stuck", "uul_premature_end", "no_extra_blank_even", "no_extra_nonblank_odd",
     "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
     "duplicate_recommendations",
 ])
@@ -567,6 +2386,9 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
 ) -> None:
     route_change = failure == "route_drift"
     unknown_tail = failure == "unknown_tail"
+    no_extra_tail = failure in {"no_extra_blank_even", "no_extra_nonblank_odd"}
+    unlinked_pair_tail = failure in {"uul_stuck", "uul_premature_end"}
+    no_extra_body_count = 10 if failure == "no_extra_blank_even" else 11
     catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
             browser_page,
@@ -574,13 +2396,37 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             sync_legacy_unscoped_work,
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
-            extra_tail=failure not in {"stale_free", "route_drift", "unknown_tail"},
-            stuck_extra_tail=failure in {"stuck_extra_tail", "stuck_single_extra_tail"},
-            true_mode_body_page_count=1 if failure == "stuck_single_extra_tail" else 2,
-            latest_end=failure if failure in {
-                "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
-                "duplicate_recommendations",
-            } else "none",
+            extra_tail=(
+                False
+                if no_extra_tail
+                else unlinked_pair_tail or failure not in {"stale_free", "route_drift", "unknown_tail"}
+            ),
+            extra_tail_unlinked_pair=unlinked_pair_tail,
+            no_extra_tail=no_extra_tail,
+            true_mode_body_page_count=(
+                12 if unlinked_pair_tail else (
+                    no_extra_body_count if no_extra_tail else (
+                        1 if failure == "stuck_single_extra_tail" else 2
+                    )
+                )
+            ),
+            first_mode_body_page_count=(
+                12 if unlinked_pair_tail else (no_extra_body_count if no_extra_tail else 4)
+            ),
+            first_page_blank=failure != "no_extra_nonblank_odd",
+            initial_state=99 if failure == "uul_premature_end" else 0,
+            stuck_extra_tail=failure == "uul_stuck" or failure in {
+                "stuck_extra_tail", "stuck_single_extra_tail"
+            },
+            latest_end=(
+                "valid" if failure == "uul_premature_end" else (
+                    failure if failure in {
+                        "missing_actions", "wrong_labels", "hidden_recommendations",
+                        "duplicate_title", "duplicate_recommendations",
+                    }
+                    else "none"
+                )
+            ),
             page_change_timeout_ms=700,
         )
     )
@@ -597,7 +2443,7 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             candidate,
             output_root=tmp_path / "batch-output",
             library_dir=tmp_path / "library",
-            max_pages=5,
+            max_pages=20 if unlinked_pair_tail else 5,
             now=NOW,
         )
 
@@ -1055,6 +2901,45 @@ async def test_comicfuz_waits_for_both_initial_pair_images(
         row["number"] for row in await adapter._active_page_rows(browser_page)
     ) == (0, 1)
     assert adapter._captured_indices == []
+
+
+@pytest.mark.parametrize(
+    ("first_page_blank", "initial_state", "restored_numbers", "initial_numbers"),
+    [
+        (True, 6, (11, 12), (0,)),
+        (False, 6, (12, 13), (0, 1)),
+        (False, 7, (14,), (0, 1)),
+    ],
+    ids=["restored-final-body-and-extra", "restored-unlinked-pair", "restored-linked-last"],
+)
+async def test_comicfuz_uul_restored_positions_rewind_before_capture(
+    browser_page,
+    first_page_blank: bool,
+    initial_state: int,
+    restored_numbers: tuple[int, ...],
+    initial_numbers: tuple[int, ...],
+) -> None:
+    await _route_comicfuz(
+        browser_page,
+        extra_tail_unlinked_pair=True,
+        first_page_blank=first_page_blank,
+        first_page_blank_inherited=not first_page_blank,
+        first_mode_body_page_count=12,
+        true_mode_body_page_count=12,
+        initial_state=initial_state,
+    )
+    adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(WORK_URL, wait_until="commit")
+    await adapter.configure_target_identity("1970:80641", "comicfuz:1970")
+    adapter.resolve_initial_navigation_url(VIEWER_URL)
+
+    await adapter.initialize(browser_page)
+
+    rows = await adapter._active_page_rows(browser_page)
+    assert tuple(row["number"] for row in rows) == initial_numbers
+    assert adapter._captured_indices == []
+    assert tuple(row["number"] for row in rows) != restored_numbers
 
 
 @pytest.mark.parametrize("missing_index", [0, 1])

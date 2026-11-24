@@ -98,10 +98,31 @@ class BatchPlanner:
             site_sources = [source for source in all_sources if source.site == site]
             blocked_quota_sources: frozenset[int] = frozenset()
             history_guard = getattr(policy, "guards_unresolved_quota_attempts", None)
-            if callable(history_guard) and history_guard():
-                blocked_quota_sources = policy.unresolved_quota_attempt_source_ids(
-                    self.catalog.list_crawl_runs()
-                )
+            work_history_guard = getattr(
+                policy, "guards_unresolved_quota_attempts_by_work", None
+            )
+            if (
+                (callable(history_guard) and history_guard())
+                or (callable(work_history_guard) and work_history_guard())
+            ):
+                runs = self.catalog.list_crawl_runs()
+                if callable(history_guard) and history_guard():
+                    blocked_quota_sources = policy.unresolved_quota_attempt_source_ids(runs)
+                if callable(work_history_guard) and work_history_guard():
+                    item_work_ids = {item.id: item.work_id for item in items}
+                    source_lookup = {source.id: source for source in all_sources}
+                    blocked_work_ids = policy.unresolved_quota_attempt_work_ids(
+                        runs,
+                        item_work_ids=item_work_ids,
+                        sources_by_id=source_lookup,
+                        targets_by_id={target.id: target for target in all_targets},
+                        now=current,
+                    )
+                    blocked_quota_sources = blocked_quota_sources | frozenset(
+                        source.id
+                        for source in site_sources
+                        if item_work_ids.get(source.item_id) in blocked_work_ids
+                    )
             sources = site_sources
             excluded_source_ids: set[int] = set()
             selected_key_values = (

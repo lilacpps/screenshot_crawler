@@ -592,6 +592,17 @@ manifest source URLs remain canonical. Already-free and newly observed active
 grants are non-consuming; a stale grant-only plan records a fresh grant before
 skipping, without opening a viewer or starting a ticket attempt.
 
+Site Policies may opt into a separate Work-scoped unresolved-quota-history
+hook when a possible debit on one episode must block other episodes in that
+Work. The default hook blocks nothing. Planner uses its blocked Work IDs to
+remove all matching quota candidates. The CLI calls the Executor's local gate
+before creating a Page for normal and grant-only runs; the Executor also
+rechecks history internally before entry. A site can resolve a failed run
+only from an immutable, identity-bound proof of persisted consumption; a
+markerless or malformed attempt remains blocked across dates. The proof uses
+the existing CrawlRun record and does not require a Catalog schema change.
+ComicFUZ uses this opt-in; Piccoma's existing same-Source guard is unchanged.
+
 `PolicyDecision.pending_quota` is an inventory/display signal; it does not by
 itself authorize execution. Piccoma's policy separately admits available quota
 sources in normal Batch through `piccoma_ticket_auto` and in grant-only through

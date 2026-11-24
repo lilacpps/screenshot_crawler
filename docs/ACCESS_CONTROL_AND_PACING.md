@@ -547,6 +547,9 @@ confirmed use persists the Work timestamp and source grant, and the site's
 during that interval. A local skip prints SKIP and its next check time through
 the optional policy `grant_only_retry_at()` hook. At expiry the site must still
 confirm availability. Manual use and old rental deadlines are not inferred.
+Inventory displays a policy retry time only while that timestamp is strictly
+in the future; expired retry hints are omitted. The timestamp remains a local
+negative-gate hint and never proves live ticket availability.
 Explicit deferred grant-only can borrow its resolver guard for prepared entry;
 the owner keeps it active and performs bounded cleanup. Default Runner entry
 and unsupported adapters keep their existing lifecycle.

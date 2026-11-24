@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QAbstractItemModelTester, QSignalSpy
 from PySide6.QtWidgets import QApplication
 
+from screenshot_crawler.catalog.models import CrawlRun, Item
 from screenshot_crawler.gui.model import ArchiveFilter, InventoryTreeModel, StatusFilter, ViewMode
 from screenshot_crawler.management.models import (
     InventoryCounts,
@@ -106,6 +107,37 @@ def test_same_work_is_projected_both_ways_and_selection_survives(qt_app):
     model.set_search("")
     model.set_view_mode(ViewMode.SITE)
     assert model.checked_keys == {"wk-1", "wk-2"}
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [
+        ("access_consumption_confirmed:v1:2026-11-24T17:11:33+09:00|capture|END", "capture|END"),
+        ("access_consumption_confirmed:v2:2026-11-24T17:11:33+09:00|capture", "access_consumption_confirmed:v2:2026-11-24T17:11:33+09:00|capture"),
+    ],
+)
+def test_detail_pane_displays_run_result_without_valid_internal_marker(qt_app, stop_reason, expected):
+    from screenshot_crawler.gui.details import DetailPane
+
+    snapshot = _snapshot()
+    item = Item(
+        id=7, work_id=1, item_title="作品", kind="episode", order_key=None,
+        order_label="第1話", status="pending", completed_at=None,
+        created_at="2026-11-24T00:00:00+09:00", updated_at="2026-11-24T00:00:00+09:00",
+    )
+    run = CrawlRun(
+        id=1, item_id=7, source_id=1, target_id=1, site_snapshot="comicfuz",
+        external_id_snapshot="1:1", backend_snapshot="web", target_key_snapshot="1:1",
+        locator_snapshot="https://example.invalid", access_strategy="quota", status="failed",
+        started_at="2026-11-24T17:11:00+09:00", finished_at="2026-11-24T17:11:33+09:00",
+        page_count=0, stop_reason=stop_reason, error_type=None, error_message=None,
+        created_at="2026-11-24T17:11:00+09:00", updated_at="2026-11-24T17:11:33+09:00",
+    )
+    pane = DetailPane()
+    pane.set_snapshot(replace(snapshot, items={7: item}, latest_runs={7: run}))
+    pane.set_item(7)
+
+    assert pane._field_labels["Result"].text() == expected
 
 
 def test_work_view_row_lookups_do_not_rescan_all_works_and_cache_tracks_view_changes(qt_app, monkeypatch):
