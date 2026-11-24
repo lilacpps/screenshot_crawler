@@ -160,7 +160,11 @@ class PremiumObserver:
                                 and a.get("episodeId") == self.episode and s.get("id") == self.work
                                 and type(a.get("hasAccess")) is bool and isinstance(a.get("accessType"), str)
                                 and type(a.get("isDisableBonus")) is bool
-                                and _integer(s.get("waitAndFreeRecoveryTime"), maximum=23 * 3600)
+                                # Native UI treats an omitted recovery as Work-ready.
+                                # Work can recover between the Work and Premium passes;
+                                # this must skip Premium rather than stop the Batch.
+                                # Explicit null/malformed values remain invalid.
+                                and _integer(s.get("waitAndFreeRecoveryTime", 0), maximum=23 * 3600)
                                 and (a.get("timeRemainingInSeconds") is None
                                      or _integer(a["timeRemainingInSeconds"], maximum=PREMIUM_SECONDS))):
                             reduced = {"access": a["hasAccess"], "type": a["accessType"],
@@ -168,7 +172,7 @@ class PremiumObserver:
                                        "remaining_state": ("missing" if "timeRemainingInSeconds" not in a
                                                            else "null" if a["timeRemainingInSeconds"] is None else "valid"),
                                        "disabled": a["isDisableBonus"],
-                                       "recovery": s["waitAndFreeRecoveryTime"]}
+                                       "recovery": s.get("waitAndFreeRecoveryTime", 0)}
                     else:
                         g = data.get("gacha") if isinstance(data, dict) else None
                         if (isinstance(g, dict) and type(g.get("canRollGacha")) is bool
@@ -191,7 +195,8 @@ class PremiumObserver:
             return None
         latest = [r for r in rows if r[0] == at]
         if len(latest) != 1 or latest[0][1] is None:
-            raise UnknownPageStateError("Younganimal Premium native state is invalid or ambiguous")
+            raise UnknownPageStateError(
+                f"Younganimal Premium native state is invalid or ambiguous ({kind})")
         return latest[0]
 
     async def wait(self, kind: str, *, after: datetime | None = None) -> tuple[datetime, dict]:

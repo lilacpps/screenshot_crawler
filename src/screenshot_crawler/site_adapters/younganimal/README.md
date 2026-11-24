@@ -20,6 +20,18 @@ first Catalog candidate for eligibility/wallet verification, selecting the first
 N in unchanged Catalog order. Zero stops the pass before episode navigation;
 unknown state fails closed. No quota-episode search or Work cooldown applies.
 
+Native `series.waitAndFreeRecoveryTime` is optional: omission means Work-ready
+(zero), as in the site's current entry component. The Premium resolver skips
+that Work with `work_ticket_priority` and continues later Works. Explicit null
+or malformed recovery still stops closed; a new Premium checkout and its debit
+confirmation still require positive recovery. Already-readable entry spends
+nothing. This fixes the 2026-11-25 native-state failure on a valid existing rental.
+Read-only production resolver verification covers the original rental and a
+same-Work ungranted episode with omitted recovery; optional gacha was disabled
+and mutations blocked. No new live ticket consumption or full Batch rerun.
+Evidence and regression results: `note/11_younganimal.md` and ignored
+`.tmp/ya-premium-state-20261125/`.
+
 The two-step `ifRead` / `rentConf` entry requires one ticket, zero coins and a
 15-day term. Native exact IDs, positive same-account auth, aggregate consistency,
 exact checkout, stock debit and timer confirm consumption; the existing episode

@@ -25,6 +25,7 @@ from tests.integration.test_younganimal_adapter_browser import (
 )
 
 NOW_ID = "00000000002bc"
+MISSING_RECOVERY = object()
 
 CHARGE_NOTICE = '''<dialog class="dialog" data-e2e="pop" id="charge-notice">
   <div class="dialog-content"><h2 class="dialog-h mode-waitfree">「待つと無料」購読中作品の<br>チャージが完了しました。</h2>
@@ -48,7 +49,7 @@ def short_waits(monkeypatch):
     monkeypatch.setattr(adapter, "VIEWER_READY_POLL_MS", 20)
 
 
-async def install(page, *, count=3, case="ok", initial=False):
+async def install(page, *, count=3, case="ok", initial=False, recovery=60000):
     await page.set_viewport_size({"width": 1906, "height": 986})
     state = {"count": count, "access": initial, "checkouts": 0, "paths": [], "gacha": 0}
     html = _episode_html(native_source_slots=tuple(range(1, 17)))
@@ -113,9 +114,19 @@ async def install(page, *, count=3, case="ok", initial=False):
         elif path == "/api/userPoint":
             await r.fulfill(json={"bonusValue": state["count"], "paidCoin": 0})
         elif path == f"/api/episodes/{EPISODE_ID}":
+            current_recovery = {
+                "work-ready": 0, "recovery-missing": MISSING_RECOVERY,
+                "recovery-null": None, "recovery-bool": True, "recovery-negative": -1,
+                "recovery-string": "60000", "recovery-float": 60000.0,
+                "recovery-overflow": 23 * 3600 + 1,
+            }.get(case, recovery)
+            if case == "recovery-disappears" and state["access"]:
+                current_recovery = MISSING_RECOVERY
             await r.fulfill(json={"episode": {
                 "id": NOW_ID if case == "wrong-id" else EPISODE_ID,
-                "series": {"id": NOW_ID if case == "wrong-work" else WORK_ID, "waitAndFreeRecoveryTime": 0 if case == "work-ready" else 60000},
+                "series": {"id": NOW_ID if case == "wrong-work" else WORK_ID,
+                           **({} if current_recovery is MISSING_RECOVERY else
+                              {"waitAndFreeRecoveryTime": current_recovery})},
                 "access": {"episodeId": NOW_ID if case == "wrong-access-id" else EPISODE_ID, "hasAccess": state["access"],
                            "accessType": "purchased" if state["access"] else "waitAndFree",
                            **({"timeRemainingInSeconds": 1295999} if state["access"] else {"timeRemainingInSeconds": None} if case == "null-timer" else {}),
@@ -179,7 +190,9 @@ async def test_premium_exact_two_step_entry_and_15_day_grant(browser_page, count
                                   "boolean-body", "wrong-episode-body", "transparent",
                                   "auth-none", "auth-bool", "wrong-work", "wrong-access-id",
                                   "null-timer", "series-duplicate", "series-conflict", "series-pending-conflict",
-                                  "series-older-pending-duplicate"])
+                                  "series-older-pending-duplicate", "recovery-missing",
+                                  "recovery-null", "recovery-bool", "recovery-negative",
+                                  "recovery-string", "recovery-float", "recovery-overflow"])
 async def test_premium_invalid_ui_or_identity_never_dispatches_checkout(browser_page, case):
     adapter, state = await install(browser_page, case=case)
     with pytest.raises((UnknownPageStateError, AccessResourceUnavailableError,
@@ -190,7 +203,7 @@ async def test_premium_invalid_ui_or_identity_never_dispatches_checkout(browser_
     assert await browser_page.evaluate("paidClicks") == 0
 
 
-@pytest.mark.parametrize("case", ["no-debit", "viewer-stuck", "auth-switch"])
+@pytest.mark.parametrize("case", ["no-debit", "viewer-stuck", "auth-switch", "recovery-disappears"])
 async def test_no_reclick_and_confirmed_debit_survives_viewer_failure(browser_page, case):
     adapter, state = await install(browser_page, case=case)
     with pytest.raises(AccessConsumptionUnconfirmedError):
@@ -224,8 +237,9 @@ async def test_unknown_stock_stops_without_trying_a_ticket(browser_page, count):
 
 
 @pytest.mark.parametrize("entry_only", [True, False])
-async def test_preexisting_grant_does_not_spend_or_invent_consumption(browser_page, entry_only):
-    adapter, state = await install(browser_page, initial=True)
+@pytest.mark.parametrize("recovery", [60000, MISSING_RECOVERY], ids=["recovering", "omitted-ready"])
+async def test_preexisting_grant_does_not_spend_or_invent_consumption(browser_page, entry_only, recovery):
+    adapter, state = await install(browser_page, initial=True, recovery=recovery)
     if entry_only:
         with pytest.raises(premium.AlreadyAccessible) as error:
             await adapter.initialize_entry_only(browser_page)
@@ -237,8 +251,10 @@ async def test_preexisting_grant_does_not_spend_or_invent_consumption(browser_pa
 
 @pytest.mark.parametrize("count", [0, 2])
 @pytest.mark.parametrize("adapter_hook", [False, True])
-async def test_stock_resolver_never_walks_large_quota_pool(browser_page, monkeypatch, count, adapter_hook):
-    adapter, state = await install(browser_page, count=count)
+@pytest.mark.parametrize("recovery", [60000, 0, MISSING_RECOVERY], ids=["recovering", "zero-ready", "omitted-ready"])
+@pytest.mark.parametrize("initial", [False, True], ids=["ungranted", "rental"])
+async def test_stock_resolver_never_walks_large_quota_pool(browser_page, monkeypatch, count, adapter_hook, recovery, initial):
+    adapter, state = await install(browser_page, count=count, recovery=recovery, initial=initial)
     await adapter._premium_entry.observer.wait("episode")
     await adapter._close_ticket_route_guard()
     await adapter._premium_entry.observer.close()
@@ -260,7 +276,10 @@ async def test_stock_resolver_never_walks_large_quota_pool(browser_page, monkeyp
         assert (resolver._ticket_route_guard is not None) == (count > 0)
     else:
         result = await premium.resolve_ticket_candidates(browser_page, pool, "premium_ticket", timeout_ms=1000)
-    assert result.selected_source_ids == tuple(range(count))
+    selected = count if recovery == 60000 else 0
+    assert result.selected_source_ids == tuple(range(selected))
+    if count and not selected:
+        assert result.skipped_source_reasons == tuple((i, "work_ticket_priority") for i in range(9000))
     assert result.stop_resource_pass == (count == 0)
     episode_paths = [p for p in state["paths"] if p.startswith('/episodes/')]
     assert episode_paths == ([f'/episodes/{EPISODE_ID}'] if count else [])

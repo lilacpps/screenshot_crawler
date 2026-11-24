@@ -69,6 +69,52 @@ also supported. Work Ticket retains its one-per-Work / 23-hour contract.
 Only Premium opts into the existing per-Work stock resolver. No new CLI flag,
 configuration, durable stock/gacha ledger or shared production change is added.
 
+Recovery omission correction (2026-11-25): the interrupted grant-only `all`
+run ended on the first Premium snapshot for Source 32857 / episode
+`6875351a903aa`, after a successful campaign dismissal. Metrics contain no
+403/429/5xx/challenge/CAPTCHA stop. A read-only shared-CDP probe reproduced
+the native-state error: exact authenticated IDs, positive stock and an active
+`purchased/hasAccess=true` rental were valid, but `episode.series` omitted
+`waitAndFreeRecoveryTime`. The parser incorrectly required that optional field.
+The same Work's ungranted `ba8bd21945dcc` also omitted it and displayed the
+native `wfRead` control with no `ifRead`. Currently served native component
+source explicitly uses a falsy recovery for Work-ready entry and a positive
+recovery for Premium. Omission is therefore normalized to zero; explicit null,
+boolean, negative, string, float and >23-hour values still fail closed. No
+Work readiness is inferred from an arbitrary missing response, identity or auth.
+
+The resolver now applies its existing `work_ticket_priority` result to this
+native ready shape, selecting no Premium candidates for that Work without
+stopping later Works/the whole resource pass. Already-readable entry remains
+non-consuming. Positive recovery is still mandatory before a new Premium
+checkout and in post-debit confirmation; disappearing recovery after checkout
+cannot confirm consumption. The invalid-state error now identifies its response
+kind (for example `episode`), without retaining raw payloads or account data.
+No CLI/config, Catalog, Core, shared access or Hanayume contract changes.
+
+Read-only verification of the actual production Adapter resolver succeeded for
+both the original rental and the same-Work ungranted episode, returning
+`work_ticket_priority` and `stop_resource_pass=false`. Optional daily-gacha
+preparation was replaced with read-only home/auth/stock hydration for this probe;
+all non-read requests were blocked (46 total). No spin, checkout, ticket/coin,
+Catalog/Watchlist/library write or full Batch rerun occurred. Evidence and
+isolated test logs: `.tmp/ya-premium-state-20261125/` (ignored). Previous live
+gacha/checkout results below do not verify a new consuming run for this fix.
+
+Validation: complete Younganimal Premium and optional-daily-gacha browser files,
+plus Younganimal live-access, Policy and Batch Unit files: **254 passed, zero
+failed/skipped/deselected**, 92.55s, 72 existing Python/pytest-asyncio deprecation
+warnings. XML/log: `affected.xml` / `affected.log` in the evidence directory.
+Existing tests now cover omitted/zero/positive recovery with ungranted/rental
+states, zero/positive stock, both resolver entry points and a 9000-candidate pool;
+malformed explicit recovery, no spending on existing grants, and disappearance
+after checkout remain guarded. Global `ruff check src tests` and scoped
+`git diff --check` passed. Full repository and separate Research/Probe suites
+were not run because this changes only the site-local Premium parser/diagnostic
+contract, not shared production code or research helpers. `note/00_core.md`
+needs no update. Restart the running process before rerunning the original Batch;
+no Catalog reset, new setting or data migration is required.
+
 The resolver visits home, waits for positive account authentication and stock,
 and closes the optional unique campaign dialog using its `popClose` or legacy
 `closeCpPop` button (`button.dialog-btn.mode-campaign` with the observed `button`
@@ -164,7 +210,9 @@ does not verify the revised flow.
 `/api/userPoint.bonusValue` supplies stock; `paidCoin` stays separate. Home zero
 ends the whole Premium pass before episode entry. Otherwise the first Catalog
 candidate alone verifies exact work/episode/access IDs, native Work recovery
-and episode-wallet stock. Positive recovery is required; a charged Work Ticket
+and episode-wallet stock. Positive recovery is required for Premium; omitted
+recovery is native Work-ready zero, while malformed explicit recovery is unknown.
+A charged Work Ticket
 selects no Premium candidate for that Work. The first N Catalog candidates are
 selected for N tickets, with no quota-episode search or per-Work Premium limit.
 Every selected entry rechecks live stock, identity/auth and current eligibility.
