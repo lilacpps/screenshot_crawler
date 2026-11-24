@@ -1047,10 +1047,13 @@ _TICKET_MODAL_INSPECTOR = r"""({chapterLabel, chargeLabel, cancelLabel, appLabel
   const appControls=controls.filter(element=>norm(element.innerText)===appLabel);
   const commentsControls=controls.filter(element=>norm(element.innerText)===commentsLabel);
   const cancelControls=controls.filter(element=>norm(element.innerText)===cancelLabel);
+  const appAnchors=appControls.filter(element=>element.tagName==='A'
+    &&classNames(element).length===0);
+  const appButtons=appControls.filter(element=>element.tagName==='BUTTON'
+    &&hasClassPrefix(element,'Dialog_appflow__button__'));
   const allowedControls={app:countLabel(appLabel),comments:countLabel(commentsLabel),cancel:countLabel(cancelLabel)};
   const allowedControlShapes={
-    app:appControls.length===1&&appControls[0].tagName==='BUTTON'
-      &&hasClassPrefix(appControls[0],'Dialog_appflow__button__'),
+    app:appControls.length===2&&appAnchors.length===1&&appButtons.length===1,
     comments:commentsControls.length===1&&commentsControls[0].tagName==='A'
       &&hasClassPrefix(commentsControls[0],'Dialog_buttons__active__'),
     cancel:cancelControls.length===1&&cancelControls[0].tagName==='A'
@@ -1062,7 +1065,7 @@ _TICKET_MODAL_INSPECTOR = r"""({chapterLabel, chargeLabel, cancelLabel, appLabel
     ||!!cta.closest('button[disabled],[aria-disabled="true"]');
   const exact=dialogRoots.length===1&&globalExactCtas.length===1&&globalCtas.length===1&&modalCtas.length===1
     &&chapterTitleMatch&&cancels.length===1&&ticketCountOne
-    &&allowedControls.app===1&&allowedControls.comments===1&&allowedControls.cancel===1
+    &&allowedControls.app===2&&allowedControls.comments===1&&allowedControls.cancel===1
     &&allowedControlShapes.app&&allowedControlShapes.comments&&allowedControlShapes.cancel
     &&otherAccess.length===0&&!disabled;
   return {dialogRootCount:dialogRoots.length,modal:!!modal,modalRoot:modal,cta,

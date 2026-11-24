@@ -138,11 +138,30 @@ def _listing_html(*, modal_variant: str = "valid") -> str:
         if modal_variant == "unknown_control"
         else ""
     )
-    app_control = (
-        f'<button class="Dialog_unknown__fixture">{APP}</button>'
-        if modal_variant == "lookalike_app_control"
-        else f'<button class="Dialog_appflow__button__fixture">{APP}</button>'
+    app_pair = (
+        f'<a>{APP}</a>'
+        f'<button class="Dialog_appflow__button__fixture">{APP}</button>'
     )
+    if modal_variant == "lookalike_app_control":
+        app_control = f'<button class="Dialog_unknown__fixture">{APP}</button>'
+    elif modal_variant == "third_app_control":
+        app_control = f'{app_pair}<a>{APP}</a>'
+    elif modal_variant == "unknown_app_anchor_class":
+        app_control = (
+            f'<a class="Dialog_unknown__fixture">{APP}</a>'
+            f'<button class="Dialog_appflow__button__fixture">{APP}</button>'
+        )
+    elif modal_variant == "unknown_app_button_class":
+        app_control = (
+            f'<a>{APP}</a><button class="Dialog_unknown__fixture">{APP}</button>'
+        )
+    elif modal_variant == "unknown_app_tag":
+        app_control = (
+            f'<a>{APP}</a>'
+            f'<div role="button" class="Dialog_appflow__button__fixture">{APP}</div>'
+        )
+    else:
+        app_control = app_pair
     modal = f"""<div class="Dialog_modal__fixture">
         <div class="Dialog_content__fixture">
           <div class="Dialog_chapter__fixture">
@@ -701,7 +720,7 @@ async def test_ticket_modal_scope_ignores_background_heading_and_controls(
     assert modal["chapterTitleMatch"] is True
     assert modal["cancelCount"] == 1
     assert modal["ticketCountOne"] is True
-    assert modal["allowedControls"] == {"app": 1, "comments": 1, "cancel": 1}
+    assert modal["allowedControls"] == {"app": 2, "comments": 1, "cancel": 1}
     assert modal["otherAccessCount"] == 0
     assert modal["disabled"] is False
     assert modal["exact"] is True
@@ -761,6 +780,10 @@ async def test_ticket_controller_accepts_only_one_visible_dialog_root(
         "unknown_price_marker",
         "unknown_control",
         "lookalike_app_control",
+        "third_app_control",
+        "unknown_app_anchor_class",
+        "unknown_app_button_class",
+        "unknown_app_tag",
     ),
 )
 async def test_ambiguous_ticket_dialog_is_a_no_action(

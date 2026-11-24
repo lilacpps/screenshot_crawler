@@ -48,6 +48,7 @@ TICKET_AVAILABLE = "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"
 TICKET_RECOVERY = "0\u6642\u306b\u56de\u5fa9!"
 TICKET_RECOVERY_UI_FALLBACK = "0\u6642\u306b\u56de\u5fa9\uff01"
 TICKET_CTA = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
+TICKET_APP = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
 EPISODE_TITLE = "第31話"
 
 
@@ -185,7 +186,8 @@ def _work_ticket_listing_html(
           </div></div>
           <div class="Dialog_buttons__fixture">
             <a class="Dialog_buttons__active__fixture" id="ticket-cta">{TICKET_CTA}</a>
-            <button class="Dialog_appflow__button__fixture">アプリはこちら</button>
+            <a>{TICKET_APP}</a>
+            <button class="Dialog_appflow__button__fixture">{TICKET_APP}</button>
             <a class="Dialog_buttons__active__fixture">コメント一覧へ</a>
             <a class="Dialog_buttons__cancel__fixture">キャンセル</a>
           </div>

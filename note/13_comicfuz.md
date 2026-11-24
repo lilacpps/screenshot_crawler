@@ -123,13 +123,18 @@ review reports BLOCKING=0. The isolated attempt left one failed pre-action
 `DiscoveryIncompleteError` CrawlRun in `%TEMP%/cfzgt1/catalog.sqlite`; its item
 is pending and source/resource/grant/artifact state is empty. Preserve this
 run and keep work 3667 quarantined; do not retry it. The attempt consumed zero
-tickets. A later Work 3152 grant-only attempt ended with the typed
-`target_ticket_modal_not_exact` no-action sentinel and no persisted consumption;
-its viewer endpoint POST/200 flags were not captured, so that event is not
-classified as a ticket request. A separate one-navigation, one-row-selection
+tickets. Work 3152's first grant-only attempt ended with the typed
+`target_ticket_modal_not_exact` no-action sentinel. After the modal-scope
+correction passed review, one Lead-authorized reattempt (CrawlRun 3) ended with
+the same pre-click no-action reason. A passive Page observer recorded one
+canonical viewer endpoint POST/200, but its body was rejected by the strict
+request decoder as unknown; chapter/useTicket/point flags were not established
+and the event is not classified as a consuming request. The post-run Catalog has
+no Work 3152 quota start, grant expiry, resource state, or Artifact; the Item
+remains pending and the previous runs are unchanged. The separate non-consuming
 probe observed the exact native available state and modal without clicking the
-CTA. See the current Phase 04 evidence below; any next live action requires a
-separate Lead instruction.
+CTA. No further same-work or next-Work live action is authorized until a new
+Lead instruction. Details and sanitized artifacts are in the Phase 04 ledger.
 
 Current Phase 04 modal scope is based on the observed visible
 `div[class*="Dialog_modal__"]` root. The target title is a unique exact
@@ -149,6 +154,28 @@ Dialog control CSS mapping, not a saved Dialog JSX caller. Real post-consumption
 request flags and grant expiry remain unverified. The isolated 3152 attempt and
 modal probe each observed an endpoint POST/200 event with flags unrecorded; do
 not interpret those events as a ticket charge or claim endpoint HTTP count zero.
+
+After the no-action CrawlRun 3, one bounded non-consuming modal diagnosis
+found the exact false gate: the visible Dialog contains an exact app-caption
+anchor with an empty class and an exact app-caption button with the observed
+`Dialog_appflow__button__` prefix. The previous inspector expected only the
+button, so `allowedControls.app` is 2 and `allowedControlShapes.app` is false.
+The exact target title, charge CTA, ticket amount, Cancel/comments controls,
+unknown-control count, native state, and unchanged-before/after state all pass.
+The probe clicked only the target row; charge and other control clicks were 0.
+The shared inspector now accepts exactly that observed app-caption pair: one
+classless `A` and one `BUTTON` with the known
+`Dialog_appflow__button__` prefix. It rejects third app controls, unfamiliar A/B
+classes, unknown role-button tags, and unknown captions; it does not assume a
+containment relationship. The same inspector still gates reading, trusted-click
+arming, and final CTA selection; all ticket/native/API/price guards remain
+unchanged. The corrected synthetic controller browser module passed 57 cases, the
+affected ComicFUZ Unit group passed 64 cases, and the normal/grant-only/
+unavailable-work E2E selection passed 3. Scoped Ruff, compile, and diff checks
+passed. Independent review covered 17 modal cases and 3 adapter E2E cases
+(20 passed, 142 deselected, 0 skipped), BLOCKING=0. This is synthetic
+verification only; no live CTA or additional CLI attempt was made. The sanitized
+modal diagnostic is in the Phase 04 ledger.
 
 The public first-party client binds `/v1/web_manga_viewer_2` to
 `WebMangaViewer2Request` and `WebMangaViewer2Response`; the similarly named
