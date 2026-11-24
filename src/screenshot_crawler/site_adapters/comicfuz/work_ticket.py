@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -106,13 +107,19 @@ class NativeTicketSnapshot:
     rental_present: bool
     rental_label: str
     viewer_chapter_id: str
+    point_type_present: bool = False
+    point_type_in: bool = False
+    point_type_prototype_default_zero: bool = False
+    point_amount_present: bool = False
+    point_amount_in: bool = False
+    point_amount_prototype_default_zero: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class TicketEntryProof:
     request_started_at: datetime
     confirmed_at: datetime
-    access_granted_until: datetime
+    access_granted_until: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +144,8 @@ class DecodedViewerResponse:
     rental_present: bool
     point_type: int | None
     point_amount: int | None
+    point_present: bool
+    point_metadata_complete: bool
 
 
 def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
@@ -316,9 +325,17 @@ def decode_viewer_response(
         raise TypeError("ComicFUZ viewer response target rental metadata is malformed")
     point_type: int | None = None
     point_amount: int | None = None
+    point_present = point_bytes is not None
+    point_metadata_complete = False
     if point_bytes is not None:
         if not isinstance(point_bytes, bytes):
             raise ValueError("ComicFUZ viewer response target point metadata is malformed")
+        point_metadata_complete = all(
+            field_number in {1, 2} and wire_type == 0
+            for field_number, wire_type, _value in _protobuf_fields(
+                point_bytes, maximum_size=2 * 1024 * 1024
+            )
+        )
         point = _selected_fields(point_bytes, {1: 0, 2: 0})
         point_type = point.get(1, 0)
         point_amount = point.get(2, 0)
@@ -338,6 +355,8 @@ def decode_viewer_response(
         rental_present=10 in chapter,
         point_type=point_type,
         point_amount=point_amount,
+        point_present=point_present,
+        point_metadata_complete=point_metadata_complete,
     )
 
 
@@ -408,6 +427,38 @@ def parse_rental_expiry(value: object) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise UnknownPageStateError("ComicFUZ rental expiry has no explicit timezone")
     return parsed
+
+
+_RELATIVE_RENTAL_DAYS = re.compile(r"残り([1-9][0-9]*)日")
+
+
+def parse_relative_rental_days(value: object) -> int | None:
+    """Recognize the observed current-entry marker without deriving an expiry."""
+
+    if not isinstance(value, str) or len(value) > 160:
+        return None
+    match = _RELATIVE_RENTAL_DAYS.fullmatch(value)
+    return int(match.group(1)) if match is not None else None
+
+
+def _native_point_is_known_zero(snapshot: NativeTicketSnapshot) -> bool:
+    """Accept explicit zero or a verified generated-prototype zero default."""
+
+    type_is_zero = snapshot.point_type == 0 and (
+        snapshot.point_type_present
+        or (
+            snapshot.point_type_in
+            and snapshot.point_type_prototype_default_zero
+        )
+    )
+    amount_is_zero = snapshot.point_amount == 0 and (
+        snapshot.point_amount_present
+        or (
+            snapshot.point_amount_in
+            and snapshot.point_amount_prototype_default_zero
+        )
+    )
+    return type_is_zero and amount_is_zero
 
 
 def is_canonical_viewer_url(url: str, *, chapter_id: str) -> bool:
@@ -486,7 +537,7 @@ async def read_native_ticket_snapshot(
             or (query and query != [("position", "thumbnail")])
         ):
             raise UnknownPageStateError("ComicFUZ ticket snapshot is outside the target work page")
-    if page_mode == "viewer" and not is_target_viewer_url(
+    if page_mode in {"viewer", "ticket_post"} and not is_target_viewer_url(
         page.url, chapter_id=chapter_id
     ):
         raise UnknownPageStateError(
@@ -523,6 +574,8 @@ async def read_native_ticket_snapshot(
           let pointTypeIn = false;
           let pointTypePrototypeDefaultZero = false;
           let pointAmountPresent = false;
+          let pointAmountIn = false;
+          let pointAmountPrototypeDefaultZero = false;
           let rentalValue = null;
           let rentalPresent = false;
           let rentalIn = false;
@@ -662,6 +715,14 @@ async def read_native_ticket_snapshot(
             }
             pointAmount = runtimePoint.amount;
             pointAmountPresent = Object.hasOwn(runtimePoint,'amount');
+            pointAmountIn = 'amount' in runtimePoint;
+            const runtimeAmountDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(runtimePoint) || {}, 'amount');
+            pointAmountPrototypeDefaultZero = !!runtimeAmountDescriptor
+              && Object.hasOwn(runtimeAmountDescriptor,'value')
+              && typeof runtimeAmountDescriptor.value === 'number'
+              && Number.isInteger(runtimeAmountDescriptor.value)
+              && runtimeAmountDescriptor.value === 0;
 
             const rentalDescriptor = Object.getOwnPropertyDescriptor(
               Object.getPrototypeOf(chapter) || {}, 'endOfRentalPeriod');
@@ -794,6 +855,14 @@ async def read_native_ticket_snapshot(
               && typeDescriptor.value === 0;
             pointAmount = point?.amount;
             pointAmountPresent = !!point && Object.hasOwn(point,'amount');
+            pointAmountIn = !!point && 'amount' in point;
+            const amountDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(point || {}) || {}, 'amount');
+            pointAmountPrototypeDefaultZero = !!amountDescriptor
+              && Object.hasOwn(amountDescriptor,'value')
+              && typeof amountDescriptor.value === 'number'
+              && Number.isInteger(amountDescriptor.value)
+              && amountDescriptor.value === 0;
             chargeStatusIn = 'chargeStatus' in manga;
             const chargeStatusDescriptor = Object.getOwnPropertyDescriptor(
               Object.getPrototypeOf(manga) || {}, 'chargeStatus');
@@ -840,6 +909,8 @@ async def read_native_ticket_snapshot(
             pointTypePrototypeDefaultZero,
             pointAmount,
             pointAmountPresent,
+            pointAmountIn,
+            pointAmountPrototypeDefaultZero,
             isRead,
             rentalValue,
             rentalPresent,
@@ -874,7 +945,7 @@ async def read_native_ticket_snapshot(
     if (
         value.get("mangaId") != work_id
         or value.get("chapterId") != chapter_id
-        or page_mode not in {"listing", "viewer"}
+        or page_mode not in {"listing", "viewer", "ticket_post"}
         or (
             page_mode == "listing"
             and (
@@ -884,7 +955,7 @@ async def read_native_ticket_snapshot(
             )
         )
         or (
-            page_mode == "viewer"
+            page_mode in {"viewer", "ticket_post"}
             and (
                 value.get("currentPath") != f"/manga/viewer/{chapter_id}"
                 or value.get("viewerChapterId") != chapter_id
@@ -902,6 +973,8 @@ async def read_native_ticket_snapshot(
     point_type_in = value.get("pointTypeIn")
     point_type_default_zero = value.get("pointTypePrototypeDefaultZero")
     point_amount_present = value.get("pointAmountPresent")
+    point_amount_in = value.get("pointAmountIn")
+    point_amount_default_zero = value.get("pointAmountPrototypeDefaultZero")
     is_read = value.get("isRead")
     rental_value = value.get("rentalValue")
     rental_present = value.get("rentalPresent")
@@ -915,7 +988,17 @@ async def read_native_ticket_snapshot(
         or type(point_type_in) is not bool
         or type(point_type_default_zero) is not bool
         or type(point_amount_present) is not bool
-        or not point_amount_present
+        or type(point_amount_in) is not bool
+        or type(point_amount_default_zero) is not bool
+        or (
+            not point_amount_present
+            and not (
+                page_mode == "ticket_post"
+                and point_amount == 0
+                and point_amount_in
+                and point_amount_default_zero
+            )
+        )
         or (
             not point_type_present
             and not (point_type_in and point_type_default_zero and point_type == 0)
@@ -943,7 +1026,7 @@ async def read_native_ticket_snapshot(
             )
         )
         or (
-            page_mode == "viewer"
+            page_mode in {"viewer", "ticket_post"}
             and value.get("isTicketAvailablePresent") is not True
             and not (
                 value.get("isTicketAvailableIn") is True
@@ -993,6 +1076,12 @@ async def read_native_ticket_snapshot(
         rental_present=rental_present,
         rental_label=value["rentalLabels"][0] if value["rentalLabels"] else "",
         viewer_chapter_id=str(value.get("viewerChapterId") or ""),
+        point_type_present=point_type_present,
+        point_type_in=point_type_in,
+        point_type_prototype_default_zero=point_type_default_zero,
+        point_amount_present=point_amount_present,
+        point_amount_in=point_amount_in,
+        point_amount_prototype_default_zero=point_amount_default_zero,
     )
 
 
@@ -1618,8 +1707,13 @@ class ComicFuzTicketEntry:
                     attempt_reporter,
                     "ticket_native_consumption_transition_unconfirmed",
                 )
+            relative_rental_days = (
+                parse_relative_rental_days(response_metadata.rental_value)
+                if response_metadata.rental_present
+                else None
+            )
             grant_expiry: datetime | None = None
-            if response_metadata.rental_present:
+            if response_metadata.rental_present and relative_rental_days is None:
                 try:
                     candidate_expiry = parse_rental_expiry(
                         response_metadata.rental_value
@@ -1666,13 +1760,16 @@ class ComicFuzTicketEntry:
             deadline = asyncio.get_running_loop().time() + ACTION_TIMEOUT_MS / 1000
             post_state: NativeTicketSnapshot | None = None
             last_error: BaseException | None = None
+            post_snapshot_mode = (
+                "ticket_post" if relative_rental_days is not None else "viewer"
+            )
             while asyncio.get_running_loop().time() < deadline:
                 try:
                     post_state = await read_native_ticket_snapshot(
                         page,
                         work_id=self.work_id,
                         chapter_id=self.chapter_id,
-                        page_mode="viewer",
+                        page_mode=post_snapshot_mode,
                     )
                     if post_state.viewer_chapter_id == self.chapter_id:
                         break
@@ -1703,38 +1800,76 @@ class ComicFuzTicketEntry:
                     attempt_reporter,
                     "viewer_state_does_not_match_native_response",
                 )
-            if (
-                not response_metadata.rental_present
-                or not post_state.rental_value
-                or not post_state.rental_present
-                or post_state.rental_value != response_metadata.rental_value
-                or grant_expiry is None
-            ):
-                await self._mark_unknown(attempt_reporter, "target_rental_expiry_missing")
-            expiry = grant_expiry
-            if expiry <= self._now():
-                await self._mark_unknown(attempt_reporter, "target_rental_expiry_not_future")
-            if (
-                response_metadata.point_type is not None
-                and response_metadata.point_amount is not None
-                and (
-                    response_metadata.point_type != native_state.point_type
-                    or response_metadata.point_amount != native_state.point_amount
-                )
-            ):
-                await self._mark_unknown(
-                    attempt_reporter,
-                    "target_point_metadata_changed_in_response",
-                )
-            if (
-                post_state.point_type != native_state.point_type
-                or post_state.point_amount != native_state.point_amount
-                or native_state.rental_value == post_state.rental_value
-            ):
-                await self._mark_unknown(
-                    attempt_reporter,
-                    "target_native_grant_transition_unconfirmed",
-                )
+            if relative_rental_days is not None:
+                if not (
+                    response_metadata.rental_present
+                    and response_metadata.rental_value != native_state.rental_value
+                    and post_state.rental_present
+                    and parse_relative_rental_days(post_state.rental_value)
+                    == relative_rental_days
+                    and post_state.rental_value == response_metadata.rental_value
+                ):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "relative_rental_marker_mismatch",
+                    )
+                if not (
+                    response_metadata.point_present
+                    and response_metadata.point_metadata_complete
+                    and response_metadata.point_type == 0
+                    and response_metadata.point_amount == 0
+                ):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "relative_rental_response_point_not_zero",
+                    )
+                if not _native_point_is_known_zero(post_state):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "relative_rental_post_point_not_zero_or_unproven",
+                    )
+                if (
+                    self._now().astimezone(JST).date()
+                    != response_confirmed_at.astimezone(JST).date()
+                ):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "relative_rental_post_state_crossed_jst_midnight",
+                    )
+                expiry = None
+            else:
+                if (
+                    not response_metadata.rental_present
+                    or not post_state.rental_value
+                    or not post_state.rental_present
+                    or post_state.rental_value != response_metadata.rental_value
+                    or grant_expiry is None
+                ):
+                    await self._mark_unknown(attempt_reporter, "target_rental_expiry_missing")
+                expiry = grant_expiry
+                if expiry <= self._now():
+                    await self._mark_unknown(attempt_reporter, "target_rental_expiry_not_future")
+                if (
+                    response_metadata.point_type is not None
+                    and response_metadata.point_amount is not None
+                    and (
+                        response_metadata.point_type != native_state.point_type
+                        or response_metadata.point_amount != native_state.point_amount
+                    )
+                ):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "target_point_metadata_changed_in_response",
+                    )
+                if (
+                    post_state.point_type != native_state.point_type
+                    or post_state.point_amount != native_state.point_amount
+                    or native_state.rental_value == post_state.rental_value
+                ):
+                    await self._mark_unknown(
+                        attempt_reporter,
+                        "target_native_grant_transition_unconfirmed",
+                    )
             if route_failure is not None:
                 await self._mark_unknown(
                     attempt_reporter,

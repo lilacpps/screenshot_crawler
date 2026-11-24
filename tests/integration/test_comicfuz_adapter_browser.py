@@ -82,13 +82,15 @@ def _ticket_request(chapter_id: int) -> bytes:
     ) + _ticket_uint(4, chapter_id)
 
 
-def _ticket_response(*, work_id: int, chapter_id: int, expiry: str) -> bytes:
+def _ticket_response(
+    *, work_id: int, chapter_id: int, expiry: str, point_amount: int = 30
+) -> bytes:
     manga = (
         _ticket_uint(1, work_id)
         + _ticket_uint(13, 1)
         + _ticket_bytes(18, TICKET_RECOVERY.encode())
     )
-    point = _ticket_uint(2, 30)
+    point = _ticket_uint(2, point_amount) if point_amount else b""
     chapter = (
         _ticket_uint(1, chapter_id)
         + _ticket_bytes(5, point)
@@ -546,7 +548,12 @@ def _viewer_html(
 
 
 def _ticket_viewer_html(
-    *, work_id: str, chapter_id: str, expiry: str, chapter_label: str = EPISODE_TITLE
+    *,
+    work_id: str,
+    chapter_id: str,
+    expiry: str,
+    chapter_label: str = EPISODE_TITLE,
+    relative_rental: bool = False,
 ) -> str:
     html = _viewer_html(
         _jpeg_bytes(),
@@ -556,13 +563,18 @@ def _ticket_viewer_html(
     )
     html = html.replace("80641", chapter_id).replace("1970", work_id)
     old = f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData}};"
+    point_consumption = (
+        "Object.create({type:0,amount:0})"
+        if relative_rental
+        else "{type:0,amount:30}"
+    )
     native_data = (
         f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData,"
         f"manga:{{mangaId:'{work_id}',isChargeNeeded:true,isTicketAvailable:false,"
         f"chargeStatus:{json.dumps(TICKET_RECOVERY)}}},"
         f"chapters:[{{chapters:[{{chapterId:'{chapter_id}',"
         f"chapterMainName:{json.dumps(chapter_label)},"
-        f"pointConsumption:{{type:0,amount:30}},isRead:true,"
+        f"pointConsumption:{point_consumption},isRead:true,"
         f"endOfRentalPeriod:{json.dumps(expiry)}}}]}}]}};"
     )
     if old not in html:
@@ -715,6 +727,11 @@ async def _comicfuz_batch_fixture(
 
 @pytest.mark.parametrize("grant_only", [False, True], ids=["normal_batch", "grant_only"])
 @pytest.mark.parametrize(
+    "relative_rental",
+    [False, True],
+    ids=["absolute_expiry", "relative_current_entry"],
+)
+@pytest.mark.parametrize(
     "ticket_query",
     [False, True],
     ids=["canonical_viewer_route", "ticket_query_viewer_route"],
@@ -725,19 +742,27 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
     tmp_path: Path,
     sync_legacy_unscoped_work,
     grant_only: bool,
+    relative_rental: bool,
     ticket_query: bool,
 ) -> None:
     work_id, chapter_id = "3667", "76630"
     work_url = f"{BASE}/manga/{work_id}"
     chapter_label = "Ticket target episode"
     now = datetime.now(JST)
-    expiry = (now + timedelta(days=1)).isoformat()
+    expiry = "残り2日" if relative_rental else (now + timedelta(days=1)).isoformat()
     request_body = _ticket_request(int(chapter_id))
     response_body = _ticket_response(
-        work_id=int(work_id), chapter_id=int(chapter_id), expiry=expiry
+        work_id=int(work_id),
+        chapter_id=int(chapter_id),
+        expiry=expiry,
+        point_amount=0 if relative_rental else 30,
     )
     viewer_html = _ticket_viewer_html(
-        work_id=work_id, chapter_id=chapter_id, expiry=expiry, chapter_label=chapter_label
+        work_id=work_id,
+        chapter_id=chapter_id,
+        expiry=expiry,
+        chapter_label=chapter_label,
+        relative_rental=relative_rental,
     )
     listing_html = _work_ticket_listing_html(
         work_id=work_id,
@@ -858,6 +883,10 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         assert catalog.get_item(candidate.item_id).status == "pending"
         assert catalog.list_artifacts(item_id=candidate.item_id) == []
         assert adapter.get_access_consumption().consumed is True
+        if relative_rental:
+            assert adapter.get_access_consumption().access_granted_until is None
+        else:
+            assert adapter.get_access_consumption().access_granted_until is not None
         assert adapter._source_response_tasks == {}
         assert adapter._source_responses == {}
     else:
@@ -877,6 +906,12 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         artifacts = catalog.list_artifacts(item_id=candidate.item_id)
         assert len(artifacts) == 1 and artifacts[0].format == "zip"
         assert adapter.get_access_consumption().consumed is True
+        if relative_rental:
+            assert adapter.get_access_consumption().access_granted_until is None
+        else:
+            assert adapter.get_access_consumption().access_granted_until is not None
+    if relative_rental:
+        assert catalog.get_source(candidate.source_id).access_granted_until is None
     assert api_requests == [request_body]
     assert len(work_page_visits) == 2
     assert [observation.status for observation in attempt_observations] == [

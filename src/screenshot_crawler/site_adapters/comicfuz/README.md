@@ -1,8 +1,8 @@
 # ComicFUZ free adapter
 
-## Work Ticket status (2026-11-24; Phase 02/Gate03 PASS, Phase 04 in progress; run4 outcome unknown)
+## Work Ticket status (2026-11-24; Gate03 PASS; Phase 04 in progress; runs 4–5 unknown)
 
-The latest isolated Work3152 quota run (CrawlRun 4) observed a decoded `useTicket=true` / zero-point request without a matched response. Its consumption result is unknown and must be counted as one potential ticket use; preserve its history and do not retry or repair it from the current charge badge. Work3667 remains quarantined. A separate free-only Work3152 row selection reached the canonical viewer route, followed by one `useTicket=false` / zero-point request; its response status was not observed. A later non-consuming selection of quota target `46873` opened the exact charge Dialog, but the visible CTA anchor href classified as the Work route without query, and no React `href`/`as` props were found. Public static excerpts show a generic chapter ticket branch but do not bind it to the modal CTA; actual CTA navigation and request ordering remain unverified. The CTA was not clicked. No further quota/ticket action is authorized by this checkpoint.
+Work3152 run4 and Work3342 run5 are both unknown and remain unchanged; conservatively count one potential ticket use for each. Run4's exact ticket request has no matched response status. Run5's exact ticket request matched HTTP 200, but its positive native consumption proof was not saved, so HTTP status and empty Catalog rows do not establish consumption or its absence. Work3667 remains quarantined. Do not retry these Works or repair history from a later charge badge. The non-consuming modal probes and their limits are recorded in the work-ticket progress ledger. No further live action is authorized without a fresh Lead instruction.
 
 Current synthetic URL contract: the selected viewer target accepts either the
 exact canonical `https://comic-fuz.com/manga/viewer/<chapterId>` URL or that
@@ -105,18 +105,36 @@ click arming, and final CTA selection; other ticket proof checks are unchanged.
 The latest synthetic controller browser module passed 57 cases, the affected
 ComicFUZ Unit group passed 64 cases, and the adapter normal/grant-only/
 unavailable-work selection passed 3. Independent review covered 17 modal cases
-and 3 adapter E2E cases (20 passed, 142 deselected, 0 skipped), BLOCKING=0. No
-CTA was clicked and no further live action has been run. See the progress ledger
-for the safe projection.
+and 3 adapter E2E cases (20 passed, 142 deselected, 0 skipped), BLOCKING=0. At
+that earlier modal-scope checkpoint no CTA had been clicked and no later live
+action had run; subsequent run4/run5 outcomes and the current stop state are
+summarized above and in the progress ledger. See the ledger for the safe
+projection.
 Historical prior modal-scope gate, before the app-caption pair correction:
 independent review covered 13 synthetic cases plus 3 Batch E2E cases (16
 passed, 0 skipped), BLOCKING=0; the controller browser file had 53 passed and
 the Batch E2E selection had 3 passed. The current post-correction results are
 57 controller browser cases, 64 affected Unit cases, 3 adapter E2E cases, and
 independent review of 17 modal plus 3 adapter cases (20 passed, 0 skipped).
-Scoped Ruff, `git diff --check`, `py_compile`, and `compileall` passed. No ticket consumption is confirmed; run4 remains unknown/potential 1. Do not run another live action without a separate Lead instruction. Actual post-consumption response values and grant expiry remain
-unverified. See the progress ledger for the sanitized request-observer
-artifact and exact run evidence.
+These earlier modal-scope checks did not resolve ticket consumption. Current
+accounting is run4 and run5 unknown, one potential use each (aggregate 2); do
+not retry either Work. Run5 had a matched ticket request/HTTP 200, but no saved
+positive native proof. Actual native consumption response and absolute grant
+expiry remain unverified. See the progress ledger for the exact run evidence.
+
+The current controller has a synthetic-only branch for a same-operation
+relative rental marker exactly matching `残り<positive integer>日`. A fresh
+matched response and exact-target React state must agree on the marker and
+complete zero-point metadata. The relative value permits only current entry;
+it is not converted into an absolute expiry and does not create a future
+source grant. A separate non-consuming Work3342 snapshot observed `残り2日`,
+but the strict listing snapshot rejected it with
+`listing_runtime_point_amount_mismatch`; that snapshot is not run5's response
+proof. Targeted results: 37 unit tests; 72 controller-browser tests plus one
+separately selected preexisting-relative case; and 8 normal Batch/grant-only
+Adapter E2E cases passed. Existing pytest-asyncio deprecation warnings only.
+No additional ticket action occurred. See the progress ledger for evidence
+limits and current stop conditions.
 
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 

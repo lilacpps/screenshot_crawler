@@ -18,6 +18,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     is_target_viewer_url,
     is_ticket_viewer_url,
     is_zero_cost_direct_request,
+    parse_relative_rental_days,
     parse_rental_expiry,
     read_bounded_viewer_response_body,
 )
@@ -222,6 +223,26 @@ def test_rental_expiry_requires_explicit_timezone() -> None:
         parse_rental_expiry("2026-11-25T00:00:00")
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("残り2日", 2),
+        ("残り1日", 1),
+        ("残り0日", None),
+        ("残り02日", None),
+        ("残り-1日", None),
+        ("残り2 日", None),
+        ("2026-11-25T00:00:00+09:00", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_relative_rental_marker_is_recognized_without_deriving_expiry(
+    value: object, expected: int | None
+) -> None:
+    assert parse_relative_rental_days(value) == expected
+
+
 def _viewer_response(
     *,
     manga_id: int = 3667,
@@ -232,13 +253,19 @@ def _viewer_response(
     point_amount: int = 30,
     include_rental: bool = True,
     include_page: bool = True,
+    include_point: bool = True,
+    unknown_point_field: bool = False,
 ) -> bytes:
     manga = _number(1, manga_id)
     if ticket_available:
         manga += _number(12, 1)
     manga += _number(13, 1) + _bytes(18, charge_status.encode())
-    point = _number(2, point_amount)
-    chapter = _number(1, chapter_id) + _bytes(5, point)
+    point = _number(2, point_amount) if point_amount else b""
+    if unknown_point_field:
+        point += _number(3, 1)
+    chapter = _number(1, chapter_id)
+    if include_point:
+        chapter += _bytes(5, point)
     if include_rental:
         chapter += _bytes(10, rental_expiry.encode())
     group = _bytes(2, chapter)
@@ -266,6 +293,35 @@ def test_web_manga_viewer2_response_decodes_exact_native_access_projection() -> 
     assert decoded.rental_present is True
     assert decoded.point_type == 0
     assert decoded.point_amount == 30
+    assert decoded.point_present is True
+    assert decoded.point_metadata_complete is True
+
+
+def test_viewer_response_distinguishes_present_default_zero_point_from_missing() -> None:
+    present_default = decode_viewer_response(
+        _viewer_response(point_amount=0), work_id="3667", chapter_id="76630"
+    )
+    missing = decode_viewer_response(
+        _viewer_response(include_point=False), work_id="3667", chapter_id="76630"
+    )
+
+    assert present_default.point_present is True
+    assert present_default.point_metadata_complete is True
+    assert present_default.point_type == 0 and present_default.point_amount == 0
+    assert missing.point_present is False
+    assert missing.point_type is None and missing.point_amount is None
+
+
+def test_viewer_response_marks_unknown_point_cost_fields_incomplete() -> None:
+    decoded = decode_viewer_response(
+        _viewer_response(point_amount=0, unknown_point_field=True),
+        work_id="3667",
+        chapter_id="76630",
+    )
+
+    assert decoded.point_present is True
+    assert decoded.point_type == 0 and decoded.point_amount == 0
+    assert decoded.point_metadata_complete is False
 
 
 @pytest.mark.parametrize(

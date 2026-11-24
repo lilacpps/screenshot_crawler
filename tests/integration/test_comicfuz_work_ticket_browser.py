@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,16 +69,24 @@ def _request_body(*, chapter_id: int = int(CHAPTER_ID), paid_points: int = 0) ->
 
 
 def _viewer_response(
-    *, rental_expiry: str | None, manga_id: int = int(WORK_ID), ticket_available: bool = False
+    *,
+    rental_expiry: str | None,
+    manga_id: int = int(WORK_ID),
+    ticket_available: bool = False,
+    point_amount: int = 30,
+    include_point: bool = True,
+    unknown_point_field: bool = False,
 ) -> bytes:
     charge_status = AVAILABLE if ticket_available else RECOVERY
     manga = _number(1, manga_id) + _number(13, 1) + _bytes(18, charge_status.encode())
     if ticket_available:
         manga += _number(12, 1)
-    chapter = (
-        _number(1, int(CHAPTER_ID))
-        + _bytes(5, _number(2, 30))
-    )
+    point = _number(2, point_amount) if point_amount else b""
+    if unknown_point_field:
+        point += _number(3, 1)
+    chapter = _number(1, int(CHAPTER_ID))
+    if include_point:
+        chapter += _bytes(5, point)
     if rental_expiry is not None:
         chapter += _bytes(10, rental_expiry.encode())
     group = _bytes(2, chapter)
@@ -218,6 +227,13 @@ async def _prepare_page(
     response_ticket_available: bool = False,
     inherit_viewer_ticket_default: bool = False,
     mismatch_response_expiry: bool = False,
+    response_point_amount: int = 30,
+    include_response_point: bool = True,
+    unknown_response_point_field: bool = False,
+    post_point_zero_default: bool = False,
+    post_point_default_missing: bool = False,
+    post_rental_override: str | None = None,
+    omit_post_rental: bool = False,
     api_url: str | None = None,
     send_request: bool = True,
     rental_expiry_override: str | None = None,
@@ -228,13 +244,16 @@ async def _prepare_page(
         datetime.now(UTC) + timedelta(hours=24)
     ).isoformat()
     response_expiry = (
-        datetime.fromisoformat(expiry) + timedelta(days=1)
+        (datetime.fromisoformat(expiry) + timedelta(days=1)).isoformat()
         if mismatch_response_expiry
-        else datetime.fromisoformat(expiry)
+        else expiry
     )
     response_body = _viewer_response(
-        rental_expiry=None if omit_response_expiry else response_expiry.isoformat(),
+        rental_expiry=None if omit_response_expiry else response_expiry,
         ticket_available=response_ticket_available,
+        point_amount=response_point_amount,
+        include_point=include_response_point,
+        unknown_point_field=unknown_response_point_field,
     )
     async def listing(route) -> None:
         await route.fulfill(
@@ -254,7 +273,7 @@ async def _prepare_page(
     await browser_page.route(f"{BASE}/assets/manga_detail/charged.svg", badge)
     await browser_page.goto(f"{BASE}/manga/{WORK_ID}")
     await browser_page.evaluate(
-        """({viewerUrl, apiUrl, bodyBytes, workId, chapterId, chapterLabel, expiry, recovery, chargeLabel, requestFrame, inheritTicketDefault, sendRequest}) => {
+        """({viewerUrl, apiUrl, bodyBytes, workId, chapterId, chapterLabel, expiry, recovery, chargeLabel, requestFrame, inheritTicketDefault, sendRequest, postPointZeroDefault, postPointDefaultMissing, omitPostRental, postRentalOverride}) => {
           const cta=[...document.querySelectorAll('a[class*="Dialog_buttons__active__"]')]
             .find(e=>e.innerText.trim()===chargeLabel);
           cta.addEventListener('click',()=>{
@@ -263,10 +282,12 @@ async def _prepare_page(
                 const manga={mangaId:workId,isChargeNeeded:true,chargeStatus:recovery};
                 if(inheritTicketDefault)Object.setPrototypeOf(manga,{isTicketAvailable:false});
                 else manga.isTicketAvailable=false;
-                const data={chapterId,manga,chapters:[{chapters:[{
-                    chapterId,chapterMainName:chapterLabel,pointConsumption:{type:0,amount:30},
-                    isRead:true,endOfRentalPeriod:expiry
-                  }]}]};
+                const point=postPointDefaultMissing?{}:postPointZeroDefault
+                  ?Object.create({type:0,amount:0})
+                  :Object.assign(Object.create({type:0}),{amount:30});
+                const chapter={chapterId,chapterMainName:chapterLabel,pointConsumption:point,isRead:true};
+                if(!omitPostRental)chapter.endOfRentalPeriod=postRentalOverride??expiry;
+                const data={chapterId,manga,chapters:[{chapters:[chapter]}]};
                 const image=document.createElement('img');
                 image.className='G54Y0W_page__fixture';
                 image.__reactFiber$synthetic={memoizedProps:{webMangaViewerData:data},return:null};
@@ -299,6 +320,10 @@ async def _prepare_page(
             "requestFrame": request_frame,
             "inheritTicketDefault": inherit_viewer_ticket_default,
             "sendRequest": send_request,
+            "postPointZeroDefault": post_point_zero_default,
+            "postPointDefaultMissing": post_point_default_missing,
+            "omitPostRental": omit_post_rental,
+            "postRentalOverride": post_rental_override,
         },
     )
 
@@ -422,6 +447,197 @@ async def test_ticket_controller_succeeds_once_and_keeps_page_route_guard(
     )
     assert retry_result == "blocked"
     assert len(downstream) == 1
+
+
+async def test_relative_rental_confirms_current_entry_without_future_grant(
+    browser_page, browser_context
+) -> None:
+    body = _request_body()
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=body,
+        downstream=downstream,
+        rental_expiry_override="残り2日",
+        response_point_amount=0,
+        post_point_zero_default=True,
+        inherit_viewer_ticket_default=True,
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+    grants = []
+
+    proof = await controller.enter(
+        page,
+        chapter_label=CHAPTER_LABEL,
+        native_state=_pre_state(),
+        row_access_mode="quota",
+        attempt_reporter=observations.append,
+        grant_reporter=grants.append,
+        click=lambda: page.get_by_text(CTA, exact=True).click(),
+    )
+
+    post_state = await read_native_ticket_snapshot(
+        page,
+        work_id=WORK_ID,
+        chapter_id=CHAPTER_ID,
+        page_mode="ticket_post",
+    )
+    assert proof.access_granted_until is None
+    assert controller.consumption.consumed is True
+    assert controller.consumption.resource == "work_ticket"
+    assert controller.consumption.access_granted_until is None
+    assert post_state.rental_value == "残り2日" and post_state.rental_present is True
+    assert post_state.point_type == post_state.point_amount == 0
+    assert post_state.point_type_in and post_state.point_type_prototype_default_zero
+    assert post_state.point_amount_in and post_state.point_amount_prototype_default_zero
+    assert grants == []
+    assert len(downstream) == 1 and downstream[0] == body
+    assert [row.status for row in observations] == ["attempting", "confirmed"]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "api_ui_relative_mismatch",
+        "response_point_submessage_missing",
+        "response_point_cost_nonzero",
+        "response_point_unknown_cost_field",
+        "post_point_plain_missing",
+        "post_point_nonzero",
+        "post_rental_missing",
+    ],
+)
+async def test_relative_rental_mismatch_or_incomplete_zero_proof_keeps_consumption_unknown(
+    browser_page, browser_context, monkeypatch, variant: str
+) -> None:
+    monkeypatch.setattr(work_ticket_module, "ACTION_TIMEOUT_MS", 500)
+    options = {
+        "rental_expiry_override": "残り2日",
+        "response_point_amount": 0,
+        "post_point_zero_default": True,
+        "inherit_viewer_ticket_default": True,
+    }
+    if variant == "api_ui_relative_mismatch":
+        options["post_rental_override"] = "残り3日"
+    elif variant == "response_point_submessage_missing":
+        options["include_response_point"] = False
+    elif variant == "response_point_cost_nonzero":
+        options["response_point_amount"] = 1
+    elif variant == "response_point_unknown_cost_field":
+        options["unknown_response_point_field"] = True
+    elif variant == "post_point_plain_missing":
+        options["post_point_default_missing"] = True
+    elif variant == "post_point_nonzero":
+        options["post_point_zero_default"] = False
+    elif variant == "post_rental_missing":
+        options["omit_post_rental"] = True
+
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page, browser_context, body=_request_body(), downstream=downstream, **options
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+
+    with pytest.raises(UnknownPageStateError, match="result is unknown"):
+        await controller.enter(
+            page,
+            chapter_label=CHAPTER_LABEL,
+            native_state=_pre_state(),
+            row_access_mode="quota",
+            attempt_reporter=observations.append,
+            grant_reporter=lambda grant: None,
+            click=lambda: page.get_by_text(CTA, exact=True).click(),
+        )
+
+    assert controller.consumption.consumed is True
+    assert controller.consumption.access_granted_until is None
+    assert len(downstream) == 1
+    assert [row.status for row in observations] == ["attempting", "confirmed"]
+
+
+async def test_relative_rental_cancellation_after_consumption_keeps_expiry_unknown(
+    browser_page, browser_context
+) -> None:
+    body = _request_body()
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=body,
+        downstream=downstream,
+        rental_expiry_override="残り2日",
+        response_point_amount=0,
+        post_point_zero_default=True,
+        inherit_viewer_ticket_default=True,
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+
+    def cancel_after_confirmation(observation) -> None:
+        observations.append(observation)
+        if observation.status == "confirmed":
+            raise asyncio.CancelledError("synthetic cancellation after consumption proof")
+
+    with pytest.raises(asyncio.CancelledError):
+        await controller.enter(
+            page,
+            chapter_label=CHAPTER_LABEL,
+            native_state=_pre_state(),
+            row_access_mode="quota",
+            attempt_reporter=cancel_after_confirmation,
+            grant_reporter=lambda grant: None,
+            click=lambda: page.get_by_text(CTA, exact=True).click(),
+        )
+
+    assert controller.consumption.consumed is True
+    assert controller.consumption.access_granted_until is None
+    assert len(downstream) == 1
+    assert [row.status for row in observations] == ["attempting", "confirmed"]
+
+
+async def test_preexisting_relative_rental_does_not_start_another_ticket_action(
+    browser_page, browser_context
+) -> None:
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page, browser_context, body=_request_body(), downstream=downstream
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+    click_count = 0
+
+    async def unexpected_click() -> None:
+        nonlocal click_count
+        click_count += 1
+
+    with pytest.raises(UnknownPageStateError, match="unsupported native format"):
+        await controller.enter(
+            page,
+            chapter_label=CHAPTER_LABEL,
+            native_state=replace(
+                _pre_state(), rental_value="残り2日", rental_present=True
+            ),
+            row_access_mode="quota",
+            attempt_reporter=observations.append,
+            grant_reporter=lambda grant: None,
+            click=unexpected_click,
+        )
+
+    assert click_count == 0
+    assert controller.attempt_latched is False
+    assert observations == []
+    assert downstream == []
 
 
 @pytest.mark.parametrize(
