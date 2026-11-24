@@ -113,6 +113,14 @@ class NativeTicketSnapshot:
     point_amount_present: bool = False
     point_amount_in: bool = False
     point_amount_prototype_default_zero: bool = False
+    rental_row_validated: bool = False
+    row_root_class_tokens: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectRentalViewerResult:
+    snapshot: NativeTicketSnapshot
+    assert_route_healthy: Callable[[], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,7 +530,7 @@ async def read_native_ticket_snapshot(
 ) -> NativeTicketSnapshot:
     """Read an allowlisted projection from hydrated first-party React data."""
 
-    if page_mode == "listing":
+    if page_mode in {"listing", "rental_listing"}:
         parsed_page = urlparse(page.url)
         query = parse_qsl(parsed_page.query, keep_blank_values=True, strict_parsing=True)
         if (
@@ -581,7 +589,9 @@ async def read_native_ticket_snapshot(
           let rentalIn = false;
           let rentalPrototypeDefaultEmpty = false;
           let isRead = null;
-          if (pageMode === 'listing') {
+          let rentalRowValidated = false;
+          let rowRootClassTokens = [];
+          if (pageMode === 'listing' || pageMode === 'rental_listing') {
             const headingList = document.querySelector('div[class*="title_detail_chapters__list__"]');
             headingElements = headingList
               ? [...headingList.querySelectorAll('h3[class*="Chapter_chapter__name__"]')] : [];
@@ -595,6 +605,7 @@ async def read_native_ticket_snapshot(
             const nativeTarget = nativeMatches[0].candidate;
             const heading = targetIndex >= 0 ? headingElements[targetIndex] : null;
             row = heading?.parentElement?.parentElement || null;
+            rowRootClassTokens = row ? [...row.classList] : [];
             rentalLabels = row
               ? [...row.querySelectorAll('p[class*="Chapter_chapter__rentalPeriod__"]')]
                   .filter(element => element.getClientRects().length > 0)
@@ -623,9 +634,15 @@ async def read_native_ticket_snapshot(
             if (chapterCandidates.length !== 1) return {state:'listing_row_chapter_missing_or_ambiguous'};
             rowChapter = chapterCandidates[0];
 
-            const visible = element => !!element?.getClientRects().length
-              && getComputedStyle(element).visibility === 'visible'
-              && getComputedStyle(element).display !== 'none';
+            const visible = element => {
+              if (!element || !element.getClientRects().length) return false;
+              for (let node = element; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (node.hidden || style.display === 'none' || style.visibility !== 'visible'
+                    || Number(style.opacity) === 0) return false;
+              }
+              return true;
+            };
             const badges = [...document.querySelectorAll('div[class*="Charge_charge__"]')]
               .filter(visible);
             if (badges.length !== 1) return {state:'listing_charge_component_missing_or_ambiguous'};
@@ -687,7 +704,24 @@ async def read_native_ticket_snapshot(
               return {state:'listing_runtime_chapter_label_mismatch'};
             }
             const amountValues = [rowPoint.amount, nativePoint.amount, runtimePoint.amount];
-            if (amountValues.some(amount => !Number.isInteger(amount) || amount < 0)
+            if (pageMode === 'rental_listing') {
+              const runtimeAmountDescriptor = Object.getOwnPropertyDescriptor(
+                Object.getPrototypeOf(runtimePoint) || {}, 'amount');
+              const runtimeAmountKnownZero = runtimePoint.amount === 0
+                && Number.isInteger(runtimePoint.amount)
+                && (Object.hasOwn(runtimePoint, 'amount') || (
+                  'amount' in runtimePoint && !!runtimeAmountDescriptor
+                  && Object.hasOwn(runtimeAmountDescriptor, 'value')
+                  && runtimeAmountDescriptor.value === 0
+                ));
+              if (!runtimeAmountKnownZero
+                  || (Object.hasOwn(rowPoint, 'amount')
+                    && rowPoint.amount !== runtimePoint.amount)
+                  || (Object.hasOwn(nativePoint, 'amount')
+                    && nativePoint.amount !== runtimePoint.amount)) {
+                return {state:'listing_runtime_point_amount_mismatch'};
+              }
+            } else if (amountValues.some(amount => !Number.isInteger(amount) || amount < 0)
                 || !Object.hasOwn(rowPoint,'amount')
                 || !Object.hasOwn(nativePoint,'amount')
                 || !Object.hasOwn(runtimePoint,'amount')
@@ -709,6 +743,7 @@ async def read_native_ticket_snapshot(
             if (typeof pointType !== 'number' || !Number.isInteger(pointType)
                 || (!pointTypePresent && !(pointTypeIn && pointTypePrototypeDefaultZero
                   && pointType === 0))
+                || (pageMode === 'rental_listing' && pointType !== 0)
                 || (rowTypePresent && rowPoint.type !== pointType)
                 || (nativeTypePresent && nativePoint.type !== pointType)) {
               return {state:'listing_runtime_point_type_unproven'};
@@ -743,6 +778,88 @@ async def read_native_ticket_snapshot(
                   ? rentalLabels.length !== 1 || normalizeLabel(rentalLabels[0]) !== normalizeLabel(rentalValue)
                   : rentalLabels.length !== 0)) {
               return {state:'listing_runtime_rental_label_mismatch'};
+            }
+            if (pageMode === 'rental_listing') {
+              const row = heading?.parentElement?.parentElement || null;
+              const rowTokens = row ? [...row.classList] : [];
+              const exactRootTokens = new Set([
+                'Chapter_chapter__wJPBe', 'Chapter_chapter__alreadyViewed__BYLMn'
+              ]);
+              const visibleWithin = element => !!row && row.contains(element) && visible(element);
+              const freeNodes = row ? [...row.querySelectorAll('p[class*="Chapter_chapter__price_free__"]')] : [];
+              const visibleFree = freeNodes.filter(node => visibleWithin(node));
+              const rentalNodes = row ? [...row.querySelectorAll('p[class*="Chapter_chapter__rentalPeriod__"]')] : [];
+              const visibleRental = rentalNodes.filter(node => visibleWithin(node));
+              const priceNodes = row ? [...row.querySelectorAll('[class*="Chapter_chapter__price"]')] : [];
+              const priceSlots = priceNodes.filter(node => node.matches('i[class*="Chapter_chapter__price__"]'));
+              const otherPriceNodes = priceNodes.filter(node =>
+                !node.matches('p[class*="Chapter_chapter__price_free__"]')
+                && !node.matches('i[class*="Chapter_chapter__price__"]')
+                && !priceSlots.some(slot => slot.contains(node))
+              );
+              const knownClass = token => [
+                /^Chapter_chapter__row(?:__[A-Za-z0-9_-]+)?$/,
+                /^Chapter_chapter__thumbnail_wrapper__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__thumbnail__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__thumbnail_overlay__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__label__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__label_(advance|update)__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__detail__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__name__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__subName__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__updateDate__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__bottom__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__userAction__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__userAction_item__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__userAction_icon__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__userAction_text__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__price_free__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__price__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__price_gold__[A-Za-z0-9_-]+$/,
+                /^Chapter_chapter__rentalPeriod__[A-Za-z0-9_-]+$/
+              ].some(pattern => pattern.test(token));
+              const thumbnail = row?.querySelector('div[class*="Chapter_chapter__thumbnail_wrapper__"]');
+              const unknownMarkers = row ? [row, ...row.querySelectorAll('*')].filter(node => {
+                if (node.hasAttribute('aria-label') || node.hasAttribute('title') || node.hasAttribute('role')) return true;
+                const style = getComputedStyle(node);
+                if (style.backgroundImage !== 'none'
+                    || getComputedStyle(node, '::before').backgroundImage !== 'none'
+                    || getComputedStyle(node, '::after').backgroundImage !== 'none') return true;
+                const tokens = [...node.classList];
+                if (node === row) return tokens.length !== exactRootTokens.size
+                  || tokens.some(token => !exactRootTokens.has(token));
+                const chapterTokens = tokens.filter(token => token.startsWith('Chapter_chapter__'));
+                if (chapterTokens.some(token => !knownClass(token))) return true;
+                if (node.tagName === 'IMG') {
+                  if (thumbnail?.contains(node) && node.matches('img[class*="Chapter_chapter__thumbnail__"]')) return false;
+                  if (node.matches('img[class*="Chapter_chapter__userAction_icon__"]')) {
+                    let path = null;
+                    try { path = new URL(node.currentSrc || node.src, location.href).pathname; } catch (_) {}
+                    return !['/assets/manga_detail/comment.svg', '/assets/manga_detail/like.svg'].includes(path);
+                  }
+                  return !priceSlots.some(slot => slot.contains(node));
+                }
+                if (node.tagName.toLowerCase() === 'svg') return true;
+                if (node.tagName === 'DIV') return chapterTokens.length === 0;
+                if (node.tagName === 'P') return !node.matches(
+                  'p[class*="Chapter_chapter__subName__"], p[class*="Chapter_chapter__updateDate__"], '
+                  + 'p[class*="Chapter_chapter__userAction_text__"], p[class*="Chapter_chapter__price_free__"], '
+                  + 'p[class*="Chapter_chapter__rentalPeriod__"]');
+                if (node.tagName === 'H3') return !node.matches('h3[class*="Chapter_chapter__name__"]');
+                if (node.tagName === 'I') return !node.matches('i[class*="Chapter_chapter__label__"], i[class*="Chapter_chapter__price__"]');
+                return true;
+              }).length : 1;
+              rentalRowValidated = !!row
+                && rowTokens.length === exactRootTokens.size
+                && rowTokens.every(token => exactRootTokens.has(token))
+                && freeNodes.length === 1 && visibleFree.length === 1
+                && normalizeLabel(visibleFree[0].innerText) === '無料'
+                && rentalNodes.length === 1 && visibleRental.length === 1
+                && normalizeLabel(visibleRental[0].innerText) === normalizeLabel(rentalValue)
+                && typeof rentalValue === 'string' && rentalValue.length > 0
+                && priceSlots.length === 0 && otherPriceNodes.length === 0
+                && unknownMarkers === 0;
+              if (!rentalRowValidated) return {state:'rental_listing_row_not_exact'};
             }
             const availableLabels = ticketAvailableLabels;
             const recoveryLabelSet = new Set(recoveryLabels);
@@ -797,8 +914,20 @@ async def read_native_ticket_snapshot(
             catch (_) { imagePath = ''; }
             const chargeText = normalizeLabel(chargeNode.innerText);
             const chargeClass = String(chargeNode.className || '');
+            const chargeClassTokens = chargeClass.split(/\s+/).filter(Boolean);
             const displayChargeStatus = chargeStatus || (isTicketAvailable
               ? availableFallback : recoveryFallback);
+            const relativeRentalRecoveryPresentation = pageMode === 'rental_listing'
+              && !isTicketAvailable
+              && chargeStatusPresent
+              && recoveryLabelSet.has(chargeStatus)
+              && displayChargeStatus === chargeStatus
+              && chargeText === chargeStatus
+              && imagePath === '/assets/manga_detail/charge.svg'
+              && img?.alt === chargeAlt
+              && chargeClassTokens.length === 2
+              && chargeClassTokens.includes('Charge_charge__JSGmu')
+              && chargeClassTokens.includes('undefined');
             const statusMatches = isTicketAvailable
               ? availableLabels.includes(chargeStatus)
               : chargeStatus
@@ -809,13 +938,19 @@ async def read_native_ticket_snapshot(
               ? '/assets/manga_detail/charged.svg' : '/assets/manga_detail/charge.svg';
             const expectedClass = isTicketAvailable
               ? 'Charge_charge__charged__' : 'Charge_charge__not_charged__';
+            const chargeLabelMatches = pageMode === 'rental_listing' && !isTicketAvailable
+              ? relativeRentalRecoveryPresentation
+              : (pageMode === 'rental_listing'
+                ? (chargeProp.labelText === chargeStatus || relativeRentalRecoveryPresentation)
+                : chargeProp.labelText === chargeStatus);
             chargePresentationMatched = chargeProp.isTicketAvailable === isTicketAvailable
-              && chargeProp.labelText === chargeStatus
+              && chargeLabelMatches
               && statusMatches
               && chargeText === displayChargeStatus
               && imagePath === expectedImagePath
               && img?.alt === chargeAlt
-              && chargeClass.includes(expectedClass);
+              && (relativeRentalRecoveryPresentation
+                || chargeClass.includes(expectedClass));
             if (!chargePresentationMatched) return {state:'listing_charge_presentation_mismatch'};
             chapterLabel = normalizeLabel(labels[0]);
             isRead = typeof chapter.isRead === 'boolean' ? chapter.isRead : null;
@@ -927,7 +1062,9 @@ async def read_native_ticket_snapshot(
             nextWorkId:String(next?.query?.mangaId ?? ''),
             nativeChapterCount:nextChapters.length,
             domHeadingCount:headingElements.length,
-            targetIndex
+            targetIndex,
+            rentalRowValidated,
+            rowRootClassTokens
           };
         }""",
         {"workId": work_id, "chapterId": chapter_id, "pageMode": page_mode,
@@ -945,9 +1082,9 @@ async def read_native_ticket_snapshot(
     if (
         value.get("mangaId") != work_id
         or value.get("chapterId") != chapter_id
-        or page_mode not in {"listing", "viewer", "ticket_post"}
+         or page_mode not in {"listing", "rental_listing", "viewer", "ticket_post"}
         or (
-            page_mode == "listing"
+            page_mode in {"listing", "rental_listing"}
             and (
                 value.get("nextPage") != "/manga/[mangaId]"
                 or value.get("nextWorkId") != work_id
@@ -962,9 +1099,9 @@ async def read_native_ticket_snapshot(
                 or value.get("currentSearch") not in {"", "?ticket=true"}
             )
         )
-        or (page_mode == "listing" and type(value.get("targetIndex")) is not int)
-        or (page_mode == "listing" and value.get("nativeChapterCount") != value.get("domHeadingCount"))
-        or (page_mode == "listing" and value.get("targetIndex") < 0)
+        or (page_mode in {"listing", "rental_listing"} and type(value.get("targetIndex")) is not int)
+        or (page_mode in {"listing", "rental_listing"} and value.get("nativeChapterCount") != value.get("domHeadingCount"))
+        or (page_mode in {"listing", "rental_listing"} and value.get("targetIndex") < 0)
         or not isinstance(value.get("rentalLabels"), list)
     ):
         raise UnknownPageStateError("ComicFUZ ticket snapshot identity does not match the target")
@@ -993,7 +1130,7 @@ async def read_native_ticket_snapshot(
         or (
             not point_amount_present
             and not (
-                page_mode == "ticket_post"
+                page_mode in {"ticket_post", "rental_listing"}
                 and point_amount == 0
                 and point_amount_in
                 and point_amount_default_zero
@@ -1017,7 +1154,7 @@ async def read_native_ticket_snapshot(
         or type(rental_in) is not bool
         or type(rental_default_empty) is not bool
         or (
-            page_mode == "listing"
+            page_mode in {"listing", "rental_listing"}
             and value.get("isTicketAvailablePresent") is not True
             and not (
                 value.get("isTicketAvailable") is False
@@ -1045,13 +1182,35 @@ async def read_native_ticket_snapshot(
             )
         )
         or len(value["rentalLabels"]) > 1
-        or (page_mode == "listing" and value.get("chargePresentationMatched") is not True)
         or (
-            page_mode == "listing"
+            page_mode in {"listing", "rental_listing"}
+            and value.get("chargePresentationMatched") is not True
+        )
+        or (
+            page_mode in {"listing", "rental_listing"}
             and value["rentalLabels"]
             and value["rentalLabels"][0] != rental_value
         )
-        or (page_mode == "listing" and rental_value and not value["rentalLabels"])
+        or (page_mode in {"listing", "rental_listing"} and rental_value and not value["rentalLabels"])
+        or (
+            page_mode == "rental_listing"
+            and (
+                value.get("rentalRowValidated") is not True
+                or not isinstance(value.get("rowRootClassTokens"), list)
+                or set(value.get("rowRootClassTokens", [])) != {
+                    "Chapter_chapter__wJPBe",
+                    "Chapter_chapter__alreadyViewed__BYLMn",
+                }
+                or len(value.get("rowRootClassTokens", [])) != 2
+                or type(point_amount) is not int
+                or point_amount != 0
+                or (point_amount_present is not True and not (
+                    point_amount_in is True and point_amount_default_zero is True
+                ))
+                or not rental_value
+                or parse_relative_rental_days(rental_value) is None
+            )
+        )
     ):
         raise UnknownPageStateError("ComicFUZ ticket native fields are malformed or contradictory")
     return NativeTicketSnapshot(
@@ -1082,7 +1241,275 @@ async def read_native_ticket_snapshot(
         point_amount_present=point_amount_present,
         point_amount_in=point_amount_in,
         point_amount_prototype_default_zero=point_amount_default_zero,
+        rental_row_validated=value.get("rentalRowValidated") is True,
+        row_root_class_tokens=tuple(value.get("rowRootClassTokens") or ()),
     )
+
+
+async def wait_for_native_viewer_presence(
+    page: Page,
+    *,
+    work_id: str,
+    chapter_id: str,
+    timeout_ms: int = ACTION_TIMEOUT_MS,
+) -> None:
+    """Wait for the exact viewer runtime message without interpreting access."""
+
+    if type(timeout_ms) is not int or timeout_ms < 1:
+        raise ValueError("ComicFUZ viewer readiness timeout is invalid")
+    try:
+        await page.wait_for_function(
+            r"""({workId, chapterId}) => {
+              const current = new URL(location.href);
+              if (current.protocol !== 'https:' || current.hostname !== 'comic-fuz.com'
+                  || current.port || current.username || current.password
+                  || current.pathname !== `/manga/viewer/${chapterId}`
+                  || current.search || current.hash) return false;
+              let next = null;
+              try { next = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || 'null'); }
+              catch (_) { return false; }
+              if (next?.page !== '/manga/viewer/[chapterId]'
+                  || String(next?.props?.pageProps?.chapterId ?? '') !== chapterId
+                  || (next?.query?.chapterId != null
+                    && String(next.query.chapterId) !== chapterId)) return false;
+              for (const image of document.querySelectorAll('img[class*="G54Y0W_page"]')) {
+                let key = Object.keys(image).find(name => name.startsWith('__reactFiber$'));
+                let fiber = key ? image[key] : null;
+                for (let depth = 0; fiber && depth < 35; depth++, fiber = fiber.return) {
+                  const data = fiber.memoizedProps?.webMangaViewerData;
+                  if (!data || typeof data !== 'object'
+                      || String(data.manga?.mangaId ?? '') !== workId
+                      || String(data.chapterId ?? '') !== chapterId
+                      || !Array.isArray(data.chapters)) continue;
+                  const chapters = data.chapters.flatMap(group =>
+                    Array.isArray(group?.chapters) ? group.chapters : []);
+                  if (chapters.filter(chapter =>
+                    String(chapter?.chapterId ?? '') === chapterId).length === 1) return true;
+                }
+              }
+              return false;
+            }""",
+            arg={"workId": work_id, "chapterId": chapter_id},
+            timeout=timeout_ms,
+            polling=100,
+        )
+    except (PlaywrightError, TimeoutError) as exc:
+        raise UnknownPageStateError(
+            "ComicFUZ exact viewer runtime data did not become available"
+        ) from exc
+
+
+async def open_direct_relative_rental_viewer(
+    page: Page,
+    *,
+    pre_state: NativeTicketSnapshot,
+    on_guard_installed: Callable[[Callable[[], None]], None] | None = None,
+) -> DirectRentalViewerResult:
+    """Open a Catalog-selected active rental through one strict zero-cost request."""
+
+    work_id, chapter_id = pre_state.work_id, pre_state.chapter_id
+    if (
+        not re.fullmatch(r"[0-9]+", work_id)
+        or not re.fullmatch(r"[0-9]+", chapter_id)
+        or not pre_state.rental_row_validated
+        or not pre_state.rental_present
+        or parse_relative_rental_days(pre_state.rental_value) is None
+        or not _native_point_is_known_zero(pre_state)
+        or pre_state.point_type != 0
+        or pre_state.point_amount != 0
+        or not pre_state.chapter_label
+    ):
+        raise UnknownPageStateError("ComicFUZ direct rental pre-state is not exact")
+    target_url = f"https://comic-fuz.com/manga/viewer/{chapter_id}"
+    if not is_canonical_viewer_url(target_url, chapter_id=chapter_id):
+        raise UnknownPageStateError("ComicFUZ direct rental target route is not canonical")
+
+    expected_request: object | None = None
+    request_count = 0
+    route_failure: str | None = None
+    operation_active = False
+    operation_succeeded = False
+    response_future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+
+    def same_request(left: object, right: object) -> bool:
+        return getattr(left, "_impl_obj", left) is getattr(right, "_impl_obj", right)
+
+    def same_frame(left: object, right: object) -> bool:
+        return getattr(left, "_impl_obj", left) is getattr(right, "_impl_obj", right)
+
+    def fail(reason: str) -> None:
+        nonlocal route_failure
+        if route_failure is None:
+            route_failure = reason
+
+    def assert_route_healthy() -> None:
+        if route_failure is not None:
+            raise UnknownPageStateError(
+                f"ComicFUZ direct viewer route failed ({route_failure})"
+            )
+        if not operation_succeeded:
+            raise UnknownPageStateError(
+                "ComicFUZ direct viewer operation did not reach a confirmed state"
+            )
+
+    async def route_request(route) -> None:
+        nonlocal expected_request, request_count
+        request = route.request
+        request_count += 1
+        if not operation_active:
+            fail('direct_viewer_operation_ended')
+            await route.abort('blockedbyclient')
+            return
+        if request_count != 1:
+            fail("direct_viewer_request_count_not_one")
+            await route.abort("blockedbyclient")
+            return
+        if not is_canonical_viewer_api_request(request.url, request.method):
+            fail("direct_viewer_request_route_not_canonical")
+            await route.abort("blockedbyclient")
+            return
+        try:
+            request_frame = request.frame
+            if (
+                not same_frame(request_frame, page.main_frame)
+                or not is_canonical_viewer_url(page.url, chapter_id=chapter_id)
+                or not is_canonical_viewer_url(request_frame.url, chapter_id=chapter_id)
+            ):
+                fail("direct_viewer_request_not_bound_to_main_target")
+                await route.abort("blockedbyclient")
+                return
+            body = request.post_data_buffer
+            decoded = decode_viewer_request(body) if isinstance(body, bytes) else None
+            if (
+                decoded is None
+                or decoded.chapter_id != int(chapter_id)
+                or decoded.use_ticket
+                or decoded.point_free != 0
+                or decoded.point_paid != 0
+                or not is_zero_cost_direct_request(body, chapter_id=chapter_id)
+            ):
+                fail("direct_viewer_request_not_zero_cost_exact")
+                await route.abort("blockedbyclient")
+                return
+            expected_request = request
+            if not operation_active or route_failure is not None:
+                fail("direct_viewer_operation_ended")
+                await route.abort("blockedbyclient")
+                return
+            await route.fallback()
+        except (AttributeError, TypeError, ValueError, PlaywrightError):
+            fail("direct_viewer_request_metadata_unavailable")
+            await route.abort("blockedbyclient")
+
+    def on_response(response) -> None:
+        if expected_request is None or response_future.done():
+            return
+        try:
+            if same_request(response.request, expected_request) and same_frame(
+                response.request.frame, page.main_frame
+            ):
+                response_future.set_result(response)
+        except (AttributeError, PlaywrightError):
+            return
+
+    await page.route(API_ROUTE_PATTERN, route_request)
+    if on_guard_installed is not None:
+        on_guard_installed(assert_route_healthy)
+    operation_active = True
+    page.on("response", on_response)
+    try:
+        try:
+            await page.goto(
+                target_url,
+                wait_until="domcontentloaded",
+                timeout=ACTION_TIMEOUT_MS,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise UnknownPageStateError("ComicFUZ direct viewer navigation failed") from exc
+        if route_failure is not None or request_count != 1 or expected_request is None:
+            raise UnknownPageStateError(
+                route_failure or "direct_viewer_request_not_observed_once"
+            )
+        try:
+            response = await asyncio.wait_for(
+                response_future,
+                timeout=ACTION_TIMEOUT_MS / 1000,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as exc:
+            raise UnknownPageStateError("ComicFUZ direct viewer response was not matched") from exc
+        if route_failure is not None or getattr(response, "status", None) != 200:
+            raise UnknownPageStateError(
+                route_failure or "direct_viewer_response_status_not_200"
+            )
+        try:
+            body = await read_bounded_viewer_response_body(
+                response,
+                timeout=RESPONSE_BODY_TIMEOUT_MS / 1000,
+            )
+            response_state = decode_viewer_response(
+                body,
+                work_id=work_id,
+                chapter_id=chapter_id,
+            )
+        except (TypeError, ValueError, OSError, TimeoutError, PlaywrightError) as exc:
+            raise UnknownPageStateError("ComicFUZ direct viewer response metadata is invalid") from exc
+        if not (
+            response_state.manga_id == int(work_id)
+            and response_state.chapter_id == int(chapter_id)
+            and response_state.rental_present
+            and response_state.rental_value == pre_state.rental_value
+            and parse_relative_rental_days(response_state.rental_value) is not None
+            and response_state.point_present
+            and response_state.point_metadata_complete
+            and response_state.point_type == 0
+            and response_state.point_amount == 0
+            and response_state.is_charge_needed_present
+        ):
+            raise UnknownPageStateError("ComicFUZ direct viewer response does not match its rental")
+        if not is_canonical_viewer_url(page.url, chapter_id=chapter_id):
+            raise UnknownPageStateError("ComicFUZ direct viewer did not reach the canonical target")
+        await wait_for_native_viewer_presence(
+            page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+        )
+        post_state = await read_native_ticket_snapshot(
+            page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="ticket_post",
+        )
+        if not (
+            post_state.work_id == work_id
+            and post_state.chapter_id == chapter_id
+            and post_state.viewer_chapter_id == chapter_id
+            and post_state.chapter_label == pre_state.chapter_label
+            and post_state.rental_present
+            and post_state.rental_value == pre_state.rental_value
+            and post_state.rental_value == response_state.rental_value
+            and parse_relative_rental_days(post_state.rental_value) is not None
+            and _native_point_is_known_zero(post_state)
+            and post_state.point_type == 0
+            and post_state.point_amount == 0
+            and post_state.is_charge_needed == response_state.is_charge_needed
+            and post_state.is_charge_needed_present
+                == response_state.is_charge_needed_present
+        ):
+            raise UnknownPageStateError("ComicFUZ fresh direct viewer state does not match response")
+        if route_failure is not None or request_count != 1:
+            raise UnknownPageStateError(
+                route_failure or "direct_viewer_request_count_changed"
+            )
+        operation_succeeded = True
+        return DirectRentalViewerResult(
+            snapshot=post_state,
+            assert_route_healthy=assert_route_healthy,
+        )
+    finally:
+        operation_active = False
+        page.remove_listener("response", on_response)
 
 
 async def read_work_ticket_badge(page: Page) -> dict[str, object]:

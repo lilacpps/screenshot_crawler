@@ -4,6 +4,12 @@
 
 Work3152 run4 and Work3342 run5 are both unknown and remain unchanged; conservatively count one potential ticket use for each. Run4's exact ticket request has no matched response status. Run5's exact ticket request matched HTTP 200, but its positive native consumption proof was not saved, so HTTP status and empty Catalog rows do not establish consumption or its absence. Work3667 remains quarantined. Do not retry these Works or repair history from a later charge badge. The non-consuming modal probes and their limits are recorded in the work-ticket progress ledger. No further live action is authorized without a fresh Lead instruction.
 
+## Current B direct rental revalidation (synthetic only)
+
+A past aware `quota_started_at` with no finite source grant is a planning hint for a non-consuming `direct` + `work_ticket` revalidation. The adapter validates only the selected Work row; recognized current free/paid/quota access produces a typed no-action skip, while unknown presentation remains a hard error. The positive B row requires the exact observed native work/chapter join, already-viewed row shape, visible free marker plus matching positive relative rental label, zero point type/amount, and the observed Charge recovery/native status pairing. Ticket availability may be true or false independently of the rental.
+
+The adapter makes one strict canonical viewer request with `useTicket=false` and both point amounts zero. It does not create a ticket consumption, source grant, expiry, or resource-state record. A page-lifetime guard rejects later consuming requests and is checked through capture and output metadata. Normal Batch must still reach verified END before packaging. This implementation has synthetic verification only; it has not been used in a live Batch. Work3152 run4 and Work3342 run5 remain unknown/potential uses, and Work3667 remains quarantined. See the work-ticket runbook progress ledger for tests and evidence boundaries.
+
 Current synthetic URL contract: the selected viewer target accepts either the
 exact canonical `https://comic-fuz.com/manga/viewer/<chapterId>` URL or that
 same exact path with only `ticket=true`. Work URLs, a different chapter,

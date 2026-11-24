@@ -23,6 +23,11 @@ class ComicFuzSitePolicy(SitePolicy):
     def records_confirmed_quota_attempts_in_run_history(self) -> bool:
         return True
 
+    def allows_automatic_candidate_retry(self) -> bool:
+        """Never replay a ComicFUZ target on a fresh Page after an entry failure."""
+
+        return False
+
     def confirmed_quota_attempt_identity_matches(
         self,
         candidate: object,
@@ -223,6 +228,22 @@ class ComicFuzSitePolicy(SitePolicy):
             grant_until = _parse_optional_grant(source.access_granted_until)
             if grant_until is not None and grant_until > current:
                 return PolicyDecision(True, "direct", "active_access_grant")
+            quota_started_at = source.quota_started_at
+            if quota_started_at is not None and source.access_granted_until is None:
+                consumed_at = _parse_aware(quota_started_at)
+                if (
+                    not re.fullmatch(r"[0-9]+:[0-9]+", source.external_id)
+                    or consumed_at is None
+                    or consumed_at > current
+                ):
+                    return PolicyDecision(False, None, "quota_history_timestamp_untrusted")
+                return PolicyDecision(
+                    True,
+                    "direct",
+                    "live_rental_revalidation",
+                    consumes_quota=False,
+                    quota_resource=self.WORK_TICKET_RESOURCE,
+                )
             return PolicyDecision(
                 True,
                 "quota",
@@ -241,6 +262,34 @@ class ComicFuzSitePolicy(SitePolicy):
             "rental": "rental_not_supported",
         }.get(source.access_mode, "unknown")
         return PolicyDecision(False, None, reason)
+
+    def evaluate_for_quota_resource(
+        self,
+        source: Source,
+        *,
+        now: datetime,
+        quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        self.validate_access_resource(quota_resource)
+        decision = self.evaluate(source, now=now, quota_available=quota_available)
+        if (
+            quota_resource == self.WORK_TICKET_RESOURCE
+            and decision.reason == "live_rental_revalidation"
+        ):
+            return PolicyDecision(
+                True,
+                "quota",
+                "work_ticket",
+                consumes_quota=True,
+                quota_resource=self.WORK_TICKET_RESOURCE,
+                quota_scope="work",
+                quota_limit=1,
+                quota_commit_mode="after_observed_consumption",
+            )
+        if decision.consumes_quota and decision.quota_resource != quota_resource:
+            raise SitePolicyError(f"Unsupported ComicFUZ resource: {quota_resource}")
+        return decision
 
 
 def _aware(value: datetime, name: str) -> datetime:

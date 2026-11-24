@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,6 +113,67 @@ def test_comicfuz_episode_grant_is_direct_only_while_strictly_unexpired() -> Non
     naive_grant = replace(active, access_granted_until="2026-10-13T13:00:00")
     with pytest.raises(SitePolicyError, match="access_granted_until must be a timezone-aware timestamp"):
         policy.evaluate(naive_grant, now=NOW, quota_available=0)
+
+
+def test_comicfuz_past_quota_history_is_only_a_direct_revalidation_hint() -> None:
+    policy = ComicFuzSitePolicy()
+    source = replace(
+        _source("quota"),
+        quota_started_at="2026-10-12T23:59:00+09:00",
+    )
+    decision = policy.evaluate(source, now=NOW, quota_available=0)
+    assert (
+        decision.eligible,
+        decision.access_strategy,
+        decision.reason,
+        decision.consumes_quota,
+        decision.quota_resource,
+        decision.quota_commit_mode,
+    ) == (True, "direct", "live_rental_revalidation", False, "work_ticket", "before_run")
+
+    # Explicit resource selection preserves the requested quota pass; the old
+    # timestamp never becomes a grant or a finite expiry.
+    explicit = policy.evaluate_for_quota_resource(
+        source,
+        now=NOW,
+        quota_available=0,
+        quota_resource="work_ticket",
+    )
+    assert (explicit.access_strategy, explicit.reason, explicit.consumes_quota) == (
+        "quota", "work_ticket", True
+    )
+    assert explicit.quota_resource == "work_ticket"
+    assert policy.allows_automatic_candidate_retry() is False
+
+    expired_finite_grant = replace(
+        source,
+        access_granted_until=(NOW - timedelta(seconds=1)).isoformat(),
+    )
+    expired_decision = policy.evaluate(
+        expired_finite_grant, now=NOW, quota_available=0
+    )
+    assert (expired_decision.access_strategy, expired_decision.reason) == (
+        "quota",
+        "work_ticket",
+    )
+    assert expired_decision.consumes_quota is True
+
+
+@pytest.mark.parametrize(
+    "quota_started_at",
+    ["2026-10-13T12:00:01+09:00", "2026-10-13T11:00:00", "not-a-timestamp"],
+)
+def test_comicfuz_untrusted_quota_history_does_not_select_direct_or_quota(
+    quota_started_at: str,
+) -> None:
+    source = replace(_source("quota"), quota_started_at=quota_started_at)
+    decision = ComicFuzSitePolicy().evaluate(source, now=NOW, quota_available=0)
+    assert (decision.eligible, decision.access_strategy, decision.reason) == (
+        False,
+        None,
+        "quota_history_timestamp_untrusted",
+    )
+    assert decision.quota_resource is None
 
 
 @pytest.mark.parametrize(

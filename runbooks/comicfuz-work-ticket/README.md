@@ -119,6 +119,8 @@ skip = now.astimezone(JST) < retry_at
 
 **Gate 03:** browser fixtureで無副作用のfree/paid/blank分類、quotaのクリック0/1、正の消費/不明、entry-only、同Page継続、identity drift、AccessGuard失敗、再試行阻止を検証。コイン購入操作0、重複消費0、通常Batchに余分な作品一覧visit0。
 
+**Phase 04 B implementation status (2026-11-24):** Synthetic-only direct revalidation is implemented behind the existing normal Batch path. The old quota timestamp is a planning hint, not rental authority; the live selected Work row and exact zero-cost viewer response remain the authority. B can end a normal Batch at positive END and ZIP without recording a ticket use or source grant. Current live status remains stopped: Work3152 run4 and Work3342 run5 are unknown/potential uses, and Work3667 remains quarantined. No additional real ticket action was taken for B. Details and limitations are in `PROGRESS.md`.
+
 ### Phase 04 — 回帰試験、限定した実サイトE2E、独立監査
 
 1. **静的/自動:** `ruff check src tests`, `git diff --check`、`docs/TEST_STRATEGY.md`に従ったComicFUZ/Policy/Batch Executor/CLI/管理画面の影響テスト。共有部変更時は関連する全サイトの回帰テスト。全pytestを常に必須とはしない。

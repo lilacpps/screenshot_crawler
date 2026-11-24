@@ -50,6 +50,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     is_canonical_viewer_url,
     is_target_viewer_url,
     is_ticket_viewer_url,
+    open_direct_relative_rental_viewer,
     parse_rental_expiry,
     read_native_ticket_snapshot,
 )
@@ -150,6 +151,9 @@ class ComicFuzAdapter(SiteAdapter):
         self._target_url: str | None = None
         self._access_strategy: AccessStrategy = "auto"
         self._quota_resource: str | None = None
+        self._direct_rental_revalidation = False
+        self._direct_rental_guard_check: Callable[[], None] | None = None
+        self._direct_rental_guard_page: Page | None = None
         self._existing_access_grant_until: datetime | None = None
         self._ticket_entry: ComicFuzTicketEntry | None = None
         self._ticket_entry_confirmed = False
@@ -315,19 +319,42 @@ class ComicFuzAdapter(SiteAdapter):
         self._target_url = f"https://{SITE_HOST}/manga/viewer/{self._chapter_id}"
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
         if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 "ComicFUZ supports access_strategy='auto', 'direct', or 'quota'"
             )
+        if (
+            self._direct_rental_guard_check is not None
+            and self._direct_rental_guard_page is page
+            and not page.is_closed()
+        ):
+            raise UnknownPageStateError(
+                "ComicFUZ direct rental Page must close before adapter reconfiguration"
+            )
         self._access_strategy = access_strategy
         self._quota_resource = None
+        self._direct_rental_revalidation = False
+        self._direct_rental_guard_check = None
+        self._direct_rental_guard_page = None
         self._ticket_entry = None
         self._ticket_entry_confirmed = False
         self._access_consumption = AccessConsumption()
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
+        if self._access_strategy == "direct":
+            if quota_resource not in {None, "work_ticket"}:
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ direct access supports only the selected work_ticket revalidation context"
+                )
+            if quota_resource == "work_ticket":
+                if self._work_id is None or self._chapter_id is None:
+                    raise UnknownPageStateError(
+                        "ComicFUZ direct rental revalidation requires a configured target identity"
+                    )
+                self._quota_resource = quota_resource
+                self._direct_rental_revalidation = True
+            return
         if self._access_strategy != "quota":
             if quota_resource is not None:
                 raise UnsupportedAccessStrategyError(
@@ -557,6 +584,57 @@ class ComicFuzAdapter(SiteAdapter):
         work_url = self._preflight_work_url or f"https://{SITE_HOST}/manga/{self._work_id}"
         if self._access_strategy == "quota":
             expected_episode_title = await self._initialize_work_ticket_entry(page)
+        elif self._direct_rental_revalidation:
+            if self._quota_resource != "work_ticket":
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ direct rental context lost its work_ticket resource"
+                )
+            work_parts = parse_comicfuz_work_url(page.url)
+            if work_parts is None or work_parts.work_id != self._work_id:
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental revalidation did not start on its target Work page"
+                )
+            discovery = ComicFuzDiscoveryAdapter()
+            await discovery.wait_for_target_row_hydration(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+            )
+            row = await discovery.observe_target_row(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+            )
+            if row.access_mode in {"free", "paid", "quota"}:
+                self._ticket_not_attempted(f"current_access_{row.access_mode}")
+            if row.access_mode != "unknown":
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental target has an unsupported current access state"
+                )
+            native = await read_native_ticket_snapshot(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+                page_mode="rental_listing",
+            )
+            if (
+                row.chapter_id != self._chapter_id
+                or row.index < 0
+                or " ".join(native.chapter_label.split()) != row.label
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ direct rental target differs from its current native row"
+                )
+            def install_direct_rental_guard(check: Callable[[], None]) -> None:
+                self._direct_rental_guard_check = check
+                self._direct_rental_guard_page = page
+
+            direct_result = await open_direct_relative_rental_viewer(
+                page,
+                pre_state=native,
+                on_guard_installed=install_direct_rental_guard,
+            )
+            expected_episode_title = direct_result.snapshot.chapter_label
         elif (
             self._access_strategy == "direct"
             and self._existing_access_grant_until is not None
@@ -656,6 +734,7 @@ class ComicFuzAdapter(SiteAdapter):
         await self._initialize_work_ticket_entry(page)
 
     def get_output_metadata(self) -> dict[str, str | None]:
+        self._assert_direct_rental_guard_healthy()
         return {
             "title": self._output_title,
             "author": None,
@@ -665,6 +744,7 @@ class ComicFuzAdapter(SiteAdapter):
 
     @_cleanup_observer_on_failure
     async def detect_state(self, page: Page) -> PageState:
+        self._assert_direct_rental_guard_healthy()
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError(
                 "ComicFUZ left the configured free episode before verified END"
@@ -728,6 +808,7 @@ class ComicFuzAdapter(SiteAdapter):
         return targets[0]
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -738,6 +819,7 @@ class ComicFuzAdapter(SiteAdapter):
         return tuple(locator.nth(int(row["index"])) for row in self._body_rows(rows))
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -755,6 +837,7 @@ class ComicFuzAdapter(SiteAdapter):
         )
 
     async def get_content_context(self, page: Page) -> ContentContext:
+        self._assert_direct_rental_guard_healthy()
         chapter_id = parse_comicfuz_episode_url(page.url)
         if chapter_id is None:
             chapter_id = self._chapter_id
@@ -790,6 +873,7 @@ class ComicFuzAdapter(SiteAdapter):
         page: Page,
         previous_identity: ContentIdentity | None,
     ) -> None:
+        self._assert_direct_rental_guard_healthy()
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         previous_signature: tuple[object, ...] | None = None
         stable_checks = 0
@@ -913,6 +997,7 @@ class ComicFuzAdapter(SiteAdapter):
 
     @_cleanup_observer_on_failure
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._assert_direct_rental_guard_healthy()
         rows = await self._active_page_rows(page)
         self._validate_page_group(rows)
         if any(not row["ready"] for row in rows):
@@ -950,6 +1035,7 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError("ComicFUZ page changed during capture")
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader identity changed during capture")
+        self._assert_direct_rental_guard_healthy()
         await self._validate_reader_identity(page)
         if numbers != tuple(
             range(len(self._captured_indices), len(self._captured_indices) + len(numbers))
@@ -1075,6 +1161,7 @@ class ComicFuzAdapter(SiteAdapter):
         allow_initial_manifest_loading: bool = False,
         allow_cached_manifest_at_end: bool = False,
     ) -> bool:
+        self._assert_direct_rental_guard_healthy()
         if not await self._reader_route_is_target(page):
             raise UnknownPageStateError("ComicFUZ reader route differs from the verified target")
         snapshot = await self._read_viewer_snapshot(page)
@@ -1229,6 +1316,7 @@ class ComicFuzAdapter(SiteAdapter):
         return snapshot
 
     async def _reader_route_is_target(self, page: Page) -> bool:
+        self._assert_direct_rental_guard_healthy()
         if self._chapter_id is None or not is_target_viewer_url(
             page.url, chapter_id=str(self._chapter_id)
         ):
@@ -1525,6 +1613,10 @@ class ComicFuzAdapter(SiteAdapter):
             if row.get("ready"):
                 self._validate_page_row(row)
         return True
+
+    def _assert_direct_rental_guard_healthy(self) -> None:
+        if self._direct_rental_guard_check is not None:
+            self._direct_rental_guard_check()
 
     async def _terminal_body_shells_clear(self, page: Page) -> bool:
         shells = [row for row in await self._all_page_rows(page) if row["shown"]]
