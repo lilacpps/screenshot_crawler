@@ -98,10 +98,10 @@ def _cleanup_observer_on_failure(
     return wrapped
 
 
-def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
-    """Accept only the live-verified body-prefix / extra / reader-tail shapes."""
+def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int | None]:
+    """Accept only the verified body-prefix and exact native reader tails."""
 
-    if not isinstance(pages, list) or len(pages) < 4:
+    if not isinstance(pages, list) or len(pages) < 3:
         raise UnknownPageStateError("ComicFUZ viewer page-role manifest is incomplete")
     roles: list[str] = []
     for slot in pages:
@@ -136,12 +136,13 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
             raise UnknownPageStateError("ComicFUZ viewer contains an unsupported page role")
 
     extra_positions = [index for index, role in enumerate(roles) if role != "body_candidate"]
-    if not extra_positions:
-        raise UnknownPageStateError("ComicFUZ viewer must expose a native extra-page boundary")
-    extra_index = extra_positions[0]
+    extra_index = extra_positions[0] if extra_positions else len(roles)
     if extra_index < 1 or roles[:extra_index] != ["body_candidate"] * extra_index:
         raise UnknownPageStateError("ComicFUZ body pages are not a contiguous unlinked prefix")
-    if roles[extra_index:] not in (
+    tail = roles[extra_index:]
+    if tail == ["google_ads", "last_page"]:
+        return tuple(range(extra_index)), None
+    if tail not in (
         ["linked_extra", "google_ads", "last_page"],
         ["linked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
         ["unlinked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
@@ -1347,6 +1348,10 @@ class ComicFuzAdapter(SiteAdapter):
             body_indices, extra_index = _classify_viewer_pages(pages)
             if self._chapter_id != snapshot.get("viewer_chapter_id"):
                 raise UnknownPageStateError("ComicFUZ viewer page list belongs to another episode")
+            if extra_index is None and len(body_indices) % 2 != (1 if is_first_page_blank else 0):
+                raise UnknownPageStateError(
+                    "ComicFUZ body-page parity conflicts with the first-page layout"
+                )
             initial_body_indices = (0,) if is_first_page_blank else (0, 1)
             if not set(initial_body_indices).issubset(body_indices):
                 raise UnknownPageStateError(

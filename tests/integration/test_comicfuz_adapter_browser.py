@@ -416,10 +416,13 @@ def _viewer_html(
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
     extra_tail_unlinked_pair: bool = False,
+    no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
 ) -> str:
+    if no_extra_tail and (extra_tail or extra_tail_unlinked_pair):
+        raise ValueError("no-extra tail cannot be combined with an extra-image tail")
     encoded = base64.b64encode(jpeg).decode("ascii")
     next_data = (
         {
@@ -486,7 +489,9 @@ def _viewer_html(
             for start in range(0, len(remaining_extras), 2):
                 image_groups[max(image_groups) + 1] = remaining_extras[start:start + 2]
     terminal_state = max(image_groups) + 1 if image_groups else 0
-    native_page_count = body_descriptor_count + (5 if extra_tail else 3)
+    native_page_count = body_descriptor_count + (
+        2 if no_extra_tail else (5 if extra_tail or extra_tail_unlinked_pair else 3)
+    )
     counter_values = [
         f"{group[0] + 1}/{native_page_count}" for _state, group in image_groups.items()
     ] + [f"{native_page_count}/{native_page_count}"]
@@ -522,6 +527,8 @@ def _viewer_html(
             {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
             {{googleAds:{{}}}}, {{lastPage:{{}}}}
           );
+        }} else if ({str(no_extra_tail).lower()}) {{
+          pageDescriptors.push({{googleAds:{{}}}}, {{lastPage:{{}}}});
         }} else {{
           pageDescriptors.push(
             {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
@@ -810,6 +817,7 @@ async def _route_comicfuz(
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
     extra_tail_unlinked_pair: bool = False,
+    no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
@@ -841,6 +849,7 @@ async def _route_comicfuz(
         transition_overlap_variant=transition_overlap_variant,
         extra_tail=extra_tail,
         extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        no_extra_tail=no_extra_tail,
         latest_end=latest_end,
         stuck_extra_tail=stuck_extra_tail,
         native_subtitle=native_subtitle,
@@ -2234,25 +2243,31 @@ async def test_unavailable_work_ticket_skips_only_that_work_and_replans(
 
 
 @pytest.mark.parametrize(
-    ("extra_tail", "latest_end", "body_count", "extra_tail_unlinked_pair", "first_blank"),
+    (
+        "extra_tail", "latest_end", "body_count", "extra_tail_unlinked_pair",
+        "first_blank", "no_extra_tail",
+    ),
     [
-        (False, "none", 2, False, True), (True, "none", 2, False, True),
-        (True, "valid", 2, False, True), (False, "valid", 2, False, True),
-        (True, "account_recommendations", 2, False, True),
-        (True, "none", 1, False, True),
-        (True, "account_recommendations", 1, False, True),
-        (True, "none", 12, True, True),
-        (True, "none", 12, True, False),
+        (False, "none", 2, False, True, False), (True, "none", 2, False, True, False),
+        (True, "valid", 2, False, True, False), (False, "valid", 2, False, True, False),
+        (True, "account_recommendations", 2, False, True, False),
+        (True, "none", 1, False, True, False),
+        (True, "account_recommendations", 1, False, True, False),
+        (True, "none", 12, True, True, False),
+        (True, "none", 12, True, False, False),
+        (False, "valid", 11, False, True, True),
+        (False, "valid", 10, False, False, True),
     ],
     ids=[
         "body-only", "legacy-extra-tail", "legacy-next-chapter-end", "latest-end",
         "legacy-extra-account-recommendation", "legacy-single-body", "legacy-single-body-end",
         "unlinked-pair-tail-blank-first", "unlinked-pair-tail-nonblank-first",
+        "no-extra-tail-blank-first-odd-body", "no-extra-tail-nonblank-first-even-body",
     ],
 )
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
     browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str,
-    body_count: int, extra_tail_unlinked_pair: bool, first_blank: bool,
+    body_count: int, extra_tail_unlinked_pair: bool, first_blank: bool, no_extra_tail: bool,
 ) -> None:
     (
         catalog,
@@ -2267,6 +2282,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         browser_page, tmp_path, sync_legacy_unscoped_work,
         extra_tail=extra_tail, latest_end=latest_end,
         extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        no_extra_tail=no_extra_tail,
         first_page_blank=first_blank,
         first_mode_body_page_count=body_count,
         true_mode_body_page_count=body_count,
@@ -2308,7 +2324,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
 
 @pytest.mark.parametrize("failure", [
     "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail", "stuck_single_extra_tail",
-    "uul_stuck", "uul_premature_end",
+    "uul_stuck", "uul_premature_end", "no_extra_blank_even", "no_extra_nonblank_odd",
     "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
     "duplicate_recommendations",
 ])
@@ -2317,7 +2333,9 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
 ) -> None:
     route_change = failure == "route_drift"
     unknown_tail = failure == "unknown_tail"
+    no_extra_tail = failure in {"no_extra_blank_even", "no_extra_nonblank_odd"}
     unlinked_pair_tail = failure in {"uul_stuck", "uul_premature_end"}
+    no_extra_body_count = 10 if failure == "no_extra_blank_even" else 11
     catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
             browser_page,
@@ -2325,13 +2343,24 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             sync_legacy_unscoped_work,
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
-            extra_tail=unlinked_pair_tail or failure not in {"stale_free", "route_drift", "unknown_tail"},
-            extra_tail_unlinked_pair=unlinked_pair_tail,
-            true_mode_body_page_count=(
-                12 if unlinked_pair_tail else (1 if failure == "stuck_single_extra_tail" else 2)
+            extra_tail=(
+                False
+                if no_extra_tail
+                else unlinked_pair_tail or failure not in {"stale_free", "route_drift", "unknown_tail"}
             ),
-            first_mode_body_page_count=12 if unlinked_pair_tail else 4,
-            first_page_blank=True,
+            extra_tail_unlinked_pair=unlinked_pair_tail,
+            no_extra_tail=no_extra_tail,
+            true_mode_body_page_count=(
+                12 if unlinked_pair_tail else (
+                    no_extra_body_count if no_extra_tail else (
+                        1 if failure == "stuck_single_extra_tail" else 2
+                    )
+                )
+            ),
+            first_mode_body_page_count=(
+                12 if unlinked_pair_tail else (no_extra_body_count if no_extra_tail else 4)
+            ),
+            first_page_blank=failure != "no_extra_nonblank_odd",
             initial_state=99 if failure == "uul_premature_end" else 0,
             stuck_extra_tail=failure == "uul_stuck" or failure in {
                 "stuck_extra_tail", "stuck_single_extra_tail"

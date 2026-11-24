@@ -48,6 +48,12 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     pages = [image.copy(), image.copy(), extra, {"role": "google_ads"}, {"role": "last_page"}]
 
     assert _classify_viewer_pages(pages) == ((0, 1), 2)
+    assert _classify_viewer_pages(
+        [image.copy(), {"role": "google_ads"}, {"role": "last_page"}]
+    ) == ((0,), None)
+    assert _classify_viewer_pages(
+        [*[image.copy() for _ in range(11)], {"role": "google_ads"}, {"role": "last_page"}]
+    ) == (tuple(range(11)), None)
     unlinked_extra = {**extra, "has_link": False}
     triple = [image.copy(), image.copy(), extra, unlinked_extra, extra.copy(),
               {"role": "google_ads"}, {"role": "last_page"}]
@@ -60,6 +66,9 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     assert _classify_viewer_pages(unlinked_pair_tail) == (tuple(range(12)), 12)
 
     invalid = [
+        [{"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), {"role": "last_page"}, {"role": "google_ads"}],
+        [image.copy(), {"role": "google_ads"}, {"role": "last_page"}, image.copy()],
         [image.copy(), {**image, "has_link": True}, {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, image.copy(), {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, extra, {"role": "google_ads"}, {"role": "last_page"}],
