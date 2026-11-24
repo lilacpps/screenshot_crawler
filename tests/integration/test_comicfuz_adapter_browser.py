@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from screenshot_crawler import cli
 from screenshot_crawler.batch import (
     BatchExecutor,
     BatchPlanner,
@@ -43,6 +44,9 @@ BASE = "https://comic-fuz.com"
 WORK_URL = f"{BASE}/manga/1970?position=thumbnail"
 VIEWER_URL = f"{BASE}/manga/viewer/80641"
 NOW = datetime(2026, 10, 13, 12, tzinfo=JST)
+TICKET_AVAILABLE = "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"
+TICKET_RECOVERY = "0\u6642\u306b\u56de\u5fa9!"
+TICKET_CTA = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
 EPISODE_TITLE = "第31話"
 
 
@@ -51,6 +55,52 @@ def _jpeg_bytes(color: tuple[int, int, int] = (38, 121, 205)) -> bytes:
     output = BytesIO()
     image.save(output, format="JPEG", quality=91)
     return output.getvalue()
+
+
+def _ticket_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _ticket_uint(field: int, value: int) -> bytes:
+    return _ticket_varint(field << 3) + _ticket_varint(value)
+
+
+def _ticket_bytes(field: int, value: bytes) -> bytes:
+    return _ticket_varint((field << 3) | 2) + _ticket_varint(len(value)) + value
+
+
+def _ticket_request(chapter_id: int) -> bytes:
+    return _ticket_bytes(1, _ticket_uint(3, 2)) + _ticket_uint(2, 1) + _ticket_bytes(
+        3, b""
+    ) + _ticket_uint(4, chapter_id)
+
+
+def _ticket_response(*, work_id: int, chapter_id: int, expiry: str) -> bytes:
+    manga = (
+        _ticket_uint(1, work_id)
+        + _ticket_uint(13, 1)
+        + _ticket_bytes(18, TICKET_RECOVERY.encode())
+    )
+    point = _ticket_uint(2, 30)
+    chapter = (
+        _ticket_uint(1, chapter_id)
+        + _ticket_bytes(5, point)
+        + _ticket_bytes(10, expiry.encode())
+    )
+    groups = _ticket_bytes(2, chapter)
+    viewer_page = _ticket_bytes(1, b"synthetic-page")
+    viewer_data = _ticket_bytes(2, viewer_page)
+    return (
+        _ticket_bytes(2, viewer_data)
+        + _ticket_bytes(5, groups)
+        + _ticket_bytes(11, manga)
+        + _ticket_uint(12, chapter_id)
+    )
 
 
 def _work_html(
@@ -87,6 +137,75 @@ def _work_html(
       </head><body>{account_link}
       <div class="title_detail_chapters__list__fixture"><ul>{rows}</ul></div>
       <style>body{{min-height:1200px}}</style></body></html>'''
+
+
+def _work_ticket_listing_html(
+    *,
+    work_id: str,
+    chapter_id: str,
+    chapter_label: str,
+    request_body: bytes,
+    viewer_html: str,
+    charge_available: bool = True,
+) -> str:
+    next_data = {
+        "page": "/manga/[mangaId]",
+        "query": {"mangaId": work_id},
+        "props": {
+            "pageProps": {
+                "chapters": [
+                    {
+                        "chapters": [
+                            {"chapterId": chapter_id, "chapterMainName": chapter_label}
+                        ]
+                    }
+                ]
+            }
+        },
+    }
+    request_values = list(request_body)
+    viewer_html_js = json.dumps(viewer_html).replace("</", "<\\/")
+    return f'''<!doctype html><html><head><title>Verified ComicFUZ Work</title>
+      <link rel="canonical" href="{BASE}/manga/{work_id}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(next_data)}</script>
+      </head><body><div class="title_detail_chapters__list__fixture">
+        <div class="Chapter_chapter__row__fixture"><div class="Chapter_chapter__detail__fixture">
+          <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
+        </div></div></div>
+        <div class="Charge_charge__charged__fixture">{TICKET_AVAILABLE}
+          <img alt="チャージ" src="/assets/manga_detail/charged.svg"></div>
+        <section id="ticket-modal" style="display:none"><h2>{chapter_label}</h2>
+          <button id="ticket-cta">{TICKET_CTA}</button>
+          <span>1</span><button>アプリはこちら</button><button>コメント一覧へ</button>
+          <button>キャンセル</button></section>
+        <script>
+          const chargeAvailable={json.dumps(charge_available)};
+          const workId={json.dumps(work_id)}, chapterId={json.dumps(chapter_id)};
+          const chapterLabel={json.dumps(chapter_label)};
+          const heading=document.querySelector('h3');
+          heading.__reactFiber$target={{memoizedProps:{{chapter:{{chapterId,
+            chapterMainName:chapterLabel,pointConsumption:{{type:0,amount:30}},
+            isRead:true,endOfRentalPeriod:''}}}},return:null}};
+          const chargeBadge=document.querySelector('.Charge_charge__charged__fixture');
+          if(chargeAvailable)chargeBadge.__reactFiber$charge={{memoizedProps:{{isChargeNeeded:true,
+            isTicketAvailable:true,chargeStatus:{json.dumps(TICKET_AVAILABLE)}}},return:null}};
+          else {{
+            chargeBadge.textContent='';
+            chargeBadge.style.minHeight='2px';
+            chargeBadge.__reactFiber$charge={{memoizedProps:{{isChargeNeeded:true,
+              isTicketAvailable:false,chargeStatus:''}},return:null}};
+          }}
+          const modal=document.querySelector('#ticket-modal');
+          heading.addEventListener('click',()=>modal.style.display='block');
+          document.querySelector('#ticket-cta').addEventListener('click',()=>{{
+            history.pushState({{}},'',`/manga/viewer/${{chapterId}}?ticket=true`);
+            fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
+              headers:{{'content-type':'text/plain'}},
+              body:new Uint8Array({request_values})}})
+              .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
+              .catch(()=>{{}});
+          }});
+        </script></body></html>'''
 
 
 def _viewer_html(
@@ -361,6 +480,31 @@ def _viewer_html(
       </script></body></html>"""
 
 
+def _ticket_viewer_html(
+    *, work_id: str, chapter_id: str, expiry: str, chapter_label: str = EPISODE_TITLE
+) -> str:
+    html = _viewer_html(
+        _jpeg_bytes(),
+        latest_end="valid",
+        native_title=chapter_label,
+        viewer_title=chapter_label,
+    )
+    html = html.replace("80641", chapter_id).replace("1970", work_id)
+    old = f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData}};"
+    native_data = (
+        f"const webMangaViewerData = {{chapterId:'{chapter_id}',viewerData,"
+        f"manga:{{mangaId:'{work_id}',isChargeNeeded:true,isTicketAvailable:false,"
+        f"chargeStatus:{json.dumps(TICKET_RECOVERY)}}},"
+        f"chapters:[{{chapters:[{{chapterId:'{chapter_id}',"
+        f"chapterMainName:{json.dumps(chapter_label)},"
+        f"pointConsumption:{{type:0,amount:30}},isRead:true,"
+        f"endOfRentalPeriod:{json.dumps(expiry)}}}]}}]}};"
+    )
+    if old not in html:
+        raise AssertionError("Synthetic viewer fixture lost its native React data marker")
+    return html.replace(old, native_data)
+
+
 async def _route_comicfuz(
     page,
     *,
@@ -485,8 +629,12 @@ async def _comicfuz_batch_fixture(
 
         adapters.register("comicfuz", create_adapter)
     plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(site="comicfuz")
-    assert len(plan.candidates) == 1
-    candidate = plan.candidates[0]
+    free_candidates = [
+        candidate for candidate in plan.candidates
+        if candidate.external_id == "1970:80641"
+    ]
+    assert len(free_candidates) == 1
+    candidate = free_candidates[0]
     assert candidate.external_id == "1970:80641"
     assert candidate.artifact_prefix == "003"
     executor_kwargs = {
@@ -498,6 +646,304 @@ async def _comicfuz_batch_fixture(
         executor_kwargs["package_function"] = package_function
     executor = BatchExecutor(catalog, policies, adapters, **executor_kwargs)
     return catalog, discovery, target, plan, candidate, executor, seen, watchlist
+
+
+@pytest.mark.parametrize("grant_only", [False, True], ids=["normal_batch", "grant_only"])
+async def test_comicfuz_work_ticket_batch_entry_and_capture(
+    browser_page,
+    browser_context,
+    tmp_path: Path,
+    sync_legacy_unscoped_work,
+    grant_only: bool,
+) -> None:
+    work_id, chapter_id = "3667", "76630"
+    work_url = f"{BASE}/manga/{work_id}"
+    chapter_label = "Ticket target episode"
+    now = datetime.now(JST)
+    expiry = (now + timedelta(days=1)).isoformat()
+    request_body = _ticket_request(int(chapter_id))
+    response_body = _ticket_response(
+        work_id=int(work_id), chapter_id=int(chapter_id), expiry=expiry
+    )
+    viewer_html = _ticket_viewer_html(
+        work_id=work_id, chapter_id=chapter_id, expiry=expiry, chapter_label=chapter_label
+    )
+    listing_html = _work_ticket_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label=chapter_label,
+        request_body=request_body,
+        viewer_html=viewer_html,
+    )
+    api_requests: list[bytes] = []
+    work_page_visits: list[str] = []
+
+    async def comicfuz_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == work_url:
+            work_page_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=listing_html,
+            )
+        elif path == f"{BASE}/assets/manga_detail/charged.svg":
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        api_requests.append(route.request.post_data_buffer or b"")
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=response_body,
+        )
+
+    await browser_page.route(f"{BASE}/**", comicfuz_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    catalog = CatalogService(tmp_path / "ticket-catalog.sqlite")
+    target = WatchlistTarget(
+        key="comicfuz-ticket-target",
+        work_key="stable-series-slug",
+        site="comicfuz",
+        url=work_url,
+        label="Ticket target work",
+    )
+    discovery_registry = DiscoveryAdapterRegistry()
+    discovery_registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, discovery_registry)
+    discovered = await discovery.discover(browser_page, target, "full")
+    assert discovered.complete is True
+    watchlist = sync_legacy_unscoped_work(catalog, target)
+
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now
+    )
+    candidates = [
+        candidate
+        for candidate in plan.candidates
+        if candidate.external_id == f"{work_id}:{chapter_id}"
+    ]
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.access_strategy == "quota"
+    assert candidate.quota_resource == "work_ticket"
+
+    adapter = ComicFuzAdapter()
+    adapters = AdapterRegistry()
+    adapters.register("comicfuz", lambda: adapter)
+    attempt_observations = []
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        library_dir=tmp_path / "library",
+        watchlist=watchlist,
+        access_attempt_sink=attempt_observations.append,
+    )
+    if grant_only:
+        result = await executor.execute_grant_only_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "grant-only-output",
+            now=now,
+        )
+        run = catalog.get_crawl_run(result.crawl_run_id)
+        assert result.resource_consumed is True
+        assert result.resource == "work_ticket"
+        assert run.status == "succeeded" and run.page_count == 0
+        assert catalog.get_item(candidate.item_id).status == "pending"
+        assert catalog.list_artifacts(item_id=candidate.item_id) == []
+        assert adapter.get_access_consumption().consumed is True
+        assert adapter._source_response_tasks == {}
+        assert adapter._source_responses == {}
+    else:
+        result = await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "normal-output",
+            library_dir=tmp_path / "library",
+            max_pages=5,
+            now=now,
+        )
+        run = catalog.get_crawl_run(result.crawl_run_id)
+        assert result.stop_reason == "end" and result.page_count == 2
+        assert run.status == "succeeded" and run.page_count == 2
+        assert "access_consumption_confirmed:" in (run.stop_reason or "")
+        assert catalog.get_item(candidate.item_id).status == "completed"
+        artifacts = catalog.list_artifacts(item_id=candidate.item_id)
+        assert len(artifacts) == 1 and artifacts[0].format == "zip"
+        assert adapter.get_access_consumption().consumed is True
+    assert api_requests == [request_body]
+    assert len(work_page_visits) == 2
+    assert [observation.status for observation in attempt_observations] == [
+        "attempting",
+        "confirmed",
+    ]
+
+
+async def test_unavailable_work_ticket_skips_only_that_work_and_replans(
+    browser_page,
+    browser_context,
+    tmp_path: Path,
+    sync_legacy_unscoped_work,
+) -> None:
+    work_data = [
+        ("3667", "76630", "Unavailable target", False),
+        ("3152", "49007", "Available target", True),
+    ]
+    now = datetime.now(JST)
+    expiry = (now + timedelta(days=1)).isoformat()
+    listings: dict[str, str] = {}
+    targets = []
+    for work_id, chapter_id, label, charge_available in work_data:
+        request_body = _ticket_request(int(chapter_id))
+        viewer_html = _ticket_viewer_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            expiry=expiry,
+            chapter_label=label,
+        )
+        listings[f"{BASE}/manga/{work_id}"] = _work_ticket_listing_html(
+            work_id=work_id,
+            chapter_id=chapter_id,
+            chapter_label=label,
+            request_body=request_body,
+            viewer_html=viewer_html,
+            charge_available=charge_available,
+        )
+        targets.append(
+            WatchlistTarget(
+                key=f"comicfuz-ticket-{work_id}",
+                work_key=f"series-{work_id}",
+                site="comicfuz",
+                url=f"{BASE}/manga/{work_id}",
+                label=f"Ticket target {work_id}",
+            )
+        )
+    work_page_visits: list[str] = []
+    api_requests: list[bytes] = []
+
+    async def comicfuz_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path in listings:
+            work_page_visits.append(path)
+            await route.fulfill(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=listings[path],
+            )
+        elif path == f"{BASE}/assets/manga_detail/charged.svg":
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    async def api_route(route) -> None:
+        request_body = route.request.post_data_buffer or b""
+        api_requests.append(request_body)
+        expected = _ticket_request(49007)
+        if request_body != expected:
+            await route.abort("blockedbyclient")
+            return
+        await route.fulfill(
+            status=200,
+            content_type="application/octet-stream",
+            headers={"access-control-allow-origin": BASE},
+            body=_ticket_response(work_id=3152, chapter_id=49007, expiry=expiry),
+        )
+
+    await browser_page.route(f"{BASE}/**", comicfuz_route)
+    await browser_context.route(
+        "https://api.comic-fuz.com/v1/web_manga_viewer_2**", api_route
+    )
+    catalog = CatalogService(tmp_path / "unavailable-catalog.sqlite")
+    discovery_registry = DiscoveryAdapterRegistry()
+    discovery_registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, discovery_registry)
+    watchlist = None
+    for target in targets:
+        discovered = await discovery.discover(browser_page, target, "full")
+        assert discovered.complete is True
+        watchlist = sync_legacy_unscoped_work(catalog, target)
+    assert watchlist is not None
+
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now
+    )
+    candidates = sorted(plan.candidates, key=lambda candidate: candidate.work_id or 0)
+    assert [candidate.external_id for candidate in candidates] == ["3667:76630", "3152:49007"]
+    attempts = []
+    adapters = AdapterRegistry()
+    adapters.register("comicfuz", ComicFuzAdapter)
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+        library_dir=tmp_path / "unavailable-library",
+        watchlist=watchlist,
+        access_attempt_sink=attempts.append,
+    )
+
+    class Session:
+        async def new_page(self):
+            page = await browser_context.new_page()
+            await page.route(f"{BASE}/**", comicfuz_route)
+            return page
+
+        async def close_page(self, page):
+            await page.close()
+
+    args = cli._parser().parse_args(["batch", "run", "--site", "comicfuz"])
+    args.output_root = tmp_path / "unavailable-output"
+    args.library_dir = tmp_path / "unavailable-library"
+    args.max_pages = 5
+    args.max_same_content = 2
+    args.keep_open = False
+    assert await cli._execute_batch_candidates(
+        args,
+        Session(),
+        executor,
+        candidates,
+        phase="ComicFUZ ticket no-action fixture",
+        inter_candidate_delay_ms=0,
+    ) == (2, True)
+
+    runs = catalog.list_crawl_runs()
+    unavailable_run = next(run for run in runs if run.external_id_snapshot == "3667:76630")
+    successful_run = next(run for run in runs if run.external_id_snapshot == "3152:49007")
+    assert unavailable_run.status == "failed" and unavailable_run.page_count is None
+    assert unavailable_run.stop_reason == "comicfuz_work_ticket_not_attempted"
+    assert unavailable_run.error_type == "ComicFuzTicketNotAttemptedError"
+    assert successful_run.status == "succeeded" and successful_run.page_count == 2
+    assert [observation.status for observation in attempts] == [
+        "not_attempted",
+        "attempting",
+        "confirmed",
+    ]
+    assert len(api_requests) == 1 and api_requests[0] == _ticket_request(49007)
+    assert set(work_page_visits) == {target.url for target in targets}
+    replanned = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="comicfuz", now=now + timedelta(minutes=1)
+    )
+    assert any(candidate.external_id == "3667:76630" for candidate in replanned.candidates)
 
 
 @pytest.mark.parametrize(("extra_tail", "latest_end", "body_count"), [
@@ -554,7 +1000,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     assert catalog.get_item(candidate.item_id).status == "completed"
     assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1
     assert all(entry.item_id != candidate.item_id for entry in replanned.candidates)
-    assert len(plan.candidates) == 1
+    assert sum(candidate.external_id == "1970:80641" for candidate in plan.candidates) == 1
 
 
 @pytest.mark.parametrize("failure", [

@@ -1,6 +1,6 @@
 # ComicFUZ free adapter
 
-## Work Ticket status (2026-11-24; Phase 02 PASS, Phase 03 native research)
+## Work Ticket status (2026-11-24; Phase 02 PASS, Phase 03 synthetic implementation re-review pending)
 
 Discovery now classifies visible row-local `無料` as `free`, recognized visible
 S/G coin/medal marks as `paid`, and a fully hydrated row with a confirmed blank
@@ -9,16 +9,28 @@ marker remains `unknown`. The Site Policy admits only `work_ticket` for quota,
 scoped to one attempt per Work, and uses the next 00:00 JST boundary rather
 than a 23-hour duration. Planner and Executor block unresolved quota attempts
 for every episode in that Work. Normal Batch and explicit grant-only selection
-are covered by synthetic tests, but the site-local charge entry/controller is
-not implemented yet; quota acquisition is not operational until Phase 03.
-Premium Ticket, coins, medals, and paid actions remain unsupported. No Catalog
-schema change was made. Phase 02 live listing work 3667 matched between a
-logged-in context and an isolated anonymous context (25 rows: free 1, paid 1,
-quota 23); no ticket or viewer action occurred. See
+are implemented for normal Batch and grant-only through a site-local,
+same-Page controller. A quota attempt validates the one Catalog-selected row,
+clicks only the exact visible `チャージで読む` control once, and decodes the
+matching `/v1/web_manga_viewer_2` request/response pair. Normal Batch continues
+through the existing viewer/capture/END path; grant-only stops before source
+image observation, image read/save, ZIP, Artifact, or Completed status. Premium
+Ticket, coins, medals, and paid actions remain unsupported. No Catalog schema
+change was made. Phase 02 live listing work 3667 matched between a logged-in
+context and an isolated anonymous context (25 rows: free 1, paid 1, quota 23);
+no ticket was used. A later canonical free-viewer probe confirmed the native
+React fields used for the controller's pre/post state, also without a ticket.
+See
 [`runbooks/comicfuz-work-ticket/PROGRESS.md`](../../../../runbooks/comicfuz-work-ticket/PROGRESS.md)
 for gates, test results, and remaining native consumption/expiry evidence. Gate
-02 passed independent review with BLOCKING=0. Phase 03 remains in read-only
-native-contract research until synthetic tests and review approve any live click.
+02 passed independent review with BLOCKING=0. The Phase 03 synthetic targeted
+suite passes, and independent Gate03 review is pending before any live charge
+click. Review-fix synthetic coverage also verifies a capped/timed native response
+read, rejection of noncanonical requests before forwarding, terminal abort of
+in-flight and later ticket requests after cancellation, and a typed no-action
+skip that replans from one unavailable Work to another eligible Work. Ticket
+consumption is first committed without a grant expiry; an observed expiry is
+attached only after fresh final-time validation. No live charge has been clicked.
 
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 
@@ -52,7 +64,7 @@ When the current page image is associated with a ComicFUZ viewer-delivered blob 
 
 Viewer image response observation is limited to 16 entries, with a 2-second read deadline and 4 MiB `Content-Length` and post-read caps. Playwright `Response.body()` buffers before returning, so the post-read cap cannot limit memory already allocated by Playwright; the header cap and deadline are the available safeguards. Failed, timed-out, duplicate, END, error, and page-close reads are canceled or cleared. The first-party projection omits signed image URLs, so same-dimension descriptor substitution cannot be independently ruled out through a descriptor-to-blob URL hash comparison; native index, role, title, dimensions, current image binding, and geometry are still checked. The site-local AccessProfile observes the public site, `api.comic-fuz.com`, and the observed image host for existing AccessGuard policy; no charge/resource API is called by the adapter.
 
-The adapter is registered for manual `crawl` and normal Batch. At the Phase 02 checkpoint, Site Policy can select `free` direct candidates and `quota` candidates for `work_ticket`; paid, owned, unknown and unavailable states are skipped. The normal and grant-only CLI resource-selection paths exist generically, but ComicFUZ's site-local quota entry/controller is not implemented until Phase 03. Do not treat policy selection as proof that ticket acquisition is operational. Manual crawl requires `COMICFUZ_WORK_URL`. Batch reads that value when supplied and otherwise derives the canonical same-work listing URL from the validated composite Catalog identity; a supplied URL must match that work. In either path the adapter's established free route still validates the listing and exact free row before opening the requested viewer. Normal Catalog planning retains Discovery's global `display_position` as the archive prefix, and standard Batch owns ZIP/Artifact/Completed lifecycle without site-specific Core changes.
+The adapter is registered for manual `crawl` and normal Batch. Site Policy can select `free` direct candidates and `quota` candidates for `work_ticket`; paid, owned, unknown and unavailable states are skipped. Normal and grant-only both use the ComicFUZ site-local quota entry/controller. Manual crawl requires `COMICFUZ_WORK_URL`. Batch reads that value when supplied and otherwise derives the canonical same-work listing URL from the validated composite Catalog identity; a supplied URL must match that work. Existing free/direct access retains its complete-listing and exact-free-row preflight. Quota entry instead visits the one selected work page, verifies the exact target row and modal, and makes its single charge attempt; it does not scan other chapters or do another full Discovery pass. An observed active source grant goes directly to the canonical viewer route. Normal Catalog planning retains Discovery's global `display_position` as the archive prefix, and standard Batch owns ZIP/Artifact/Completed lifecycle without site-specific Core changes.
 
 The adapter uses the existing shared Playwright page/CDP session and does not launch Chrome or modify shared Core. Any route change before the verified END fails closed; the adapter does not accept `NEXT_CONTENT`. Focused synthetic browser tests cover the body-plus-linked-extra mixed spread, role variants rejected before output, preflight denial in logged-in and anonymous sessions, delayed first-party manifest attachment and old-image transitions, restore/rewind, work/episode/title drift, unknown tail, `max_pages`, partial spreads, source read deadlines/caps, CSS visual effects, byte preservation, native PNG fallback, and mutation during capture. During initialization only, initial stability and rewind waits may also defer a temporary loss after the first manifest read, within their existing deadlines. Every poll rechecks route and work/chapter/title metadata; a missing manifest resets stability and skips image processing. The original manifest stays bound and must match exactly when it returns. Permanent loss times out and changed data fails immediately. After initialization, detect/capture still reject disappearance; this is not a general cached-manifest capture path.
 

@@ -67,7 +67,7 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
-## Work Ticket current status (2026-11-24; Phase 02 PASS, Phase 03 native research)
+## Work Ticket current status (2026-11-24; Phase 02 PASS, Phase 03 synthetic implementation re-review pending)
 
 Discovery recognizes an exact visible row-local `無料` marker as `free`, a
 single visible price slot containing the observed public gold/silver icon alt
@@ -81,10 +81,13 @@ scope and a one-candidate-per-Work limit, and computes retry at the next
 00:00 JST boundary; the generic `work_ticket_cooldown_hours` value is ignored.
 Free remains direct. A source-level active episode grant is also direct and
 non-consuming, independently of the Work daily reset; a grant expiring exactly
-at the current time is not active. Normal Batch and explicit grant-only candidate selection
-are policy/planner features under test, but the ComicFUZ ticket-entry adapter
-is not implemented until Phase 03, so quota acquisition is not yet operational.
-Premium Ticket, coin, medal, and paid paths remain unsupported.
+at the current time is not active. Normal Batch and explicit grant-only both
+have a site-local quota entry path in the current Phase 03 branch. Quota entry
+uses the one Catalog-selected chapter's regular work page, exact row selection,
+and its single visible `チャージで読む` modal action. It does not rerun full-list
+Discovery, inspect another episode, or invent a ticket deep link. A confirmed
+grant is read directly on the canonical viewer route. Premium Ticket, coin,
+medal, and paid paths remain unsupported.
 
 Shared Planner and Executor use an opt-in, site-neutral unresolved-quota-history
 hook. Markerless or malformed quota attempts block another episode in the same
@@ -93,11 +96,64 @@ candidate/source/work/target binding writes a versioned confirmation marker to
 the existing CrawlRun `stop_reason`; a later capture failure remains resolved.
 This avoids a new Catalog table/schema migration. Retry timestamps in inventory
 are shown only while strictly in the future. Phase 02 tests and live evidence
-passed independent review with BLOCKING=0; verification is in
-`runbooks/comicfuz-work-ticket/PROGRESS.md`. Phase 03 is limited to native
-contract research until its synthetic/reviewer gate passes. Positive native
-consumption response, server consumed timestamp and grant expiry are still
-unverified; no charge control has been activated.
+passed independent review with BLOCKING=0. Phase 03 implements a bounded
+same-Page controller and synthetic normal/grant-only paths; independent Gate03
+re-review is pending. No live charge control has been activated.
+
+The public first-party client binds `/v1/web_manga_viewer_2` to
+`WebMangaViewer2Request` and `WebMangaViewer2Response`; the similarly named
+legacy `/v1/manga_viewer` message is not the endpoint contract. Request fields
+are deviceInfo=1, useTicket=2, consumePoint=3, chapterId=4, and
+chapterArgument=5. Ticket requests require exact chapter/work identity,
+BROWSER device, an explicit true `useTicket`, and zero free/paid points.
+Response fields include viewerData=2, chapter groups=5, manga=11, and current
+chapterId=12. Manga fields 1/12/13/18 carry mangaId/isTicketAvailable/
+isChargeNeeded/chargeStatus; Chapter fields 1/5/10 carry chapterId/
+pointConsumption/endOfRentalPeriod. The viewer's bound client decodes that
+response and supplies the resulting `E.data` as
+`webMangaViewerData` to the same component.
+The sanitized public asset names, byte counts, SHA-256 values, binding excerpt,
+and native field map are recorded in
+`runbooks/comicfuz-work-ticket/PROGRESS.md` and the local evidence artifact
+`.tmp/comicfuz-work-ticket/evidence/public-bundle-provenance.json`.
+
+The controller records consumption only after the exact same-Page main-frame
+ticket request returns HTTP 200 on the same JST date and its exact native
+response positively shows ticket availability true→false, charge-needed true,
+and the precise `0時に回復!` recovery text for the same work/chapter. The
+request start time is the observed `consumed_at`; no server consumed timestamp
+was found. A future aware expiry is stored only if the response and fresh React
+projection agree. If consumption is proven but route/readiness/expiry later
+fails, the consumed resource is retained with unknown expiry and cannot be
+retried. Missing or ambiguous response proof remains an unknown work attempt.
+No fixed 72-hour expiry is used.
+
+The endpoint route is limited to the known API host/path and rejects noncanonical
+scheme, port, credentials, query, fragment, path, or method before forwarding.
+The bounded response read validates declared Content-Length and uses the
+remaining action deadline, with a two-megabyte post-read cap. Once the operation
+is terminal, both in-flight handlers and later same-Page ticket POSTs abort
+before forwarding. A typed no-action before the ticket click remains eligible
+for Batch replanning; its strict CrawlRun evidence accepts the executor's
+pre-initialization `page_count=None` or exact zero pages. `configure_run()`
+resets the previous entry proof while retaining the new target identity,
+existing-grant context and observers. Fresh expiry is checked again immediately
+before grant commit; if it expired while waiting for viewer state, consumption
+remains confirmed with expiry absent.
+
+A bounded free-viewer probe on work 3667/chapter 76561, using canonical viewer
+URL without a ticket query, observed `webMangaViewerData.manga` and `.chapters`
+in React props. The generated Manga prototype defaults are
+`isTicketAvailable=false`, `isChargeNeeded=false`, `chargeStatus=""`; Chapter
+`endOfRentalPeriod` has an inherited empty default. `isRead` is not used as an
+access predicate. The default interpretation is restricted to this observed
+generated-message shape; a missing or plain empty object stays unknown. No image
+body or ticket response was read during that probe. Live consume response
+values, server time and a real grant expiry remain unverified. Synthetic review
+fix tests pass, including terminal in-flight cancellation, Work A no-action to
+Work B replan, and normal Batch/grant-only behavior. Verification and the
+Gate03 re-review are tracked in
+`runbooks/comicfuz-work-ticket/PROGRESS.md`.
 
 ## Login-independent public-free access (2026-11-22)
 
@@ -113,11 +169,12 @@ recognized S/G icons in the visible price slot for `paid`, and only a fully
 hydrated, identity-joined row with a genuinely empty price/access region for
 `quota`. Incomplete, hidden, conflicting or unfamiliar markers remain
 `unknown`; login, account rights, rentals, stock and balances never independently
-prove access. The existing capture adapter still validates the complete
-same-work listing and exact target free row before reader navigation, then
-binds the native episode/title/page-role and visual-safety proofs. Its
-site-local quota entry path remains deferred to Phase 03. No login/logout,
-Premium Ticket, coin, medal or paid operation is added.
+prove access. The existing direct/free capture adapter still validates the
+complete same-work listing and exact target free row before reader navigation,
+then binds native episode/title/page-role and visual-safety proofs. The separate
+quota entry path validates only its selected exact target row and modal before
+the one ticket action. No login/logout, Premium Ticket, coin, medal or paid
+operation is added.
 
 Live verification used the shared browser over CDP and a dedicated Page with an
 isolated Catalog under `.tmp/comicfuz-login-20261122/`. The old code reproduced
@@ -462,7 +519,7 @@ The currently served public list is newest-first. After validating the whole lis
 
 Phase 01 live evidence on 2026-10-12 confirmed an anonymous `/account/signin` header, canonical work 1970, 34 unique hydrated chapter IDs and exact ordered DOM-label joins, four exact row-local public-free markers, and no pagination/expand control in the observed listing. The current-public-list completeness and reverse native order were accepted by independent review (BLOCKING=0) and Lead. The seed evidence is in the sanitized runbook report; no image bytes, signed URLs, screenshot, or comic content is retained.
 
-Synthetic unit and browser-backed Catalog tests cover URL validation, hydration parsing, visible positive-free/unknown classification in logged-in and anonymous sessions, full and bounded positions, incremental known-streak behavior, hidden or duplicate free markers, delayed route/canonical drift, account-header hydration without failure, access refresh to unknown with expiry clearing, completed Artifact preservation, incomplete-full availability preservation, and rerun stability. The Phase 02 live isolated Catalog/Watchlist run and independent review are recorded in the progress ledger. Charge, ticket, and medal mechanics are explicitly deferred.
+Synthetic unit and browser-backed Catalog tests cover URL validation, hydration parsing, visible positive-free/unknown classification in logged-in and anonymous sessions, full and bounded positions, incremental known-streak behavior, hidden or duplicate free markers, delayed route/canonical drift, account-header hydration without failure, access refresh to unknown with expiry clearing, completed Artifact preservation, incomplete-full availability preservation, and rerun stability. The Phase 02 live isolated Catalog/Watchlist run and independent review are recorded in the progress ledger. This historical Discovery stage did not test charge, ticket, or medal mechanics; current Work Ticket implementation and gate status are at the top of this note.
 
 ## Phase 03: public-free viewer and manual crawl (original anonymous live run PASS)
 

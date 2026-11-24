@@ -45,6 +45,14 @@ class ComicFuzWorkParts:
     work_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ComicFuzTargetRowObservation:
+    chapter_id: str
+    label: str
+    access_mode: str
+    index: int
+
+
 def _parse_url(url: str, path_pattern: re.Pattern[str]) -> re.Match[str] | None:
     try:
         parsed = urlparse(url)
@@ -294,6 +302,8 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         self,
         page: Page,
         target_parts: ComicFuzWorkParts,
+        *,
+        only_chapter_id: str | None = None,
     ) -> tuple[object, ...]:
         await self._validate_page_identity(page, target_parts)
         listing = page.locator(LIST_SELECTOR)
@@ -314,9 +324,19 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         if not isinstance(page_props, Mapping):
             raise DiscoveryIncompleteError("ComicFUZ first-party work metadata is unavailable")
         chapters = _flatten_chapters(page_props)
+        selected_indices: list[int] | None = None
+        if only_chapter_id is not None:
+            selected_indices = [
+                index for index, (chapter_id, _label) in enumerate(chapters)
+                if chapter_id == only_chapter_id
+            ]
+            if len(selected_indices) != 1:
+                raise DiscoveryIncompleteError(
+                    "ComicFUZ target chapter is missing or duplicated in native listing"
+                )
 
         dom = await listing.evaluate(
-            """container => {
+            """(container, selectedIndex) => {
               const headings = [...container.querySelectorAll('h3[class*="Chapter_chapter__name__"]')];
               const isVisible = (element, stopAt) => {
                 if (!element || element.getClientRects().length === 0) return false;
@@ -355,7 +375,10 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 ];
                 return patterns.some(pattern => pattern.test(token));
               };
-              const rows = headings.map((heading, index) => {
+              const indices = selectedIndex === null
+                ? headings.map((_, index) => index) : [selectedIndex];
+              const rows = indices.map(index => {
+                const heading = headings[index];
                 const detail = heading.parentElement;
                 const row = detail?.parentElement;
                 const classes = row ? [...row.classList] : [];
@@ -431,13 +454,15 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
                 };
               });
               const controls = container.querySelectorAll('button,a[href],[role="button"],input[type="button"],input[type="submit"]').length;
-              return {rows, controls, title: document.title};
-            }"""
+              return {rows, controls, title: document.title, headingCount: headings.length};
+            }""",
+            selected_indices[0] if selected_indices is not None else None,
         )
         if not isinstance(dom, Mapping) or not isinstance(dom.get("rows"), list):
             raise DiscoveryIncompleteError("ComicFUZ chapter rows are unavailable")
         rows = dom["rows"]
-        if not rows or len(rows) != len(chapters):
+        expected_rows = 1 if selected_indices is not None else len(chapters)
+        if not rows or len(rows) != expected_rows or dom.get("headingCount") != len(chapters):
             raise DiscoveryIncompleteError("ComicFUZ hydration and DOM chapter counts differ")
         if dom.get("controls") != 0:
             raise DiscoveryIncompleteError(
@@ -449,8 +474,10 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
 
         normalized_rows: list[tuple[str, str]] = []
         access: list[str] = []
-        for index, (chapter_id, label) in enumerate(chapters):
-            row = rows[index]
+        row_indices = selected_indices if selected_indices is not None else list(range(len(chapters)))
+        for row_offset, index in enumerate(row_indices):
+            chapter_id, label = chapters[index]
+            row = rows[row_offset]
             if not isinstance(row, Mapping):
                 raise DiscoveryIncompleteError("ComicFUZ DOM chapter row is invalid")
             row_label = row.get("label")
@@ -528,6 +555,57 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
             title,
             tuple(normalized_rows),
             tuple(access),
+        )
+
+    async def observe_target_row(
+        self,
+        page: Page,
+        *,
+        work_id: str,
+        chapter_id: str,
+    ) -> ComicFuzTargetRowObservation:
+        """Read only the Catalog-selected row from an already-open work listing."""
+
+        if not re.fullmatch(r"[0-9]+", work_id) or not re.fullmatch(r"[0-9]+", chapter_id):
+            raise DiscoveryIncompleteError("ComicFUZ target identity is malformed")
+        snapshot = await self._snapshot(
+            page,
+            ComicFuzWorkParts(work_id),
+            only_chapter_id=chapter_id,
+        )
+        found_work, _title, rows, access = snapshot
+        if (
+            found_work != work_id
+            or not isinstance(rows, tuple)
+            or len(rows) != 1
+            or not isinstance(access, tuple)
+            or len(access) != 1
+        ):
+            raise DiscoveryIncompleteError("ComicFUZ target row snapshot is incomplete")
+        row_chapter_id, label = rows[0]
+        if row_chapter_id != chapter_id or not isinstance(label, str):
+            raise DiscoveryIncompleteError("ComicFUZ target row identity changed")
+        native_text = await page.locator("#__NEXT_DATA__").text_content()
+        try:
+            native_data = json.loads(native_text or "null")
+        except json.JSONDecodeError as exc:
+            raise DiscoveryIncompleteError("ComicFUZ target native listing is invalid") from exc
+        native_props = native_data.get("props") if isinstance(native_data, Mapping) else None
+        native_page_props = native_props.get("pageProps") if isinstance(native_props, Mapping) else None
+        if not isinstance(native_page_props, Mapping):
+            raise DiscoveryIncompleteError("ComicFUZ target native listing is unavailable")
+        native_chapters = _flatten_chapters(native_page_props)
+        matching_indices = [
+            index for index, (native_id, _native_label) in enumerate(native_chapters)
+            if native_id == chapter_id
+        ]
+        if len(matching_indices) != 1:
+            raise DiscoveryIncompleteError("ComicFUZ target row position is not unique")
+        return ComicFuzTargetRowObservation(
+            chapter_id,
+            label,
+            access[0],
+            matching_indices[0],
         )
 
     def _records_from_snapshot(

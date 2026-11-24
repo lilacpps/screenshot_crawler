@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from PIL import Image
 
 from screenshot_crawler.core.errors import UnknownPageStateError, UnsupportedAccessStrategyError
+from screenshot_crawler.site_adapters.base import AccessConsumption
 from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
 from screenshot_crawler.site_adapters.comicfuz.access import comicfuz_access_profile
 from screenshot_crawler.site_adapters.comicfuz.adapter import _classify_viewer_pages
@@ -93,12 +95,50 @@ async def test_comicfuz_initial_route_requires_same_work_public_listing() -> Non
 
 
 @pytest.mark.asyncio
-async def test_comicfuz_rejects_quota_or_resource_strategies() -> None:
+async def test_comicfuz_accepts_quota_only_for_work_ticket() -> None:
     adapter = ComicFuzAdapter()
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(None, "quota")  # type: ignore[arg-type]
+        await adapter.configure_run(None, "premium_ticket")  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_quota_resource(None, "work_ticket")  # type: ignore[arg-type]
+
+    await adapter.configure_run(None, "quota")  # type: ignore[arg-type]
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(None, "ticket")  # type: ignore[arg-type]
+    await adapter.configure_target_identity("3667:76630", "houkago-basket")
+    await adapter.configure_quota_resource(None, "work_ticket")  # type: ignore[arg-type]
+    assert adapter._quota_resource == "work_ticket"
+
+
+@pytest.mark.asyncio
+async def test_comicfuz_configure_run_resets_ticket_state_and_keeps_candidate_bindings() -> None:
+    adapter = ComicFuzAdapter()
+    await adapter.configure_target_identity("3667:76630", "houkago-basket")
+    grant_until = datetime.now(UTC) + timedelta(hours=1)
+    adapter.configure_existing_access_grant(grant_until)
+    attempt_observer = lambda observation: None
+    grant_observer = lambda grant: None
+    adapter.set_access_attempt_observer(attempt_observer)
+    adapter.set_confirmed_access_grant_observer(grant_observer)
+    adapter._quota_resource = "work_ticket"
+    adapter._ticket_entry = object()  # type: ignore[assignment]
+    adapter._ticket_entry_confirmed = True
+    adapter._access_consumption = AccessConsumption(
+        consumed=True,
+        resource="work_ticket",
+        consumed_at=datetime.now(UTC),
+    )
+
+    await adapter.configure_run(None, "direct")  # type: ignore[arg-type]
+
+    assert adapter._work_id == "3667" and adapter._chapter_id == "76630"
+    assert adapter._existing_access_grant_until == grant_until
+    assert adapter._access_attempt_observer is attempt_observer
+    assert adapter._confirmed_access_grant_observer is grant_observer
+    assert adapter._quota_resource is None
+    assert adapter._ticket_entry is None
+    assert adapter._ticket_entry_confirmed is False
+    assert adapter.get_access_consumption().consumed is False
 
 
 def test_comicfuz_access_profile_includes_first_party_api_host() -> None:

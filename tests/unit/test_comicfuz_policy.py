@@ -276,6 +276,26 @@ def test_comicfuz_quota_history_blocks_unknown_and_resolves_confirmed_failure() 
         "now": datetime(2026, 11, 24, 0, tzinfo=JST),
     }
     assert policy.unresolved_quota_attempt_work_ids([unknown], **args) == frozenset({100})
+    not_attempted = SimpleNamespace(
+        **{
+            **unknown.__dict__,
+            "stop_reason": "comicfuz_work_ticket_not_attempted",
+            "error_type": "ComicFuzTicketNotAttemptedError",
+            "error_message": "pre-click state was positively unavailable",
+            "page_count": 0,
+        }
+    )
+    assert policy.unresolved_quota_attempt_work_ids([not_attempted], **args) == frozenset()
+    no_attempt_without_page_count = SimpleNamespace(
+        **{**not_attempted.__dict__, "page_count": None}
+    )
+    assert policy.unresolved_quota_attempt_work_ids(
+        [no_attempt_without_page_count], **args
+    ) == frozenset()
+    malformed_no_action = SimpleNamespace(
+        **{**not_attempted.__dict__, "stop_reason": "unknown_stop_reason"}
+    )
+    assert policy.unresolved_quota_attempt_work_ids([malformed_no_action], **args) == frozenset({100})
     confirmed_run = SimpleNamespace(
         **{
             **unknown.__dict__,

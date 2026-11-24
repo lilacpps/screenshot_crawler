@@ -10,6 +10,7 @@ import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -25,7 +26,12 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessAttemptObservation,
+    AccessConsumption,
+    ConfirmedAccessGrant,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.comicfuz.access import comicfuz_access_profile
 from screenshot_crawler.site_adapters.comicfuz.discovery import (
     SITE_HOST,
@@ -35,6 +41,15 @@ from screenshot_crawler.site_adapters.comicfuz.discovery import (
 )
 from screenshot_crawler.site_adapters.comicfuz.native_capture import (
     capture_comicfuz_source_bytes,
+)
+from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+    API_HOST,
+    API_PATH,
+    ComicFuzTicketEntry,
+    ComicFuzTicketNotAttemptedError,
+    is_ticket_viewer_url,
+    parse_rental_expiry,
+    read_native_ticket_snapshot,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
@@ -132,6 +147,11 @@ class ComicFuzAdapter(SiteAdapter):
         self._chapter_id: str | None = None
         self._target_url: str | None = None
         self._access_strategy: AccessStrategy = "auto"
+        self._quota_resource: str | None = None
+        self._existing_access_grant_until: datetime | None = None
+        self._ticket_entry: ComicFuzTicketEntry | None = None
+        self._ticket_entry_confirmed = False
+        self._access_consumption = AccessConsumption()
         self._episode_title: str | None = None
         self._expected_episode_title: str | None = None
         self._expected_viewer_title: str | None = None
@@ -161,6 +181,30 @@ class ComicFuzAdapter(SiteAdapter):
         self._bound_page = page
         page.on("response", self._handle_source_response)
         page.on("close", self._on_page_closed)
+
+    async def prepare_entry_only_page(self, page: Page) -> None:
+        """Keep only Page lifecycle tracking; grant-only never reads image bodies."""
+
+        await self._cleanup_source_observer()
+        self._bound_page = page
+        page.on("close", self._on_page_closed)
+
+    def configure_existing_access_grant(
+        self, access_granted_until: datetime | None
+    ) -> None:
+        if (
+            isinstance(access_granted_until, datetime)
+            and access_granted_until.tzinfo is not None
+            and access_granted_until.utcoffset() is not None
+        ):
+            self._existing_access_grant_until = access_granted_until
+        else:
+            self._existing_access_grant_until = None
+
+    def get_access_consumption(self) -> AccessConsumption:
+        if self._ticket_entry is not None and self._ticket_entry.consumption.consumed:
+            return self._ticket_entry.consumption
+        return self._access_consumption
 
     async def _cleanup_source_observer(self) -> None:
         page = self._bound_page
@@ -268,8 +312,184 @@ class ComicFuzAdapter(SiteAdapter):
         self._chapter_id = match.group("chapter")
         self._target_url = f"https://{SITE_HOST}/manga/viewer/{self._chapter_id}"
 
+    async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
+        del page
+        if access_strategy not in {"auto", "direct", "quota"}:
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ supports access_strategy='auto', 'direct', or 'quota'"
+            )
+        self._access_strategy = access_strategy
+        self._quota_resource = None
+        self._ticket_entry = None
+        self._ticket_entry_confirmed = False
+        self._access_consumption = AccessConsumption()
+
+    async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
+        del page
+        if self._access_strategy != "quota":
+            if quota_resource is not None:
+                raise UnsupportedAccessStrategyError(
+                    "ComicFUZ quota resource requires access_strategy='quota'"
+                )
+            return
+        if quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ quota access supports only quota_resource='work_ticket'"
+            )
+        if self._work_id is None or self._chapter_id is None:
+            raise UnknownPageStateError(
+                "ComicFUZ Work Ticket requires a configured Catalog target identity"
+            )
+        if self._ticket_entry is not None:
+            raise UnknownPageStateError("ComicFUZ Work Ticket entry is already configured")
+        self._quota_resource = quota_resource
+        self._ticket_entry = ComicFuzTicketEntry(
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            external_id=f"{self._work_id}:{self._chapter_id}",
+        )
+        self._access_consumption = AccessConsumption()
+
+    def _ticket_not_attempted(self, reason: str) -> None:
+        if self._work_id is None or self._chapter_id is None:
+            raise UnknownPageStateError("ComicFUZ ticket target identity is unavailable")
+        self.report_access_attempt(
+            AccessAttemptObservation(
+                site="comicfuz",
+                external_id=f"{self._work_id}:{self._chapter_id}",
+                resource="work_ticket",
+                resource_kind="work_ticket",
+                status="not_attempted",
+                observed_at=datetime.now(UTC),
+                reason=reason,
+            )
+        )
+        raise ComicFuzTicketNotAttemptedError(reason)
+
+    async def _initialize_work_ticket_entry(self, page: Page) -> str:
+        """Open one Catalog-selected row and confirm exactly its ticket entry."""
+
+        if (
+            self._work_id is None
+            or self._chapter_id is None
+            or self._ticket_entry is None
+            or self._quota_resource != "work_ticket"
+        ):
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ ticket entry requires a configured work_ticket target"
+            )
+        work_parts = parse_comicfuz_work_url(page.url)
+        if work_parts is None or work_parts.work_id != self._work_id:
+            raise UnknownPageStateError("ComicFUZ ticket entry did not start on its work page")
+        row = await ComicFuzDiscoveryAdapter().observe_target_row(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+        )
+        if row.access_mode in {"free", "paid"}:
+            self._ticket_not_attempted(f"target_access_{row.access_mode}")
+        if row.access_mode != "quota":
+            raise UnknownPageStateError("ComicFUZ selected ticket row is not classified")
+
+        native = await read_native_ticket_snapshot(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            page_mode="listing",
+        )
+        if " ".join(native.chapter_label.split()) != row.label:
+            raise UnknownPageStateError("ComicFUZ native target label differs from its listing row")
+        now = datetime.now(UTC)
+        if native.rental_value:
+            if not native.rental_present:
+                raise UnknownPageStateError("ComicFUZ target rental lacks native field presence")
+            expiry = parse_rental_expiry(native.rental_value)
+            if expiry is None:
+                raise UnknownPageStateError("ComicFUZ target rental expiry is unavailable")
+            if expiry > now:
+                self.report_confirmed_access_grant(
+                    ConfirmedAccessGrant(
+                        site="comicfuz",
+                        external_id=f"{self._work_id}:{self._chapter_id}",
+                        observed_at=now,
+                        access_granted_until=expiry,
+                        expiry_evidence="site_absolute_expiry",
+                    )
+                )
+                self._ticket_not_attempted("target_has_active_rental")
+        if not (
+            native.point_type == 0
+            and native.point_amount > 0
+            and native.is_charge_needed_present
+            and native.is_charge_needed
+            and native.is_ticket_available_present
+            and native.is_ticket_available
+            and native.charge_status_present
+            and native.charge_status in {"\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"}
+        ):
+            self._ticket_not_attempted("work_ticket_unavailable")
+
+        heading = page.locator('h3[class*="Chapter_chapter__name__"]').nth(row.index)
+        if (
+            row.index < 0
+            or await page.locator('h3[class*="Chapter_chapter__name__"]').count() <= row.index
+            or not await heading.is_visible()
+            or " ".join((await heading.inner_text()).split()) != row.label
+        ):
+            raise UnknownPageStateError("ComicFUZ selected row position changed before modal open")
+        original_url = page.url
+        blocked_selection_requests: list[bool] = []
+
+        async def block_unexpected_viewer_api(route) -> None:
+            blocked_selection_requests.append(True)
+            await route.abort("blockedbyclient")
+
+        route_pattern = f"https://{API_HOST}{API_PATH}**"
+        await page.route(route_pattern, block_unexpected_viewer_api)
+        try:
+            await heading.click()
+            await page.wait_for_timeout(100)
+        finally:
+            with suppress(Exception):
+                await page.unroute(route_pattern, block_unexpected_viewer_api)
+        if blocked_selection_requests or page.url != original_url:
+            raise UnknownPageStateError(
+                "ComicFUZ row selection changed route or requested the viewer API unexpectedly"
+            )
+        after_modal = await read_native_ticket_snapshot(
+            page,
+            work_id=self._work_id,
+            chapter_id=self._chapter_id,
+            page_mode="listing",
+        )
+        if after_modal != native:
+            raise UnknownPageStateError("ComicFUZ native ticket state changed before the CTA")
+
+        async def click_charge_cta() -> None:
+            cta = page.get_by_text("\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080", exact=True)
+            if await cta.count() != 1 or not await cta.is_visible():
+                raise UnknownPageStateError("ComicFUZ ticket CTA is not a unique visible target")
+            await cta.click()
+
+        try:
+            await self._ticket_entry.enter(
+                page,
+                chapter_label=row.label,
+                native_state=after_modal,
+                row_access_mode=row.access_mode,
+                attempt_reporter=self.report_access_attempt,
+                grant_reporter=self.report_confirmed_access_grant,
+                click=click_charge_cta,
+            )
+        finally:
+            self._access_consumption = self._ticket_entry.consumption
+        self._ticket_entry_confirmed = True
+        self._access_consumption = self._ticket_entry.consumption
+        self._expected_episode_title = row.label
+        return row.label
+
     def resolve_initial_navigation_url(self, source_url: str) -> str:
-        """Route through the same-work public listing before any reader entry."""
+        """Choose the minimum observed entry route for free, grant, or ticket."""
 
         chapter_id = parse_comicfuz_episode_url(source_url)
         if chapter_id is None:
@@ -299,15 +519,15 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "ComicFUZ source URL is not the exact configured viewer route"
             )
+        if self._access_strategy == "quota":
+            return work_url
+        if (
+            self._access_strategy == "direct"
+            and self._existing_access_grant_until is not None
+            and self._existing_access_grant_until > datetime.now(UTC)
+        ):
+            return self._target_url
         return work_url
-
-    async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
-        if access_strategy not in {"auto", "direct"}:
-            raise UnsupportedAccessStrategyError(
-                "ComicFUZ public-free crawl supports access_strategy='auto' or 'direct' only"
-            )
-        self._access_strategy = access_strategy
 
     @_cleanup_observer_on_failure
     async def initialize(self, page: Page) -> None:
@@ -329,35 +549,72 @@ class ComicFuzAdapter(SiteAdapter):
         self._initialized = False
 
         work_url = self._preflight_work_url or f"https://{SITE_HOST}/manga/{self._work_id}"
-        target = WatchlistTarget(
-            key=f"comicfuz-preflight-{self._work_id}",
-            work_key=f"comicfuz:{self._work_id}",
-            site="comicfuz",
-            url=work_url,
-            label=f"ComicFUZ {self._work_id}",
-        )
-        records = [
-            record async for record in ComicFuzDiscoveryAdapter().iter_records(page, target, "full")
-        ]
-        matches = [
-            record
-            for record in records
-            if record.source.external_id == f"{self._work_id}:{self._chapter_id}"
-        ]
-        if len(matches) != 1 or matches[0].source.access_mode != "free":
-            raise UnknownPageStateError(
-                "ComicFUZ target episode lacks exact current public-free listing evidence"
+        if self._access_strategy == "quota":
+            expected_episode_title = await self._initialize_work_ticket_entry(page)
+        elif (
+            self._access_strategy == "direct"
+            and self._existing_access_grant_until is not None
+            and self._existing_access_grant_until > datetime.now(UTC)
+        ):
+            if page.url != self._target_url:
+                raise UnknownPageStateError("ComicFUZ existing grant did not open its canonical viewer")
+            native = await read_native_ticket_snapshot(
+                page,
+                work_id=self._work_id,
+                chapter_id=self._chapter_id,
+                page_mode="viewer",
             )
-        if matches[0].source.url != self._target_url:
-            raise UnknownPageStateError(
-                "ComicFUZ free-list target route did not match the reader URL"
+            expiry = parse_rental_expiry(native.rental_value)
+            now = datetime.now(UTC)
+            if (
+                not native.rental_present
+                or expiry is None
+                or expiry <= now
+                or native.chapter_label.strip() == ""
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ existing direct grant is not confirmed by the live target viewer"
+                )
+            self.report_confirmed_access_grant(
+                ConfirmedAccessGrant(
+                    site="comicfuz",
+                    external_id=f"{self._work_id}:{self._chapter_id}",
+                    observed_at=now,
+                    access_granted_until=expiry,
+                    expiry_evidence="site_absolute_expiry",
+                )
             )
-        expected_episode_title = matches[0].item.order_label
-        if not isinstance(expected_episode_title, str) or not expected_episode_title.strip():
-            raise UnknownPageStateError("ComicFUZ preflight episode label is unavailable")
+            expected_episode_title = native.chapter_label
+        else:
+            target = WatchlistTarget(
+                key=f"comicfuz-preflight-{self._work_id}",
+                work_key=f"comicfuz:{self._work_id}",
+                site="comicfuz",
+                url=work_url,
+                label=f"ComicFUZ {self._work_id}",
+            )
+            records = [
+                record
+                async for record in ComicFuzDiscoveryAdapter().iter_records(page, target, "full")
+            ]
+            matches = [
+                record
+                for record in records
+                if record.source.external_id == f"{self._work_id}:{self._chapter_id}"
+            ]
+            if len(matches) != 1 or matches[0].source.access_mode != "free":
+                raise UnknownPageStateError(
+                    "ComicFUZ target episode lacks exact current public-free listing evidence"
+                )
+            if matches[0].source.url != self._target_url:
+                raise UnknownPageStateError(
+                    "ComicFUZ free-list target route did not match the reader URL"
+                )
+            expected_episode_title = matches[0].item.order_label
+            if not isinstance(expected_episode_title, str) or not expected_episode_title.strip():
+                raise UnknownPageStateError("ComicFUZ preflight episode label is unavailable")
+            await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
         self._expected_episode_title = expected_episode_title
-
-        await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
         manifest_deadline = (
             asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         )
@@ -382,6 +639,15 @@ class ComicFuzAdapter(SiteAdapter):
                 "ComicFUZ reader title does not match its freshly verified listing row"
             )
         self._initialized = True
+
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Confirm a ticket entry without invoking the image response observer."""
+
+        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "ComicFUZ grant-only entry requires quota/work_ticket"
+            )
+        await self._initialize_work_ticket_entry(page)
 
     def get_output_metadata(self) -> dict[str, str | None]:
         return {
@@ -961,15 +1227,23 @@ class ComicFuzAdapter(SiteAdapter):
             parsed = urlparse(page.url)
         except ValueError:
             return False
-        return (
+        canonical_route = (
             parsed.scheme.lower() == "https"
             and parsed.hostname == SITE_HOST
             and parsed.port is None
             and parsed.username is None
             and parsed.password is None
             and parsed.path == f"/manga/viewer/{self._chapter_id}"
-            and not parsed.query
             and not parsed.fragment
+        )
+        if not canonical_route:
+            return False
+        if not parsed.query:
+            return True
+        return (
+            self._ticket_entry_confirmed
+            and self._quota_resource == "work_ticket"
+            and is_ticket_viewer_url(page.url, chapter_id=str(self._chapter_id))
         )
 
     async def _read_episode_title(self, page: Page) -> str | None:

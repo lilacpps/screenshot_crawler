@@ -115,6 +115,20 @@ class ComicFuzSitePolicy(SitePolicy):
                 continue
 
             marker = _parse_consumption_marker(getattr(run, "stop_reason", None))
+            if (
+                getattr(run, "status", None) == "failed"
+                and getattr(run, "error_type", None) == "ComicFuzTicketNotAttemptedError"
+                and getattr(run, "stop_reason", None) == "comicfuz_work_ticket_not_attempted"
+                and (
+                    getattr(run, "page_count", None) is None
+                    or (
+                        type(getattr(run, "page_count", None)) is int
+                        and getattr(run, "page_count", None) == 0
+                    )
+                )
+                and getattr(run, "error_message", None)
+            ):
+                continue
             if not isinstance(marker, datetime) or not started <= marker <= finished:
                 blocked.add(work_id)
                 continue
