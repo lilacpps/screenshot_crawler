@@ -47,6 +47,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     API_PATH,
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
+    find_ticket_modal_cta,
     is_ticket_viewer_url,
     parse_rental_expiry,
     read_native_ticket_snapshot,
@@ -472,9 +473,7 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError("ComicFUZ native ticket state changed before the CTA")
 
         async def click_charge_cta() -> None:
-            cta = page.get_by_text("\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080", exact=True)
-            if await cta.count() != 1 or not await cta.is_visible():
-                raise UnknownPageStateError("ComicFUZ ticket CTA is not a unique visible target")
+            cta = await find_ticket_modal_cta(page, chapter_label=row.label)
             await cta.click()
 
         try:

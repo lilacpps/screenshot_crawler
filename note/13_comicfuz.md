@@ -123,9 +123,32 @@ review reports BLOCKING=0. The isolated attempt left one failed pre-action
 `DiscoveryIncompleteError` CrawlRun in `%TEMP%/cfzgt1/catalog.sqlite`; its item
 is pending and source/resource/grant/artifact state is empty. Preserve this
 run and keep work 3667 quarantined; do not retry it. The attempt consumed zero
-tickets, but no real post-consumption state or expiry has been verified. The
-next live operation requires a new Lead instruction and a different allowed
-work in the same isolated Catalog.
+tickets. A later Work 3152 grant-only attempt ended with the typed
+`target_ticket_modal_not_exact` no-action sentinel and no persisted consumption;
+its viewer endpoint POST/200 flags were not captured, so that event is not
+classified as a ticket request. A separate one-navigation, one-row-selection
+probe observed the exact native available state and modal without clicking the
+CTA. See the current Phase 04 evidence below; any next live action requires a
+separate Lead instruction.
+
+Current Phase 04 modal scope is based on the observed visible
+`div[class*="Dialog_modal__"]` root. The target title is a unique exact
+`p[class*="Dialog_chapter__mainText__"]`; the CTA is a unique exact visible
+anchor inside that root. The unique ticket amount is a direct-text `1` in
+`p[class*="Dialog_items__amount__"]`; visible unknown/extra price markers,
+other access controls, duplicate title/dialog/amount, or disabled CTA fail
+closed. The root contains the target title, CTA, price, Cancel, app, and comments
+controls while the parent body wrapper also contains the same-label background
+chapter `h3`. Read validation, trusted-click arming, and final CTA locator use
+this same modal scope and visible-state contract. Native consumption proof,
+zero-point request validation, route guard, and one-click latch were unchanged.
+The public `5061` asset (32,022 bytes, SHA-256
+`81b37aa63715952b699341c36226472198b088ed7613a14c2bc8fb07395d267c`) was
+fetched without credentials or referrer and its bounded excerpt records the
+Dialog control CSS mapping, not a saved Dialog JSX caller. Real post-consumption
+request flags and grant expiry remain unverified. The isolated 3152 attempt and
+modal probe each observed an endpoint POST/200 event with flags unrecorded; do
+not interpret those events as a ticket charge or claim endpoint HTTP count zero.
 
 The public first-party client binds `/v1/web_manga_viewer_2` to
 `WebMangaViewer2Request` and `WebMangaViewer2Response`; the similarly named
@@ -598,3 +621,17 @@ At the original Phase 04 checkpoint on `main`, `ComicFuzSitePolicy` admitted onl
 The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses Catalog position and provisional archive numbering; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original public-free Phase 04 did not change shared Core or Catalog schema; shared Catalog v7 now automatically reflects acquisition scope through Discovery, without a mandatory sync gate. Charge/ticket/medal handling was deferred by that historical free-only phase; current Work Ticket support is described at the start of this note.
 
 Synthetic policy/planner and browser-backed Batch integration cover the allowed/rejected access states, direct-only resource contract, global display-position prefixes, Discovery-to-Catalog-to-Plan-to-Runner-to-ZIP completion, rediscovery/replan retention of the completed artifact, loss of free proof before reader entry, route drift, unknown END, and packaging failure. Failed Batch attempts leave the Item pending with a failed CrawlRun and no Artifact. Reviewer selected 20 tests and reported 20 passed, 0 skipped, BLOCKING=0. Phase 05 isolated E2E is complete; the final overall Reviewer gate passed with BLOCKING=0 and the Lead accepted Phases 01-05. The original implementation commit `4b64a3c` is now included in `main`.
+
+
+Phase 04 modal diagnostic on Work 3152 / chapter 46873: one Page navigation and
+one target-row selection, zero CTA/other-control clicks. Native ticket state was
+available before and unchanged after selection; `rental_value=""` with
+`rental_present=false` is the observed strict generated-prototype empty default,
+not unknown. The modal had an exact enabled CTA, a target title `p`, one price
+`p.Dialog_items__amount__*` with direct text `1`, and exactly the known app,
+comments, and Cancel controls. The production helper's old count of 29 came
+from the page-level ancestor that included background links; the new root
+`Dialog_modal` isolates it. Sanitized evidence is in
+`runbooks/comicfuz-work-ticket/PROGRESS.md` and the linked metadata artifact.
+No real ticket has been consumed, and the one viewer POST/200 event's request
+flags are unknown.

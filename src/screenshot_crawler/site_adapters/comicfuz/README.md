@@ -60,10 +60,18 @@ noncanonical requests before forwarding, terminal abort of in-flight and later
 ticket requests after cancellation, and a typed no-action skip that replans
 from one unavailable Work to another eligible Work. Ticket consumption is
 first committed without a grant expiry; an observed expiry is attached only
-after fresh final-time validation. The isolated CLI attempt stopped before the
-charge control, so no real ticket was consumed. Do not retry work 3667; wait
-for a new Lead instruction before the next isolated live operation. Actual
-consume response values and real grant expiry remain unverified.
+after fresh final-time validation. The isolated 3667 attempt remains quarantined. A later Work 3152 CLI attempt
+ended with the typed `target_ticket_modal_not_exact` no-action sentinel and no
+persisted consumption. A bounded non-consuming probe observed the exact
+`Dialog_modal` root and target `p` title; the read validator, trusted-click
+arming, and final CTA locator now share that scope and visible-state contract.
+Endpoint POST/200 events were observed, but request flags were not saved and
+they are not proof of consumption. Independent modal review covered 13
+synthetic cases plus 3 Batch E2E cases (16 passed, 0 skipped), BLOCKING=0; the
+controller browser file had 53 passed, and the Batch E2E selection had 3 passed.
+Scoped Ruff, `git diff --check`, and `compileall` passed. No real ticket has been
+used. Do not run another live action without a separate Lead instruction. Actual
+post-consumption response values and grant expiry remain unverified.
 
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 

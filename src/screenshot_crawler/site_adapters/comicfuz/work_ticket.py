@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlparse
 
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Locator, Page
 
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, UnknownPageStateError
@@ -991,47 +991,101 @@ async def read_work_ticket_badge(page: Page) -> dict[str, object]:
     return value
 
 
+_TICKET_MODAL_INSPECTOR = r"""({chapterLabel, chargeLabel, cancelLabel, appLabel, commentsLabel}) => {
+  const visible=element=>{
+    if(!element||!element.getClientRects().length)return false;
+    for(let node=element;node;node=node.parentElement){
+      const style=getComputedStyle(node);
+      if(node.hidden||style.display==='none'||style.visibility==='hidden'
+        ||style.visibility==='collapse'||Number(style.opacity)===0)return false;
+    }
+    return true;
+  };
+  const norm=value=>String(value||'').trim().replace(/\s+/g,' ');
+  const classNames=element=>typeof element.className==='string'
+    ?element.className.split(/\s+/).filter(Boolean):[];
+  const hasClassPrefix=(element,prefix)=>classNames(element).some(name=>name.startsWith(prefix));
+  const exactLeaves=(root,label)=>[...root.querySelectorAll('*')].filter(element=>
+    visible(element)&&norm(element.innerText)===label
+      &&![...element.children].some(child=>norm(child.innerText)===label));
+  const dialogRoots=[...document.querySelectorAll('div[class*="Dialog_modal__"]')]
+    .filter(visible);
+  const modal=dialogRoots.length===1?dialogRoots[0]:null;
+  const globalExactCtas=exactLeaves(document,chargeLabel);
+  const globalCtas=globalExactCtas.filter(element=>element.tagName==='A'
+    &&hasClassPrefix(element,'Dialog_buttons__active__'));
+  const modalCtas=modal?globalCtas.filter(element=>modal.contains(element)):[];
+  const cta=modalCtas.length===1?modalCtas[0]:null;
+  const titles=modal?[...modal.querySelectorAll('p[class*="Dialog_chapter__mainText__"]')]
+    .filter(visible):[];
+  const chapterTitleMatch=titles.length===1&&norm(titles[0].innerText)===chapterLabel;
+  const cancels=modal?exactLeaves(modal,cancelLabel):[];
+  const ones=modal?exactLeaves(modal,'1'):[];
+  const amountNodes=modal?[...modal.querySelectorAll('p[class*="Dialog_items__amount__"]')]
+    .filter(visible):[];
+  const itemClasses=element=>classNames(element)
+    .filter(name=>name.startsWith('Dialog_items__'));
+  const unknownPriceMarkers=modal?[...modal.querySelectorAll('[class*="Dialog_items__"]')]
+    .filter(element=>{
+      if(!visible(element))return false;
+      return itemClasses(element).some(name=>{
+        const knownSemantic=name.startsWith('Dialog_items__item__')
+          ||name.startsWith('Dialog_items__amount__')||name.startsWith('Dialog_items__icon__');
+        const generatedRoot=!name.slice('Dialog_items__'.length).includes('__');
+        return !knownSemantic&&!generatedRoot;
+      });
+    }):[];
+  const directText=element=>[...element.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE)
+    .map(node=>node.textContent||'').join('').trim();
+  const ticketCountOne=amountNodes.length===1&&amountNodes[0].tagName==='P'
+    &&directText(amountNodes[0])==='1'&&norm(amountNodes[0].innerText)==='1'
+    &&ones.length===1&&ones[0]===amountNodes[0]
+    &&unknownPriceMarkers.length===0;
+  const controls=modal?[...modal.querySelectorAll('a,button,[role="button"]')]
+    .filter(visible):[];
+  const countLabel=label=>controls.filter(element=>norm(element.innerText)===label).length;
+  const appControls=controls.filter(element=>norm(element.innerText)===appLabel);
+  const commentsControls=controls.filter(element=>norm(element.innerText)===commentsLabel);
+  const cancelControls=controls.filter(element=>norm(element.innerText)===cancelLabel);
+  const allowedControls={app:countLabel(appLabel),comments:countLabel(commentsLabel),cancel:countLabel(cancelLabel)};
+  const allowedControlShapes={
+    app:appControls.length===1&&appControls[0].tagName==='BUTTON'
+      &&hasClassPrefix(appControls[0],'Dialog_appflow__button__'),
+    comments:commentsControls.length===1&&commentsControls[0].tagName==='A'
+      &&hasClassPrefix(commentsControls[0],'Dialog_buttons__active__'),
+    cancel:cancelControls.length===1&&cancelControls[0].tagName==='A'
+      &&hasClassPrefix(cancelControls[0],'Dialog_buttons__cancel__')
+  };
+  const otherAccess=controls.filter(element=>element!==cta
+    &&![appLabel,commentsLabel,cancelLabel].includes(norm(element.innerText)));
+  const disabled=!cta||!!cta.disabled||cta.getAttribute('aria-disabled')==='true'
+    ||!!cta.closest('button[disabled],[aria-disabled="true"]');
+  const exact=dialogRoots.length===1&&globalExactCtas.length===1&&globalCtas.length===1&&modalCtas.length===1
+    &&chapterTitleMatch&&cancels.length===1&&ticketCountOne
+    &&allowedControls.app===1&&allowedControls.comments===1&&allowedControls.cancel===1
+    &&allowedControlShapes.app&&allowedControlShapes.comments&&allowedControlShapes.cancel
+    &&otherAccess.length===0&&!disabled;
+  return {dialogRootCount:dialogRoots.length,modal:!!modal,modalRoot:modal,cta,
+    globalCtaCount:globalExactCtas.length,
+    ctaCount:modalCtas.length,chapterTitleCount:titles.length,chapterTitleMatch,
+    cancelCount:cancels.length,priceAmountCount:amountNodes.length,
+    unknownPriceMarkerCount:unknownPriceMarkers.length,
+    priceDirectTextOne:amountNodes.length===1&&directText(amountNodes[0])==='1',
+    ticketCountOne,allowedControls,allowedControlShapes,
+    otherAccessCount:otherAccess.length,disabled,ctaText:cta?norm(cta.innerText):'',
+    tag:cta?cta.tagName:'',exact};
+}"""
+
+
 async def read_ticket_modal(page: Page, *, chapter_label: str) -> dict[str, object]:
     """Require one visible target-bound Work Ticket modal action before attempt."""
 
+    script = (
+        f"args => {{const result=({_TICKET_MODAL_INSPECTOR})(args);"
+        "const {modalRoot,cta,...safe}=result;return safe;}"
+    )
     value = await page.evaluate(
-        r"""({chapterLabel, chargeLabel, cancelLabel, appLabel, commentsLabel}) => {
-          const visible = element => {
-            if (!element || !element.getClientRects().length) return false;
-            for(let node=element;node;node=node.parentElement){
-              const style=getComputedStyle(node);
-              if(node.hidden||style.display==='none'||style.visibility==='hidden'
-                ||style.visibility==='collapse'||Number(style.opacity)===0)return false;
-            }
-            return true;
-          };
-          const norm=value=>String(value||'').trim().replace(/\s+/g,' ');
-          const exact=[...document.querySelectorAll('*')]
-            .filter(element=>visible(element)&&norm(element.innerText)===chargeLabel);
-          const ctas=exact.filter(element=>![...element.children]
-            .some(child=>norm(child.innerText)===chargeLabel));
-          if(ctas.length!==1)return {ctaCount:ctas.length};
-          const cta=ctas[0];
-          let modal=null;
-          for(let node=cta,depth=0;node&&depth<10;node=node.parentElement,depth++){
-            const text=norm(node.innerText);
-            const headings=[...node.querySelectorAll('h1,h2,h3,h4')]
-              .filter(visible).map(element=>norm(element.innerText));
-            if(headings.includes(chapterLabel)&&text.includes(cancelLabel)){modal=node;break;}
-          }
-          if(!modal)return {ctaCount:1,modal:false};
-          const leafOne=[...modal.querySelectorAll('*')].filter(element=>
-            visible(element)&&element.children.length===0&&norm(element.innerText)==='1').length;
-          const otherAccess=[...modal.querySelectorAll('a,button,[role="button"]')].filter(element=>
-            visible(element)&&!element.contains(cta)&&!cta.contains(element)
-              &&![appLabel,commentsLabel,cancelLabel]
-              .includes(norm(element.innerText)));
-          return {ctaCount:1,modal:true,tag:cta.tagName,chapterTitleMatch:true,
-            ticketCountOne:leafOne===1,otherAccessCount:otherAccess.length,
-            disabled:!!cta.disabled||cta.getAttribute('aria-disabled')==='true'
-              ||!!cta.closest('button[disabled],[aria-disabled="true"]'),
-            ctaText:norm(cta.innerText)};
-        }""",
+        script,
         {
             "chapterLabel": chapter_label,
             "chargeLabel": TICKET_CTA_LABEL,
@@ -1043,6 +1097,49 @@ async def read_ticket_modal(page: Page, *, chapter_label: str) -> dict[str, obje
     if not isinstance(value, dict):
         raise UnknownPageStateError("ComicFUZ ticket modal could not be read")
     return value
+
+
+async def find_ticket_modal_cta(page: Page, *, chapter_label: str) -> Locator:
+    """Resolve the exact CTA from the same unique visible modal contract."""
+
+    state = await read_ticket_modal(page, chapter_label=chapter_label)
+    if state.get("exact") is not True:
+        raise UnknownPageStateError("ComicFUZ ticket modal is not exact before CTA selection")
+
+    async def is_dom_visible(locator: Locator) -> bool:
+        return await locator.evaluate(
+            """element => {
+              if(!element||!element.getClientRects().length)return false;
+              for(let node=element;node;node=node.parentElement){
+                const style=getComputedStyle(node);
+                if(node.hidden||style.display==='none'||style.visibility==='hidden'
+                  ||style.visibility==='collapse'||Number(style.opacity)===0)return false;
+              }
+              return true;
+            }"""
+        )
+
+    roots = page.locator('div[class*="Dialog_modal__"]')
+    visible_roots = []
+    for index in range(await roots.count()):
+        candidate = roots.nth(index)
+        if await is_dom_visible(candidate):
+            visible_roots.append(candidate)
+    if len(visible_roots) != 1:
+        raise UnknownPageStateError("ComicFUZ ticket modal root is not unique and visible")
+
+    candidates = visible_roots[0].locator('a[class*="Dialog_buttons__active__"]')
+    matching_ctas = []
+    for index in range(await candidates.count()):
+        candidate = candidates.nth(index)
+        if (
+            await is_dom_visible(candidate)
+            and " ".join((await candidate.inner_text()).split()) == TICKET_CTA_LABEL
+        ):
+            matching_ctas.append(candidate)
+    if len(matching_ctas) != 1:
+        raise UnknownPageStateError("ComicFUZ ticket CTA is not unique within its modal")
+    return matching_ctas[0]
 
 
 class ComicFuzTicketEntry:
@@ -1195,9 +1292,14 @@ class ComicFuzTicketEntry:
 
         modal = await read_ticket_modal(page, chapter_label=chapter_label)
         if (
-            modal.get("ctaCount") != 1
+            modal.get("dialogRootCount") != 1
+            or modal.get("globalCtaCount") != 1
+            or modal.get("ctaCount") != 1
             or modal.get("modal") is not True
+            or modal.get("exact") is not True
             or modal.get("chapterTitleMatch") is not True
+            or modal.get("chapterTitleCount") != 1
+            or modal.get("cancelCount") != 1
             or modal.get("ticketCountOne") is not True
             or modal.get("otherAccessCount") != 0
             or modal.get("disabled") is not False
@@ -1361,39 +1463,28 @@ class ComicFuzTicketEntry:
         page.on("response", record_response)
         try:
             await page.expose_function(binding_name, record_trusted_click)
+            arming_script = f"""config => {{
+              const scope=({_TICKET_MODAL_INSPECTOR})(config);
+              if(!scope.exact||!scope.modalRoot||!scope.cta)
+                throw new Error('target ticket modal is not exact');
+              const cta=scope.cta;
+              document.addEventListener('click',event=>{{
+                if(event.isTrusted===true&&(event.target===cta||cta.contains(event.target))){{
+                  const report=window[config.bindingName];
+                  if(typeof report==='function')report({{nonce:config.nonce,count:1,trusted:true,
+                    chapterLabel:config.chapterLabel,chargeLabel:config.chargeLabel}}).catch(()=>{{}});
+                }}
+              }},true);
+            }}"""
             await page.evaluate(
-                r"""({nonce, chapterLabel, chargeLabel, cancelLabel, bindingName}) => {
-          const norm=value=>String(value||'').trim().replace(/\s+/g,' ');
-                  const visible=element=>!!element&&!!element.getClientRects().length
-                    &&getComputedStyle(element).visibility==='visible'
-                    &&getComputedStyle(element).display!=='none';
-                  const exact=[...document.querySelectorAll('*')]
-                    .filter(element=>visible(element)&&norm(element.innerText)===chargeLabel);
-                  const ctas=exact.filter(element=>![...element.children]
-                    .some(child=>norm(child.innerText)===chargeLabel));
-                  if(ctas.length!==1)throw new Error('ticket CTA is not unique');
-                  const cta=ctas[0];
-                  let modal=null;
-                  for(let node=cta,depth=0;node&&depth<10;node=node.parentElement,depth++){
-                    const headings=[...node.querySelectorAll('h1,h2,h3,h4')].map(e=>norm(e.innerText));
-                    if(headings.includes(chapterLabel)&&norm(node.innerText).includes(cancelLabel)){
-                      modal=node;break;
-                    }
-                  }
-                  if(!modal||!modal.contains(cta))throw new Error('target modal is not bound');
-                  document.addEventListener('click',event=>{
-                    if(event.isTrusted===true&&(event.target===cta||cta.contains(event.target))){
-                      const report=window[bindingName];
-                      if(typeof report==='function')report({nonce,count:1,trusted:true,
-                        chapterLabel,chargeLabel}).catch(()=>{});
-                    }
-                  },true);
-                }""",
+                arming_script,
                 {
                     "nonce": click_nonce,
                     "chapterLabel": chapter_label,
                     "chargeLabel": TICKET_CTA_LABEL,
                     "cancelLabel": TICKET_CANCEL_LABEL,
+                    "appLabel": TICKET_APP_LABEL,
+                    "commentsLabel": TICKET_COMMENTS_LABEL,
                     "bindingName": binding_name,
                 },
             )

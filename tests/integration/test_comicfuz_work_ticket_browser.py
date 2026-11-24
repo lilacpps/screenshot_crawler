@@ -20,7 +20,9 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
     NativeTicketSnapshot,
+    find_ticket_modal_cta,
     read_native_ticket_snapshot,
+    read_ticket_modal,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -108,14 +110,80 @@ def _pre_state() -> NativeTicketSnapshot:
     )
 
 
-def _listing_html() -> str:
+def _listing_html(*, modal_variant: str = "valid") -> str:
+    title = "Different chapter" if modal_variant == "wrong_label" else CHAPTER_LABEL
+    if modal_variant == "duplicate_price":
+        price_values = ("1", "30")
+    elif modal_variant == "price_two_with_unrelated_one":
+        price_values = ("2",)
+    else:
+        price_values = ("1",)
+    unrelated_price_one = modal_variant == "price_two_with_unrelated_one"
+    price_extra_class = (
+        " Dialog_items__mystery__fixture"
+        if modal_variant == "unknown_price_marker"
+        else ""
+    )
+    price_markup = "".join(
+        f'<p class="Dialog_items__amount__fixture{price_extra_class}">{value}</p>'
+        for value in price_values
+    )
+    duplicate_title = (
+        '<p class="Dialog_chapter__mainText__duplicate">Different chapter</p>'
+        if modal_variant == "duplicate_title"
+        else ""
+    )
+    unknown_control = (
+        '<button class="Dialog_buttons__extra__fixture">Another access</button>'
+        if modal_variant == "unknown_control"
+        else ""
+    )
+    app_control = (
+        f'<button class="Dialog_unknown__fixture">{APP}</button>'
+        if modal_variant == "lookalike_app_control"
+        else f'<button class="Dialog_appflow__button__fixture">{APP}</button>'
+    )
+    modal = f"""<div class="Dialog_modal__fixture">
+        <div class="Dialog_content__fixture">
+          <div class="Dialog_chapter__fixture">
+            <p class="Dialog_chapter__mainText__fixture">{title}</p>
+            {duplicate_title}
+          </div>
+          <div class="Dialog_items__fixture">
+            <div class="Dialog_items__item__fixture">
+              <span class="Dialog_items__icon__fixture"></span>
+              {price_markup}
+              {'<span>1</span>' if unrelated_price_one else ''}
+            </div>
+          </div>
+          <div class="Dialog_buttons__fixture">
+            <a class="Dialog_buttons__active__fixture">{CTA}</a>
+            {app_control}
+            <a class="Dialog_buttons__active__fixture">{COMMENTS}</a>
+            <a class="Dialog_buttons__cancel__fixture">{CANCEL}</a>
+            {unknown_control}
+          </div>
+        </div>
+      </div>"""
+    if modal_variant == "duplicate_dialog":
+        modal += modal
+    elif modal_variant == "hidden_duplicate_dialog":
+        modal += modal.replace(
+            'class="Dialog_modal__fixture"',
+            'class="Dialog_modal__hidden__fixture" style="display:none"',
+        )
+    elif modal_variant == "opacity_zero_duplicate_dialog":
+        modal += modal.replace(
+            'class="Dialog_modal__fixture"',
+            'class="Dialog_modal__hidden__fixture" style="opacity:0"',
+        )
     return f"""<!doctype html><html><body>
+      <h3 class="Chapter_chapter__name__fixture">{CHAPTER_LABEL}</h3>
+      <button class="page-control__fixture">Background control</button>
       <div class="Charge_charge__charged__fixture">{AVAILABLE}
         <img alt="\u30c1\u30e3\u30fc\u30b8" src="/assets/manga_detail/charged.svg">
       </div>
-      <section id="ticket-modal"><h2>{CHAPTER_LABEL}</h2><p>{CTA}</p>
-        <span>1</span><button>{APP}</button><button>{COMMENTS}</button>
-        <button>{CANCEL}</button></section>
+      {modal}
     </body></html>"""
 
 
@@ -134,6 +202,7 @@ async def _prepare_page(
     api_url: str | None = None,
     send_request: bool = True,
     rental_expiry_override: str | None = None,
+    modal_variant: str = "valid",
 ):
     expiry = rental_expiry_override or (
         datetime.now(UTC) + timedelta(hours=24)
@@ -148,7 +217,11 @@ async def _prepare_page(
         ticket_available=response_ticket_available,
     )
     async def listing(route) -> None:
-        await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=_listing_html())
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_listing_html(modal_variant=modal_variant),
+        )
 
     async def badge(route) -> None:
         await route.fulfill(
@@ -162,7 +235,8 @@ async def _prepare_page(
     await browser_page.goto(f"{BASE}/manga/{WORK_ID}")
     await browser_page.evaluate(
         """({viewerUrl, apiUrl, bodyBytes, workId, chapterId, chapterLabel, expiry, recovery, chargeLabel, requestFrame, inheritTicketDefault, sendRequest}) => {
-          const cta=[...document.querySelectorAll('p')].find(e=>e.innerText.trim()===chargeLabel);
+          const cta=[...document.querySelectorAll('a[class*="Dialog_buttons__active__"]')]
+            .find(e=>e.innerText.trim()===chargeLabel);
           cta.addEventListener('click',()=>{
             history.pushState({},'',viewerUrl);
             const updateViewer=()=>{
@@ -573,7 +647,11 @@ async def test_missing_ticket_cta_is_a_proved_no_action(browser_page, browser_co
     body = _request_body()
     downstream: list[bytes] = []
     page = await _prepare_page(browser_page, browser_context, body=body, downstream=downstream)
-    await page.locator("p").evaluate("element => element.remove()")
+    await page.evaluate(
+        "label => [...document.querySelectorAll('a[class*=\\\"Dialog_buttons__active__\\\"]')]"
+        ".find(element => element.innerText.trim() === label)?.remove()",
+        CTA,
+    )
     controller = ComicFuzTicketEntry(
         work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
     )
@@ -581,6 +659,129 @@ async def test_missing_ticket_cta_is_a_proved_no_action(browser_page, browser_co
 
     async def unexpected_click() -> None:
         raise AssertionError("CTA should not be clicked when the visible modal is absent")
+
+    with pytest.raises(ComicFuzTicketNotAttemptedError, match="target_ticket_modal_not_exact"):
+        await controller.enter(
+            page,
+            chapter_label=CHAPTER_LABEL,
+            native_state=_pre_state(),
+            row_access_mode="quota",
+            attempt_reporter=observations.append,
+            grant_reporter=lambda grant: None,
+            click=unexpected_click,
+        )
+
+    assert controller.attempt_latched is False
+    assert [row.status for row in observations] == ["not_attempted"]
+    assert downstream == []
+
+
+@pytest.mark.parametrize(
+    "modal_variant",
+    ("valid", "hidden_duplicate_dialog", "opacity_zero_duplicate_dialog"),
+)
+async def test_ticket_modal_scope_ignores_background_heading_and_controls(
+    browser_page, browser_context, modal_variant: str
+) -> None:
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=_request_body(),
+        downstream=[],
+        modal_variant=modal_variant,
+    )
+
+    modal = await read_ticket_modal(page, chapter_label=CHAPTER_LABEL)
+    cta = await find_ticket_modal_cta(page, chapter_label=CHAPTER_LABEL)
+
+    assert modal["dialogRootCount"] == 1
+    assert modal["globalCtaCount"] == 1
+    assert modal["ctaCount"] == 1
+    assert modal["chapterTitleCount"] == 1
+    assert modal["chapterTitleMatch"] is True
+    assert modal["cancelCount"] == 1
+    assert modal["ticketCountOne"] is True
+    assert modal["allowedControls"] == {"app": 1, "comments": 1, "cancel": 1}
+    assert modal["otherAccessCount"] == 0
+    assert modal["disabled"] is False
+    assert modal["exact"] is True
+    assert await cta.evaluate("element => element.tagName") == "A"
+    assert " ".join((await cta.inner_text()).split()) == CTA
+
+
+@pytest.mark.parametrize(
+    "modal_variant",
+    ("hidden_duplicate_dialog", "opacity_zero_duplicate_dialog"),
+)
+async def test_ticket_controller_accepts_only_one_visible_dialog_root(
+    browser_page, browser_context, modal_variant: str
+) -> None:
+    body = _request_body()
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=body,
+        downstream=downstream,
+        modal_variant=modal_variant,
+        inherit_viewer_ticket_default=True,
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+
+    async def click_visible_modal_cta() -> None:
+        cta = await find_ticket_modal_cta(page, chapter_label=CHAPTER_LABEL)
+        await cta.click()
+
+    proof = await controller.enter(
+        page,
+        chapter_label=CHAPTER_LABEL,
+        native_state=_pre_state(),
+        row_access_mode="quota",
+        attempt_reporter=observations.append,
+        grant_reporter=lambda grant: None,
+        click=click_visible_modal_cta,
+    )
+
+    assert proof.request_started_at.tzinfo is not None
+    assert controller.consumption.consumed is True
+    assert len(downstream) == 1
+
+
+@pytest.mark.parametrize(
+    "modal_variant",
+    (
+        "duplicate_dialog",
+        "wrong_label",
+        "duplicate_title",
+        "duplicate_price",
+        "price_two_with_unrelated_one",
+        "unknown_price_marker",
+        "unknown_control",
+        "lookalike_app_control",
+    ),
+)
+async def test_ambiguous_ticket_dialog_is_a_no_action(
+    browser_page, browser_context, modal_variant: str
+) -> None:
+    body = _request_body()
+    downstream: list[bytes] = []
+    page = await _prepare_page(
+        browser_page,
+        browser_context,
+        body=body,
+        downstream=downstream,
+        modal_variant=modal_variant,
+    )
+    controller = ComicFuzTicketEntry(
+        work_id=WORK_ID, chapter_id=CHAPTER_ID, external_id=f"{WORK_ID}:{CHAPTER_ID}"
+    )
+    observations = []
+
+    async def unexpected_click() -> None:
+        raise AssertionError("CTA must not be clicked for an ambiguous modal")
 
     with pytest.raises(ComicFuzTicketNotAttemptedError, match="target_ticket_modal_not_exact"):
         await controller.enter(

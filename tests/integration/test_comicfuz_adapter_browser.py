@@ -149,6 +149,7 @@ def _work_ticket_listing_html(
     viewer_html: str,
     charge_available: bool = True,
     listing_ready_delay_ms: int = 0,
+    hidden_duplicate_dialog: bool = False,
 ) -> str:
     next_data = {
         "page": "/manga/[mangaId]",
@@ -173,6 +174,32 @@ def _work_ticket_listing_html(
         if listing_ready_delay_ms > 0
         else "title_detail_chapters__list__fixture"
     )
+    modal = f'''<div class="Dialog_modal__fixture" id="ticket-modal" style="display:none">
+        <div class="Dialog_content__fixture">
+          <div class="Dialog_chapter__fixture">
+            <p class="Dialog_chapter__mainText__fixture">{chapter_label}</p>
+          </div>
+          <div class="Dialog_items__fixture"><div class="Dialog_items__item__fixture">
+            <span class="Dialog_items__icon__fixture"></span>
+            <p class="Dialog_items__amount__fixture">1</p>
+          </div></div>
+          <div class="Dialog_buttons__fixture">
+            <a class="Dialog_buttons__active__fixture" id="ticket-cta">{TICKET_CTA}</a>
+            <button class="Dialog_appflow__button__fixture">アプリはこちら</button>
+            <a class="Dialog_buttons__active__fixture">コメント一覧へ</a>
+            <a class="Dialog_buttons__cancel__fixture">キャンセル</a>
+          </div>
+        </div>
+      </div>'''
+    hidden_modal = (
+        modal.replace(
+            'class="Dialog_modal__fixture"',
+            'class="Dialog_modal__hidden__fixture" style="opacity:0"',
+            1,
+        )
+        if hidden_duplicate_dialog
+        else ""
+    )
     return f'''<!doctype html><html><head><title>Verified ComicFUZ Work</title>
       <link rel="canonical" href="{BASE}/manga/{work_id}">
       <script id="__NEXT_DATA__" type="application/json">{json.dumps(next_data)}</script>
@@ -182,10 +209,8 @@ def _work_ticket_listing_html(
         </div></div></div>
         <div class="Charge_charge__charged__fixture"><img alt="チャージ"
           src="/assets/manga_detail/charged.svg"><p>{TICKET_AVAILABLE}</p></div>
-        <section id="ticket-modal" style="display:none"><h2>{chapter_label}</h2>
-          <button id="ticket-cta">{TICKET_CTA}</button>
-          <span>1</span><button>アプリはこちら</button><button>コメント一覧へ</button>
-          <button>キャンセル</button></section>
+        <button class="page-control__fixture">Background control</button>
+        {modal}{hidden_modal}
         <script>
           (() => {{
           const chargeAvailable={json.dumps(charge_available)};
@@ -705,6 +730,7 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
         request_body=request_body,
         viewer_html=viewer_html,
         listing_ready_delay_ms=350,
+        hidden_duplicate_dialog=True,
     )
     api_requests: list[bytes] = []
     work_page_visits: list[str] = []
