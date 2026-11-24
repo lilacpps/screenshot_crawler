@@ -30,6 +30,8 @@ MAX_VIEWER_RESPONSE_BYTES = 2 * 1024 * 1024
 NO_ATTEMPT_STOP_REASON = "comicfuz_work_ticket_not_attempted"
 TICKET_AVAILABLE_LABELS = {"\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"}
 TICKET_RECOVERY_LABELS = {"0\u6642\u306b\u56de\u5fa9!"}
+TICKET_AVAILABLE_UI_FALLBACK = "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86\uff01"
+TICKET_RECOVERY_UI_FALLBACK = "0\u6642\u306b\u56de\u5fa9\uff01"
 TICKET_CTA_LABEL = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
 TICKET_CANCEL_LABEL = "\u30ad\u30e3\u30f3\u30bb\u30eb"
 TICKET_APP_LABEL = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
@@ -99,7 +101,7 @@ class NativeTicketSnapshot:
     charge_status_present: bool
     point_type: int
     point_amount: int
-    is_read: bool
+    is_read: bool | None
     rental_value: str
     rental_present: bool
     rental_label: str
@@ -461,66 +463,270 @@ async def read_native_ticket_snapshot(
             )
 
     value = await page.evaluate(
-        r"""({workId, chapterId, pageMode}) => {
+        r"""({workId, chapterId, pageMode, ticketAvailableLabels, recoveryLabels,
+            availableFallback, recoveryFallback, chargeAlt}) => {
           const fiberOf = element => {
             const key = Object.keys(element || {}).find(name => name.startsWith('__reactFiber$'));
             return key ? element[key] : null;
           };
+          const normalizeLabel = value => String(value ?? '').split(/\s+/).filter(Boolean).join(' ');
           const next = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || 'null');
           const nextChapters = (next?.props?.pageProps?.chapters || [])
             .flatMap(group => Array.isArray(group?.chapters) ? group.chapters : []);
-          const targetIndex = nextChapters.findIndex(chapter =>
-            String(chapter?.chapterId ?? '') === chapterId);
           let chapter = null;
+          let rowChapter = null;
           let manga = null;
           let mangaId = '';
           let viewerChapterId = '';
-          let charge = null;
+          let chargePresentationMatched = false;
+          let chargeStatusIn = false;
+          let chargeStatusPrototypeDefaultEmpty = false;
           let row = null;
           let headingElements = [];
           let rentalLabels = [];
+          let targetIndex = -1;
+          let chapterLabel = '';
+          let pointType = null;
+          let pointAmount = null;
+          let pointTypePresent = false;
+          let pointTypeIn = false;
+          let pointTypePrototypeDefaultZero = false;
+          let pointAmountPresent = false;
+          let rentalValue = null;
+          let rentalPresent = false;
+          let rentalIn = false;
+          let rentalPrototypeDefaultEmpty = false;
+          let isRead = null;
           if (pageMode === 'listing') {
             const headingList = document.querySelector('div[class*="title_detail_chapters__list__"]');
             headingElements = headingList
               ? [...headingList.querySelectorAll('h3[class*="Chapter_chapter__name__"]')] : [];
+            const nativeChapterIds = nextChapters.map(candidate =>
+              String(candidate?.chapterId ?? ''));
+            const nativeMatches = nextChapters
+              .map((candidate, index) => ({candidate, index}))
+              .filter(entry => String(entry.candidate?.chapterId ?? '') === chapterId);
+            if (nativeMatches.length !== 1) return {state:'listing_native_target_missing_or_ambiguous'};
+            targetIndex = nativeMatches[0].index;
+            const nativeTarget = nativeMatches[0].candidate;
             const heading = targetIndex >= 0 ? headingElements[targetIndex] : null;
             row = heading?.parentElement?.parentElement || null;
             rentalLabels = row
               ? [...row.querySelectorAll('p[class*="Chapter_chapter__rentalPeriod__"]')]
                   .filter(element => element.getClientRects().length > 0)
-                  .map(element => element.innerText.trim()) : [];
-            let fiber = fiberOf(heading);
-            const chapterCandidates = [];
-            for (let depth = 0; fiber && depth < 35; depth++, fiber = fiber.return) {
-              const props = fiber.memoizedProps || {};
-              const candidate = props.chapter;
-              if (candidate && typeof candidate === 'object'
-                  && String(candidate.chapterId ?? '') === chapterId) {
-                if (!chapterCandidates.includes(candidate)) chapterCandidates.push(candidate);
+                  .map(element => normalizeLabel(element.innerText)) : [];
+            const chapterCandidatesForHeading = element => {
+              let node = fiberOf(element);
+              const candidates = [];
+              for (let depth = 0; node && depth < 35; depth++, node = node.return) {
+                const candidate = node.memoizedProps?.chapter;
+                if (candidate && typeof candidate === 'object' && !candidates.includes(candidate))
+                  candidates.push(candidate);
               }
+              return candidates;
+            };
+            const domRowCandidates = headingElements.map(chapterCandidatesForHeading);
+            const domChapterIds = domRowCandidates.map(candidates =>
+              candidates.length === 1 ? String(candidates[0].chapterId ?? '') : '');
+            if (nextChapters.length !== headingElements.length
+                || nativeChapterIds.some(id => !id)
+                || new Set(nativeChapterIds).size !== nativeChapterIds.length
+                || domChapterIds.some(id => !id)
+                || JSON.stringify(nativeChapterIds) !== JSON.stringify(domChapterIds)) {
+              return {state:'listing_native_dom_chapter_order_mismatch'};
             }
-            if (chapterCandidates.length === 1) chapter = chapterCandidates[0];
+            const chapterCandidates = domRowCandidates[targetIndex] || [];
+            if (chapterCandidates.length !== 1) return {state:'listing_row_chapter_missing_or_ambiguous'};
+            rowChapter = chapterCandidates[0];
+
             const visible = element => !!element?.getClientRects().length
               && getComputedStyle(element).visibility === 'visible'
               && getComputedStyle(element).display !== 'none';
             const badges = [...document.querySelectorAll('div[class*="Charge_charge__"]')]
               .filter(visible);
+            if (badges.length !== 1) return {state:'listing_charge_component_missing_or_ambiguous'};
+
+            const webDataFrom = element => {
+              let node = fiberOf(element);
+              const values = [];
+              for (let depth = 0; node && depth < 35; depth++, node = node.return) {
+                const data = node.memoizedProps?.webMangaViewerData;
+                if (data && typeof data === 'object' && !values.includes(data)) values.push(data);
+              }
+              return values;
+            };
+            const headingData = webDataFrom(heading);
+            const chargeData = webDataFrom(badges[0]);
+            if (headingData.length !== 1 || chargeData.length !== 1
+                || headingData[0] !== chargeData[0]) {
+              return {state:'listing_runtime_work_data_missing_or_ambiguous'};
+            }
+            const webData = headingData[0];
+            const groups = Array.isArray(webData.chapters) ? webData.chapters : [];
+            const runtimeChapters = groups.flatMap(group =>
+              Array.isArray(group?.chapters) ? group.chapters : []);
+            const runtimeChapterIds = runtimeChapters.map(candidate =>
+              String(candidate?.chapterId ?? ''));
+            const runtimeMatches = runtimeChapters
+              .map((candidate, index) => ({candidate, index}))
+              .filter(entry => String(entry.candidate?.chapterId ?? '') === chapterId);
+            if (runtimeChapters.length !== nextChapters.length
+                || runtimeChapterIds.some(id => !id)
+                || new Set(runtimeChapterIds).size !== runtimeChapterIds.length
+                || JSON.stringify(runtimeChapterIds) !== JSON.stringify(nativeChapterIds)
+                || runtimeMatches.length !== 1
+                || runtimeMatches[0].index !== targetIndex) {
+              return {state:'listing_runtime_target_missing_or_out_of_order'};
+            }
+            chapter = runtimeMatches[0].candidate;
+            manga = webData.manga;
+            if (!manga || typeof manga !== 'object'
+                || String(manga.mangaId ?? '') !== workId
+                || String(next?.query?.mangaId ?? '') !== workId) {
+              return {state:'listing_runtime_work_identity_mismatch'};
+            }
+            mangaId = String(manga.mangaId ?? '');
+
+            const nativeChapter = nativeTarget;
+            const rowPoint = rowChapter.pointConsumption;
+            const nativePoint = nativeChapter?.pointConsumption;
+            const runtimePoint = chapter.pointConsumption;
+            if (!row || !heading || !rowPoint || typeof rowPoint !== 'object'
+                || !nativePoint || typeof nativePoint !== 'object'
+                || !runtimePoint || typeof runtimePoint !== 'object') {
+              return {state:'listing_runtime_chapter_metadata_missing'};
+            }
+            const labels = [rowChapter.chapterMainName, nativeChapter?.chapterMainName,
+              chapter.chapterMainName];
+            if (labels.some(label => typeof label !== 'string')
+                || labels.some(label => normalizeLabel(label) !== normalizeLabel(labels[0]))) {
+              return {state:'listing_runtime_chapter_label_mismatch'};
+            }
+            const amountValues = [rowPoint.amount, nativePoint.amount, runtimePoint.amount];
+            if (amountValues.some(amount => !Number.isInteger(amount) || amount < 0)
+                || !Object.hasOwn(rowPoint,'amount')
+                || !Object.hasOwn(nativePoint,'amount')
+                || !Object.hasOwn(runtimePoint,'amount')
+                || amountValues.some(amount => amount !== amountValues[0])) {
+              return {state:'listing_runtime_point_amount_mismatch'};
+            }
+            const runtimeTypeDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(runtimePoint) || {}, 'type');
+            pointType = runtimePoint.type;
+            pointTypePresent = Object.hasOwn(runtimePoint, 'type');
+            pointTypeIn = 'type' in runtimePoint;
+            pointTypePrototypeDefaultZero = !!runtimeTypeDescriptor
+              && Object.hasOwn(runtimeTypeDescriptor,'value')
+              && typeof runtimeTypeDescriptor.value === 'number'
+              && Number.isInteger(runtimeTypeDescriptor.value)
+              && runtimeTypeDescriptor.value === 0;
+            const rowTypePresent = Object.hasOwn(rowPoint,'type');
+            const nativeTypePresent = Object.hasOwn(nativePoint,'type');
+            if (typeof pointType !== 'number' || !Number.isInteger(pointType)
+                || (!pointTypePresent && !(pointTypeIn && pointTypePrototypeDefaultZero
+                  && pointType === 0))
+                || (rowTypePresent && rowPoint.type !== pointType)
+                || (nativeTypePresent && nativePoint.type !== pointType)) {
+              return {state:'listing_runtime_point_type_unproven'};
+            }
+            pointAmount = runtimePoint.amount;
+            pointAmountPresent = Object.hasOwn(runtimePoint,'amount');
+
+            const rentalDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(chapter) || {}, 'endOfRentalPeriod');
+            rentalValue = chapter.endOfRentalPeriod;
+            rentalPresent = Object.hasOwn(chapter,'endOfRentalPeriod');
+            rentalIn = 'endOfRentalPeriod' in chapter;
+            rentalPrototypeDefaultEmpty = !!rentalDescriptor
+              && Object.hasOwn(rentalDescriptor,'value')
+              && typeof rentalDescriptor.value === 'string'
+              && rentalDescriptor.value === '';
+            if (typeof rentalValue !== 'string'
+                || (!rentalPresent && !(rentalIn && rentalPrototypeDefaultEmpty
+                  && rentalValue === ''))) {
+              return {state:'listing_runtime_rental_unproven'};
+            }
+            if (rentalLabels.length > 1
+                || (rentalValue
+                  ? rentalLabels.length !== 1 || normalizeLabel(rentalLabels[0]) !== normalizeLabel(rentalValue)
+                  : rentalLabels.length !== 0)) {
+              return {state:'listing_runtime_rental_label_mismatch'};
+            }
+            const availableLabels = ticketAvailableLabels;
+            const recoveryLabelSet = new Set(recoveryLabels);
+            const chargeNode = badges[0];
             const chargeProps = [];
             for (const badge of badges) {
               let node = fiberOf(badge);
               for (let depth = 0; node && depth < 20; depth++, node = node.return) {
                 const props = node.memoizedProps || {};
-                if (Object.hasOwn(props,'isChargeNeeded')
-                    && Object.hasOwn(props,'isTicketAvailable')
-                    && Object.hasOwn(props,'chargeStatus')) {
+                if (Object.hasOwn(props,'isTicketAvailable')
+                    && Object.hasOwn(props,'labelText')) {
                   chargeProps.push(props);
                   break;
                 }
               }
             }
-            if (chargeProps.length === 1) charge = chargeProps[0];
-            manga = charge;
-            mangaId = String(next?.query?.mangaId ?? '');
+            if (chargeProps.length !== 1
+                || !Object.hasOwn(manga,'isChargeNeeded')
+                || typeof manga.isChargeNeeded !== 'boolean') {
+              return {state:'listing_runtime_charge_state_missing'};
+            }
+            const ticketDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(manga) || {}, 'isTicketAvailable');
+            const chargeStatusDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(manga) || {}, 'chargeStatus');
+            const isTicketAvailable = manga.isTicketAvailable;
+            const isTicketAvailablePresent = Object.hasOwn(manga,'isTicketAvailable');
+            const isTicketAvailableIn = 'isTicketAvailable' in manga;
+            const isTicketAvailablePrototypeDefault = !!ticketDescriptor
+              && Object.hasOwn(ticketDescriptor,'value')
+              && typeof ticketDescriptor.value === 'boolean'
+              && ticketDescriptor.value === false;
+            const chargeStatus = manga.chargeStatus;
+            const chargeStatusPresent = Object.hasOwn(manga,'chargeStatus');
+            chargeStatusIn = 'chargeStatus' in manga;
+            chargeStatusPrototypeDefaultEmpty = !!chargeStatusDescriptor
+              && Object.hasOwn(chargeStatusDescriptor,'value')
+              && typeof chargeStatusDescriptor.value === 'string'
+              && chargeStatusDescriptor.value === '';
+            if (typeof isTicketAvailable !== 'boolean'
+                || (!isTicketAvailablePresent
+                  && !(isTicketAvailableIn && isTicketAvailablePrototypeDefault))
+                || typeof chargeStatus !== 'string'
+                || (!chargeStatusPresent
+                  && !(chargeStatusIn && chargeStatusPrototypeDefaultEmpty && chargeStatus === ''))) {
+              return {state:'listing_runtime_charge_state_missing'};
+            }
+            const chargeProp = chargeProps[0];
+            const img = chargeNode.querySelector('img');
+            let imagePath = '';
+            try { imagePath = new URL(img?.currentSrc || img?.src || '', location.href).pathname; }
+            catch (_) { imagePath = ''; }
+            const chargeText = normalizeLabel(chargeNode.innerText);
+            const chargeClass = String(chargeNode.className || '');
+            const displayChargeStatus = chargeStatus || (isTicketAvailable
+              ? availableFallback : recoveryFallback);
+            const statusMatches = isTicketAvailable
+              ? availableLabels.includes(chargeStatus)
+              : chargeStatus
+                ? recoveryLabelSet.has(chargeStatus)
+                : chargeStatusPrototypeDefaultEmpty
+                  && displayChargeStatus === recoveryFallback;
+            const expectedImagePath = isTicketAvailable
+              ? '/assets/manga_detail/charged.svg' : '/assets/manga_detail/charge.svg';
+            const expectedClass = isTicketAvailable
+              ? 'Charge_charge__charged__' : 'Charge_charge__not_charged__';
+            chargePresentationMatched = chargeProp.isTicketAvailable === isTicketAvailable
+              && chargeProp.labelText === chargeStatus
+              && statusMatches
+              && chargeText === displayChargeStatus
+              && imagePath === expectedImagePath
+              && img?.alt === chargeAlt
+              && chargeClass.includes(expectedClass);
+            if (!chargePresentationMatched) return {state:'listing_charge_presentation_mismatch'};
+            chapterLabel = normalizeLabel(labels[0]);
+            isRead = typeof chapter.isRead === 'boolean' ? chapter.isRead : null;
           } else {
             const webData = [];
             for (const image of document.querySelectorAll('img[class*="G54Y0W_page"]')) {
@@ -544,10 +750,41 @@ async def read_native_ticket_snapshot(
             chapter = selected[0];
             manga = web.manga;
             mangaId = String(manga.mangaId ?? '');
+            const point = chapter.pointConsumption;
+            const typeDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(point || {}) || {}, 'type');
+            pointType = point?.type;
+            pointTypePresent = !!point && Object.hasOwn(point,'type');
+            pointTypeIn = !!point && 'type' in point;
+            pointTypePrototypeDefaultZero = !!typeDescriptor
+              && Object.hasOwn(typeDescriptor,'value')
+              && typeof typeDescriptor.value === 'number'
+              && Number.isInteger(typeDescriptor.value)
+              && typeDescriptor.value === 0;
+            pointAmount = point?.amount;
+            pointAmountPresent = !!point && Object.hasOwn(point,'amount');
+            chargeStatusIn = 'chargeStatus' in manga;
+            const chargeStatusDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(manga) || {}, 'chargeStatus');
+            chargeStatusPrototypeDefaultEmpty = !!chargeStatusDescriptor
+              && Object.hasOwn(chargeStatusDescriptor,'value')
+              && typeof chargeStatusDescriptor.value === 'string'
+              && chargeStatusDescriptor.value === '';
+            const rentalDescriptor = Object.getOwnPropertyDescriptor(
+              Object.getPrototypeOf(chapter) || {}, 'endOfRentalPeriod');
+            rentalValue = chapter.endOfRentalPeriod;
+            rentalPresent = Object.hasOwn(chapter,'endOfRentalPeriod');
+            rentalIn = 'endOfRentalPeriod' in chapter;
+            rentalPrototypeDefaultEmpty = !!rentalDescriptor
+              && Object.hasOwn(rentalDescriptor,'value')
+              && typeof rentalDescriptor.value === 'string'
+              && rentalDescriptor.value === '';
+            chapterLabel = typeof chapter.chapterMainName === 'string'
+              ? normalizeLabel(chapter.chapterMainName) : '';
+            isRead = typeof chapter.isRead === 'boolean' ? chapter.isRead : null;
           }
           if (!chapter || typeof chapter !== 'object' || !manga || typeof manga !== 'object')
             return {state:'native_target_props_missing'};
-          const point = chapter.pointConsumption;
           const ticketDescriptor = Object.getOwnPropertyDescriptor(
             Object.getPrototypeOf(manga) || {}, 'isTicketAvailable');
           return {
@@ -565,12 +802,21 @@ async def read_native_ticket_snapshot(
             chargeStatus:manga.chargeStatus,
             chargeStatusPresent:Object.hasOwn(manga,'chargeStatus'),
             chapterId:String(chapter.chapterId ?? ''),
-            chapterLabel:typeof chapter.chapterMainName === 'string' ? chapter.chapterMainName : '',
-            pointType:point?.type,
-            pointAmount:point?.amount,
-            isRead:chapter.isRead,
-            rentalValue:chapter.endOfRentalPeriod,
-            rentalPresent:Object.hasOwn(chapter,'endOfRentalPeriod'),
+            chapterLabel,
+            pointType,
+            pointTypePresent,
+            pointTypeIn,
+            pointTypePrototypeDefaultZero,
+            pointAmount,
+            pointAmountPresent,
+            isRead,
+            rentalValue,
+            rentalPresent,
+            rentalIn,
+            rentalPrototypeDefaultEmpty,
+            chargeStatusIn,
+            chargeStatusPrototypeDefaultEmpty,
+            chargePresentationMatched,
             rentalLabels,
             viewerChapterId,
             nextPage:next?.page,
@@ -582,7 +828,12 @@ async def read_native_ticket_snapshot(
             targetIndex
           };
         }""",
-        {"workId": work_id, "chapterId": chapter_id, "pageMode": page_mode},
+        {"workId": work_id, "chapterId": chapter_id, "pageMode": page_mode,
+         "ticketAvailableLabels": sorted(TICKET_AVAILABLE_LABELS),
+         "recoveryLabels": sorted(TICKET_RECOVERY_LABELS),
+         "availableFallback": TICKET_AVAILABLE_UI_FALLBACK,
+         "recoveryFallback": TICKET_RECOVERY_UI_FALLBACK,
+         "chargeAlt": TICKET_CHARGE_ALT},
     )
     if not isinstance(value, Mapping) or value.get("state") != "ok":
         state = value.get("state") if isinstance(value, Mapping) else "malformed_projection"
@@ -616,23 +867,49 @@ async def read_native_ticket_snapshot(
     ):
         raise UnknownPageStateError("ComicFUZ ticket snapshot identity does not match the target")
     point_type, point_amount = value.get("pointType"), value.get("pointAmount")
+    point_type_present = value.get("pointTypePresent")
+    point_type_in = value.get("pointTypeIn")
+    point_type_default_zero = value.get("pointTypePrototypeDefaultZero")
+    point_amount_present = value.get("pointAmountPresent")
     is_read = value.get("isRead")
     rental_value = value.get("rentalValue")
+    rental_present = value.get("rentalPresent")
+    rental_in = value.get("rentalIn")
+    rental_default_empty = value.get("rentalPrototypeDefaultEmpty")
     charge_status = value.get("chargeStatus")
     if (
         type(point_type) is not int
         or type(point_amount) is not int
-        or type(is_read) is not bool
+        or type(point_type_present) is not bool
+        or type(point_type_in) is not bool
+        or type(point_type_default_zero) is not bool
+        or type(point_amount_present) is not bool
+        or not point_amount_present
+        or (
+            not point_type_present
+            and not (point_type_in and point_type_default_zero and point_type == 0)
+        )
+        or (is_read is not None and type(is_read) is not bool)
         or type(value.get("isChargeNeeded")) is not bool
         or type(value.get("isTicketAvailable")) is not bool
         or value.get("isChargeNeededPresent") is not True
-        or value.get("chargeStatusPresent") is not True
         or type(value.get("isTicketAvailablePresent")) is not bool
         or type(value.get("isTicketAvailableIn")) is not bool
         or type(value.get("isTicketAvailablePrototypeDefault")) is not bool
+        or type(value.get("chargeStatusPresent")) is not bool
+        or type(value.get("chargeStatusIn")) is not bool
+        or type(value.get("chargeStatusPrototypeDefaultEmpty")) is not bool
+        or type(rental_present) is not bool
+        or type(rental_in) is not bool
+        or type(rental_default_empty) is not bool
         or (
             page_mode == "listing"
             and value.get("isTicketAvailablePresent") is not True
+            and not (
+                value.get("isTicketAvailable") is False
+                and value.get("isTicketAvailableIn") is True
+                and value.get("isTicketAvailablePrototypeDefault") is True
+            )
         )
         or (
             page_mode == "viewer"
@@ -643,8 +920,18 @@ async def read_native_ticket_snapshot(
             )
         )
         or not isinstance(rental_value, str)
+        or (not rental_present and not (rental_in and rental_default_empty and not rental_value))
         or not isinstance(charge_status, str)
+        or (
+            not value.get("chargeStatusPresent")
+            and not (
+                value.get("chargeStatusIn") is True
+                and value.get("chargeStatusPrototypeDefaultEmpty") is True
+                and charge_status == ""
+            )
+        )
         or len(value["rentalLabels"]) > 1
+        or (page_mode == "listing" and value.get("chargePresentationMatched") is not True)
         or (
             page_mode == "listing"
             and value["rentalLabels"]
@@ -670,9 +957,9 @@ async def read_native_ticket_snapshot(
         charge_status_present=value.get("chargeStatusPresent") is True,
         point_type=point_type,
         point_amount=point_amount,
-        is_read=is_read,
+        is_read=is_read if isinstance(is_read, bool) else None,
         rental_value=rental_value,
-        rental_present=value.get("rentalPresent") is True,
+        rental_present=rental_present,
         rental_label=value["rentalLabels"][0] if value["rentalLabels"] else "",
         viewer_chapter_id=str(value.get("viewerChapterId") or ""),
     )

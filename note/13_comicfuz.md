@@ -67,7 +67,7 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 # 13. ComicFUZ 現行実装ノート
 
-## Work Ticket current status (2026-11-24; Phase 02 PASS, Phase 03 synthetic implementation re-review pending)
+## Work Ticket current status (2026-11-24; Phase 02 and Gate03 PASS, Phase 04 in progress)
 
 Discovery recognizes an exact visible row-local `無料` marker as `free`, a
 single visible price slot containing the observed public gold/silver icon alt
@@ -82,9 +82,9 @@ scope and a one-candidate-per-Work limit, and computes retry at the next
 Free remains direct. A source-level active episode grant is also direct and
 non-consuming, independently of the Work daily reset; a grant expiring exactly
 at the current time is not active. Normal Batch and explicit grant-only both
-have a site-local quota entry path in the current Phase 03 branch. Quota entry
-uses the one Catalog-selected chapter's regular work page, exact row selection,
-and its single visible `チャージで読む` modal action. It does not rerun full-list
+have a site-local quota entry path. Quota entry uses the one Catalog-selected
+chapter's regular work page, exact row selection, and its single visible
+`チャージで読む` modal action. It does not rerun full-list
 Discovery, inspect another episode, or invent a ticket deep link. A confirmed
 grant is read directly on the canonical viewer route. Premium Ticket, coin,
 medal, and paid paths remain unsupported.
@@ -96,9 +96,18 @@ candidate/source/work/target binding writes a versioned confirmation marker to
 the existing CrawlRun `stop_reason`; a later capture failure remains resolved.
 This avoids a new Catalog table/schema migration. Retry timestamps in inventory
 are shown only while strictly in the future. Phase 02 tests and live evidence
-passed independent review with BLOCKING=0. Phase 03 implements a bounded
-same-Page controller and synthetic normal/grant-only paths; independent Gate03
-re-review is pending. No live charge control has been activated.
+passed independent review with BLOCKING=0. Gate03 also passed independent
+synthetic review with BLOCKING=0. Phase 04's first isolated preflight found that
+the actual listing exposes work charge state through a shared runtime
+`webMangaViewerData` object, while the Charge component's direct props contain
+only availability and label presentation. The adapter now joins the exact
+runtime chapter through the same object referenced by the heading and Charge
+component, and rejects missing, duplicated, mismatched, or separate messages.
+The initial synthetic adapter timeout was caused by a duplicate global
+`webMangaViewerData` declaration in listing/viewer fixture scripts; the listing
+fixture is now IIFE-scoped. The current focused regression passes. No live
+charge control has been activated and no real ticket has been consumed; the
+first isolated grant-only action is pending final review/Lead go-ahead.
 
 The public first-party client binds `/v1/web_manga_viewer_2` to
 `WebMangaViewer2Request` and `WebMangaViewer2Response`; the similarly named
@@ -116,6 +125,13 @@ The sanitized public asset names, byte counts, SHA-256 values, binding excerpt,
 and native field map are recorded in
 `runbooks/comicfuz-work-ticket/PROGRESS.md` and the local evidence artifact
 `.tmp/comicfuz-work-ticket/evidence/public-bundle-provenance.json`.
+The listing Charge presentation/dataflow was also checked against the sanitized
+public bundle evidence `phase04-charge-source-provenance-3667.json`; the
+same-object runtime chapter projection for `3667:76588` is in
+`phase04-runtime-chapter-projection-76588.json`. The runtime chapter is the
+authority for point type and rental defaults because SSR omits them; SSR values
+are not completed from assumptions. These bounded live reads did not click the
+charge control or open a viewer for the quota target.
 
 The controller records consumption only after the exact same-Page main-frame
 ticket request returns HTTP 200 on the same JST date and its exact native
@@ -149,10 +165,10 @@ in React props. The generated Manga prototype defaults are
 access predicate. The default interpretation is restricted to this observed
 generated-message shape; a missing or plain empty object stays unknown. No image
 body or ticket response was read during that probe. Live consume response
-values, server time and a real grant expiry remain unverified. Synthetic review
-fix tests pass, including terminal in-flight cancellation, Work A no-action to
-Work B replan, and normal Batch/grant-only behavior. Verification and the
-Gate03 re-review are tracked in
+values, server time and a real grant expiry remain unverified. The Gate03
+independent review passed; current synthetic listing projection, normal and
+grant-only Batch, and unavailable-Work replan tests pass. Full suite history
+and Phase 04 live-audit boundaries are tracked in
 `runbooks/comicfuz-work-ticket/PROGRESS.md`.
 
 ## Login-independent public-free access (2026-11-22)
@@ -535,7 +551,7 @@ During `wait_for_change` only, a pending page turn may contain a transient three
 
 END requires one of the positive same-episode panels described above, cleared/matching rendered shells, and completed capture of every native-prefix body index. It is never inferred from count, dimensions, alt ordering, or a quiet viewport. The original 2026-10-13 isolated run produced ten body JPEGs.
 
-A previous isolated 11-JPEG ZIP is rejected: Root's independent audit found its last member was a recommendation image for another work. The corrected isolated run on 2026-10-13 saved exactly ten body JPEGs and reached positive END. Root independently decoded all archive members, checked CRC and unique hashes, and visually checked first/middle/last samples; the final member is chapter body. A viewer-delivered blob JPEG probe verified complete framing, native dimensions, and sampled browser-decoded pixel equality. This proves current viewer-delivered bytes only; it does not prove upstream publisher-master identity. If exact complete blob bytes are unavailable, the adapter captures the current authorized `HTMLImageElement` at its natural pixel dimensions into PNG and rechecks node/source identity. The site AccessProfile includes the public host, `api.comic-fuz.com`, and the observed image host for generic AccessGuard monitoring; adapter capture does not invoke resource or charge APIs. Charge, ticket, and medal behavior remains deferred.
+A previous isolated 11-JPEG ZIP is rejected: Root's independent audit found its last member was a recommendation image for another work. The corrected isolated run on 2026-10-13 saved exactly ten body JPEGs and reached positive END. Root independently decoded all archive members, checked CRC and unique hashes, and visually checked first/middle/last samples; the final member is chapter body. A viewer-delivered blob JPEG probe verified complete framing, native dimensions, and sampled browser-decoded pixel equality. This proves current viewer-delivered bytes only; it does not prove upstream publisher-master identity. If exact complete blob bytes are unavailable, the adapter captures the current authorized `HTMLImageElement` at its natural pixel dimensions into PNG and rechecks node/source identity. The site AccessProfile includes the public host, `api.comic-fuz.com`, and the observed image host for generic AccessGuard monitoring; adapter capture does not invoke resource or charge APIs. The original public-free runbook deferred charge, ticket and medal handling within its free-only scope; current Work Ticket support is described at the start of this note.
 
 Image capture rejects filters, masks, crop, opacity, blend, rotation/reflection, perspective, individual `rotate`/`scale`/`translate`, legacy clip, and unverified object-fit. Only no effect or positive axis-aligned 2D transforms are allowed. After common page-role and episode-identity validation, capture stops only if neither verified viewer-delivered source bytes nor safe native-pixel PNG readback is available. Viewer response observation is limited to 16 entries, a 2-second body-read deadline, and 4 MiB declared and returned body limits. Playwright `Response.body()` buffers before return, so the returned-size limit cannot bound pre-return memory. Reads and listeners are canceled or cleared at failure, END, and page close. Adapter manifests/metadata omit blob and signed source URLs; this is not a guarantee about generic Core diagnostics. The safe first-party projection omits signed image URLs, leaving same-dimension descriptor replacement unverified by descriptor-to-blob URL hash comparison; native index, role, title, dimensions, current image binding, and geometry are checked.
 
@@ -551,6 +567,6 @@ Chapter 80641 (global position 33) initially had multiple normal-CLI failures af
 
 At the original Phase 04 checkpoint on `main`, `ComicFuzSitePolicy` admitted only sources where `site=comicfuz`, `available=true`, and `access_mode=free`; its only strategy was `direct`. The current Work Ticket branch extends Discovery and policy as described at the top of this note. The historical tests and live captures below describe the original free-only implementation and do not establish current quota entry support.
 
-The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses Catalog position and provisional archive numbering; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original site-specific Phase 04 did not change shared Core or Catalog schema; shared Catalog v7 now automatically reflects acquisition scope through Discovery, without a mandatory sync gate.
+The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses Catalog position and provisional archive numbering; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original public-free Phase 04 did not change shared Core or Catalog schema; shared Catalog v7 now automatically reflects acquisition scope through Discovery, without a mandatory sync gate. Charge/ticket/medal handling was deferred by that historical free-only phase; current Work Ticket support is described at the start of this note.
 
 Synthetic policy/planner and browser-backed Batch integration cover the allowed/rejected access states, direct-only resource contract, global display-position prefixes, Discovery-to-Catalog-to-Plan-to-Runner-to-ZIP completion, rediscovery/replan retention of the completed artifact, loss of free proof before reader entry, route drift, unknown END, and packaging failure. Failed Batch attempts leave the Item pending with a failed CrawlRun and no Artifact. Reviewer selected 20 tests and reported 20 passed, 0 skipped, BLOCKING=0. Phase 05 isolated E2E is complete; the final overall Reviewer gate passed with BLOCKING=0 and the Lead accepted Phases 01-05. The original implementation commit `4b64a3c` is now included in `main`.

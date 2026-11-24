@@ -46,6 +46,7 @@ VIEWER_URL = f"{BASE}/manga/viewer/80641"
 NOW = datetime(2026, 10, 13, 12, tzinfo=JST)
 TICKET_AVAILABLE = "\u30c1\u30e3\u30fc\u30b8\u5b8c\u4e86!"
 TICKET_RECOVERY = "0\u6642\u306b\u56de\u5fa9!"
+TICKET_RECOVERY_UI_FALLBACK = "0\u6642\u306b\u56de\u5fa9\uff01"
 TICKET_CTA = "\u30c1\u30e3\u30fc\u30b8\u3067\u8aad\u3080"
 EPISODE_TITLE = "第31話"
 
@@ -156,7 +157,8 @@ def _work_ticket_listing_html(
                 "chapters": [
                     {
                         "chapters": [
-                            {"chapterId": chapter_id, "chapterMainName": chapter_label}
+                            {"chapterId": chapter_id, "chapterMainName": chapter_label,
+                             "pointConsumption": {"amount": 30}}
                         ]
                     }
                 ]
@@ -172,29 +174,42 @@ def _work_ticket_listing_html(
         <div class="Chapter_chapter__row__fixture"><div class="Chapter_chapter__detail__fixture">
           <h3 class="Chapter_chapter__name__fixture">{chapter_label}</h3>
         </div></div></div>
-        <div class="Charge_charge__charged__fixture">{TICKET_AVAILABLE}
-          <img alt="チャージ" src="/assets/manga_detail/charged.svg"></div>
+        <div class="Charge_charge__charged__fixture"><img alt="チャージ"
+          src="/assets/manga_detail/charged.svg"><p>{TICKET_AVAILABLE}</p></div>
         <section id="ticket-modal" style="display:none"><h2>{chapter_label}</h2>
           <button id="ticket-cta">{TICKET_CTA}</button>
           <span>1</span><button>アプリはこちら</button><button>コメント一覧へ</button>
           <button>キャンセル</button></section>
         <script>
+          (() => {{
           const chargeAvailable={json.dumps(charge_available)};
           const workId={json.dumps(work_id)}, chapterId={json.dumps(chapter_id)};
           const chapterLabel={json.dumps(chapter_label)};
+          const mangaPrototype=chargeAvailable?{{}}:{{isTicketAvailable:false,chargeStatus:''}};
+          const manga=Object.assign(Object.create(mangaPrototype),{{
+            mangaId:Number(workId),isChargeNeeded:true
+          }});
+          if(chargeAvailable){{manga.isTicketAvailable=true;manga.chargeStatus={json.dumps(TICKET_AVAILABLE)};}}
+          const point=Object.assign(Object.create({{type:0}}),{{amount:30}});
+          const chapter=Object.assign(Object.create({{endOfRentalPeriod:''}}),{{
+            chapterId:Number(chapterId),chapterMainName:chapterLabel,pointConsumption:point
+          }});
+          const webMangaViewerData={{manga,chapters:[{{chapters:[chapter]}}]}};
           const heading=document.querySelector('h3');
-          heading.__reactFiber$target={{memoizedProps:{{chapter:{{chapterId,
-            chapterMainName:chapterLabel,pointConsumption:{{type:0,amount:30}},
-            isRead:true,endOfRentalPeriod:''}}}},return:null}};
+          heading.__reactFiber$target={{memoizedProps:{{chapter}},
+            return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
           const chargeBadge=document.querySelector('.Charge_charge__charged__fixture');
-          if(chargeAvailable)chargeBadge.__reactFiber$charge={{memoizedProps:{{isChargeNeeded:true,
-            isTicketAvailable:true,chargeStatus:{json.dumps(TICKET_AVAILABLE)}}},return:null}};
-          else {{
-            chargeBadge.textContent='';
-            chargeBadge.style.minHeight='2px';
-            chargeBadge.__reactFiber$charge={{memoizedProps:{{isChargeNeeded:true,
-              isTicketAvailable:false,chargeStatus:''}},return:null}};
-          }}
+          const chargeLabel=chargeAvailable?manga.chargeStatus:'{TICKET_RECOVERY_UI_FALLBACK}';
+          chargeBadge.className=chargeAvailable
+            ?'Charge_charge__charged__fixture':'Charge_charge__not_charged__fixture';
+          chargeBadge.querySelector('img').src=chargeAvailable
+            ?'/assets/manga_detail/charged.svg':'/assets/manga_detail/charge.svg';
+          chargeBadge.querySelector('p').textContent=chargeLabel;
+          const chargeDataFiber={{memoizedProps:{{webMangaViewerData}},return:null}};
+          const chargePropsFiber={{memoizedProps:{{isTicketAvailable:!!manga.isTicketAvailable,
+            labelText:manga.chargeStatus||''}},return:chargeDataFiber}};
+          chargeBadge.__reactFiber$host={{memoizedProps:{{className:chargeBadge.className}},
+            return:chargePropsFiber}};
           const modal=document.querySelector('#ticket-modal');
           heading.addEventListener('click',()=>modal.style.display='block');
           document.querySelector('#ticket-cta').addEventListener('click',()=>{{
@@ -205,7 +220,9 @@ def _work_ticket_listing_html(
               .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
               .catch(()=>{{}});
           }});
+          }})();
         </script></body></html>'''
+
 
 
 def _viewer_html(
@@ -687,7 +704,10 @@ async def test_comicfuz_work_ticket_batch_entry_and_capture(
                 content_type="text/html; charset=utf-8",
                 body=listing_html,
             )
-        elif path == f"{BASE}/assets/manga_detail/charged.svg":
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
             await route.fulfill(
                 status=200,
                 content_type="image/svg+xml",
@@ -844,7 +864,10 @@ async def test_unavailable_work_ticket_skips_only_that_work_and_replans(
                 content_type="text/html; charset=utf-8",
                 body=listings[path],
             )
-        elif path == f"{BASE}/assets/manga_detail/charged.svg":
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
             await route.fulfill(
                 status=200,
                 content_type="image/svg+xml",

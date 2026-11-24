@@ -14,6 +14,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     API_PATH,
     API_ROUTE_PATTERN,
     TICKET_AVAILABLE_LABELS,
+    TICKET_RECOVERY_UI_FALLBACK,
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
     NativeTicketSnapshot,
@@ -805,55 +806,185 @@ async def test_request_and_proof_crossing_jst_midnight_is_unknown(
         )
 
 
-async def test_listing_snapshot_uses_target_react_chapter_and_charge_props(browser_page) -> None:
+async def _install_listing_snapshot_fixture(browser_page, *, variant: str = "valid") -> None:
+    records = [(int(CHAPTER_ID), CHAPTER_LABEL, 30)]
+    if variant == "non_target_id_order_mismatch":
+        records.extend([(76631, "Other one", 30), (76632, "Other two", 30)])
     native = {
         "page": "/manga/[mangaId]",
         "query": {"mangaId": WORK_ID},
         "props": {"pageProps": {"chapters": [{"chapters": [
-            {"chapterId": CHAPTER_ID, "chapterMainName": CHAPTER_LABEL}
-        ]}]}},
+            {"chapterId": chapter_id, "chapterMainName": label,
+             "pointConsumption": {"amount": amount}}
+            for chapter_id, label, amount in records
+        ]}]}}
     }
+    rows = "".join(
+        f'<div class="Chapter_chapter__row__fixture"><div><h3 '
+        f'class="Chapter_chapter__name__fixture">{label}</h3></div></div>'
+        for _, label, _ in records
+    )
     html = f"""<!doctype html><html><body>
       <script id="__NEXT_DATA__" type="application/json">{json.dumps(native)}</script>
-      <div class="title_detail_chapters__list__fixture"><div class="Chapter_chapter__row__fixture">
-        <div><h3 class="Chapter_chapter__name__fixture">{CHAPTER_LABEL}</h3></div>
-      </div></div>
-      <div class="Charge_charge__charged__fixture">{AVAILABLE}</div>
+      <div class="title_detail_chapters__list__fixture">{rows}</div>
+      <div class="Charge_charge__charged__fixture"><img alt="\u30c1\u30e3\u30fc\u30b8"
+        src="/assets/manga_detail/charged.svg"><p>{AVAILABLE}</p></div>
     </body></html>"""
 
     async def listing(route) -> None:
         await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
 
+    async def badge(route) -> None:
+        await route.fulfill(
+            status=200,
+            content_type="image/svg+xml",
+            body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+        )
+
     await browser_page.route(f"{BASE}/manga/{WORK_ID}**", listing)
+    await browser_page.route(f"{BASE}/assets/manga_detail/charged.svg", badge)
+    await browser_page.route(f"{BASE}/assets/manga_detail/charge.svg", badge)
     await browser_page.goto(f"{BASE}/manga/{WORK_ID}?position=thumbnail")
     await browser_page.evaluate(
-        """({chapterId, chapterLabel, chargeStatus}) => {
-          const chapter=Object.assign(Object.create({endOfRentalPeriod:''}),{
-            chapterId,chapterMainName:chapterLabel,pointConsumption:{type:0,amount:30},isRead:true
+        """({workId, chapterId, chapterLabel, available, recovery, recoveryUiFallback, variant, records}) => {
+          const pointProto=variant==='point_type_missing'?{}:{type:0};
+          const rentalProto=variant==='rental_default_missing'?{}:{endOfRentalPeriod:''};
+          const runtimeChapters=records.map(([id,label,amount])=>Object.assign(
+            Object.create(rentalProto),{chapterId:id,chapterMainName:label,
+              pointConsumption:Object.assign(Object.create(pointProto),{amount})}));
+          if(variant==='runtime_point_amount_mismatch')
+            runtimeChapters[0].pointConsumption.amount=31;
+          const parsed=JSON.parse(document.querySelector('#__NEXT_DATA__').textContent);
+          const nativeChapters=parsed.props.pageProps.chapters[0].chapters;
+          if(variant==='whitespace_label_match'){
+            runtimeChapters[0].chapterMainName=` \t${chapterLabel}  `;
+            nativeChapters[0].chapterMainName=` ${chapterLabel} `;
+          }
+          if(variant==='ssr_point_type_conflict')nativeChapters[0].pointConsumption.type=1;
+          if(variant==='ssr_point_amount_conflict')nativeChapters[0].pointConsumption.amount=31;
+          if(variant==='ssr_label_conflict')nativeChapters[0].chapterMainName='Different label';
+          document.querySelector('#__NEXT_DATA__').textContent=JSON.stringify(parsed);
+          const rowChapters=[...runtimeChapters];
+          if(variant==='row_label_conflict')rowChapters[0]=Object.assign(
+            Object.create(rentalProto),{chapterId:Number(chapterId),chapterMainName:'Different label',
+              pointConsumption:runtimeChapters[0].pointConsumption});
+          let webChapters=[...runtimeChapters];
+          if(variant==='non_target_id_order_mismatch')
+            webChapters=[webChapters[0],webChapters[2],webChapters[1]];
+          if(variant==='duplicate_target')webChapters.push(runtimeChapters[0]);
+          const mangaProto=variant==='unavailable_known_default'
+            ?{isTicketAvailable:false,chargeStatus:''}:{};
+          const manga=Object.assign(Object.create(mangaProto),{
+            mangaId:Number(variant==='wrong_work'?9999:workId),isChargeNeeded:true});
+          if(variant!=='unavailable_known_default'){
+            manga.isTicketAvailable=true;
+            manga.chargeStatus=available;
+          }
+          if(variant==='missing_runtime_availability'){
+            delete manga.isTicketAvailable;
+            delete manga.chargeStatus;
+          }
+          const webData={manga,chapters:[{chapters:webChapters}]};
+          let chargeData=webData;
+          if(variant==='different_messages_same_values')
+            chargeData={manga:Object.assign(Object.create(Object.getPrototypeOf(manga)),manga),
+              chapters:[{chapters:webChapters}]};
+          const headings=[...document.querySelectorAll('h3')];
+          headings.forEach((heading,index)=>{
+            const dataFiber={memoizedProps:{webMangaViewerData:webData},return:null};
+            const rowFiber={memoizedProps:{chapter:rowChapters[index]},return:dataFiber};
+            if(index===0&&variant==='missing_runtime_data')rowFiber.return=null;
+            if(index===0&&variant==='multiple_heading_messages')
+              dataFiber.return={memoizedProps:{webMangaViewerData:{manga:{...manga},
+                chapters:[{chapters:webChapters}]}},return:null};
+            heading.__reactFiber$target=rowFiber;
           });
-          document.querySelector('h3').__reactFiber$target={memoizedProps:{chapter},return:null};
-          document.querySelector('.Charge_charge__charged__fixture').__reactFiber$charge={
-            memoizedProps:{isChargeNeeded:true,isTicketAvailable:true,chargeStatus},return:null
-          };
+          const unavailable=variant==='unavailable_known_default';
+          const directAvailable=variant==='charge_state_mismatch'?false:!!manga.isTicketAvailable;
+          const directLabel=variant==='charge_state_mismatch'?recovery:(manga.chargeStatus||'');
+          const visibleLabel=directLabel||(directAvailable?available:recoveryUiFallback);
+          const charge=document.querySelector('.Charge_charge__charged__fixture');
+          charge.className=unavailable?'Charge_charge__not_charged__fixture':'Charge_charge__charged__fixture';
+          charge.querySelector('img').src=unavailable
+            ?'/assets/manga_detail/charge.svg':'/assets/manga_detail/charged.svg';
+          charge.querySelector('p').textContent=visibleLabel;
+          const chargeDataFiber={memoizedProps:{webMangaViewerData:chargeData},return:null};
+          charge.__reactFiber$host={memoizedProps:{className:charge.className},
+            return:{memoizedProps:{isTicketAvailable:directAvailable,labelText:directLabel},return:chargeDataFiber}};
         }""",
-        {"chapterId": CHAPTER_ID, "chapterLabel": CHAPTER_LABEL, "chargeStatus": AVAILABLE},
+        {"workId": WORK_ID, "chapterId": CHAPTER_ID, "chapterLabel": CHAPTER_LABEL,
+         "available": AVAILABLE, "recovery": RECOVERY,
+         "recoveryUiFallback": TICKET_RECOVERY_UI_FALLBACK, "variant": variant,
+         "records": records},
     )
 
+
+async def test_listing_snapshot_joins_row_and_charge_to_same_runtime_message(browser_page) -> None:
+    await _install_listing_snapshot_fixture(browser_page)
     snapshot = await read_native_ticket_snapshot(
-        browser_page,
-        work_id=WORK_ID,
-        chapter_id=CHAPTER_ID,
-        page_mode="listing",
+        browser_page, work_id=WORK_ID, chapter_id=CHAPTER_ID, page_mode="listing"
     )
 
     assert snapshot.work_id == WORK_ID
     assert snapshot.chapter_id == CHAPTER_ID
     assert snapshot.point_type == 0 and snapshot.point_amount == 30
-    assert snapshot.is_read is True
+    assert snapshot.is_read is None
     assert snapshot.rental_value == "" and snapshot.rental_present is False
     assert snapshot.is_charge_needed and snapshot.is_ticket_available
     assert snapshot.charge_status == AVAILABLE
 
+
+async def test_listing_snapshot_returns_whitespace_normalized_chapter_label(browser_page) -> None:
+    await _install_listing_snapshot_fixture(browser_page, variant="whitespace_label_match")
+    snapshot = await read_native_ticket_snapshot(
+        browser_page, work_id=WORK_ID, chapter_id=CHAPTER_ID, page_mode="listing"
+    )
+
+    assert snapshot.chapter_label == CHAPTER_LABEL
+
+
+async def test_listing_snapshot_accepts_only_proven_unavailable_defaults(browser_page) -> None:
+    await _install_listing_snapshot_fixture(browser_page, variant="unavailable_known_default")
+    snapshot = await read_native_ticket_snapshot(
+        browser_page, work_id=WORK_ID, chapter_id=CHAPTER_ID, page_mode="listing"
+    )
+
+    assert snapshot.is_ticket_available is False
+    assert snapshot.is_ticket_available_present is False
+    assert snapshot.is_ticket_available_prototype_default is True
+    assert snapshot.charge_status == ""
+    assert snapshot.charge_status_present is False
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "missing_runtime_availability",
+        "missing_runtime_data",
+        "wrong_work",
+        "different_messages_same_values",
+        "multiple_heading_messages",
+        "duplicate_target",
+        "non_target_id_order_mismatch",
+        "runtime_point_amount_mismatch",
+        "ssr_point_type_conflict",
+        "ssr_point_amount_conflict",
+        "ssr_label_conflict",
+        "row_label_conflict",
+        "rental_default_missing",
+        "point_type_missing",
+        "charge_state_mismatch",
+    ],
+)
+async def test_listing_snapshot_rejects_incomplete_or_contradictory_runtime_data(
+    browser_page, variant: str
+) -> None:
+    await _install_listing_snapshot_fixture(browser_page, variant=variant)
+
+    with pytest.raises(UnknownPageStateError):
+        await read_native_ticket_snapshot(
+            browser_page, work_id=WORK_ID, chapter_id=CHAPTER_ID, page_mode="listing"
+        )
 
 async def test_entry_only_page_does_not_attach_image_response_observer(browser_page) -> None:
     adapter = ComicFuzAdapter()

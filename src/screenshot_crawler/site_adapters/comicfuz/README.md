@@ -1,6 +1,6 @@
 # ComicFUZ free adapter
 
-## Work Ticket status (2026-11-24; Phase 02 PASS, Phase 03 synthetic implementation re-review pending)
+## Work Ticket status (2026-11-24; Phase 02 and Gate03 PASS, Phase 04 in progress)
 
 Discovery now classifies visible row-local `無料` as `free`, recognized visible
 S/G coin/medal marks as `paid`, and a fully hydrated row with a confirmed blank
@@ -20,17 +20,31 @@ change was made. Phase 02 live listing work 3667 matched between a logged-in
 context and an isolated anonymous context (25 rows: free 1, paid 1, quota 23);
 no ticket was used. A later canonical free-viewer probe confirmed the native
 React fields used for the controller's pre/post state, also without a ticket.
+The isolated Phase 04 listing preflight then confirmed that Charge state is
+read from the shared runtime `webMangaViewerData` object, while the Charge
+component's direct props contain only availability and label. The adapter joins
+the same exact chapter from that object referenced by both heading and Charge;
+SSR omissions are not filled in. The original Phase 03 synthetic listing
+fixture had a different shape; its correction now passes the focused listing
+projection tests. The initial adapter E2E timeout was a synthetic fixture
+global-`const` collision during `document.write`, fixed by IIFE-scoping the
+listing script; no production guard was loosened.
 See
 [`runbooks/comicfuz-work-ticket/PROGRESS.md`](../../../../runbooks/comicfuz-work-ticket/PROGRESS.md)
 for gates, test results, and remaining native consumption/expiry evidence. Gate
-02 passed independent review with BLOCKING=0. The Phase 03 synthetic targeted
-suite passes, and independent Gate03 review is pending before any live charge
-click. Review-fix synthetic coverage also verifies a capped/timed native response
-read, rejection of noncanonical requests before forwarding, terminal abort of
-in-flight and later ticket requests after cancellation, and a typed no-action
-skip that replans from one unavailable Work to another eligible Work. Ticket
-consumption is first committed without a grant expiry; an observed expiry is
-attached only after fresh final-time validation. No live charge has been clicked.
+02 and Gate03 passed independent review with BLOCKING=0. Latest focused
+controller/listing tests pass (60 passed); normal Batch, grant-only, and
+unavailable-Work replan synthetic E2E pass (3 passed). Independent review also
+passed the 18-case listing projection group and the 3 adapter E2E cases. Review
+coverage verifies a capped/timed native response read, rejection of
+noncanonical requests before forwarding, terminal abort of in-flight and later
+ticket requests after cancellation, and a typed no-action skip that replans
+from one unavailable Work to another eligible Work. Ticket consumption is
+first committed without a grant expiry; an observed expiry is attached only
+after fresh final-time validation. No live charge has been clicked and no real
+ticket has been consumed. The first isolated grant-only action is pending final
+review/Lead go-ahead; actual consume response values and real grant expiry are
+still unverified.
 
 **Current status (2026-11-22):** Discovery and public-free capture accept either logged-in or anonymous shared-Chrome sessions. Account-header links are not access evidence. Live logged-in Full Discovery for work 3140 completed with 241 records in an isolated Catalog; a separate anonymous context on the same CDP browser showed the same 241 native rows and 241 exact free markers. A normal CLI Batch retry of chapter 82123 (第12巻 特典情報), using an isolated Catalog/Watchlist/output, completed with two 1351x1920 JPEGs, positive END, a ZIP Artifact and Completed status. The archive passed CRC/decoding, unique payload hashes and Catalog hash/size checks; both members match the prior same-chapter body-prefix evidence. The final pre-package Manifest was not retained. Native titles now use Discovery's whitespace normalization, final body-to-extras overlap is handled within the existing bounded wait, and the positive recommendation heading distinguishes the END block from additional account recommendations. The original Phases 01-05 passed on 2026-10-13; their implementation commit `4b64a3c` and the work-3140 compatibility fix `f847af0` are included in `main`. See the progress ledger for original phase evidence.
 
