@@ -705,6 +705,13 @@ async def read_native_ticket_snapshot(
             }
             const amountValues = [rowPoint.amount, nativePoint.amount, runtimePoint.amount];
             if (pageMode === 'rental_listing') {
+              // The current row/runtime objects are authoritative for this entry;
+              // SSR amount is only required to be a typed, nonnegative snapshot.
+              if (rowChapter !== chapter || rowPoint !== runtimePoint) {
+                return {state:'listing_runtime_chapter_reference_mismatch'};
+              }
+              const nativeAmountIsNonnegativeInteger = Object.hasOwn(nativePoint, 'amount')
+                && Number.isInteger(nativePoint.amount) && nativePoint.amount >= 0;
               const runtimeAmountDescriptor = Object.getOwnPropertyDescriptor(
                 Object.getPrototypeOf(runtimePoint) || {}, 'amount');
               const runtimeAmountKnownZero = runtimePoint.amount === 0
@@ -714,11 +721,7 @@ async def read_native_ticket_snapshot(
                   && Object.hasOwn(runtimeAmountDescriptor, 'value')
                   && runtimeAmountDescriptor.value === 0
                 ));
-              if (!runtimeAmountKnownZero
-                  || (Object.hasOwn(rowPoint, 'amount')
-                    && rowPoint.amount !== runtimePoint.amount)
-                  || (Object.hasOwn(nativePoint, 'amount')
-                    && nativePoint.amount !== runtimePoint.amount)) {
+              if (!nativeAmountIsNonnegativeInteger || !runtimeAmountKnownZero) {
                 return {state:'listing_runtime_point_amount_mismatch'};
               }
             } else if (amountValues.some(amount => !Number.isInteger(amount) || amount < 0)

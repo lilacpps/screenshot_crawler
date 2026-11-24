@@ -298,14 +298,20 @@ def _relative_rental_listing_html(
     *, work_id: str, chapter_id: str, chapter_label: str, rental_value: str,
     ticket_available: bool = False,
     point_amount: int = 0,
+    native_point_amount: int | str | None = 30,
+    row_runtime_same_chapter: bool = True,
+    row_runtime_same_point: bool = True,
 ) -> str:
+    native_point = (
+        {} if native_point_amount is None else {"amount": native_point_amount}
+    )
     data = {
         "page": "/manga/[mangaId]",
         "query": {"mangaId": work_id},
         "props": {"pageProps": {"chapters": [{"chapters": [{
             "chapterId": chapter_id,
             "chapterMainName": chapter_label,
-            "pointConsumption": {},
+            "pointConsumption": native_point,
         }]}]}},
     }
     charge_class = (
@@ -345,9 +351,14 @@ def _relative_rental_listing_html(
           chapterId:Number(chapterId),chapterMainName:label,pointConsumption:point,
           endOfRentalPeriod:rental
         }});
+        const rowPoint={json.dumps(row_runtime_same_point)}?point:
+          Object.create({{type:0,amount:{point_amount}}});
+        const rowChapter={json.dumps(row_runtime_same_chapter)}?chapter:
+          Object.assign(Object.create(Object.getPrototypeOf(chapter)),chapter,
+            {{pointConsumption:rowPoint}});
         const webMangaViewerData={{manga,chapters:[{{chapters:[chapter]}}]}};
         const heading=document.querySelector('h3');
-        heading.__reactFiber$target={{memoizedProps:{{chapter}},
+        heading.__reactFiber$target={{memoizedProps:{{chapter:rowChapter}},
           return:{{memoizedProps:{{webMangaViewerData}},return:null}}}};
         const badge=document.querySelector('div[class*="Charge_charge__"]');
         const chargeData={{memoizedProps:{{webMangaViewerData}},return:null}};
@@ -1355,6 +1366,91 @@ async def test_comicfuz_relative_rental_row_rejects_hidden_ancestor(browser_page
         "element => { element.style.opacity = '0'; }"
     )
     with pytest.raises(UnknownPageStateError):
+        await read_native_ticket_snapshot(
+            browser_page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="rental_listing",
+        )
+
+
+@pytest.mark.parametrize(
+    ("native_amount", "row_same_chapter", "row_same_point", "expected_state"),
+    [
+        (30, True, True, None),
+        (30, False, True, "listing_runtime_chapter_reference_mismatch"),
+        (30, False, False, "listing_runtime_chapter_reference_mismatch"),
+        ("30", True, True, "listing_runtime_point_amount_mismatch"),
+        (-1, True, True, "listing_runtime_point_amount_mismatch"),
+        (None, True, True, "listing_runtime_point_amount_mismatch"),
+    ],
+    ids=[
+        "three_layer_ssr30_runtime_default_zero",
+        "row_chapter_object_drift",
+        "row_chapter_and_point_object_drift",
+        "ssr_amount_string",
+        "ssr_amount_negative",
+        "ssr_amount_missing",
+    ],
+)
+async def test_comicfuz_rental_listing_requires_runtime_refs_and_valid_ssr_amount(
+    browser_page,
+    native_amount: int | str | None,
+    row_same_chapter: bool,
+    row_same_point: bool,
+    expected_state: str | None,
+) -> None:
+    from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
+        read_native_ticket_snapshot,
+    )
+
+    work_id, chapter_id = "3342", "46741"
+    url = f"{BASE}/manga/{work_id}"
+    html = _relative_rental_listing_html(
+        work_id=work_id,
+        chapter_id=chapter_id,
+        chapter_label="Target rental episode",
+        rental_value="\u6b8b\u308a2\u65e5",
+        native_point_amount=native_amount,
+        row_runtime_same_chapter=row_same_chapter,
+        row_runtime_same_point=row_same_point,
+    )
+
+    async def site_route(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if path == url:
+            await route.fulfill(
+                status=200, content_type="text/html; charset=utf-8", body=html
+            )
+        elif path in {
+            f"{BASE}/assets/manga_detail/charged.svg",
+            f"{BASE}/assets/manga_detail/charge.svg",
+        }:
+            await route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+            )
+        else:
+            await route.fulfill(status=404, body="not found")
+
+    await browser_page.route(f"{BASE}/**", site_route)
+    await browser_page.goto(url, wait_until="domcontentloaded")
+    if expected_state is None:
+        snapshot = await read_native_ticket_snapshot(
+            browser_page,
+            work_id=work_id,
+            chapter_id=chapter_id,
+            page_mode="rental_listing",
+        )
+        assert snapshot.point_amount == 0
+        assert snapshot.point_amount_present is False
+        assert snapshot.point_amount_prototype_default_zero is True
+        assert snapshot.point_type_present is False
+        assert snapshot.point_type_prototype_default_zero is True
+        return
+
+    with pytest.raises(UnknownPageStateError, match=expected_state):
         await read_native_ticket_snapshot(
             browser_page,
             work_id=work_id,
