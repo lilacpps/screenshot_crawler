@@ -52,6 +52,12 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     triple = [image.copy(), image.copy(), extra, unlinked_extra, extra.copy(),
               {"role": "google_ads"}, {"role": "last_page"}]
     assert _classify_viewer_pages(triple) == ((0, 1), 2)
+    unlinked_pair_tail = [
+        *[image.copy() for _ in range(12)],
+        unlinked_extra.copy(), unlinked_extra.copy(), extra.copy(),
+        {"role": "google_ads"}, {"role": "last_page"},
+    ]
+    assert _classify_viewer_pages(unlinked_pair_tail) == (tuple(range(12)), 12)
 
     invalid = [
         [image.copy(), {**image, "has_link": True}, {"role": "google_ads"}, {"role": "last_page"}],
@@ -65,6 +71,10 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
         [image.copy(), extra, extra, extra, {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, unlinked_extra, image.copy(),
          {"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), unlinked_extra, extra.copy(),
+         {"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), unlinked_extra, unlinked_extra, unlinked_extra, extra.copy(),
+         {"role": "google_ads"}, {"role": "last_page"}],
     ]
     for candidate in invalid:
         with pytest.raises(UnknownPageStateError):
@@ -72,6 +82,90 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     assert (
         capture_comicfuz_source_bytes(b"not a jpeg", expected_width=19, expected_height=31) is None
     )
+
+
+def test_comicfuz_unlinked_pair_tail_requires_exact_manifest_and_capture_history() -> None:
+    image = {"role": "image", "is_extra": None, "has_link": False,
+             "link_metadata_valid": True, "width": 1351, "height": 1920}
+    unlinked = {"role": "image", "is_extra": True, "has_link": False,
+                "link_metadata_valid": True, "width": 1359, "height": 1920}
+    linked = {"role": "image", "is_extra": True, "has_link": True,
+              "link_metadata_valid": True, "width": 750, "height": 1334}
+    manifest = [
+        *[image.copy() for _ in range(12)],
+        unlinked.copy(), unlinked.copy(), linked.copy(),
+        {"role": "google_ads"}, {"role": "last_page"},
+    ]
+    body_indices, extra_index = _classify_viewer_pages(manifest)
+    adapter = ComicFuzAdapter()
+    adapter._viewer_pages = manifest
+    adapter._body_page_indices = body_indices
+    adapter._extra_page_index = extra_index
+    adapter._is_first_page_blank = True
+    adapter._initial_body_indices = (0,)
+
+    body_plus_unlinked = [
+        {"number": 11, "alt": "page_11", "role": "body", "width": 1351, "height": 1920},
+        {"number": 12, "alt": "page_12", "role": "unlinked_extra", "width": 1359, "height": 1920},
+    ]
+    adapter._captured_indices = []
+    with pytest.raises(UnknownPageStateError, match="final body page"):
+        adapter._validate_page_group(body_plus_unlinked)
+    adapter._validate_page_group(body_plus_unlinked, allow_initial_rewind=True)
+    adapter._initialized = True
+    with pytest.raises(UnknownPageStateError, match="final body page"):
+        adapter._validate_page_group(body_plus_unlinked, allow_initial_rewind=True)
+    adapter._initialized = False
+    adapter._captured_indices = [0]
+    with pytest.raises(UnknownPageStateError, match="final body page"):
+        adapter._validate_page_group(body_plus_unlinked, allow_initial_rewind=True)
+    adapter._captured_indices = list(range(11))
+    adapter._validate_page_group(body_plus_unlinked)
+    adapter._captured_indices = list(range(12))
+    adapter._last_captured_group = (11,)
+    adapter._last_rendered_group = (11, 12)
+    adapter._validate_page_group(body_plus_unlinked)
+
+    mixed_tail_group = [
+        {"number": 13, "alt": "page_13", "role": "unlinked_extra", "width": 1359, "height": 1920},
+        {"number": 14, "alt": "page_14", "role": "linked_extra", "width": 750, "height": 1334},
+    ]
+    assert adapter._expected_extra_tail_group() == (13, 14)
+    adapter._validate_page_group(mixed_tail_group)
+    adapter._require_extra_tail_sequence(mixed_tail_group)
+
+    unlinked_pair = [
+        {"number": 12, "alt": "page_12", "role": "unlinked_extra", "width": 1359, "height": 1920},
+        {"number": 13, "alt": "page_13", "role": "unlinked_extra", "width": 1359, "height": 1920},
+    ]
+    adapter._captured_indices = []
+    with pytest.raises(UnknownPageStateError, match="expected post-body tail group"):
+        adapter._validate_page_group(unlinked_pair)
+    adapter._validate_page_group(unlinked_pair, allow_initial_rewind=True)
+    adapter._initialized = True
+    with pytest.raises(UnknownPageStateError, match="expected post-body tail group"):
+        adapter._validate_page_group(unlinked_pair, allow_initial_rewind=True)
+    adapter._initialized = False
+    adapter._captured_indices = [0]
+    with pytest.raises(UnknownPageStateError, match="expected post-body tail group"):
+        adapter._validate_page_group(unlinked_pair, allow_initial_rewind=True)
+    adapter._last_captured_group = (10, 11)
+    adapter._last_rendered_group = (10, 11)
+    adapter._captured_indices = list(range(12))
+    adapter._validate_page_group(unlinked_pair)
+    adapter._require_extra_tail_sequence(unlinked_pair)
+
+    skipped_extra = mixed_tail_group
+    with pytest.raises(UnknownPageStateError, match="extra tail is out of sequence"):
+        adapter._require_extra_tail_sequence(skipped_extra)
+
+    adapter._captured_indices = list(range(11))
+    with pytest.raises(UnknownPageStateError, match="expected post-body tail group"):
+        adapter._validate_page_group(unlinked_pair)
+
+    adapter._captured_indices = list(range(10))
+    with pytest.raises(UnknownPageStateError, match="final body page"):
+        adapter._validate_page_group(body_plus_unlinked)
 
 
 @pytest.mark.asyncio

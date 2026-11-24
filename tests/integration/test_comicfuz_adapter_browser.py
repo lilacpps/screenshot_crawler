@@ -406,6 +406,7 @@ def _viewer_html(
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
+    extra_tail_unlinked_pair: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
@@ -456,7 +457,13 @@ def _viewer_html(
             image_groups[last_state].append(body_descriptor_count)
         if not first_pair_mode and missing_second_page:
             image_groups[1] = [1]
-        if extra_tail:
+        if extra_tail_unlinked_pair:
+            if body_descriptor_count in image_groups[last_state]:
+                image_groups[last_state + 1] = [body_descriptor_count + 1, body_descriptor_count + 2]
+            else:
+                image_groups[last_state + 1] = [body_descriptor_count, body_descriptor_count + 1]
+                image_groups[last_state + 2] = [body_descriptor_count + 2]
+        elif extra_tail:
             remaining_extras = [n for n in range(body_descriptor_count, body_descriptor_count + 3)
                                 if n not in image_groups[last_state]]
             for start in range(0, len(remaining_extras), 2):
@@ -491,14 +498,23 @@ def _viewer_html(
         const pageDescriptors = Array.from({{length:{body_descriptor_count}}}, (_, index) => ({{
           image:{{imageWidth:{97 if descriptor_width_mismatch else 96},imageHeight:144}}
         }}));
-        pageDescriptors.push(
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
-          {{googleAds:{{}}}}, {{lastPage:{{}}}}
-        );
-        if ({str(extra_tail).lower()}) pageDescriptors.splice(pageDescriptors.length - 2, 0,
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
-          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}}
-        );
+        if ({str(extra_tail_unlinked_pair).lower()}) {{
+          pageDescriptors.push(
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{googleAds:{{}}}}, {{lastPage:{{}}}}
+          );
+        }} else {{
+          pageDescriptors.push(
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{googleAds:{{}}}}, {{lastPage:{{}}}}
+          );
+          if ({str(extra_tail).lower()}) pageDescriptors.splice(pageDescriptors.length - 2, 0,
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}}
+          );
+        }}
         const viewerData = {{pages:pageDescriptors}};
         if ({str(first_page_blank_inherited).lower()})
           Object.setPrototypeOf(viewerData, {{isFirstPageBlank:false}});
@@ -715,6 +731,7 @@ async def _route_comicfuz(
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
+    extra_tail_unlinked_pair: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
@@ -745,6 +762,7 @@ async def _route_comicfuz(
         persistent_transition_overlap=persistent_transition_overlap,
         transition_overlap_variant=transition_overlap_variant,
         extra_tail=extra_tail,
+        extra_tail_unlinked_pair=extra_tail_unlinked_pair,
         latest_end=latest_end,
         stuck_extra_tail=stuck_extra_tail,
         native_subtitle=native_subtitle,
@@ -1843,13 +1861,26 @@ async def test_unavailable_work_ticket_skips_only_that_work_and_replans(
     assert any(candidate.external_id == "3667:76630" for candidate in replanned.candidates)
 
 
-@pytest.mark.parametrize(("extra_tail", "latest_end", "body_count"), [
-    (False, "none", 2), (True, "none", 2), (True, "valid", 2), (False, "valid", 2),
-    (True, "account_recommendations", 2), (True, "none", 1), (True, "account_recommendations", 1),
-])
+@pytest.mark.parametrize(
+    ("extra_tail", "latest_end", "body_count", "extra_tail_unlinked_pair", "first_blank"),
+    [
+        (False, "none", 2, False, True), (True, "none", 2, False, True),
+        (True, "valid", 2, False, True), (False, "valid", 2, False, True),
+        (True, "account_recommendations", 2, False, True),
+        (True, "none", 1, False, True),
+        (True, "account_recommendations", 1, False, True),
+        (True, "none", 12, True, True),
+        (True, "none", 12, True, False),
+    ],
+    ids=[
+        "body-only", "legacy-extra-tail", "legacy-next-chapter-end", "latest-end",
+        "legacy-extra-account-recommendation", "legacy-single-body", "legacy-single-body-end",
+        "unlinked-pair-tail-blank-first", "unlinked-pair-tail-nonblank-first",
+    ],
+)
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
     browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str,
-    body_count: int,
+    body_count: int, extra_tail_unlinked_pair: bool, first_blank: bool,
 ) -> None:
     (
         catalog,
@@ -1863,6 +1894,9 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     ) = await _comicfuz_batch_fixture(
         browser_page, tmp_path, sync_legacy_unscoped_work,
         extra_tail=extra_tail, latest_end=latest_end,
+        extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        first_page_blank=first_blank,
+        first_mode_body_page_count=body_count,
         true_mode_body_page_count=body_count,
         native_subtitle="Fixture subtitle" if latest_end == "valid" else "",
     )
@@ -1872,7 +1906,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         candidate,
         output_root=tmp_path / "batch-output",
         library_dir=tmp_path / "library",
-        max_pages=5,
+        max_pages=max(5, body_count),
         now=NOW,
     )
 
@@ -1902,6 +1936,7 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
 
 @pytest.mark.parametrize("failure", [
     "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail", "stuck_single_extra_tail",
+    "uul_stuck", "uul_premature_end",
     "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
     "duplicate_recommendations",
 ])
@@ -1910,6 +1945,7 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
 ) -> None:
     route_change = failure == "route_drift"
     unknown_tail = failure == "unknown_tail"
+    unlinked_pair_tail = failure in {"uul_stuck", "uul_premature_end"}
     catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
             browser_page,
@@ -1917,13 +1953,26 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             sync_legacy_unscoped_work,
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
-            extra_tail=failure not in {"stale_free", "route_drift", "unknown_tail"},
-            stuck_extra_tail=failure in {"stuck_extra_tail", "stuck_single_extra_tail"},
-            true_mode_body_page_count=1 if failure == "stuck_single_extra_tail" else 2,
-            latest_end=failure if failure in {
-                "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
-                "duplicate_recommendations",
-            } else "none",
+            extra_tail=unlinked_pair_tail or failure not in {"stale_free", "route_drift", "unknown_tail"},
+            extra_tail_unlinked_pair=unlinked_pair_tail,
+            true_mode_body_page_count=(
+                12 if unlinked_pair_tail else (1 if failure == "stuck_single_extra_tail" else 2)
+            ),
+            first_mode_body_page_count=12 if unlinked_pair_tail else 4,
+            first_page_blank=True,
+            initial_state=99 if failure == "uul_premature_end" else 0,
+            stuck_extra_tail=failure == "uul_stuck" or failure in {
+                "stuck_extra_tail", "stuck_single_extra_tail"
+            },
+            latest_end=(
+                "valid" if failure == "uul_premature_end" else (
+                    failure if failure in {
+                        "missing_actions", "wrong_labels", "hidden_recommendations",
+                        "duplicate_title", "duplicate_recommendations",
+                    }
+                    else "none"
+                )
+            ),
             page_change_timeout_ms=700,
         )
     )
@@ -1940,7 +1989,7 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             candidate,
             output_root=tmp_path / "batch-output",
             library_dir=tmp_path / "library",
-            max_pages=5,
+            max_pages=20 if unlinked_pair_tail else 5,
             now=NOW,
         )
 
@@ -2398,6 +2447,45 @@ async def test_comicfuz_waits_for_both_initial_pair_images(
         row["number"] for row in await adapter._active_page_rows(browser_page)
     ) == (0, 1)
     assert adapter._captured_indices == []
+
+
+@pytest.mark.parametrize(
+    ("first_page_blank", "initial_state", "restored_numbers", "initial_numbers"),
+    [
+        (True, 6, (11, 12), (0,)),
+        (False, 6, (12, 13), (0, 1)),
+        (False, 7, (14,), (0, 1)),
+    ],
+    ids=["restored-final-body-and-extra", "restored-unlinked-pair", "restored-linked-last"],
+)
+async def test_comicfuz_uul_restored_positions_rewind_before_capture(
+    browser_page,
+    first_page_blank: bool,
+    initial_state: int,
+    restored_numbers: tuple[int, ...],
+    initial_numbers: tuple[int, ...],
+) -> None:
+    await _route_comicfuz(
+        browser_page,
+        extra_tail_unlinked_pair=True,
+        first_page_blank=first_page_blank,
+        first_page_blank_inherited=not first_page_blank,
+        first_mode_body_page_count=12,
+        true_mode_body_page_count=12,
+        initial_state=initial_state,
+    )
+    adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(WORK_URL, wait_until="commit")
+    await adapter.configure_target_identity("1970:80641", "comicfuz:1970")
+    adapter.resolve_initial_navigation_url(VIEWER_URL)
+
+    await adapter.initialize(browser_page)
+
+    rows = await adapter._active_page_rows(browser_page)
+    assert tuple(row["number"] for row in rows) == initial_numbers
+    assert adapter._captured_indices == []
+    assert tuple(row["number"] for row in rows) != restored_numbers
 
 
 @pytest.mark.parametrize("missing_index", [0, 1])

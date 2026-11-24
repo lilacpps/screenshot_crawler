@@ -112,15 +112,16 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
         else:
             raise UnknownPageStateError("ComicFUZ viewer contains an unsupported page role")
 
-    extra_positions = [index for index, role in enumerate(roles) if role == "linked_extra"]
+    extra_positions = [index for index, role in enumerate(roles) if role != "body_candidate"]
     if not extra_positions:
-        raise UnknownPageStateError("ComicFUZ viewer must expose a linked extra-page marker")
+        raise UnknownPageStateError("ComicFUZ viewer must expose a native extra-page boundary")
     extra_index = extra_positions[0]
     if extra_index < 1 or roles[:extra_index] != ["body_candidate"] * extra_index:
         raise UnknownPageStateError("ComicFUZ body pages are not a contiguous unlinked prefix")
     if roles[extra_index:] not in (
         ["linked_extra", "google_ads", "last_page"],
         ["linked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
+        ["unlinked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
     ):
         raise UnknownPageStateError("ComicFUZ viewer tail differs from the verified layout")
     return tuple(range(extra_index)), extra_index
@@ -710,9 +711,11 @@ class ComicFuzAdapter(SiteAdapter):
             raise PageChangeTimeoutError(
                 "ComicFUZ first-party viewer page-role manifest did not become available"
             )
-        first = await self._wait_for_stable_body(page)
+        first = await self._wait_for_stable_body(page, allow_initial_rewind=True)
         if tuple(row["number"] for row in first) != self._initial_body_indices:
-            first = await self._rewind_to_first_body(page, first)
+            first = await self._rewind_to_first_body(
+                page, first, allow_initial_rewind=True
+            )
         if tuple(row["number"] for row in first) != self._initial_body_indices:
             raise UnknownPageStateError("ComicFUZ reader did not restore to its first body page")
         self._episode_title = await self._read_episode_title(page)
@@ -1471,18 +1474,45 @@ class ComicFuzAdapter(SiteAdapter):
         rows.sort(key=lambda row: float(row["x"]), reverse=True)
         return rows
 
-    async def _active_page_rows(self, page: Page) -> list[dict[str, Any]]:
+    async def _active_page_rows(
+        self,
+        page: Page,
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> list[dict[str, Any]]:
         rows = [row for row in await self._all_page_rows(page) if row["active"]]
         if rows:
-            self._validate_page_group(rows)
+            self._validate_page_group(rows, allow_initial_rewind=allow_initial_rewind)
         return rows
 
     @staticmethod
     def _body_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if row.get("role") == "body"]
 
+    def _manifest_role_at(self, index: int) -> str | None:
+        if self._viewer_pages is None or index < 0 or index >= len(self._viewer_pages):
+            return None
+        if index in self._body_page_indices:
+            return "body"
+        slot = self._viewer_pages[index]
+        if slot.get("role") != "image" or slot.get("is_extra") is not True:
+            return None
+        linked = slot.get("has_link")
+        if type(linked) is not bool:
+            return None
+        return "linked_extra" if linked else "unlinked_extra"
+
+    def _native_extra_tail_roles(self) -> tuple[str | None, ...]:
+        extra = self._extra_page_index
+        if extra is None or self._viewer_pages is None or len(self._viewer_pages) < extra + 3:
+            return ()
+        return tuple(
+            self._manifest_role_at(index)
+            for index in range(extra, len(self._viewer_pages) - 2)
+        )
+
     def _expected_extra_tail_group(self) -> tuple[int, ...]:
-        """Return only the next group in the two observed three-extra layouts."""
+        """Return only the next group in the three supported extra-tail layouts."""
         extra = self._extra_page_index
         if (
             extra is None
@@ -1490,6 +1520,26 @@ class ComicFuzAdapter(SiteAdapter):
             or len(self._viewer_pages) != extra + 5
             or self._captured_indices != list(self._body_page_indices)
         ):
+            return ()
+        tail_roles = self._native_extra_tail_roles()
+        if tail_roles == ("unlinked_extra", "unlinked_extra", "linked_extra"):
+            if self._advanced_extra_groups:
+                if (
+                    self._advanced_extra_groups == ((extra, extra + 1),)
+                    and self._last_rendered_group == (extra, extra + 1)
+                ):
+                    return (extra + 2,)
+                return ()
+            if self._last_rendered_group == (extra - 1, extra):
+                return (extra + 1, extra + 2)
+            if (
+                self._last_captured_group
+                and self._last_rendered_group == self._last_captured_group
+                and self._last_captured_group[-1] == extra - 1
+            ):
+                return (extra, extra + 1)
+            return ()
+        if tail_roles != ("linked_extra", "unlinked_extra", "linked_extra"):
             return ()
         if self._advanced_extra_groups:
             if (
@@ -1516,6 +1566,7 @@ class ComicFuzAdapter(SiteAdapter):
             self._advanced_extra_groups
             and numbers == self._advanced_extra_groups[-1] == self._last_rendered_group
         )
+        expected_roles = tuple(self._manifest_role_at(number) for number in numbers)
         if (
             not numbers
             or extra is None
@@ -1523,10 +1574,8 @@ class ComicFuzAdapter(SiteAdapter):
             or len(self._viewer_pages) != extra + 5
             or self._captured_indices != list(self._body_page_indices)
             or (numbers != self._expected_extra_tail_group() and not stale)
-            or [row.get("role") for row in rows] != [
-                "unlinked_extra" if number == extra + 1 else "linked_extra"
-                for number in numbers
-            ]
+            or any(role is None for role in expected_roles)
+            or tuple(row.get("role") for row in rows) != expected_roles
         ):
             raise UnknownPageStateError("ComicFUZ extra tail is out of sequence")
 
@@ -1642,8 +1691,12 @@ class ComicFuzAdapter(SiteAdapter):
                 return False
         return True
 
-    @staticmethod
-    def _validate_page_group(rows: list[dict[str, Any]]) -> None:
+    def _validate_page_group(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> None:
         if not rows or len(rows) > 2:
             raise UnknownPageStateError("ComicFUZ visible page spread has an unsupported shape")
         for row in rows:
@@ -1654,19 +1707,87 @@ class ComicFuzAdapter(SiteAdapter):
         if len(rows) == 2 and numbers[1] != numbers[0] + 1:
             raise UnknownPageStateError("ComicFUZ spread page identities are not contiguous")
         roles = [row.get("role") for row in rows]
-        if roles not in (
+        initial_uul_rewind = bool(
+            allow_initial_rewind
+            and not self._initialized
+            and not self._captured_indices
+            and self._native_extra_tail_roles()
+            == ("unlinked_extra", "unlinked_extra", "linked_extra")
+        )
+        if roles in (
             ["body"], ["body", "body"], ["unlinked_extra", "linked_extra"],
             ["linked_extra", "unlinked_extra"], ["linked_extra"],
         ):
-            if roles == ["body", "linked_extra"]:
-                if rows[1].get("number") != rows[0].get("number") + 1:
-                    raise UnknownPageStateError(
-                        "ComicFUZ linked extra is not joined to the final spread"
-                    )
-            else:
+            return
+        if roles == ["body", "linked_extra"]:
+            if numbers[1] != numbers[0] + 1:
                 raise UnknownPageStateError(
-                    "ComicFUZ spread contains an unsupported page-role sequence"
+                    "ComicFUZ linked extra is not joined to the final spread"
                 )
+            return
+        if roles == ["body", "unlinked_extra"]:
+            extra = self._extra_page_index
+            body_indices = self._body_page_indices
+            numbers_tuple = tuple(numbers)
+            before_last_body = bool(
+                extra is not None
+                and self._native_extra_tail_roles()
+                    == ("unlinked_extra", "unlinked_extra", "linked_extra")
+                and numbers_tuple == (extra - 1, extra)
+                and tuple(self._captured_indices) == body_indices[:-1]
+                and self._expected_body_group() == (extra - 1,)
+            )
+            captured_last_body = bool(
+                extra is not None
+                and self._native_extra_tail_roles()
+                    == ("unlinked_extra", "unlinked_extra", "linked_extra")
+                and numbers_tuple == (extra - 1, extra)
+                and tuple(self._captured_indices) == body_indices
+                and self._last_captured_group == (extra - 1,)
+                and self._last_rendered_group == numbers_tuple
+            )
+            initial_final_body_and_extra = bool(
+                initial_uul_rewind
+                and extra is not None
+                and numbers_tuple == (extra - 1, extra)
+            )
+            if not (before_last_body or captured_last_body or initial_final_body_and_extra):
+                raise UnknownPageStateError(
+                    "ComicFUZ unlinked extra is not joined to the expected final body page"
+                )
+            return
+        if roles == ["unlinked_extra", "unlinked_extra"]:
+            extra = self._extra_page_index
+            numbers_tuple = tuple(numbers)
+            stale_advanced_group = bool(
+                self._advanced_extra_groups
+                and numbers_tuple == self._advanced_extra_groups[-1] == self._last_rendered_group
+            )
+            initial_unlinked_pair = bool(
+                initial_uul_rewind
+                and extra is not None
+                and numbers_tuple == (extra, extra + 1)
+            )
+            if (
+                extra is None
+                or self._native_extra_tail_roles()
+                    != ("unlinked_extra", "unlinked_extra", "linked_extra")
+                or (
+                    tuple(self._captured_indices) != self._body_page_indices
+                    and not initial_unlinked_pair
+                )
+                or numbers_tuple != (extra, extra + 1)
+                or (
+                    numbers_tuple != self._expected_extra_tail_group()
+                    and not stale_advanced_group
+                    and not initial_unlinked_pair
+                )
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ unlinked extra pair is not the expected post-body tail group"
+                )
+            return
+        raise UnknownPageStateError("ComicFUZ spread contains an unsupported page-role sequence")
 
     @staticmethod
     def _validate_page_row(row: dict[str, Any]) -> None:
@@ -1823,7 +1944,12 @@ class ComicFuzAdapter(SiteAdapter):
             },
         )
 
-    async def _wait_for_stable_body(self, page: Page) -> list[dict[str, Any]]:
+    async def _wait_for_stable_body(
+        self,
+        page: Page,
+        *,
+        allow_initial_rewind: bool = False,
+    ) -> list[dict[str, Any]]:
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         previous: tuple[object, ...] | None = None
         stable = 0
@@ -1833,9 +1959,12 @@ class ComicFuzAdapter(SiteAdapter):
                 stable = 0
                 await page.wait_for_timeout(self.render_poll_ms)
                 continue
-            rows = await self._active_page_rows(page)
+            rows = await self._active_page_rows(
+                page,
+                allow_initial_rewind=allow_initial_rewind,
+            )
             if rows and all(row["ready"] for row in rows):
-                self._validate_page_group(rows)
+                self._validate_page_group(rows, allow_initial_rewind=allow_initial_rewind)
                 numbers = tuple(int(row["number"]) for row in rows)
                 if self._is_incomplete_initial_group(numbers):
                     previous = None
@@ -1861,8 +1990,16 @@ class ComicFuzAdapter(SiteAdapter):
         )
 
     async def _rewind_to_first_body(
-        self, page: Page, rows: list[dict[str, Any]]
+        self,
+        page: Page,
+        rows: list[dict[str, Any]],
+        *,
+        allow_initial_rewind: bool = False,
     ) -> list[dict[str, Any]]:
+        if allow_initial_rewind and (self._initialized or self._captured_indices):
+            raise UnknownPageStateError(
+                "ComicFUZ initial rewind allowance is unavailable after capture"
+            )
         previous = rows
         for _ in range(self.max_rewind_turns):
             numbers = tuple(int(row["number"]) for row in previous)
@@ -1881,8 +2018,15 @@ class ComicFuzAdapter(SiteAdapter):
                     prior_signature = None
                     await page.wait_for_timeout(self.render_poll_ms)
                     continue
-                current = await self._active_page_rows(page)
+                current = await self._active_page_rows(
+                    page,
+                    allow_initial_rewind=allow_initial_rewind,
+                )
                 if current and all(row["ready"] for row in current):
+                    self._validate_page_group(
+                        current,
+                        allow_initial_rewind=allow_initial_rewind,
+                    )
                     current_signature = self._body_signature(current)
                     stable = stable + 1 if current_signature == prior_signature else 0
                     if stable >= self.render_stable_checks and current_signature != signature:
