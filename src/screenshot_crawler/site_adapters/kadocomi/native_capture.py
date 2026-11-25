@@ -274,6 +274,10 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     };
     const beginningNodes = [...root.querySelectorAll('div[data-type="beginning"]')];
     const prNodes = [...root.querySelectorAll('div[data-type="pr"]')];
+    const beginningOwnerIndex = node => {
+      const beginning = node.closest('div[data-type="beginning"]');
+      return beginning ? slides.indexOf(beginning.closest('.splide__slide')) : -1;
+    };
     const beginningMarkers = beginningNodes.map(node => {
       const owner = node.closest('.splide__slide');
       return {
@@ -288,7 +292,6 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     });
     const prMarkers = prNodes.map(node => {
       const owner = node.closest('.splide__slide');
-      const beginning = node.closest('div[data-type="beginning"]');
       return {
         tagName: node.tagName,
         wrapperClass: hasClassPrefix(node, '_endOfBookWrapper_'),
@@ -296,8 +299,7 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
         dataType: node.getAttribute('data-type'),
         dataN: node.getAttribute('data-n'),
         slideIndex: slides.indexOf(owner),
-        beginningOwnerIndex: beginning
-          ? slides.indexOf(beginning.closest('.splide__slide')) : -1,
+        beginningOwnerIndex: beginningOwnerIndex(node),
         box: markerBox(node)
       };
     });
@@ -323,7 +325,10 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
       };
     };
     const mainEndMarkers = markers.map(markerRecord);
-    const secondaryEndMarkers = secondaryEndNodes.map(markerRecord);
+    const secondaryEndMarkers = secondaryEndNodes.map(node => ({
+      ...markerRecord(node),
+      beginningOwnerIndex: beginningOwnerIndex(node)
+    }));
     const activeIndex = slides.indexOf(active[0]);
     if (unclassifiedEndMarkerCount > 0) return {status: 'end_marker_shape'};
     return {

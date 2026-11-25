@@ -571,6 +571,73 @@ inventory errors now include bounded content-count and marker-position summaries
 in the exception and adapter diagnostics, without source/Blob URLs or image data.
 Detailed evidence, test results and limitations are in `note/12_kadocomi.md`.
 
+## First body slide with a main END marker and a final PR bridge (2026-11-26)
+
+`content_first_final_pr_bridge` supports the layout observed on 第9話②
+(`KC_007947_S:KC_0079470001000011_E`) and 第9話①
+(`KC_007947_S:KC_0079470001000051_E`). The first wrapped body canvas
+shares slide 0 with main END n=1. Body pairs follow, then a final singleton
+with PR n=2, an empty slide with PR n=1 and main END n=2, and an empty paired
+main END. An optional recommendation follows as one empty secondary END slide.
+After saving every body slot, the adapter makes one guarded ArrowLeft from
+the final singleton and one from the stable PR bridge. It requires the exact
+next slide on each turn and completes on the paired END. Live direct crawls
+reached END with eight native WebP pages per episode. See `note/12_kadocomi.md`
+for the validated marker layout and verification scope.
+
+## Beginning slide with a secondary END and a final PR bridge (2026-11-26)
+
+`beginning_end_final_pr_bridge` supports 第8話④
+(`KC_007947_S:KC_0079470000900041_E`). Its empty beginning slide contains an
+unnumbered secondary END inside the beginning root. One guarded ArrowLeft
+opens the first body spread. Paired body slides lead to a final singleton
+with PR n=2, then an empty PR n=1/main END n=2 bridge and the empty paired
+main END. The adapter saves every body slot, advances once from the final
+singleton and once from the settled bridge, and completes on the paired
+main END. See `note/12_kadocomi.md` for the observed sequence and validation.
+
+## First body slide with a main END and a single PR-pair bridge (2026-11-26)
+
+`content_first_pr_pair_bridge` supports 第8話③
+(`KC_007947_S:KC_0079470000900031_E`). A first wrapped body singleton
+shares the slide with main END n=1 and is followed by body pairs.
+The last pair advances by the regular hit-tested overlay to an empty
+slide with PR n=1/n=2. With all body slots captured, the adapter makes
+one guarded ArrowLeft from the stable PR slide to the paired main END.
+The following empty secondary END is the recommendation. See
+`note/12_kadocomi.md` for the live and regression evidence.
+
+## Beginning and recommendation secondary ENDs with a PR-pair bridge (2026-11-26)
+
+`beginning_end_pr_pair_bridge` supports 第6話②
+(`KC_007947_S:KC_0079470000700021_E`). The secondary END inside the empty
+beginning root identifies entry. One guarded ArrowLeft opens the first
+body spread, and normal overlay turns advance through the body pairs.
+After capturing every body slot, the adapter advances once from the stable
+empty PR n=1/n=2 slide into the immediately following paired main END.
+The second secondary END owns the subsequent recommendation slide.
+See `note/12_kadocomi.md` for the observed marker roles and verification.
+
+## Beginning secondary END layout settlement (2026-11-26)
+
+The initial reader check allows up to four extra 150 ms polls when an
+otherwise validated beginning secondary END has zero height on the active
+first slide. The marker must gain positive, contained geometry and the full
+reader inventory must settle before the entry key is sent. Persistent zero
+height, invalid marker roles or geometry elsewhere still fail closed.
+第5話⑤ was observed with a transient zero-height marker before it settled.
+
+## First body slide with a main END and two PR bridges (2026-11-26)
+
+`content_first_pr_pair_end_bridge` supports 第1話
+(`KC_007947_S:KC_0079470000200011_E`). The first wrapped body singleton
+shares main END n=1. Body pairs then lead to an empty PR n=1/n=2 slide,
+an empty PR n=1/main END n=2 slide and the paired main END. The body
+uses normal hit-tested overlay turns. After all body slots are captured,
+each empty PR slide must settle and advance once by guarded ArrowLeft
+to the exact next slide. Completion is on the paired main END. See
+`note/12_kadocomi.md` for the observed marker roles and verification.
+
 ## Operational validation
 
 Use only a dedicated Watchlist and Catalog beneath ignored `work/kadocomi/`; never point at the normal user Catalog/output. Real-site browser access uses the existing shared Crawler Chrome through CDP and Playwright. The adapter does not launch Chrome or select a profile. Do not log in, buy, consume tickets/coins/points, access rental/purchased content, or bypass gates.

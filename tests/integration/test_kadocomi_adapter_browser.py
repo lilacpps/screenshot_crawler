@@ -128,6 +128,12 @@ def _reader_html(
     metadata_fault: str | None = None,
 ) -> str:
     image_data = [base64.b64encode(image).decode("ascii") for image in images]
+    beginning_secondary_end = reader_layout in {
+        "beginning_end_final_pr_bridge", "beginning_end_pr_pair_bridge",
+    }
+    single_pr_pair_bridge = reader_layout in {
+        "content_first_pr_pair_bridge", "beginning_end_pr_pair_bridge",
+    }
     if reader_layout == "paired":
         pages = [
             {"images": [0]},
@@ -178,22 +184,42 @@ def _reader_html(
                 pages[-1]["trailing"] = True
     elif reader_layout in {
         "direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation",
-        "direct_first_final_pr_bridge_secondary_end",
+        "direct_first_final_pr_bridge_secondary_end", "content_first_final_pr_bridge",
+        "content_first_final_pr_bridge_no_recommendation", "beginning_end_final_pr_bridge",
+        "content_first_pr_pair_bridge", "beginning_end_pr_pair_bridge",
+        "content_first_pr_pair_end_bridge",
         "direct_first_pr_pair_bridge", "direct_first_pr_pair_bridge_single", "paired_first_pr_pair_bridge",
     }:
-        final_singleton = reader_layout in {"direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation", "direct_first_final_pr_bridge_secondary_end"}
-        if reader_layout == "direct_first_final_pr_bridge_secondary_end" and (len(images) < 4 or len(images) % 2):
-            raise ValueError("final-PR secondary bridge requires first/final singletons and middle pairs")
+        content_first_bridge = reader_layout.startswith("content_first_final_pr_bridge")
+        beginning_end_bridge = reader_layout == "beginning_end_final_pr_bridge"
+        content_first_pr_pair = reader_layout.startswith("content_first_pr_pair_")
+        two_pr_bridge = content_first_bridge or beginning_end_bridge or reader_layout == "direct_first_final_pr_bridge_secondary_end"
+        final_singleton = two_pr_bridge or reader_layout in {
+            "direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation",
+        }
+        if beginning_end_bridge and (len(images) < 3 or len(images) % 2 != 1):
+            raise ValueError("beginning END bridge requires body pairs and a final singleton")
+        if reader_layout == "beginning_end_pr_pair_bridge" and (len(images) < 2 or len(images) % 2):
+            raise ValueError("beginning END with a PR pair requires paired body pages")
+        if two_pr_bridge and not beginning_end_bridge and (len(images) < 4 or len(images) % 2):
+            raise ValueError("final-PR bridge requires first/final singletons and middle pairs")
         direct = reader_layout.startswith("direct_first_")
-        pages = [{"images": [0]}] if direct else []
-        pages.extend({"images": [i, i + 1]} for i in range(int(direct), len(images) - int(final_singleton), 2))
+        first_singleton = direct or content_first_bridge or content_first_pr_pair
+        pages = [{"images": [0]}] if first_singleton else []
+        if beginning_secondary_end:
+            pages.append({"images": []})
+        if content_first_bridge or content_first_pr_pair:
+            pages[0]["end_numbers"] = ["1"]
+        pages.extend({"images": [i, i + 1]} for i in range(int(first_singleton), len(images) - int(final_singleton), 2))
         if final_singleton:
             pages.append({"images": [len(images) - 1], "pr_numbers": ["2"]})
             pages.append(
                 {"images": [], "pr_numbers": ["1"], "end_numbers": ["2"]}
-                if reader_layout == "direct_first_final_pr_bridge_secondary_end"
+                if two_pr_bridge
                 else {"images": [], "pr_numbers": ["1", "2"]}
             )
+        elif single_pr_pair_bridge:
+            pages.append({"images": [], "pr_numbers": ["1", "2"]})
         else:
             pages.extend([
                 {"images": [], "pr_numbers": ["1", "2"]},
@@ -201,7 +227,9 @@ def _reader_html(
             ])
         if reader_layout != "direct_first_final_pr_bridge_secondary_end":
             pages.append({"images": [], "end_numbers": ["1", "2"]})
-        if final_singleton:
+        if single_pr_pair_bridge or (
+            final_singleton and not beginning_end_bridge and not reader_layout.endswith("_no_recommendation")
+        ):
             pages.append({"images": [], "end_numbers": ["1", "2"]} if reader_layout.endswith("double_end") else {"images": [], "trailing": True})
         pr_rows = [i for i, row in enumerate(pages) if row.get("pr_numbers")]
         if final_pr_fault == "missing_pr":
@@ -223,6 +251,24 @@ def _reader_html(
             pages.append({"images": []})
         elif final_pr_fault == "secondary_extra":
             pages[-1]["trailing"] = True
+        if content_first_bridge or content_first_pr_pair:
+            if final_pr_fault == "first_end_missing":
+                pages[0]["end_numbers"] = []
+            elif final_pr_fault == "first_end_wrong_owner":
+                pages[1]["end_numbers"] = pages[0].pop("end_numbers")
+            elif final_pr_fault == "secondary_missing":
+                pages[-1]["trailing"] = False
+            elif final_pr_fault == "final_pair":
+                pages[pr_rows[0]]["images"].append(0)
+        if reader_layout == "beginning_end_pr_pair_bridge":
+            if final_pr_fault == "secondary_missing":
+                pages[-1]["trailing"] = False
+            elif final_pr_fault == "secondary_duplicate":
+                pages[-1]["trailing_count"] = 2
+            elif final_pr_fault == "secondary_wrong_number":
+                pages[-1]["secondary_number"] = 'data-n="1"'
+            elif final_pr_fault == "secondary_outside":
+                pages[-1]["secondary_left"] = 800
         if reader_layout == "direct_first_final_pr_bridge_secondary_end":
             if final_pr_fault == "secondary_missing":
                 pages[-1]["trailing"] = False
@@ -470,6 +516,9 @@ def _reader_html(
             pages[end_page_index]["end_numbers"] = []
     else:
         raise ValueError(f"unknown reader fixture layout: {reader_layout}")
+    has_empty_beginning = beginning_secondary_end or reader_layout in {
+        "beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr",
+    }
     page_markup = []
     for index, page in enumerate(pages):
         active = " is-active" if index == 0 else ""
@@ -506,6 +555,24 @@ def _reader_html(
         if reader_layout.startswith("direct_first_") and index == 1 and beginning_fault == "direct_later":
             canvas_markup[0] = canvas_markup[0].replace('data-image="1"', 'data-type="contents" data-image="1"')
         beginning_markup = ""
+        if beginning_secondary_end and index == 0:
+            marker = ""
+            if beginning_fault != "missing_marker":
+                number = ' data-n="1"' if beginning_fault == "numbered_marker" else ""
+                visibility = "visibility:hidden;" if beginning_fault == "hidden_marker" else ""
+                height = 0 if beginning_fault == "zero_height" else 36
+                marker = (
+                    '<div class="_endOfBook_1w5tt_50" data-type="end-of-book"'
+                    f'{number} style="{visibility}width:36px;height:{height}px"></div>'
+                )
+            beginning_markup = (
+                '<div class="_root_1w5tt_1" data-type="beginning" '
+                'style="width:700px;height:400px">'
+                + ("" if beginning_fault == "outside_root" else marker)
+                + "</div>"
+            )
+            if beginning_fault == "outside_root":
+                beginning_markup += marker
         if reader_layout in {"beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr"} and index == 0:
             if beginning_fault not in {"unknown_empty", "missing_root"}:
                 pr_markup = ""
@@ -627,7 +694,7 @@ def _reader_html(
             + trailing_markup
             + (
                 ""
-                if reader_layout in {"beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr"} and index == 0
+                if has_empty_beginning and index == 0
                 else '<div class="_cover_bx4cr_11" data-turn="next"></div>'
             )
             + "</div>"
@@ -673,7 +740,10 @@ def _reader_html(
         )
     sequence_indexes = [i for i, row in enumerate(pages) if row.get("pr_numbers")]
     sequence_script = ""
-    if "pr_pair" in reader_layout or reader_layout == "direct_first_final_pr_bridge_secondary_end":
+    if "pr_pair" in reader_layout or reader_layout in {
+        "direct_first_final_pr_bridge_secondary_end", "content_first_final_pr_bridge",
+        "content_first_final_pr_bridge_no_recommendation", "beginning_end_final_pr_bridge",
+    }:
         sequence_script = f"""
         document.addEventListener('keydown', event => {{
           if (event.key !== 'ArrowLeft' || event.__kadocomiEntryHandled) return;
@@ -730,7 +800,11 @@ def _reader_html(
         root.addEventListener('click', event => {{
           if (!event.target.closest('._cover_bx4cr_11')) return;
           const index = slides.findIndex(slide => slide.classList.contains('is-active'));
-          if ({str(skip_to_end).lower()} && index === 0) {{
+          if ({str(single_pr_pair_bridge and final_pr_fault == 'skip_bridge').lower()} &&
+              index === {len(pages) - 4}) {{
+            slides[index].classList.remove('is-active');
+            slides[index + 2].classList.add('is-active');
+          }} else if ({str(skip_to_end).lower()} && index === 0) {{
             slides[index].classList.remove('is-active');
             slides[{2 if reader_layout == 'paired' else mixed_end_index}].classList.add('is-active');
           }} else if (({str(is_mixed_layout).lower()} && index === {mixed_final_content_index}) ||
@@ -741,12 +815,13 @@ def _reader_html(
             slides[index + 1].classList.add('is-active');
           }}
         }});
-        if ({str(reader_layout.startswith('direct_first_') or reader_layout in {'beginning_pr', 'beginning_pr_mixed_final', 'beginning_pr_final_pr'}).lower()}) {{
+        if ({str(reader_layout.startswith('direct_first_') or has_empty_beginning).lower()}) {{
           document.addEventListener('keydown', event => {{
             if (event.key !== 'ArrowLeft') return;
             const index = slides.findIndex(slide => slide.classList.contains('is-active'));
             if (index !== 0) return;
             event.__kadocomiEntryHandled = true;
+            window.__beginningKeyCount = (window.__beginningKeyCount || 0) + 1;
             const behavior = {json.dumps(beginning_key_behavior)};
             if (behavior === 'advance') {{
               slides[0].classList.remove('is-active');
@@ -1177,6 +1252,12 @@ async def test_kadocomi_updated_reader_rejects_unknown_or_ambiguous_dom(
         "direct_first_secondary_end",
         "paired_first_secondary_end",
         "direct_first_final_pr_bridge_secondary_end",
+        "content_first_final_pr_bridge",
+        "content_first_final_pr_bridge_no_recommendation",
+        "beginning_end_final_pr_bridge",
+        "content_first_pr_pair_bridge",
+        "beginning_end_pr_pair_bridge",
+        "content_first_pr_pair_end_bridge",
         "direct_first_pr_pair_double_end",
         "direct_first_pr_pair_recommendation",
         "direct_first_pr_pair_bridge",
@@ -1224,6 +1305,12 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         "direct_first_secondary_end": 16,
         "paired_first_secondary_end": 9,
         "direct_first_final_pr_bridge_secondary_end": 40,
+        "content_first_final_pr_bridge": 8,
+        "content_first_final_pr_bridge_no_recommendation": 8,
+        "beginning_end_final_pr_bridge": 11,
+        "content_first_pr_pair_bridge": 11,
+        "beginning_end_pr_pair_bridge": 8,
+        "content_first_pr_pair_end_bridge": 7,
         "direct_first_pr_pair_double_end": 6,
         "direct_first_pr_pair_recommendation": 6,
         "direct_first_pr_pair_bridge": 5,
@@ -1231,15 +1318,36 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         "paired_first_pr_pair_bridge": 4,
     }[reader_layout]
     images = _fixture_images(image_count)
+    delayed_beginning_geometry = (
+        reader_layout == "beginning_end_final_pr_bridge" and reader_build == "20261118"
+    )
     await _install_reader_routes(
         browser_page,
         images,
         computed_direction=computed_direction,
         reader_build=reader_build,
         reader_layout=reader_layout,
+        beginning_fault="zero_height" if delayed_beginning_geometry else None,
     )
     main_document_urls = _watch_main_document_requests(browser_page)
     adapter = KadocomiAdapter()
+    beginning_marker_heights: list[float] = []
+    if delayed_beginning_geometry:
+        original_snapshot = adapter._snapshot
+
+        async def snapshot_during_beginning_render(page: Page, *, include_nodes: bool = False):
+            snapshot = await original_snapshot(page, include_nodes=include_nodes)
+            if snapshot.get("activeIndex") == 0:
+                height = snapshot["secondaryEndMarkers"][0]["box"]["height"]
+                beginning_marker_heights.append(height)
+                if height == 0:
+                    # Change the real fixture DOM after returning an observed zero-height frame.
+                    await page.locator('[data-type="beginning"] [data-type="end-of-book"]').evaluate(
+                        "marker => { marker.style.height = '36px'; }"
+                    )
+            return snapshot
+
+        monkeypatch.setattr(adapter, "_snapshot", snapshot_during_beginning_render)
     result = await CrawlerRunner(
         RunConfig(
             site="kadocomi",
@@ -1253,6 +1361,8 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
     ).run(browser_page, adapter)
 
     assert result.stop_state is PageState.END
+    if delayed_beginning_geometry:
+        assert beginning_marker_heights[:3] == [0, 36, 36]
     assert main_document_urls == [EPISODE_URL]
     assert len(result.pages) == len(images)
     assert [page.file_extension for page in result.pages] == [".webp"] * len(images)
@@ -1329,6 +1439,53 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [1, *([2] * 19), 1, 0, 0]
         assert [(m["dataN"], m["slideIndex"]) for m in final_snapshot["prMarkers"]] == [("2", 20), ("1", 21)]
         assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"20": 1, "21": 1}
+    elif reader_layout == "beginning_end_final_pr_bridge":
+        assert adapter._reader_layout == reader_layout
+        assert final_snapshot["activeIndex"] == 8
+        assert final_snapshot["markerSlideIndexes"] == [7, 8, 8]
+        assert final_snapshot["markerNumbers"] == ["2", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [0]
+        assert final_snapshot["secondaryEndMarkers"][0]["beginningOwnerIndex"] == 0
+        assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [0, 2, 2, 2, 2, 2, 1, 0, 0]
+        assert await browser_page.evaluate("window.__beginningKeyCount") == 1
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"6": 1, "7": 1}
+    elif reader_layout.startswith("content_first_final_pr_bridge"):
+        has_recommendation = not reader_layout.endswith("_no_recommendation")
+        assert adapter._reader_layout == "content_first_final_pr_bridge"
+        assert final_snapshot["activeIndex"] == 6
+        assert final_snapshot["markerSlideIndexes"] == [0, 5, 6, 6]
+        assert final_snapshot["markerNumbers"] == ["1", "2", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == ([7] if has_recommendation else [])
+        assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [
+            1, 2, 2, 2, 1, 0, 0, *([0] if has_recommendation else []),
+        ]
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"4": 1, "5": 1}
+    elif reader_layout == "content_first_pr_pair_bridge":
+        assert adapter._reader_layout == reader_layout
+        assert final_snapshot["activeIndex"] == 7
+        assert final_snapshot["markerSlideIndexes"] == [0, 7, 7]
+        assert final_snapshot["markerNumbers"] == ["1", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [8]
+        assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [1, 2, 2, 2, 2, 2, 0, 0, 0]
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"6": 1}
+    elif reader_layout == "beginning_end_pr_pair_bridge":
+        assert adapter._reader_layout == reader_layout
+        assert final_snapshot["activeIndex"] == 6
+        assert final_snapshot["markerSlideIndexes"] == [6, 6]
+        assert final_snapshot["markerNumbers"] == ["1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [0, 7]
+        assert [m["beginningOwnerIndex"] for m in final_snapshot["secondaryEndMarkers"]] == [0, -1]
+        assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [0, 2, 2, 2, 2, 0, 0, 0]
+        assert await browser_page.evaluate("window.__beginningKeyCount") == 1
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"5": 1}
+    elif reader_layout == "content_first_pr_pair_end_bridge":
+        assert adapter._reader_layout == reader_layout
+        assert final_snapshot["activeIndex"] == 6
+        assert final_snapshot["markerSlideIndexes"] == [0, 5, 6, 6]
+        assert final_snapshot["markerNumbers"] == ["1", "2", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == []
+        assert [len(r["contentSlots"]) for r in final_snapshot["slideRows"]] == [1, 2, 2, 2, 0, 0, 0]
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") == {"4": 1, "5": 1}
     elif "pr_pair" in reader_layout:
         assert adapter._reader_layout == reader_layout.removesuffix("_single")
         assert final_snapshot["activeIndex"] == adapter._end_slide_index
@@ -1972,6 +2129,12 @@ async def _seed_kadocomi_batch_candidate(
         "direct_first_secondary_end": 16,
         "paired_first_secondary_end": 9,
         "direct_first_final_pr_bridge_secondary_end": 40,
+        "content_first_final_pr_bridge": 8,
+        "content_first_final_pr_bridge_no_recommendation": 8,
+        "beginning_end_final_pr_bridge": 11,
+        "content_first_pr_pair_bridge": 11,
+        "beginning_end_pr_pair_bridge": 8,
+        "content_first_pr_pair_end_bridge": 7,
         "direct_first_pr_pair_double_end": 6,
         "direct_first_pr_pair_recommendation": 6,
         "direct_first_pr_pair_bridge": 5,
@@ -2061,6 +2224,12 @@ async def _seed_kadocomi_batch_candidate(
         "direct_first_secondary_end",
         "paired_first_secondary_end",
         "direct_first_final_pr_bridge_secondary_end",
+        "content_first_final_pr_bridge",
+        "content_first_final_pr_bridge_no_recommendation",
+        "beginning_end_final_pr_bridge",
+        "content_first_pr_pair_bridge",
+        "beginning_end_pr_pair_bridge",
+        "content_first_pr_pair_end_bridge",
         "direct_first_pr_pair_double_end",
         "direct_first_pr_pair_recommendation",
         "direct_first_pr_pair_bridge",
@@ -2208,6 +2377,32 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
             "secondary_missing", "secondary_duplicate", "secondary_wrong_owner",
             "secondary_wrong_number", "secondary_outside", "final_missing", "final_pair", "duplicate_main",
         )],
+        *[f"sequence_content_first_final_pr_bridge_{fault}" for fault in (
+            "first_end_missing", "first_end_wrong_owner", "wrong_end", "wrong_owner",
+            "secondary_missing", "final_pair", "content_at_bridge",
+            "first_none", "first_skip", "second_none", "second_skip", "async_pr",
+        )],
+        *[f"sequence_content_first_final_pr_bridge_no_recommendation_{fault}" for fault in (
+            "wrong_end", "secondary_extra", "extra_slide", "second_skip",
+        )],
+        *[f"sequence_beginning_end_final_pr_bridge_{fault}" for fault in (
+            "entry_missing_marker", "entry_numbered_marker", "entry_outside_root", "entry_hidden_marker",
+            "entry_zero_height", "entry_none", "entry_skip", "wrong_end", "first_skip", "second_skip",
+        )],
+        *[f"sequence_content_first_pr_pair_bridge_{fault}" for fault in (
+            "first_end_missing", "wrong_end", "wrong_owner", "duplicate_pr", "secondary_missing",
+            "content_at_bridge", "skip_bridge", "first_none", "first_skip", "async_pr",
+        )],
+        *[f"sequence_beginning_end_pr_pair_bridge_{fault}" for fault in (
+            "entry_missing_marker", "entry_outside_root", "entry_numbered_marker", "entry_hidden_marker", "entry_skip",
+            "wrong_owner", "content_at_bridge", "secondary_missing", "secondary_duplicate", "secondary_wrong_number",
+            "secondary_outside", "skip_bridge", "first_none", "first_skip",
+        )],
+        *[f"sequence_content_first_pr_pair_end_bridge_{fault}" for fault in (
+            "first_end_missing", "first_end_wrong_owner", "duplicate_pr", "wrong_owner",
+            "content_at_bridge", "wrong_end", "secondary_extra", "extra_slide",
+            "first_none", "first_skip", "second_none", "second_skip",
+        )],
         *[f"direct_mixed_{fault}" for fault in (
             "missing_root", "duplicate_root", "entry_none", "entry_skip", "missing_marker",
             "wrong_number", "content_at_end", "extra_after_end", "none", "skip", "unexpected_pr", "async_pr",
@@ -2324,15 +2519,33 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         layout = next(name for name in (
             "direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation",
             "direct_first_final_pr_bridge_secondary_end",
+            "content_first_final_pr_bridge_no_recommendation", "content_first_final_pr_bridge",
+            "beginning_end_final_pr_bridge", "content_first_pr_pair_bridge", "beginning_end_pr_pair_bridge",
+            "content_first_pr_pair_end_bridge",
             "direct_first_pr_pair_bridge", "paired_first_pr_pair_bridge",
         ) if failure.startswith(f"sequence_{name}_"))
         suffix = failure.removeprefix(f"sequence_{layout}_")
         options["reader_layout"] = layout
-        images = _fixture_images(6 if layout in {"direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation", "direct_first_final_pr_bridge_secondary_end"} else (5 if layout.startswith("direct_first_") else 4))
-        if suffix != "async_pr":
+        if layout in {"beginning_end_final_pr_bridge", "content_first_pr_pair_bridge"}:
+            images = _fixture_images(11)
+        elif layout.startswith("content_first_final_pr_bridge") or layout == "beginning_end_pr_pair_bridge":
+            images = _fixture_images(8)
+        elif layout == "content_first_pr_pair_end_bridge":
+            images = _fixture_images(7)
+        elif layout in {"direct_first_pr_pair_double_end", "direct_first_pr_pair_recommendation", "direct_first_final_pr_bridge_secondary_end"}:
+            images = _fixture_images(6)
+        else:
+            images = _fixture_images(5 if layout.startswith("direct_first_") else 4)
+        if suffix in {"entry_none", "entry_skip"}:
+            options["beginning_key_behavior"] = suffix.removeprefix("entry_")
+        elif suffix.startswith("entry_"):
+            options["beginning_fault"] = suffix.removeprefix("entry_")
+        elif suffix != "async_pr":
             options["final_pr_fault"] = suffix
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 0.8)
-        monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.8)
+        monkeypatch.setattr(
+            kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 2.0 if suffix == "entry_zero_height" else 0.8
+        )
     elif failure.startswith(("direct_mixed_", "paired_mixed_", "direct_paired_")):
         prefix = next(p for p in ("direct_mixed_rec_", "direct_mixed_", "paired_mixed_", "direct_paired_") if failure.startswith(p))
         options["reader_layout"] = {"direct_mixed_rec_": "direct_first_mixed_final_with_recommendation", "direct_mixed_": "direct_first_mixed_final", "paired_mixed_": "paired_first_mixed_final", "direct_paired_": "direct_first_paired_end"}[prefix]
@@ -2510,7 +2723,7 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         _wait_for_foreign_client_navigation(browser_page, monkeypatch)
     main_document_urls = _watch_main_document_requests(browser_page)
 
-    with pytest.raises(CandidateExecutionError):
+    with pytest.raises(CandidateExecutionError) as candidate_error:
         await executor.execute_candidate(
             browser_page,
             candidate,
@@ -2529,8 +2742,23 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     if failure.startswith("sequence_") and suffix in {"first_none", "second_none"}:
         counts = await browser_page.evaluate("window.__sequenceKeyCounts")
         assert set(counts.values()) == {1}
-    if failure.startswith("sequence_direct_first_final_pr_bridge_secondary_end_") and suffix in {"first_skip", "second_skip"}:
+    if failure.startswith((
+        "sequence_direct_first_final_pr_bridge_secondary_end_", "sequence_content_first_final_pr_bridge_",
+        "sequence_beginning_end_final_pr_bridge_", "sequence_content_first_pr_pair_bridge_",
+        "sequence_beginning_end_pr_pair_bridge_", "sequence_content_first_pr_pair_end_bridge_",
+    )) and suffix in {"first_skip", "second_skip"}:
         assert set((await browser_page.evaluate("window.__sequenceKeyCounts")).values()) == {1}
+    if failure.startswith((
+        "sequence_beginning_end_final_pr_bridge_entry_", "sequence_beginning_end_pr_pair_bridge_entry_",
+    )):
+        keys = await browser_page.evaluate("window.__beginningKeyCount || 0")
+        assert keys == int(suffix in {"entry_none", "entry_skip"})
+    if failure == "sequence_beginning_end_final_pr_bridge_entry_zero_height":
+        assert "beginning secondary END still has zero height" in str(candidate_error.value)
+    if failure in {"sequence_content_first_pr_pair_bridge_skip_bridge", "sequence_beginning_end_pr_pair_bridge_skip_bridge"}:
+        end_index = "6" if failure.startswith("sequence_beginning_end") else "7"
+        assert await browser_page.evaluate("window.__sequenceKeyCounts") is None
+        assert await browser_page.locator(".splide__slide.is-active").get_attribute("data-slide") == end_index
     if failure in {"bridge_none", "direct_bridge_none", "pr_secondary_none", "pr_secondary_skip"}:
         assert await browser_page.evaluate("window.__finalPrKeyCount") == 1
     if failure in {"pr_secondary_none", "pr_secondary_skip", "paired_pr_secondary_none", "paired_pr_secondary_skip"}:

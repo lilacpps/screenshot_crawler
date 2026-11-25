@@ -961,6 +961,218 @@ independent source observer was run. Completed live/ZIP evidence is in
 
 ## Current P2 capture implementation
 
+### First body slide with a main END and two PR bridges (2026-11-26)
+
+Item 57665 / Source 57972, 第1話
+(`KC_007947_S:KC_0079470000200011_E`), was the last candidate in a Batch
+with 19 successful candidates. It failed initial topology validation.
+The older three-PR branches handled a directly typed first canvas or two
+slots on the first slide. Shared-CDP observation showed 33 slides with
+body counts `[1, 2 x 29, 0, 0, 0]`. The first slot is a wrapped singleton
+with main END n=1 on slide 0 and no beginning root. Empty slide 30 owns
+PR n=1/n=2, empty slide 31 owns PR n=1 and main END n=2, and the paired
+main END n=1/n=2 is on the last slide 32. There is no secondary END.
+
+`content_first_pr_pair_end_bridge` validates those relative positions,
+marker types, numbers, owners and geometry, with a first wrapped singleton
+and only paired body slides before the bridges. The first and subsequent
+body turns use the hit-tested overlay. After all ordered body slots are
+captured, each empty bridge must settle before one guarded ArrowLeft to the
+exact next slide. The paired main END is the completion boundary.
+
+The first probe advanced one slide and the viewer persisted that position.
+The first direct verification correctly stopped at the first-slide check.
+After returning to slide 0 with the normal backward key, the direct CLI
+completed at END with `--max-pages 59` in the isolated
+`work/kadocomi/error-57665-20261126/retry/` output. The ZIP contains 59
+ordered 844x1200 WebP pages that passed CRC and full decoding. A new page
+opened the episode again at slide 0 after completion. Live verification
+covered this episode with the normal Catalog and 20-candidate Batch
+outside its scope.
+
+Validation passed 8 unit and 116 affected browser integration cases, with
+zero skips. The new fixture checks ordered native page bytes, one key per
+bridge and completion on the paired END. Missing or moved leading markers,
+misowned or duplicate PRs, extra slides and stalled or skipped turns leave
+the Batch item pending without a ZIP. Changed-file Ruff and diff checks
+passed. Repository-wide Ruff reported the two existing DTZ001 findings
+in the ComicFuz policy tests.
+
+### Beginning secondary END layout settlement (2026-11-26)
+
+Item 57646 / Source 57953, 第5話⑤
+(`KC_007947_S:KC_0079470000600051_E`), failed with
+`Kadocomi secondary END marker number or geometry is invalid`. The captured
+inventory matches `beginning_end_final_pr_bridge` with
+`[0, 2, 2, 2, 1, 0, 0]` body counts. On two of three shared-CDP startup
+traces, the unnumbered secondary END on slide 0 initially measured 0 px
+high with full beginning-root ancestry and otherwise valid slot and marker
+roles. It became 846 px high after about 117 ms. The initial geometry error
+could occur when sampling the placeholder during that window.
+
+Initial inventory validation permits at most four additional polls at
+150 ms intervals for that zero-height case. It first verifies all marker
+roles, recorded ancestry, other geometry and body layout. A re-poll resets
+the settlement signature. A positive, contained marker box and two matching
+valid snapshots are required before any entry key or capture. A persistent
+placeholder raises `UnknownPageStateError` with the bounded inventory
+diagnostic. Numbered, displaced or unexpected markers, other geometry
+failures, and checks after initialization retain the strict validation.
+
+Normal live direct crawl of the reported episode stopped at END and created
+a ZIP with seven ordered 844x1200 WebP pages in the isolated
+`work/kadocomi/error-57646-20261126/` output. The ZIP passed CRC and every
+page decoded. The 22-candidate Batch and operational Catalog were outside
+this verification.
+
+The current-build browser fixture captured an actual zero-height DOM
+snapshot, then rendered the marker and verified exact body bytes and END.
+The fixture failed as expected with the re-poll limit set to zero. A
+persistent zero-height Batch fixture exhausted the local allowance without
+an entry key, completion or ZIP. The affected pass covered 8 unit and 68
+browser integration tests, with zero skips. Changed-file Ruff and diff
+checks passed. Repository-wide Ruff reported the two existing DTZ001
+findings in the ComicFuz policy tests.
+
+### Beginning and recommendation secondary ENDs with a PR-pair bridge (2026-11-26)
+
+Item 57644 / Source 57951, 第6話②
+(`KC_007947_S:KC_0079470000700021_E`), failed with ambiguous beginning/final
+PR ownership. The previous two-PR branch expected one PR in the beginning
+root and one on the final body slide. Shared-CDP observation confirmed
+`[0, 2, 2, 2, 2, 0, 0, 0]` body slots with both PR wrappers n=1/n=2 on
+empty slide 5. The initial unnumbered secondary END is inside the known
+beginning root on slide 0. The paired main END is slide 6, followed by a
+separate unnumbered secondary END on recommendation slide 7.
+
+`beginning_end_pr_pair_bridge` validates the exact entry and recommendation
+marker positions, class, number, and contained geometry, including ancestry
+of the leading secondary END. It checks the order and ownership of the
+paired PR and main END wrappers, and requires only body pairs between entry
+and the PR slide. One guarded ArrowLeft opens the first spread. Hit-tested
+overlay turns advance through the body. All ordered slots must be captured
+before one guarded ArrowLeft from the settled PR slide reaches the immediately
+following paired main END. The recommendation lies beyond the completion
+boundary.
+
+The normal direct CLI completed the reported public episode at END with
+`--max-pages 8`. Its isolated ZIP in `work/kadocomi/error-57644-20261126/`
+has eight sequential 844x1200 WebP entries that passed CRC and full decoding.
+The operational Catalog and the 33-candidate Batch were outside this
+verification.
+
+Validation passed 8 unit and 136 affected browser integration tests, with
+zero skips. The 19 focused cases test the ordered Runner and Batch output,
+one key for each required turn, and rejection of absent, misowned or malformed
+secondary ENDs, unexpected bridge content and stalled or skipped navigation.
+Changed-file Ruff and diff checks passed. Repository-wide Ruff reported the
+two existing DTZ001 findings in the ComicFuz policy tests.
+
+### First body slide with a main END and a single PR-pair bridge (2026-11-26)
+
+Item 57633 / Source 57940, 第8話③
+(`KC_007947_S:KC_0079470000900031_E`), failed initial inventory validation.
+Shared-CDP observation confirmed `[1, 2, 2, 2, 2, 2, 0, 0, 0]` body slots,
+no beginning root, and the first wrapped singleton sharing slide 0 with
+main END n=1. Both PR markers n=1/n=2 belong to empty slide 6. Main END
+n=1/n=2 owns slide 7, and slide 8 is the single unnumbered secondary END.
+The live hit-tested overlay advanced from the final spread on slide 5 to
+slide 6, and one ArrowLeft advanced from slide 6 to slide 7.
+
+`content_first_pr_pair_bridge` requires these relative roles, exact marker
+counts and ownership, contained geometry, and all body pairs between the
+first singleton and the empty PR slide. It uses the usual overlay turn
+from the last spread. After all ordered body slots are captured and the PR
+slide is stable across two snapshots, it makes one guarded ArrowLeft and
+requires the exact next paired main END. The completion boundary precedes
+the secondary recommendation.
+
+The normal direct CLI completed the reported public episode at END with
+`--max-pages 11`. The isolated ZIP in `work/kadocomi/error-57633-20261126/`
+has 11 sequential 768x1092 WebP entries that passed CRC and full decoding.
+The operational Catalog and the 34-candidate Batch were outside this
+verification.
+
+Validation passed 8 unit tests and 153 affected browser integration cases,
+with zero skips. The 15 focused cases check the observed Runner and Batch
+paths, exact native page order, one bridge key, and rejection of bad or
+mutated markers, content on the bridge, skipping the bridge or paired END,
+and a stalled bridge. Changed-file Ruff and diff checks passed.
+
+### Beginning slide with a secondary END and a final PR bridge (2026-11-26)
+
+Item 57632 / Source 57939, 第8話④
+(`KC_007947_S:KC_0079470000900041_E`), failed initial inventory validation.
+Shared-CDP observation confirmed `[0, 2, 2, 2, 2, 2, 1, 0, 0]` body slots
+and exactly one unnumbered secondary END nested inside the beginning root
+on slide 0. PR n=2 shares final body slide 6; PR n=1 and main END n=2 share
+empty bridge slide 7. The main END pair n=1/n=2 owns the last slide 8.
+ArrowLeft advanced from slide 0 to the first body pair and from slide 7 to
+the paired END in the live reader.
+
+`beginning_end_final_pr_bridge` requires the exact relative marker roles,
+beginning ancestry and contained geometry, body pairs and final singleton.
+The beginning turn also checks marker visibility, reader focus, and the
+absence of a visible dialog. It presses ArrowLeft once and waits for the
+first body pair. After all native body slots are saved in order, it presses
+ArrowLeft once from the final singleton and once from the settled empty
+bridge. Only the final paired main END can complete the run.
+
+The normal direct CLI completed the reported public episode at END with
+`--max-pages 11`. Its isolated ZIP under `work/kadocomi/error-57632-20261126/`
+has 11 sequential 768x1092 WebP entries that passed CRC and full decoding.
+The operational Catalog and the 35-candidate Batch were outside this
+verification.
+
+Validation passed 8 unit tests, 144 browser cases for entry and final-PR
+layouts, and 26 browser cases for native-source checks and reader DOM
+rejection, with zero skips. The new cases exercise all three guarded key
+turns, ZIP completion, malformed or hidden beginning markers, and failed
+or skipped turns. Ruff passed for the changed Python files.
+
+### First body slide with a main END marker and a final PR bridge (2026-11-26)
+
+Item 57630 / Source 57937, 第9話②
+(`KC_007947_S:KC_0079470001000011_E`), failed initial inventory validation
+with `Kadocomi END marker topology is unsupported or ambiguous`. Shared
+Crawler Chrome via CDP reproduced the reported counts
+`[1, 2, 2, 2, 1, 0, 0, 0]`. The first canvas is in a content wrapper with
+no beginning root. Main END roles in DOM order are n=1 on slide 0, n=2 on
+slide 5, and n=1/n=2 on slide 6. PR roles are n=2 on the final body slide 4
+and n=1 on the empty bridge slide 5. Slide 7 is the sole secondary END,
+with no marker number. Item 57631 / Source 57938, 第9話①
+(`KC_007947_S:KC_0079470001000051_E`), reproduced the same error after
+the first fix. Its live inventory has the same main END and PR roles and
+ends at slide 6, with counts `[1, 2, 2, 2, 1, 0, 0]` and no secondary END.
+
+`content_first_final_pr_bridge` validates those relative marker roles and
+owners, contained marker geometry, wrapped first and final singletons, paired
+middle body slides, the empty PR bridge and the empty paired END. It accepts
+zero slides after paired END, or one empty slide with a single unnumbered
+secondary END marker. After all body slots are captured in order, the adapter
+reuses the guarded PR sequence turns. It presses ArrowLeft once on
+the final body slide, waits for two stable bridge snapshots, then presses
+ArrowLeft once to reach the immediately following paired main END. The
+completion boundary is identical in both layouts. Missing or displaced
+markers, unexpected content on the bridge, a trailing slide without the
+required recommendation marker and skipped turns stop the run.
+
+The normal `crawl --site kadocomi --access-strategy direct --max-pages 8`
+command completed both public episodes at END in isolated output under
+`work/kadocomi/error-57631-20261126/`. Each ZIP has eight sequential
+768x1092 WebP entries that passed CRC and full decoding. The production native
+source and pixel proof ran during acquisition. The operational Catalog and
+the 36-candidate Batch were outside this verification.
+
+The synthetic seven-slide fixture reproduced the reported error before the
+fix. The affected pass covered 8 unit and 93 browser integration tests, with
+zero skips. The Runner and Batch cases check ordered native files, the same
+paired END in both layouts and exactly one key for each final transition.
+Invalid marker roles, an unexplained trailing slide and skipped navigation
+leave the Batch item pending without a ZIP. Ruff passed for the changed
+Python files. Repository-wide Ruff reported two existing DTZ001 findings
+in the ComicFuz policy tests.
+
 ### Reader class update (2026-11-18)
 
 Item 50779 / Source 51086 (`KC_019661_S:KC_0196610000600021_E`,
