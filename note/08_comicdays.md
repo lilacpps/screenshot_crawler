@@ -1,3 +1,35 @@
+## First body canvas beside a single front link (2026-11-25)
+
+Item/source 22001 (`3269754496662918439`, スキップとローファー Scene 37)
+timed out during direct initialization on both Batch attempts, before any page
+was saved. The diagnostic DOM and shared Chrome showed one full front link at
+area 0, body areas 1..15, full and half back links at 16/17, ad at 18 and
+Colophon at 19 with `sliderLast=20`. At slider 1 the first body canvas was already
+visible beside the front link. The next slider was 3 and displayed areas 2/3.
+
+The `single-front-body` layout requires that ordered structure, an odd contiguous
+body run and exact area/slider count agreement. Initialization waits at slider 1
+for area 1 to render. Later odd body sliders select `now-1, now`, using the existing
+visibility and canvas readiness proof. Structural body indices survive lazy
+unmounting. The adapter confirms the full/half back-link spread as `AD` at
+`sliderLast-3` after the final body pair, then accepts the ad/Colophon spread as
+`END` at `sliderLast-1`. An unproved start or tail reaches the existing bounded
+failure. Normal Batch uses this path automatically with the existing CLI,
+configuration, access checks and output format.
+
+Shared-CDP production direct verification on the same episode reached `END`
+in 19 seconds and saved each body area 1..15 once in order as PNG. The isolated
+15-entry ZIP matched the manifest and passed CRC validation. The run reported
+`resource_consumed=false` and made no operational Catalog or library writes.
+The 19-candidate Batch was not rerun.
+
+Comic DAYS Unit and browser Integration coverage passed 440 cases with zero
+skips. The final eight-case regression subset also passed, including the added
+case rejecting a jump directly from the last body spread to Colophon. Changed
+files passed Ruff and diff checks. Full Ruff reports two existing `DTZ001`
+findings in the ComicFUZ policy tests. Full pytest and Research tests were not
+run because the correction is site-local and the research tools did not change.
+
 ## Forward-click timeout recovery (2026-11-23)
 
 Comic DAYS now waits up to 3000 ms for the existing page-forward control to become
@@ -846,7 +878,7 @@ mutation safety cannot be proven. A body spread is complete only when every
 expected area is visible with exactly one ready canvas; a missing or hidden
 second area remains loading. The 20-page leading-area live variant uses body
 areas 1..20 with sliders 1, 2, 4, ..., 20 and terminal sliders 22/23. A
-  front-prefix-tail variant has two supported forms. The `dummy-single` form
+  front-prefix-tail variant supports several forms. The `dummy-single` form
   observed on episode 21652 has one dummy area and two exact `front-link-page`
   areas before the body, followed by `back-link-page` full, `back-link-page`
   half, ad, and colophon areas. Its slider 1 is the front-link prefix, slider 2
@@ -865,6 +897,8 @@ viewport intersection ratio meets the existing readiness threshold, excluding
 clipped neighbors. At the tail boundary, the observed single final body area
 is accepted only when it is the structural last body area immediately before
 the full/half back-link pair; ordinary body states remain two-area spreads.
+The `single-front-body` form starts with body area 1 already visible beside one
+front link and uses `now-1, now` to select later two-area body spreads.
 Terminal state requires a completed forward
 transition to the visible colophon with no active body canvas. URL changes are
 reported as `NEXT_CONTENT`. Render readiness is tracked separately from native

@@ -1345,9 +1345,17 @@ class ComicDaysAdapter(SiteAdapter):
             twoFrontBodyShell &&
             !areas.slice(2).some(area => area.querySelector('.front-link-page')) &&
             ![...areas[2].children].some(element => element.classList.contains('page') && element.classList.contains('js-page'));
-          const frontPrefixMode = dummyFrontPrefix ? 'dummy-single' : twoFrontDoublePrefix ? 'two-front-double' : null;
+          const singleFrontBody = Number.isInteger(sliderLast) && sliderLast >= 8 && sliderLast % 2 === 0 &&
+            sliderLast === areas.length && colophonIndex === sliderLast - 1 &&
+            areas[0].children.length === 1 && isFrontLink(areas[0].children[0]) &&
+            areas.slice(1, colophonIndex - 3).every(isBodyAreaShell) &&
+            areas.slice(colophonIndex - 3, colophonIndex).every(area => area.children.length === 1) &&
+            isBackFull(areas[colophonIndex - 3].children[0]) &&
+            isBackHalf(areas[colophonIndex - 2].children[0]) && isAd(areas[colophonIndex - 1].children[0]);
+          const frontPrefixMode = dummyFrontPrefix ? 'dummy-single' : twoFrontDoublePrefix ? 'two-front-double' :
+            singleFrontBody ? 'single-front-body' : null;
           const frontPrefix = frontPrefixMode !== null;
-          const firstBody = frontPrefixMode === 'dummy-single' ? 3 : frontPrefixMode === 'two-front-double' ? 2 : canvasFirst;
+          const firstBody = singleFrontBody ? 1 : frontPrefixMode === 'dummy-single' ? 3 : frontPrefixMode === 'two-front-double' ? 2 : canvasFirst;
           const layouts = Number.isFinite(sliderLast) ? [
             {name: 'legacy-tail', body: sliderLast - 4, back: sliderLast - 3, ad: sliderLast - 2, colophon: sliderLast - 1},
             {name: 'leading-area-tail', body: sliderLast - 3, back: sliderLast - 2, ad: sliderLast - 1, colophon: sliderLast},
@@ -1538,6 +1546,10 @@ class ComicDaysAdapter(SiteAdapter):
                 and full_item.get("areaIndex") == expected[0]
                 and half_item.get("areaIndex") == expected[1]
                 and ad_item.get("areaIndex") == expected[2]
+                and (
+                    observation.get("frontPrefixMode") != "single-front-body"
+                    or observation.get("sliderNow") == expected[1]
+                )
                 and full_item.get("onScreen") is True
                 and half_item.get("onScreen") is True
                 and full_item.get("canvasCount") == 0
@@ -1636,6 +1648,10 @@ class ComicDaysAdapter(SiteAdapter):
                 and half_item.get("imageCount") == 2
                 and half_item.get("linkSlotCount") == 2
                 and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
+                and (
+                    observation.get("frontPrefixMode") != "single-front-body"
+                    or observation.get("sliderNow") == indices.get("colophon")
+                )
             )
             expected_colophon = indices.get("colophon")
         elif variant == "series-like-tail":
@@ -1871,6 +1887,9 @@ class ComicDaysAdapter(SiteAdapter):
                             nonbody_previous = signature
                     self._trace_nonbody_transition(observation, current, last, nonbody_stable)
                     tail_indices = observation.get("tailIndices") if isinstance(observation, dict) else None
+                    single_front_body = (
+                        observation is not None and observation.get("frontPrefixMode") == "single-front-body"
+                    )
                     new_tail_transition = (
                         isinstance(observation, dict)
                         and observation.get("tailVariant") in {"front-prefix-tail", "series-like-tail"}
@@ -1891,6 +1910,7 @@ class ComicDaysAdapter(SiteAdapter):
                         observation is not None
                         and nonbody_stable >= 2
                         and state.get("colophon") is True
+                        and (not single_front_body or self._known_tail_slider == last - 3)
                         and (
                             (current == last and self._known_tail_slider in {last - 2, last - 1})
                             or (current == last - 1 and self._known_tail_slider is None)
@@ -1905,6 +1925,7 @@ class ComicDaysAdapter(SiteAdapter):
                     elif (
                         observation is not None
                         and nonbody_stable >= 2
+                        and (not single_front_body or advance_from == last - 5)
                         and (
                             current in {last - 2, last - 1}
                             or (

@@ -139,7 +139,7 @@ selected from the runtime slider and an explicit body-area layout, rather than
 from `now-1/now` alone. The observed 20-page episode has body areas 1..20,
 sliders 1, 2, 4, ..., 20, and a terminal tail at 22/23. Volume links,
 questionnaire/premium blocks, blank areas, dummy/front-link areas, and the
-  colophon are excluded. The front-prefix-tail variant has two supported forms:
+  colophon are excluded. The front-prefix-tail variant supports these forms:
   `dummy-single` has one dummy area and two exact `front-link-page` areas before
   the body, while `two-front-double` has two exact front-link areas with no
   dummy. Both are followed by full back-link, half back-link, ad, and colophon
@@ -157,6 +157,14 @@ questionnaire/premium blocks, blank areas, dummy/front-link areas, and the
   the final structural body area may be a single content row before the
   full/half back-link pair; this exception does not relax ordinary spread
   validation.
+In the `single-front-body` form, one full front-link area shares slider 1 with
+the first body canvas at area 1. Initialization waits for that canvas at slider
+1. Later odd sliders select the two body areas at `now-1` and `now` and require
+both to be render-ready. The structure requires an odd, contiguous body run,
+full and half back links, ad and Colophon, with total areas equal to `sliderLast`.
+The full/half back-link spread at `sliderLast-3` must be confirmed after the last
+body spread before the ad/Colophon spread at `sliderLast-1` can end the run.
+This layout was verified on item 22001. See `note/08_comicdays.md` for results.
 The `dummy-front-double` mode handles the separately observed leading-area tail
 with one empty dummy, one exact full front-link page, a contiguous body
 run, one half back-link, ad and validated Colophon. Slider 1 is the prefix; one
@@ -392,7 +400,8 @@ viewer observation, rewind control inspection/clicks, transition waits, and the
   front-prefix-tail layout. In the `dummy-single` form initialization reaches
   slider 2; in the `two-front-double` form it reaches slider 3 and requires the
   two-area first spread. Both forms use the validated forward control exactly
-  once and never click a front-link anchor.
+  once and never click a front-link anchor. In `single-front-body`, the first
+  canvas is already on slider 1, so no forward action is needed during initialization.
 
 Discovery, Policy, and the exact ticket entry paths are implemented and
 synthetic-browser verified. The current policy uses `work_ticket` with work

@@ -999,6 +999,131 @@ async def test_comicdays_malformed_dummy_front_prefix_never_advances(
     assert await browser_page.evaluate("window.frontLinkClicks") == 0
 
 
+def _single_front_body_html() -> str:
+    markup = "\n".join(
+        line for line in FRONT_PREFIX_TAIL_HTML.split("<script>", 1)[0].splitlines()
+        if 'id="dummy"' not in line and 'id="front-two"' not in line
+    )
+    markup = markup.replace(
+        '      <div class="page-area js-page-area" id="back-full"',
+        '      <div class="page-area js-page-area" id="body-five" style="display:none">'
+        '<canvas class="page-image js-page-image"></canvas></div>\n'
+        '      <div class="page-area js-page-area" id="back-full"',
+    )
+    return markup + """
+    <script>
+      const now = document.querySelector('.js-viewer-slider-pagenum-now');
+      const forward = document.querySelector('.js-slide-forward');
+      const backward = document.querySelector('.js-slide-backward');
+      const spreads = {
+        1: ['front-one', 'body-one'], 3: ['body-two', 'body-three'],
+        5: ['body-four', 'body-five'], 7: ['back-full', 'back-half'],
+        9: ['tail-ad', 'viewer-colophon'],
+      };
+      window.forwardClicks = 0;
+      window.frontLinkClicks = 0;
+      window.showSpread = (slider) => {
+        now.textContent = String(slider);
+        backward.disabled = slider === 1;
+        for (const area of document.querySelectorAll('.js-page-area')) {
+          area.style.display = spreads[slider].includes(area.id) ? 'block' : 'none';
+        }
+      };
+      forward.onclick = () => { window.forwardClicks++; showSpread(Number(now.textContent) + 2); };
+      backward.onclick = () => showSpread(Number(now.textContent) - 2);
+      document.querySelector('.front-link-page a').onclick = (event) => {
+        event.preventDefault(); window.frontLinkClicks++;
+      };
+      showSpread(1);
+    </script>
+    """
+
+
+async def _single_front_body_page(browser_page, monkeypatch: pytest.MonkeyPatch) -> ComicDaysAdapter:
+    monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
+    monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
+    monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(_single_front_body_html())
+    await _paint_sources(browser_page, "canvas.page-image")
+    return adapter
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+async def test_comicdays_single_front_with_first_body_preserves_every_page(
+    browser_page, monkeypatch: pytest.MonkeyPatch, resumed: bool,
+) -> None:
+    adapter = await _single_front_body_page(browser_page, monkeypatch)
+    if resumed:
+        await browser_page.evaluate("""() => {
+          showSpread(9);
+          const first = document.querySelector('#body-one canvas');
+          first.remove();
+          const backward = document.querySelector('.js-slide-backward');
+          const original = backward.onclick;
+          backward.onclick = () => {
+            original();
+            if (document.querySelector('.js-viewer-slider-pagenum-now').textContent === '1') {
+              document.querySelector('#body-one').append(first);
+            }
+          };
+        }""")
+
+    adapter.page_change_timeout_ms = 2_000
+    await adapter.initialize(browser_page)
+    assert await browser_page.evaluate("window.forwardClicks") == 0
+    for slider, indices in [(1, {"1"}), (3, {"2", "3"}), (5, {"4", "5"})]:
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert identity.page_number == slider
+        assert set(identity.page_id.split(",")) == indices
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert await browser_page.evaluate("[window.forwardClicks, window.frontLinkClicks]") == [4, 0]
+
+
+@pytest.mark.parametrize("mutation", [
+    "document.querySelector('#body-one canvas').remove()",
+    "document.querySelector('#front-one').append(document.createElement('iframe'))",
+    "document.querySelector('#body-five').append(document.createElement('button'))",
+    "document.querySelector('#back-full img').remove()",
+    "document.querySelector('.js-viewer-slider-pagenum-last').textContent = '11'",
+])
+async def test_comicdays_single_front_with_first_body_rejects_unproven_start(
+    browser_page, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    adapter = await _single_front_body_page(browser_page, monkeypatch)
+    await browser_page.evaluate(mutation)
+    adapter.page_change_timeout_ms = 250
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.initialize(browser_page)
+    assert await browser_page.evaluate("[window.forwardClicks, window.frontLinkClicks]") == [0, 0]
+
+
+async def test_comicdays_single_front_with_first_body_requires_tail_before_end(
+    browser_page, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = await _single_front_body_page(browser_page, monkeypatch)
+    await adapter.initialize(browser_page)
+    await browser_page.evaluate("""() => {
+      showSpread(5);
+      document.querySelector('.js-slide-forward').onclick = () => showSpread(9);
+    }""")
+    identity = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+    adapter.page_change_timeout_ms = 400
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is not PageState.END
+
+
 async def test_comicdays_two_front_double_prefix_normalizes_to_first_spread(
     browser_page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
