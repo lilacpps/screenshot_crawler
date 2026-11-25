@@ -38,10 +38,11 @@ TICKET_CANCEL_LABEL = "\u30ad\u30e3\u30f3\u30bb\u30eb"
 TICKET_APP_LABEL = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
 TICKET_COMMENTS_LABEL = "\u30b3\u30e1\u30f3\u30c8\u4e00\u89a7\u3078"
 TICKET_CHARGE_ALT = "\u30c1\u30e3\u30fc\u30b8"
-_RENTAL_ROW_ROOT_CLASS_TOKENS = frozenset({
-    "Chapter_chapter__wJPBe",
-    "Chapter_chapter__alreadyViewed__BYLMn",
-})
+# Keep the base and already-viewed classes paired as observed in each site build.
+_RENTAL_ROW_ROOT_CLASS_PAIRS = (
+    ("Chapter_chapter__wJPBe", "Chapter_chapter__alreadyViewed__BYLMn"),
+    ("Chapter_chapter__yBHGE", "Chapter_chapter__alreadyViewed__n_0yI"),
+)
 _RENTAL_ROW_COSMETIC_ROOT_TOKEN = "false"
 
 
@@ -51,8 +52,9 @@ def _has_exact_rental_row_root_class_tokens(value: object) -> bool:
     tokens = set(value)
     if len(tokens) != len(value):
         return False
-    return tokens == _RENTAL_ROW_ROOT_CLASS_TOKENS or tokens == (
-        _RENTAL_ROW_ROOT_CLASS_TOKENS | {_RENTAL_ROW_COSMETIC_ROOT_TOKEN}
+    tokens.discard(_RENTAL_ROW_COSMETIC_ROOT_TOKEN)
+    return len(tokens) == 2 and any(
+        tokens.issuperset(pair) for pair in _RENTAL_ROW_ROOT_CLASS_PAIRS
     )
 
 
@@ -570,7 +572,7 @@ async def read_native_ticket_snapshot(
 
     value = await page.evaluate(
         r"""({workId, chapterId, pageMode, ticketAvailableLabels, recoveryLabels,
-            availableFallback, recoveryFallback, chargeAlt, rentalRootClassTokens,
+            availableFallback, recoveryFallback, chargeAlt, rentalRootClassPairs,
             rentalRootCosmeticToken}) => {
           const fiberOf = element => {
             const key = Object.keys(element || {}).find(name => name.startsWith('__reactFiber$'));
@@ -802,14 +804,12 @@ async def read_native_ticket_snapshot(
             if (pageMode === 'rental_listing') {
               const row = heading?.parentElement?.parentElement || null;
               const rowTokens = row ? [...row.classList] : [];
-              const mandatoryRootTokens = new Set(rentalRootClassTokens);
               const hasExactRootTokens = tokens => {
                 const tokenSet = new Set(tokens);
-                if (tokenSet.size !== tokens.length
-                    || ![...mandatoryRootTokens].every(token => tokenSet.has(token))) return false;
-                return tokenSet.size === mandatoryRootTokens.size
-                  || (tokenSet.size === mandatoryRootTokens.size + 1
-                    && tokenSet.has(rentalRootCosmeticToken));
+                if (tokenSet.size !== tokens.length) return false;
+                tokenSet.delete(rentalRootCosmeticToken);
+                return tokenSet.size === 2 && rentalRootClassPairs.some(pair =>
+                  pair.every(token => tokenSet.has(token)));
               };
               const visibleWithin = element => !!row && row.contains(element) && visible(element);
               const freeNodes = row ? [...row.querySelectorAll('p[class*="Chapter_chapter__price_free__"]')] : [];
@@ -951,7 +951,8 @@ async def read_native_ticket_snapshot(
               && imagePath === '/assets/manga_detail/charge.svg'
               && img?.alt === chargeAlt
               && chargeClassTokens.length === 2
-              && chargeClassTokens.includes('Charge_charge__JSGmu')
+              && (chargeClassTokens.includes('Charge_charge__JSGmu')
+                || chargeClassTokens.includes('Charge_charge__ZMeYL'))
               && chargeClassTokens.includes('undefined');
             const statusMatches = isTicketAvailable
               ? availableLabels.includes(chargeStatus)
@@ -1098,7 +1099,7 @@ async def read_native_ticket_snapshot(
          "availableFallback": TICKET_AVAILABLE_UI_FALLBACK,
          "recoveryFallback": TICKET_RECOVERY_UI_FALLBACK,
          "chargeAlt": TICKET_CHARGE_ALT,
-         "rentalRootClassTokens": sorted(_RENTAL_ROW_ROOT_CLASS_TOKENS),
+         "rentalRootClassPairs": _RENTAL_ROW_ROOT_CLASS_PAIRS,
          "rentalRootCosmeticToken": _RENTAL_ROW_COSMETIC_ROOT_TOKEN},
     )
     if not isinstance(value, Mapping) or value.get("state") != "ok":
@@ -1277,7 +1278,11 @@ async def wait_for_native_viewer_presence(
     chapter_id: str,
     timeout_ms: int = ACTION_TIMEOUT_MS,
 ) -> None:
-    """Wait for the exact viewer runtime message without interpreting access."""
+    """Wait for the exact viewer runtime message after the matched zero-cost response.
+
+    A client-rendered shell can omit SSR chapter identity. The runtime target
+    still has to match here, and the caller validates the rental and point state.
+    """
 
     if type(timeout_ms) is not int or timeout_ms < 1:
         raise ValueError("ComicFUZ viewer readiness timeout is invalid")
@@ -1289,13 +1294,22 @@ async def wait_for_native_viewer_presence(
                   || current.port || current.username || current.password
                   || current.pathname !== `/manga/viewer/${chapterId}`
                   || current.search || current.hash) return false;
+              const scripts = document.querySelectorAll('#__NEXT_DATA__');
+              if (scripts.length !== 1 || scripts[0].tagName !== 'SCRIPT'
+                  || scripts[0].type !== 'application/json') return false;
               let next = null;
-              try { next = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || 'null'); }
+              try { next = JSON.parse(scripts[0].textContent || 'null'); }
               catch (_) { return false; }
-              if (next?.page !== '/manga/viewer/[chapterId]'
-                  || String(next?.props?.pageProps?.chapterId ?? '') !== chapterId
-                  || (next?.query?.chapterId != null
-                    && String(next.query.chapterId) !== chapterId)) return false;
+              if (next?.page !== '/manga/viewer/[chapterId]') return false;
+              const emptyObject = value => !!value
+                && Object.getPrototypeOf(value) === Object.prototype
+                && Object.keys(value).length === 0;
+              const pageProps = next.props?.pageProps;
+              const emptyViewer = emptyObject(next.query) && emptyObject(pageProps);
+              if (!emptyViewer && (
+                  String(pageProps?.chapterId ?? '') !== chapterId
+                  || (next.query?.chapterId != null
+                    && String(next.query.chapterId) !== chapterId))) return false;
               for (const image of document.querySelectorAll('img[class*="G54Y0W_page"]')) {
                 let key = Object.keys(image).find(name => name.startsWith('__reactFiber$'));
                 let fiber = key ? image[key] : null;
@@ -1353,7 +1367,7 @@ async def open_direct_relative_rental_viewer(
     route_failure: str | None = None
     operation_active = False
     operation_succeeded = False
-    response_future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    response_future: asyncio.Future[object | None] = asyncio.get_running_loop().create_future()
 
     def same_request(left: object, right: object) -> bool:
         return getattr(left, "_impl_obj", left) is getattr(right, "_impl_obj", right)
@@ -1365,6 +1379,8 @@ async def open_direct_relative_rental_viewer(
         nonlocal route_failure
         if route_failure is None:
             route_failure = reason
+        if not response_future.done():
+            response_future.set_result(None)
 
     def assert_route_healthy() -> None:
         if route_failure is not None:
@@ -1450,10 +1466,8 @@ async def open_direct_relative_rental_viewer(
             )
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("ComicFUZ direct viewer navigation failed") from exc
-        if route_failure is not None or request_count != 1 or expected_request is None:
-            raise UnknownPageStateError(
-                route_failure or "direct_viewer_request_not_observed_once"
-            )
+        # The viewer can start its request after DOMContentLoaded. Keep the
+        # route guard active while waiting within the existing response budget.
         try:
             response = await asyncio.wait_for(
                 response_future,
@@ -1462,7 +1476,13 @@ async def open_direct_relative_rental_viewer(
         except asyncio.CancelledError:
             raise
         except TimeoutError as exc:
+            if expected_request is None:
+                raise UnknownPageStateError("direct_viewer_request_not_observed_once") from exc
             raise UnknownPageStateError("ComicFUZ direct viewer response was not matched") from exc
+        if route_failure is not None or request_count != 1 or expected_request is None:
+            raise UnknownPageStateError(
+                route_failure or "direct_viewer_request_not_observed_once"
+            )
         if route_failure is not None or getattr(response, "status", None) != 200:
             raise UnknownPageStateError(
                 route_failure or "direct_viewer_response_status_not_200"

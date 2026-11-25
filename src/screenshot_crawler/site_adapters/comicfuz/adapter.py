@@ -20,6 +20,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
 from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
     PageChangeTimeoutError,
     UnknownPageStateError,
     UnsupportedAccessStrategyError,
@@ -47,6 +48,7 @@ from screenshot_crawler.site_adapters.comicfuz.work_ticket import (
     API_PATH,
     ComicFuzTicketEntry,
     ComicFuzTicketNotAttemptedError,
+    DirectRentalViewerResult,
     TicketEntryProof,
     find_ticket_modal_cta,
     is_canonical_viewer_url,
@@ -61,6 +63,7 @@ from screenshot_crawler.watchlist.models import WatchlistTarget
 _COMPOSITE_ID = re.compile(r"^(?P<work>[0-9]+):(?P<chapter>[0-9]+)$")
 _PAGE_LABEL = re.compile(r"^page_(?P<number>[0-9]+)$")
 _BLOB_PREFIX = "blob:https://comic-fuz.com/"
+_PUBLIC_FREE_404_REDIRECT_TIMEOUT_MS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,14 +77,26 @@ class _TicketReaderBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class _DirectReaderBinding:
+    page: Page
+    work_id: str
+    chapter_id: str
+    episode_title: str
+    rental_result: DirectRentalViewerResult | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _EmptySsrReaderIdentity:
-    binding: _TicketReaderBinding
+    binding: _TicketReaderBinding | _DirectReaderBinding
+    document_time_origin: float
     work_id: str
     chapter_id: str
     episode_title: str
     episode_subtitle: str
     work_title: str
     viewer_title: str
+
+
 def _cleanup_observer_on_failure(
     method: Callable[..., Awaitable[Any]],
 ) -> Callable[..., Awaitable[Any]]:
@@ -96,6 +111,9 @@ def _cleanup_observer_on_failure(
             raise
 
     return wrapped
+
+
+_LINKED_EXTRA_PAIR = ("linked_extra", "linked_extra")
 
 
 def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int | None]:
@@ -142,6 +160,8 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int | None]:
     tail = roles[extra_index:]
     if tail == ["google_ads", "last_page"]:
         return tuple(range(extra_index)), None
+    if tail == [*_LINKED_EXTRA_PAIR, "google_ads", "last_page"] and extra_index >= 3:
+        return tuple(range(extra_index)), extra_index
     if tail not in (
         ["linked_extra", "google_ads", "last_page"],
         ["linked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
@@ -183,6 +203,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._ticket_entry: ComicFuzTicketEntry | None = None
         self._ticket_entry_confirmed = False
         self._ticket_reader_binding: _TicketReaderBinding | None = None
+        self._direct_reader_binding: _DirectReaderBinding | None = None
         self._empty_ssr_reader_identity: _EmptySsrReaderIdentity | None = None
         self._access_consumption = AccessConsumption()
         self._episode_title: str | None = None
@@ -366,6 +387,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._ticket_entry = None
         self._ticket_entry_confirmed = False
         self._ticket_reader_binding = None
+        self._direct_reader_binding = None
         self._empty_ssr_reader_identity = None
         self._access_consumption = AccessConsumption()
 
@@ -596,6 +618,36 @@ class ComicFuzAdapter(SiteAdapter):
             and controller.external_id == binding.external_id
         )
 
+    def _empty_ssr_entry_binding(
+        self, page: Page,
+    ) -> _TicketReaderBinding | _DirectReaderBinding | None:
+        """Require same-Page entry evidence before trusting client-rendered identity."""
+        if self._ticket_reader_binding_matches(page):
+            return self._ticket_reader_binding
+        binding = self._direct_reader_binding
+        if (
+            binding is None
+            or binding.page is not page
+            or binding.work_id != self._work_id
+            or binding.chapter_id != self._chapter_id
+            or binding.episode_title != self._expected_episode_title
+            or not is_canonical_viewer_url(page.url, chapter_id=binding.chapter_id)
+        ):
+            return None
+        rental = binding.rental_result
+        if rental is None:
+            if self._access_strategy in {"auto", "direct"} and self._quota_resource is None:
+                return binding
+        elif (
+            self._access_strategy == "direct"
+            and self._quota_resource == "work_ticket"
+            and self._direct_rental_revalidation
+            and self._direct_rental_guard_page is page
+            and self._direct_rental_guard_check is rental.assert_route_healthy
+        ):
+            return binding
+        return None
+
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         """Choose the minimum observed entry route for free, grant, or ticket."""
 
@@ -655,6 +707,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._advance_pending = False
         self._ended = False
         self._initialized = False
+        self._direct_reader_binding = None
         self._empty_ssr_reader_identity = None
 
         work_url = self._preflight_work_url or f"https://{SITE_HOST}/manga/{self._work_id}"
@@ -711,6 +764,9 @@ class ComicFuzAdapter(SiteAdapter):
                 on_guard_installed=install_direct_rental_guard,
             )
             expected_episode_title = direct_result.snapshot.chapter_label
+            self._direct_reader_binding = _DirectReaderBinding(
+                page, self._work_id, self._chapter_id, expected_episode_title, direct_result
+            )
         elif (
             self._access_strategy == "direct"
             and self._existing_access_grant_until is not None
@@ -773,7 +829,10 @@ class ComicFuzAdapter(SiteAdapter):
             expected_episode_title = matches[0].item.order_label
             if not isinstance(expected_episode_title, str) or not expected_episode_title.strip():
                 raise UnknownPageStateError("ComicFUZ preflight episode label is unavailable")
-            await page.goto(self._target_url, wait_until="domcontentloaded", timeout=15_000)
+            await self._open_public_free_viewer(page, self._target_url)
+            self._direct_reader_binding = _DirectReaderBinding(
+                page, self._work_id, self._chapter_id, expected_episode_title
+            )
         self._expected_episode_title = expected_episode_title
         manifest_deadline = (
             asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
@@ -801,6 +860,39 @@ class ComicFuzAdapter(SiteAdapter):
                 "ComicFUZ reader title does not match its freshly verified listing row"
             )
         self._initialized = True
+
+    async def _open_public_free_viewer(self, page: Page, target_url: str) -> None:
+        homepage = f"https://{SITE_HOST}/"
+        for attempt in range(2):
+            # Read the document status before a ComicFUZ 404 can redirect from JS.
+            response = await page.goto(target_url, wait_until="commit", timeout=15_000)
+            if response is None or response.url != target_url:
+                raise UnknownPageStateError("ComicFUZ public-free viewer navigation left the target")
+            if response.status == 200:
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                if page.url != target_url:
+                    raise UnknownPageStateError(
+                        "ComicFUZ public-free viewer navigation left the target"
+                    )
+                return
+            if response.status != 404:
+                raise UnknownPageStateError(
+                    f"ComicFUZ public-free viewer returned HTTP {response.status}"
+                )
+            if attempt == 1:
+                break
+            try:
+                await page.wait_for_url(
+                    homepage, wait_until="commit", timeout=_PUBLIC_FREE_404_REDIRECT_TIMEOUT_MS
+                )
+            except PlaywrightTimeoutError:
+                if page.url == target_url:
+                    break
+            if page.url != homepage:
+                raise UnknownPageStateError(
+                    "ComicFUZ public-free viewer redirected to an unexpected page after HTTP 404"
+                )
+        raise AccessResourceUnavailableError("comicfuz_public_free_viewer_404")
 
     async def initialize_entry_only(self, page: Page) -> None:
         """Confirm a ticket entry without invoking the image response observer."""
@@ -871,6 +963,7 @@ class ComicFuzAdapter(SiteAdapter):
                     "ComicFUZ reached its end panel with incomplete body sequence"
                 )
             if await self._terminal_body_shells_clear(page):
+                self._require_linked_extra_pair_end()
                 self._ended = True
                 await self._cleanup_source_observer()
                 return PageState.END
@@ -1062,6 +1155,7 @@ class ComicFuzAdapter(SiteAdapter):
                                 raise UnknownPageStateError(
                                     "ComicFUZ end panel appeared before the verified body prefix was complete"
                                 )
+                            self._require_linked_extra_pair_end()
                             self._ended = True
                             self._advance_pending = False
                             await self._cleanup_source_observer()
@@ -1254,11 +1348,25 @@ class ComicFuzAdapter(SiteAdapter):
                 "ComicFUZ first-party viewer page-role manifest is malformed"
             )
         empty_ssr = snapshot.get("ssr_mode") == "empty_viewer"
+        binding = None
+        document_time_origin = snapshot.get("document_time_origin")
         if empty_ssr:
-            if not self._ticket_reader_binding_matches(page):
+            binding = self._empty_ssr_entry_binding(page)
+            if binding is None:
                 raise UnknownPageStateError(
-                    "ComicFUZ empty viewer SSR is not bound to a confirmed ticket entry"
+                    "ComicFUZ empty viewer SSR lacks a bound public-free, rental, or ticket entry"
                 )
+            cached_identity = self._empty_ssr_reader_identity
+            if (
+                type(document_time_origin) not in {float, int}
+                or document_time_origin <= 0
+                or (
+                    cached_identity is not None
+                    and (cached_identity.binding is not binding
+                         or cached_identity.document_time_origin != document_time_origin)
+                )
+            ):
+                raise UnknownPageStateError("ComicFUZ empty SSR reader document changed")
             runtime_state = snapshot.get("runtime_state")
             if runtime_state == "missing":
                 cached = await self._empty_ssr_identity_for_end(
@@ -1272,12 +1380,10 @@ class ComicFuzAdapter(SiteAdapter):
                 elif allow_initial_manifest_loading and not self._initialized:
                     return False
                 else:
-                    raise UnknownPageStateError(
-                        "ComicFUZ ticket viewer runtime identity is unavailable"
-                    )
+                    raise UnknownPageStateError("ComicFUZ viewer runtime identity is unavailable")
             elif runtime_state != "valid":
                 raise UnknownPageStateError(
-                    "ComicFUZ ticket viewer runtime identity is ambiguous or malformed"
+                    "ComicFUZ viewer runtime identity is ambiguous or malformed"
                 )
             if snapshot.get("runtime_state") == "valid":
                 identity = {
@@ -1323,7 +1429,7 @@ class ComicFuzAdapter(SiteAdapter):
             and snapshot.get("runtime_dom_title") != expected_viewer_title
         ):
             raise UnknownPageStateError(
-                "ComicFUZ ticket viewer title differs from its bound native chapter"
+                "ComicFUZ viewer title differs from its bound native chapter"
             )
         if self._expected_viewer_title is None:
             self._expected_viewer_title = expected_viewer_title
@@ -1348,6 +1454,13 @@ class ComicFuzAdapter(SiteAdapter):
             body_indices, extra_index = _classify_viewer_pages(pages)
             if self._chapter_id != snapshot.get("viewer_chapter_id"):
                 raise UnknownPageStateError("ComicFUZ viewer page list belongs to another episode")
+            if (
+                extra_index is not None and len(pages) == extra_index + 4
+                and not is_first_page_blank and extra_index % 2 == 0
+            ):
+                raise UnknownPageStateError(
+                    "ComicFUZ linked extra pair conflicts with the first-page layout"
+                )
             if extra_index is None and len(body_indices) % 2 != (1 if is_first_page_blank else 0):
                 raise UnknownPageStateError(
                     "ComicFUZ body-page parity conflicts with the first-page layout"
@@ -1387,12 +1500,10 @@ class ComicFuzAdapter(SiteAdapter):
             current_title = await self._read_episode_title(page)
             if current_title != self._episode_title:
                 raise UnknownPageStateError("ComicFUZ episode title changed during the crawl")
-        if empty_ssr and snapshot.get("runtime_state") == "valid":
-            binding = self._ticket_reader_binding
-            if binding is None:
-                raise UnknownPageStateError("ComicFUZ ticket reader binding disappeared")
+        if binding is not None and snapshot.get("runtime_state") == "valid":
             self._empty_ssr_reader_identity = _EmptySsrReaderIdentity(
                 binding=binding,
+                document_time_origin=document_time_origin,
                 work_id=self._work_id or "",
                 chapter_id=self._chapter_id or "",
                 episode_title=self._expected_episode_title or "",
@@ -1411,12 +1522,12 @@ class ComicFuzAdapter(SiteAdapter):
         terminal_title: str | None,
     ) -> dict[str, str] | None:
         cached = self._empty_ssr_reader_identity
-        binding = self._ticket_reader_binding
+        binding = self._empty_ssr_entry_binding(page)
         if not (
             allow_cached_manifest_at_end
             and cached is not None
             and binding is cached.binding
-            and self._ticket_reader_binding_matches(page)
+            and snapshot.get("document_time_origin") == cached.document_time_origin
             and snapshot.get("ssr_mode") == "empty_viewer"
             and terminal_title == cached.viewer_title
             and self._episode_title == cached.viewer_title
@@ -1638,6 +1749,7 @@ class ComicFuzAdapter(SiteAdapter):
                         ? String(ssrData.mangaId ?? '') : '';
                       return {
                         ssr_mode:ssrMode,
+                        document_time_origin:performance.timeOrigin,
                         legacy_manifest_state:legacyManifestState,
                         ssr_page:isObject(next) && typeof next.page === 'string' ? next.page : null,
                         chapter_id:ssrChapterId,
@@ -1878,16 +1990,32 @@ class ComicFuzAdapter(SiteAdapter):
         )
 
     def _expected_extra_tail_group(self) -> tuple[int, ...]:
-        """Return only the next group in the three supported extra-tail layouts."""
+        """Return only the next group in the supported extra-tail layouts."""
         extra = self._extra_page_index
         if (
             extra is None
             or self._viewer_pages is None
-            or len(self._viewer_pages) != extra + 5
             or self._captured_indices != list(self._body_page_indices)
         ):
             return ()
         tail_roles = self._native_extra_tail_roles()
+        if tail_roles == _LINKED_EXTRA_PAIR:
+            next_group = self._linked_extra_pair_group(extra)
+            if len(next_group) == 2:
+                last_body = (extra - 2, extra - 1)
+                last_spread = last_body
+            else:
+                last_body = (extra - 1,)
+                last_spread = (extra - 1, extra)
+            if (
+                not self._advanced_extra_groups
+                and self._last_rendered_group == last_spread
+                and self._last_captured_group == last_body
+            ):
+                return next_group
+            return ()
+        if len(self._viewer_pages) != extra + 5:
+            return ()
         if tail_roles == ("unlinked_extra", "unlinked_extra", "linked_extra"):
             if self._advanced_extra_groups:
                 if (
@@ -1937,13 +2065,28 @@ class ComicFuzAdapter(SiteAdapter):
             not numbers
             or extra is None
             or self._viewer_pages is None
-            or len(self._viewer_pages) != extra + 5
+            or len(self._viewer_pages) not in {extra + 4, extra + 5}
             or self._captured_indices != list(self._body_page_indices)
             or (numbers != self._expected_extra_tail_group() and not stale)
             or any(role is None for role in expected_roles)
             or tuple(row.get("role") for row in rows) != expected_roles
         ):
             raise UnknownPageStateError("ComicFUZ extra tail is out of sequence")
+
+    def _linked_extra_pair_group(self, extra: int) -> tuple[int, ...]:
+        # With a blank opening half-spread, an odd body count fills the final
+        # body spread. The other supported alignments pair its last body with
+        # the first linked extra, leaving only the second extra to advance.
+        return (extra, extra + 1) if self._is_first_page_blank and extra % 2 else (extra + 1,)
+
+    def _require_linked_extra_pair_end(self) -> None:
+        extra = self._extra_page_index
+        if (
+            extra is not None
+            and self._native_extra_tail_roles() == _LINKED_EXTRA_PAIR
+            and self._advanced_extra_groups != (self._linked_extra_pair_group(extra),)
+        ):
+            raise UnknownPageStateError("ComicFUZ end panel skipped the final linked extra")
 
     def _is_pending_transition_overlap(self, rows: list[dict[str, Any]]) -> bool:
         if not self._advance_pending or self._viewer_pages is None or len(rows) not in {3, 4}:
@@ -2083,6 +2226,14 @@ class ComicFuzAdapter(SiteAdapter):
         if roles in (
             ["body"], ["body", "body"], ["unlinked_extra", "linked_extra"],
             ["linked_extra", "unlinked_extra"], ["linked_extra"],
+        ):
+            return
+        extra = self._extra_page_index
+        if (
+            tuple(roles) == _LINKED_EXTRA_PAIR
+            and extra is not None
+            and self._native_extra_tail_roles() == _LINKED_EXTRA_PAIR
+            and tuple(numbers) == self._linked_extra_pair_group(extra)
         ):
             return
         if roles == ["body", "linked_extra"]:

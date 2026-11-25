@@ -23,6 +23,7 @@ from screenshot_crawler.batch import (
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
     UnknownPageStateError,
@@ -60,6 +61,10 @@ TICKET_APP = "\u30a2\u30d7\u30ea\u306f\u3053\u3061\u3089"
 RENTAL_ROW_ROOT_CLASSES = (
     "Chapter_chapter__wJPBe",
     "Chapter_chapter__alreadyViewed__BYLMn",
+)
+UPDATED_RENTAL_ROW_ROOT_CLASSES = (
+    "Chapter_chapter__yBHGE",
+    "Chapter_chapter__alreadyViewed__n_0yI",
 )
 EPISODE_TITLE = "第31話"
 
@@ -315,6 +320,7 @@ def _relative_rental_listing_html(
     row_runtime_same_point: bool = True,
     row_root_class_tokens: tuple[str, ...] = RENTAL_ROW_ROOT_CLASSES,
     false_descendant: bool = False,
+    recovery_charge_base_class: str = "Charge_charge__JSGmu",
 ) -> str:
     native_point = (
         {} if native_point_amount is None else {"amount": native_point_amount}
@@ -331,7 +337,7 @@ def _relative_rental_listing_html(
     charge_class = (
         "Charge_charge__charged__fixture"
         if ticket_available
-        else "Charge_charge__JSGmu undefined"
+        else f"{recovery_charge_base_class} undefined"
     )
     charge_image = "charged.svg" if ticket_available else "charge.svg"
     charge_label = TICKET_AVAILABLE if ticket_available else TICKET_RECOVERY
@@ -417,6 +423,7 @@ def _viewer_html(
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
     extra_tail_unlinked_pair: bool = False,
+    extra_tail_linked_pair: bool = False,
     no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
@@ -478,7 +485,12 @@ def _viewer_html(
             image_groups[last_state].append(body_descriptor_count)
         if not first_pair_mode and missing_second_page:
             image_groups[1] = [1]
-        if extra_tail_unlinked_pair:
+        if extra_tail_linked_pair:
+            image_groups[last_state + 1] = [
+                index for index in range(body_descriptor_count, body_descriptor_count + 2)
+                if index not in image_groups[last_state]
+            ]
+        elif extra_tail_unlinked_pair:
             if body_descriptor_count in image_groups[last_state]:
                 image_groups[last_state + 1] = [body_descriptor_count + 1, body_descriptor_count + 2]
             else:
@@ -491,7 +503,9 @@ def _viewer_html(
                 image_groups[max(image_groups) + 1] = remaining_extras[start:start + 2]
     terminal_state = max(image_groups) + 1 if image_groups else 0
     native_page_count = body_descriptor_count + (
-        2 if no_extra_tail else (5 if extra_tail or extra_tail_unlinked_pair else 3)
+        2 if no_extra_tail else (
+            4 if extra_tail_linked_pair else (5 if extra_tail or extra_tail_unlinked_pair else 3)
+        )
     )
     counter_values = [
         f"{group[0] + 1}/{native_page_count}" for _state, group in image_groups.items()
@@ -526,6 +540,12 @@ def _viewer_html(
             {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
             {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
             {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{googleAds:{{}}}}, {{lastPage:{{}}}}
+          );
+        }} else if ({str(extra_tail_linked_pair).lower()}) {{
+          pageDescriptors.push(
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
+            {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}},
             {{googleAds:{{}}}}, {{lastPage:{{}}}}
           );
         }} else if ({str(no_extra_tail).lower()}) {{
@@ -709,16 +729,19 @@ def _ticket_viewer_html(
     empty_ssr: bool = False,
     body_count: int = 2,
     no_extra_tail: bool = False,
+    extra_tail_linked_pair: bool = False,
+    first_page_blank: bool | None = None,
 ) -> str:
     html = _viewer_html(
         _jpeg_bytes(),
         empty_ssr=empty_ssr,
         bind_title_fiber=empty_ssr,
         latest_end="valid",
-        first_page_blank=True,
+        first_page_blank=(not extra_tail_linked_pair if first_page_blank is None else first_page_blank),
         first_mode_body_page_count=body_count,
         true_mode_body_page_count=body_count,
         no_extra_tail=no_extra_tail,
+        extra_tail_linked_pair=extra_tail_linked_pair,
         native_title=chapter_label,
         viewer_title=chapter_label,
     )
@@ -824,10 +847,14 @@ async def _route_comicfuz(
     transition_overlap_variant: str = "valid",
     extra_tail: bool = False,
     extra_tail_unlinked_pair: bool = False,
+    extra_tail_linked_pair: bool = False,
     no_extra_tail: bool = False,
     latest_end: str = "none",
     stuck_extra_tail: bool = False,
     native_subtitle: str = "",
+    empty_free_ssr: bool = False,
+    viewer_statuses: tuple[int, ...] = (),
+    missing_viewer_redirect: str | None = None,
 ):
     body = _work_html(free=free, sign_in=sign_in, episode_title=listing_title)
     image = _viewer_html(
@@ -856,12 +883,28 @@ async def _route_comicfuz(
         transition_overlap_variant=transition_overlap_variant,
         extra_tail=extra_tail,
         extra_tail_unlinked_pair=extra_tail_unlinked_pair,
+        extra_tail_linked_pair=extra_tail_linked_pair,
         no_extra_tail=no_extra_tail,
         latest_end=latest_end,
         stuck_extra_tail=stuck_extra_tail,
         native_subtitle=native_subtitle,
+        empty_ssr=empty_free_ssr,
+        bind_title_fiber=empty_free_ssr,
     )
+    if empty_free_ssr:
+        chapter = json.dumps({
+            "chapterId": 80641,
+            "chapterMainName": native_title,
+            "chapterSubName": native_subtitle,
+        })
+        image = image.replace(
+            "const webMangaViewerData = {chapterId:'80641',viewerData};",
+            "const webMangaViewerData = {chapterId:80641,viewerData,"
+            "manga:{mangaId:1970,mangaName:'Fixture series'},"
+            f"chapters:[{{chapters:[{chapter}]}}]}};",
+        )
     seen: list[str] = []
+    statuses = iter(viewer_statuses)
 
     async def route_request(route) -> None:
         path = route.request.url.split("?", 1)[0]
@@ -869,7 +912,13 @@ async def _route_comicfuz(
         if path == f"{BASE}/manga/1970":
             await route.fulfill(body=body, content_type="text/html; charset=utf-8")
         elif path == VIEWER_URL:
-            await route.fulfill(body=image, content_type="text/html; charset=utf-8")
+            status = next(statuses, 200)
+            document = image if status == 200 else "<!doctype html><title>Viewer unavailable</title>"
+            if status == 404 and missing_viewer_redirect is not None:
+                document += f"<script>location.replace({json.dumps(missing_viewer_redirect)});</script>"
+            await route.fulfill(status=status, body=document, content_type="text/html; charset=utf-8")
+        elif path == f"{BASE}/" and missing_viewer_redirect == "/":
+            await route.fulfill(body="Home", content_type="text/html; charset=utf-8")
         else:
             await route.fulfill(status=404, body="not found")
 
@@ -1847,6 +1896,12 @@ async def test_comicfuz_relative_rental_row_rejects_hidden_ancestor(browser_page
     [
         (30, True, True, RENTAL_ROW_ROOT_CLASSES, False, None),
         (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("false",), False, None),
+        (30, True, True, UPDATED_RENTAL_ROW_ROOT_CLASSES, False, None),
+        (
+            30, True, True,
+            (RENTAL_ROW_ROOT_CLASSES[0], UPDATED_RENTAL_ROW_ROOT_CLASSES[1]),
+            False, "rental_listing_row_not_exact",
+        ),
         (30, True, True, (RENTAL_ROW_ROOT_CLASSES[0],), False, "rental_listing_row_not_exact"),
         (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("true",), False, "rental_listing_row_not_exact"),
         (30, True, True, RENTAL_ROW_ROOT_CLASSES + ("null",), False, "rental_listing_row_not_exact"),
@@ -1862,6 +1917,8 @@ async def test_comicfuz_relative_rental_row_rejects_hidden_ancestor(browser_page
     ids=[
         "three_layer_ssr30_runtime_default_zero",
         "rental_root_cosmetic_false_token",
+        "rental_root_current_class_pair",
+        "rental_root_mixed_class_pair",
         "rental_root_missing_mandatory_token",
         "rental_root_extra_true_token",
         "rental_root_extra_null_token",
@@ -1945,11 +2002,19 @@ async def test_comicfuz_rental_listing_requires_runtime_refs_and_valid_ssr_amoun
         )
 
 
+@pytest.mark.parametrize(
+    ("body_count", "first_page_blank", "empty_ssr"),
+    [(11, False, False), (12, True, False), (12, True, True)],
+    ids=["nonblank-first", "blank-first-even", "blank-first-even-empty-ssr"],
+)
 async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
     browser_page,
     browser_context,
     tmp_path: Path,
     sync_legacy_unscoped_work,
+    body_count: int,
+    first_page_blank: bool,
+    empty_ssr: bool,
 ) -> None:
     work_id, chapter_id = "3342", "46741"
     work_url = f"{BASE}/manga/{work_id}"
@@ -1969,14 +2034,19 @@ async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
             expiry=rental,
             chapter_label=label,
             relative_rental=True,
+            empty_ssr=empty_ssr,
+            body_count=body_count,
+            extra_tail_linked_pair=True,
+            first_page_blank=first_page_blank,
         )
     ).replace("</", "<\\/")
-    viewer_bootstrap = f'''<!doctype html><html><body><script>(()=>{{
+    viewer_bootstrap = f'''<!doctype html><html><body><script>
+    window.addEventListener('load', () => setTimeout(() => {{
       fetch('https://api.comic-fuz.com/v1/web_manga_viewer_2',{{method:'POST',
         headers:{{'content-type':'text/plain'}},body:new Uint8Array({list(direct_request)})}})
         .then(()=>{{document.open();document.write({viewer_html_js});document.close();}})
         .catch(()=>{{}});
-    }})();</script></body></html>'''
+    }}, 100));</script></body></html>'''
     initial_quota_listing = _work_ticket_listing_html(
         work_id=work_id,
         chapter_id=chapter_id,
@@ -1994,7 +2064,8 @@ async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
         chapter_id=chapter_id,
         chapter_label=label,
         rental_value=rental,
-        row_root_class_tokens=RENTAL_ROW_ROOT_CLASSES + ("false",),
+        row_root_class_tokens=UPDATED_RENTAL_ROW_ROOT_CLASSES + ("false",),
+        recovery_charge_base_class="Charge_charge__ZMeYL",
     )
     current_listing = [initial_quota_listing]
     work_visits: list[str] = []
@@ -2101,14 +2172,17 @@ async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
         candidate,
         output_root=tmp_path / "relative-rental-output",
         library_dir=tmp_path / "relative-rental-library",
-        max_pages=5,
+        max_pages=body_count,
         now=now,
     )
 
     run = catalog.get_crawl_run(result.crawl_run_id)
     after_source = catalog.get_source(source.id)
-    assert result.stop_reason == "end" and result.page_count == 2
-    assert run.status == "succeeded" and run.page_count == 2
+    assert result.stop_reason == "end" and result.page_count == body_count
+    assert run.status == "succeeded" and run.page_count == body_count
+    assert adapter._advanced_extra_groups == ((body_count + 1,),)
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert len(archive.namelist()) == body_count
     assert "access_consumption_confirmed:" not in (run.stop_reason or "")
     assert catalog.get_item(candidate.item_id).status == "completed"
     artifacts = catalog.list_artifacts(item_id=candidate.item_id)
@@ -2120,6 +2194,7 @@ async def test_comicfuz_batch_revalidates_past_quota_hint_as_direct_rental(
         source_item_work_id, site="comicfuz", resource="work_ticket"
     ) is None
     assert adapter.get_access_consumption().consumed is False
+    assert (adapter._empty_ssr_reader_identity is not None) is empty_ssr
     assert api_requests == [direct_request]
     assert viewer_visits == [f"{BASE}/manga/viewer/{chapter_id}"]
     assert len(work_visits) == 2
@@ -2373,6 +2448,121 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1
     assert all(entry.item_id != candidate.item_id for entry in replanned.candidates)
     assert sum(candidate.external_id == "1970:80641" for candidate in plan.candidates) == 1
+
+
+@pytest.mark.parametrize(
+    ("body_count", "first_page_blank"), [(13, True), (12, False)],
+    ids=["blank-first-odd", "nonblank-first-even-rejected"],
+)
+async def test_comicfuz_public_free_empty_ssr_batch_linked_tail(
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, body_count: int,
+    first_page_blank: bool,
+) -> None:
+    catalog, _, _, _, candidate, executor, _, _ = await _comicfuz_batch_fixture(
+        browser_page, tmp_path, sync_legacy_unscoped_work,
+        empty_free_ssr=True,
+        extra_tail_linked_pair=True,
+        first_mode_body_page_count=body_count,
+        true_mode_body_page_count=body_count,
+        first_page_blank=first_page_blank,
+        latest_end="valid",
+    )
+    assert candidate.access_strategy == "direct" and candidate.quota_resource is None
+    operation = executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "capture",
+        library_dir=tmp_path / "library",
+        max_pages=body_count,
+        now=NOW,
+    )
+    if not first_page_blank:
+        with pytest.raises(CandidateExecutionError, match="conflicts with the first-page layout"):
+            await operation
+        assert catalog.get_item(candidate.item_id).status == "pending"
+        assert catalog.list_artifacts(item_id=candidate.item_id) == []
+        return
+    result = await operation
+    assert result.stop_reason == "end" and result.page_count == body_count
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    run = catalog.get_crawl_run(result.crawl_run_id)
+    assert run.stop_reason == "end"
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert len(archive.namelist()) == body_count
+
+
+@pytest.mark.parametrize(
+    ("statuses", "redirect", "expected_error"),
+    [
+        ((404, 200), "/", None),
+        ((404, 404), "/", AccessResourceUnavailableError),
+        ((404,), None, AccessResourceUnavailableError),
+        ((404,), "/account/signin", CandidateExecutionError),
+        ((503,), None, CandidateExecutionError),
+    ],
+    ids=["recovers", "two-404s", "static-404", "unexpected-redirect", "service-error"],
+)
+async def test_comicfuz_public_free_viewer_404_is_bounded(
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, statuses, redirect, expected_error,
+) -> None:
+    catalog, _, _, _, candidate, executor, seen, _ = await _comicfuz_batch_fixture(
+        browser_page, tmp_path, sync_legacy_unscoped_work,
+        viewer_statuses=statuses,
+        missing_viewer_redirect=redirect,
+    )
+    operation = executor.execute_candidate(
+        browser_page, candidate,
+        output_root=tmp_path / "capture",
+        library_dir=tmp_path / "library",
+        max_pages=2,
+        now=NOW,
+    )
+    if expected_error is None:
+        result = await operation
+        assert result.stop_reason == "end" and result.page_count == 2
+        assert catalog.get_item(candidate.item_id).status == "completed"
+    else:
+        with pytest.raises(expected_error) as failure:
+            await operation
+        if expected_error is AccessResourceUnavailableError:
+            assert failure.value.reason == "comicfuz_public_free_viewer_404"
+            assert failure.value.stop_resource_pass is False
+        else:
+            assert isinstance(failure.value.__cause__, UnknownPageStateError)
+        assert catalog.get_item(candidate.item_id).status == "pending"
+        assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert seen.count(VIEWER_URL) == len(statuses)
+
+
+@pytest.mark.parametrize("failure", ["unbound", "wrong_work", "new_document"])
+async def test_comicfuz_public_free_empty_ssr_requires_current_binding(browser_page, failure: str):
+    await _route_comicfuz(
+        browser_page, empty_free_ssr=True, no_extra_tail=True, true_mode_body_page_count=3
+    )
+    adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
+    await adapter.configure_target_identity("1970:80641", "fixture-series")
+    await adapter.configure_run(browser_page, "auto")
+    if failure == "unbound":
+        await browser_page.goto(VIEWER_URL)
+        adapter._expected_episode_title = EPISODE_TITLE
+        expected = "lacks a bound public-free"
+    else:
+        await browser_page.goto(WORK_URL)
+        await adapter.initialize(browser_page)
+        assert adapter._empty_ssr_reader_identity is not None
+        if failure == "wrong_work":
+            await browser_page.locator(adapter.page_selector).first.evaluate(
+                """image => {
+                  const key = Object.keys(image).find(key => key.startsWith('__reactFiber$'));
+                  image[key].memoizedProps.webMangaViewerData.manga.mangaId = 999;
+                }"""
+            )
+            expected = "runtime identity is ambiguous or malformed"
+        else:
+            await browser_page.reload()
+            expected = "empty SSR reader document changed"
+    with pytest.raises(UnknownPageStateError, match=expected):
+        await adapter._validate_reader_identity(browser_page, allow_initial_manifest_loading=True)
 
 
 @pytest.mark.parametrize("failure", [

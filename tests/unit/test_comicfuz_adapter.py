@@ -64,6 +64,12 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
         {"role": "google_ads"}, {"role": "last_page"},
     ]
     assert _classify_viewer_pages(unlinked_pair_tail) == (tuple(range(12)), 12)
+    linked_pair_tail = [
+        *[image.copy() for _ in range(11)],
+        extra.copy(), extra.copy(), {"role": "google_ads"}, {"role": "last_page"},
+    ]
+    assert _classify_viewer_pages(linked_pair_tail) == (tuple(range(11)), 11)
+    assert _classify_viewer_pages([image.copy(), *linked_pair_tail]) == (tuple(range(12)), 12)
 
     invalid = [
         [{"role": "google_ads"}, {"role": "last_page"}],
@@ -72,6 +78,7 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
         [image.copy(), {**image, "has_link": True}, {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, image.copy(), {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, extra, {"role": "google_ads"}, {"role": "last_page"}],
+        linked_pair_tail[9:],
         [image.copy(), extra, {"role": "last_page"}, {"role": "google_ads"}],
         [image.copy(), {**extra, "link_metadata_valid": False}, {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, {"role": "unknown"}, {"role": "last_page"}],
@@ -91,6 +98,38 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     assert (
         capture_comicfuz_source_bytes(b"not a jpeg", expected_width=19, expected_height=31) is None
     )
+
+
+@pytest.mark.parametrize(("body_count", "first_page_blank"), [(11, False), (12, True)])
+def test_comicfuz_linked_extra_pair_requires_final_mixed_spread_and_extra_advance(
+    body_count: int, first_page_blank: bool,
+) -> None:
+    adapter = ComicFuzAdapter()
+    adapter._body_page_indices = tuple(range(body_count))
+    adapter._extra_page_index = body_count
+    adapter._is_first_page_blank = first_page_blank
+    adapter._viewer_pages = [
+        *[{} for _ in range(body_count)],
+        *[{"role": "image", "is_extra": True, "has_link": True} for _ in range(2)],
+        {"role": "google_ads"}, {"role": "last_page"},
+    ]
+    adapter._last_rendered_group = (body_count - 1, body_count)
+    adapter._last_captured_group = (body_count - 1,)
+    adapter._captured_indices = list(range(body_count - 1))
+    assert adapter._expected_extra_tail_group() == ()
+
+    adapter._captured_indices.append(body_count - 1)
+    assert adapter._expected_extra_tail_group() == (body_count + 1,)
+    with pytest.raises(UnknownPageStateError, match="skipped the final linked extra"):
+        adapter._require_linked_extra_pair_end()
+    adapter._require_extra_tail_sequence([{"number": body_count + 1, "role": "linked_extra"}])
+    with pytest.raises(UnknownPageStateError, match="extra tail is out of sequence"):
+        adapter._require_extra_tail_sequence([{"number": body_count, "role": "linked_extra"}])
+
+    adapter._last_rendered_group = (body_count + 1,)
+    adapter._advanced_extra_groups = ((body_count + 1,),)
+    adapter._require_linked_extra_pair_end()
+    assert adapter._expected_extra_tail_group() == ()
 
 
 def test_comicfuz_unlinked_pair_tail_requires_exact_manifest_and_capture_history() -> None:
