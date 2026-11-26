@@ -59,6 +59,7 @@ def _supported_ticket_rental_term(row: dict[str, object]) -> bool:
 from screenshot_crawler.site_adapters.comicdays.native_capture import (
     COMICDAYS_CAPTURE_HOOK,
     MAX_ROWS,
+    VISIBLE_SPREAD_ELEMENT,
     reconstruct_jpeg,
     reconstruct_png,
     source_id_for_row,
@@ -66,6 +67,14 @@ from screenshot_crawler.site_adapters.comicdays.native_capture import (
 )
 
 _FORBIDDEN = re.compile(r"(?:購入|ポイント|チケット|レンタル|ログイン|会員登録|purchase|point|ticket|rental|login)", re.IGNORECASE)
+_DUMMY_FRONT_FULL_BACK = "dummy-front-full-back"
+_FRONT_PREFIX_FIRST_SLIDER = {
+    "dummy-single": 2,
+    "two-front-double": 3,
+    "dummy-front-double": 2,
+    "dummy-two-front-single": 2,
+    _DUMMY_FRONT_FULL_BACK: 2,
+}
 
 
 class ComicDaysAdapter(SiteAdapter):
@@ -92,6 +101,7 @@ class ComicDaysAdapter(SiteAdapter):
         self._advance_from_slider: int | None = None
         self._known_tail_slider: int | None = None
         self._known_nonbody_passes = 0
+        self._normalized_dummy_front_full_back = False
         self._last_transition_observation: dict[str, Any] = {}
         self._last_slider: int | None = None
         self._capture_debug: dict[str, Any] = {}
@@ -295,6 +305,8 @@ class ComicDaysAdapter(SiteAdapter):
                     "observation_error": type(exc).__name__}
         if not isinstance(value, dict):
             return {"rows": [], "colophon": False, "reason": "capture_hook_missing_or_malformed"}
+        if self._normalized_dummy_front_full_back and value.get("frontPrefixMode") != _DUMMY_FRONT_FULL_BACK:
+            return {"rows": [], "colophon": False, "reason": "normalized_viewer_layout_changed"}
         rows = value.get("rows")
         value["rows"] = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
         # The production hook owns completeness.  A non-empty row list can be
@@ -364,6 +376,7 @@ class ComicDaysAdapter(SiteAdapter):
         self._advance_from_slider = None
         self._known_tail_slider = None
         self._known_nonbody_passes = 0
+        self._normalized_dummy_front_full_back = False
         self._selected_signature = None
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         try:
@@ -796,10 +809,7 @@ class ComicDaysAdapter(SiteAdapter):
         state = await self._active_until(page, deadline)
         slider = self._valid_slider_state(state)
         front_prefix_mode = state.get("frontPrefixMode")
-        target_slider = {
-            "dummy-single": 2, "two-front-double": 3,
-            "dummy-front-double": 2, "dummy-two-front-single": 2,
-        }.get(front_prefix_mode)
+        target_slider = _FRONT_PREFIX_FIRST_SLIDER.get(front_prefix_mode)
         if (
             slider is None
             or slider[0] != 1
@@ -849,6 +859,12 @@ class ComicDaysAdapter(SiteAdapter):
                     raise PageChangeTimeoutError(
                         "Comic DAYS front-link prefix skipped the first body slider"
                     )
+                if front_prefix_mode == _DUMMY_FRONT_FULL_BACK:
+                    if after.get("frontPrefixMode") != front_prefix_mode or after_slider[1] != slider[1]:
+                        raise PageChangeTimeoutError("Comic DAYS front-link prefix layout changed")
+                    # The slider can reach 2 before both first-spread canvases finish rendering.
+                    if after.get("ready") is not True:
+                        continue
                 if after.get("ready") is not True or not after.get("rows"):
                     raise PageChangeTimeoutError(
                         "Comic DAYS front-link prefix first body spread was not ready"
@@ -900,19 +916,9 @@ class ComicDaysAdapter(SiteAdapter):
             if state.get("rows") and state.get("ready") is True:
                 if not isinstance(current, int) or not isinstance(last, int) or not 1 <= current <= last:
                     raise PageChangeTimeoutError("Comic DAYS first spread exposed an invalid slider")
-                if current == 1 or (
-                    state.get("frontPrefixMode") in {"dummy-single", "dummy-two-front-single"}
-                    and current == 2
-                    and front_prefix_advanced
-                ) or (
-                    state.get("frontPrefixMode") == "two-front-double"
-                    and current == 3
-                    and front_prefix_advanced
-                ) or (
-                    state.get("frontPrefixMode") == "dummy-front-double"
-                    and current == 2
-                    and front_prefix_advanced
-                ):
+                mode = state.get("frontPrefixMode")
+                if current == 1 or (front_prefix_advanced and _FRONT_PREFIX_FIRST_SLIDER.get(mode) == current):
+                    self._normalized_dummy_front_full_back = mode == _DUMMY_FRONT_FULL_BACK
                     return
                 await self._rewind_to_first(page, deadline=deadline)
                 continue
@@ -1172,6 +1178,8 @@ class ComicDaysAdapter(SiteAdapter):
 
         script = """
         (expected) => {
+          const visibleSpreadElement = ${VISIBLE_SPREAD_ELEMENT};
+          let useSpreadVisibility = false;
           const visibleOnScreen = (element) => {
             const rect = element.getBoundingClientRect();
             const style = getComputedStyle(element);
@@ -1182,7 +1190,7 @@ class ComicDaysAdapter(SiteAdapter):
           const summary = (element) => ({
             className: element.className || '',
             id: element.id || null,
-            onScreen: visibleOnScreen(element),
+            onScreen: useSpreadVisibility ? visibleSpreadElement(element) : visibleOnScreen(element),
             canvasCount: element.querySelectorAll('canvas').length,
             imageCount: element.querySelectorAll('img').length,
             iframeCount: element.querySelectorAll('iframe').length,
@@ -1352,10 +1360,18 @@ class ComicDaysAdapter(SiteAdapter):
             areas.slice(colophonIndex - 3, colophonIndex).every(area => area.children.length === 1) &&
             isBackFull(areas[colophonIndex - 3].children[0]) &&
             isBackHalf(areas[colophonIndex - 2].children[0]) && isAd(areas[colophonIndex - 1].children[0]);
+          const dummyFrontFullBack = Number.isInteger(sliderLast) && sliderLast >= 8 && sliderLast % 2 === 0 &&
+            sliderLast === colophonIndex && areas.length === sliderLast + 1 && areas[0].children.length === 1 &&
+            areas[0].children[0].classList.contains('page-dummy') && areas[0].children[0].classList.contains('js-page') &&
+            areas[0].children[0].children.length === 0 && areas[1].children.length === 1 && isFrontLink(areas[1].children[0]) &&
+            areas.slice(2, colophonIndex - 3).every(isBodyAreaShell) &&
+            areas.slice(colophonIndex - 3, colophonIndex).every(area => area.children.length === 1) &&
+            isBackFull(areas[colophonIndex - 3].children[0]) &&
+            isBackHalf(areas[colophonIndex - 2].children[0]) && isAd(areas[colophonIndex - 1].children[0]);
           const frontPrefixMode = dummyFrontPrefix ? 'dummy-single' : twoFrontDoublePrefix ? 'two-front-double' :
-            singleFrontBody ? 'single-front-body' : null;
+            singleFrontBody ? 'single-front-body' : dummyFrontFullBack ? 'dummy-front-full-back' : null;
           const frontPrefix = frontPrefixMode !== null;
-          const firstBody = singleFrontBody ? 1 : frontPrefixMode === 'dummy-single' ? 3 : frontPrefixMode === 'two-front-double' ? 2 : canvasFirst;
+          const firstBody = singleFrontBody ? 1 : frontPrefixMode === 'dummy-single' ? 3 : frontPrefixMode === 'two-front-double' || dummyFrontFullBack ? 2 : canvasFirst;
           const layouts = Number.isFinite(sliderLast) ? [
             {name: 'legacy-tail', body: sliderLast - 4, back: sliderLast - 3, ad: sliderLast - 2, colophon: sliderLast - 1},
             {name: 'leading-area-tail', body: sliderLast - 3, back: sliderLast - 2, ad: sliderLast - 1, colophon: sliderLast},
@@ -1385,6 +1401,8 @@ class ComicDaysAdapter(SiteAdapter):
               [...ad.children].filter(isAd).length === 1 && isColophon(colophon);
           };
           const layout = layouts.find(layoutFor) || null;
+          // Neighboring tail pages can intersect the viewport while clipped outside the spread.
+          useSpreadVisibility = dummyFrontFullBack && layout?.name === 'front-prefix-tail';
           const backArea = layout && layout.name !== 'front-prefix-tail' ? areas[layout.back] : null;
           const seriesLikeArea = layout?.name === 'series-like-tail' ? areas[layout.seriesLike] : null;
           const backFullArea = layout?.name === 'front-prefix-tail' ? areas[layout.backFull] : null;
@@ -1448,7 +1466,7 @@ class ComicDaysAdapter(SiteAdapter):
             unknownOnScreenAreas, colophon,
           };
         }
-        """
+        """.replace("${VISIBLE_SPREAD_ELEMENT}", VISIBLE_SPREAD_ELEMENT)
         try:
             value = await asyncio.wait_for(
                 page.evaluate(script, (f"https://comic-days.com/episode/{self._episode_id}.json" if self._episode_id else None)),
@@ -1541,16 +1559,25 @@ class ComicDaysAdapter(SiteAdapter):
             )
             if not all(isinstance(value, int) for value in expected) or expected != tuple(range(expected[0], expected[0] + 3)):
                 return False
+            mode = observation.get("frontPrefixMode")
+            half_back_with_ad = mode == _DUMMY_FRONT_FULL_BACK
+            colophon = observation.get("colophon")
             return (
                 all(isinstance(item, dict) for item in (full_item, half_item, ad_item))
                 and full_item.get("areaIndex") == expected[0]
                 and half_item.get("areaIndex") == expected[1]
                 and ad_item.get("areaIndex") == expected[2]
                 and (
-                    observation.get("frontPrefixMode") != "single-front-body"
+                    mode not in {"single-front-body", _DUMMY_FRONT_FULL_BACK}
                     or observation.get("sliderNow") == expected[1]
                 )
-                and full_item.get("onScreen") is True
+                and full_item.get("onScreen") is (not half_back_with_ad)
+                and (
+                    not half_back_with_ad or (
+                        ad_item.get("onScreen") is True and isinstance(colophon, dict)
+                        and colophon.get("onScreen") is False
+                    )
+                )
                 and half_item.get("onScreen") is True
                 and full_item.get("canvasCount") == 0
                 and full_item.get("imageCount") == 1
@@ -1638,6 +1665,7 @@ class ComicDaysAdapter(SiteAdapter):
             if not all(isinstance(value, list) and len(value) == 1 for value in (full, half, ads)) or not isinstance(indices, dict):
                 return False
             full_item, half_item, ad_item = full[0], half[0], ads[0]
+            mode = observation.get("frontPrefixMode")
             resources_valid = (
                 isinstance(full_item, dict) and isinstance(half_item, dict) and isinstance(ad_item, dict)
                 and full_item.get("areaIndex") == indices.get("backFull")
@@ -1649,8 +1677,12 @@ class ComicDaysAdapter(SiteAdapter):
                 and half_item.get("linkSlotCount") == 2
                 and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
                 and (
-                    observation.get("frontPrefixMode") != "single-front-body"
+                    mode not in {"single-front-body", _DUMMY_FRONT_FULL_BACK}
                     or observation.get("sliderNow") == indices.get("colophon")
+                )
+                and (
+                    mode != _DUMMY_FRONT_FULL_BACK
+                    or all(item.get("onScreen") is False for item in (full_item, half_item, ad_item))
                 )
             )
             expected_colophon = indices.get("colophon")
@@ -1873,11 +1905,17 @@ class ComicDaysAdapter(SiteAdapter):
                 if current < advance_from or current > last:
                     raise PageChangeTimeoutError("Comic DAYS viewer slider did not advance monotonically")
                 if current > advance_from:
+                    # After slider 2, body, ad, and colophon each advance exactly two positions.
+                    if self._normalized_dummy_front_full_back and current != advance_from + 2:
+                        raise PageChangeTimeoutError("Comic DAYS viewer skipped a spread")
                     if state.get("rows"):
                         observation = None
                     else:
                         observation = await self._nonbody_observation(page, timeout_ms=min(500, self._remaining_ms(deadline)))
-                        if not self._observation_matches_slider(observation, slider_state):
+                        if not self._observation_matches_slider(observation, slider_state) or (
+                            self._normalized_dummy_front_full_back
+                            and observation.get("frontPrefixMode") != _DUMMY_FRONT_FULL_BACK
+                        ):
                             nonbody_stable, nonbody_previous = 0, None
                             observation = None
                         else:
@@ -1887,9 +1925,11 @@ class ComicDaysAdapter(SiteAdapter):
                             nonbody_previous = signature
                     self._trace_nonbody_transition(observation, current, last, nonbody_stable)
                     tail_indices = observation.get("tailIndices") if isinstance(observation, dict) else None
-                    single_front_body = (
-                        observation is not None and observation.get("frontPrefixMode") == "single-front-body"
-                    )
+                    mode = observation.get("frontPrefixMode") if observation is not None else None
+                    tail_from, colophon_from = {
+                        "single-front-body": (last - 5, last - 3),
+                        _DUMMY_FRONT_FULL_BACK: (last - 4, last - 2),
+                    }.get(mode, (None, None))
                     new_tail_transition = (
                         isinstance(observation, dict)
                         and observation.get("tailVariant") in {"front-prefix-tail", "series-like-tail"}
@@ -1910,7 +1950,7 @@ class ComicDaysAdapter(SiteAdapter):
                         observation is not None
                         and nonbody_stable >= 2
                         and state.get("colophon") is True
-                        and (not single_front_body or self._known_tail_slider == last - 3)
+                        and (colophon_from is None or self._known_tail_slider == colophon_from)
                         and (
                             (current == last and self._known_tail_slider in {last - 2, last - 1})
                             or (current == last - 1 and self._known_tail_slider is None)
@@ -1925,7 +1965,7 @@ class ComicDaysAdapter(SiteAdapter):
                     elif (
                         observation is not None
                         and nonbody_stable >= 2
-                        and (not single_front_body or advance_from == last - 5)
+                        and (tail_from is None or advance_from == tail_from)
                         and (
                             current in {last - 2, last - 1}
                             or (

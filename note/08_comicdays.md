@@ -1,3 +1,36 @@
+## Dummy and one front link with a full/half back-link tail (2026-11-26)
+
+Item/source 22000 (`3269754496662918445`, スキップとローファー
+「Ｓｃｅｎｅ（３７） ドヤドヤの後輩②」) hit the 10-second normalization
+bound on both direct Batch attempts with zero saved pages. The saved DOM and a
+shared-CDP probe identified an empty dummy at area 0, a full front link at 1,
+body areas 2..16, full/half back links at 17/18, ad at 19 and Colophon at 20.
+`sliderLast=20`. The previous code reported `unknown_body_layout` at slider 1.
+
+The `dummy-front-full-back` layout requires that ordered structure, a contiguous
+odd body run, and `area count == sliderLast + 1`. The adapter uses the existing
+validated forward control once from slider 1, where the dummy and front link
+fill the spread, and requires the rendered body pair at slider 2. The structural
+body indices survive lazy canvas unmounting. Even body sliders select `now, now+1`
+through the last pair. The final body slider (`last-4`) saves its single canvas
+beside the full back link. The half back link and ad form the `AD` spread at
+`last-2`, and the Colophon alone confirms `END` at `last` after that spread.
+The existing clipped-visibility threshold distinguishes these panels from
+partially visible neighbors. Unproven layout, skipped spreads and missing render
+proof stop within the existing bounds. This uses the ordinary CLI, access checks,
+and output format.
+
+Shared-CDP production direct verification reached `END` and saved body areas
+2..16 once each in order as PNG. The isolated ZIP matched the manifest and passed
+CRC validation. The target was live-free and the adapter reported no resource
+consumption. The operational Catalog and library were outside the verification
+run. The 18-candidate Batch was not rerun because it also includes quota candidates.
+
+Comic DAYS Unit and local browser Integration coverage passed 452 cases with
+zero skips. The 10 new browser cases cover rewind, delayed canvas mount,
+clipped neighbors, malformed structures and a skipped tail. Full pytest and
+Research tests were outside the scope of this site-local correction.
+
 ## First body canvas beside a single front link (2026-11-25)
 
 Item/source 22001 (`3269754496662918439`, スキップとローファー Scene 37)
@@ -899,6 +932,9 @@ is accepted only when it is the structural last body area immediately before
 the full/half back-link pair; ordinary body states remain two-area spreads.
 The `single-front-body` form starts with body area 1 already visible beside one
 front link and uses `now-1, now` to select later two-area body spreads.
+The `dummy-front-full-back` form selects `now, now+1` at even body sliders and
+keeps the last single body area beside the full back link. Its known tail is
+the half back link and ad at `last-2`, followed by the Colophon at `last`.
 Terminal state requires a completed forward
 transition to the visible colophon with no active body canvas. URL changes are
 reported as `NEXT_CONTENT`. Render readiness is tracked separately from native
@@ -913,9 +949,9 @@ timeout. The same monotonic deadline covers viewer observation, control
 inspection/clicks, transition waits, and final readiness; initialization cannot
   return while the slider is later than position 1 for ordinary layouts or before
   the first body slider for the front-prefix-tail layout. The `dummy-single`
-  form normalizes to slider 2 and the `two-front-double` form normalizes to
-  slider 3 with its two-area first spread. Both forms use the validated forward
-  control exactly once and never click a front-link anchor.
+  form normalizes to slider 2. The `two-front-double` and `dummy-front-full-back`
+  forms normalize to their two-area first spreads at sliders 3 and 2, respectively.
+  These forms use the validated forward control once and leave front-link anchors untouched.
 
 The live granted viewer also has a non-body tail between content and the
 colophon: body slider 17 advances to slider 19 with one on-screen

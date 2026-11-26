@@ -402,6 +402,11 @@ viewer observation, rewind control inspection/clicks, transition waits, and the
   two-area first spread. Both forms use the validated forward control exactly
   once and never click a front-link anchor. In `single-front-body`, the first
   canvas is already on slider 1, so no forward action is needed during initialization.
+  In `dummy-front-full-back`, the dummy and one front link fill slider 1.
+  Initialization advances once and requires the rendered body pair at slider 2.
+  The last body canvas shares slider `last-4` with the full back link. The half
+  back link and ad form the next spread at `last-2`. The Colophon at `last`
+  confirms `END` after that spread.
 
 Discovery, Policy, and the exact ticket entry paths are implemented and
 synthetic-browser verified. The current policy uses `work_ticket` with work

@@ -17,6 +17,25 @@ MAX_ROWS = 4
 _JPEG_SOF_BASELINE = 0xC0
 _JPEG_SOF_PROGRESSIVE = {0xC2, 0xC6, 0xCA, 0xCE}
 
+VISIBLE_SPREAD_ELEMENT = """element => {
+  if (!element) return false;
+  const hidden = style => style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+  const rect = element.getBoundingClientRect();
+  if (hidden(getComputedStyle(element)) || !(rect.width > 0 && rect.height > 0)) return false;
+  let left = Math.max(rect.left, 0), right = Math.min(rect.right, innerWidth);
+  let top = Math.max(rect.top, 0), bottom = Math.min(rect.bottom, innerHeight);
+  const clips = ['hidden', 'clip', 'scroll', 'auto'];
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    if (hidden(style)) return false;
+    if (!clips.includes(style.overflowX) && !clips.includes(style.overflowY)) continue;
+    const bounds = parent.getBoundingClientRect();
+    if (clips.includes(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+    if (clips.includes(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+  }
+  return Math.max(0, right - left) * Math.max(0, bottom - top) / (rect.width * rect.height) >= 0.5;
+}"""
+
 COMICDAYS_CAPTURE_HOOK = r"""
 (() => {
   if (window.__comicDaysProductionCapture) return;
@@ -67,7 +86,7 @@ COMICDAYS_CAPTURE_HOOK = r"""
     resize.__comicDaysProduction=true;
     Object.defineProperty(HTMLCanvasElement.prototype,name,{...descriptor,set:resize});
   }
-  const visible=e=>{if(!e)return false;const own=getComputedStyle(e);if(own.display==='none'||own.visibility==='hidden'||own.opacity==='0')return false;const r=e.getBoundingClientRect();if(!(r.width>0&&r.height>0))return false;let left=Math.max(r.left,0),right=Math.min(r.right,innerWidth),top=Math.max(r.top,0),bottom=Math.min(r.bottom,innerHeight);for(let p=e.parentElement;p;p=p.parentElement){const q=getComputedStyle(p);if(q.display==='none'||q.visibility==='hidden'||q.opacity==='0')return false;if(['hidden','clip','scroll','auto'].includes(q.overflowX)){const x=p.getBoundingClientRect();left=Math.max(left,x.left);right=Math.min(right,x.right)}if(['hidden','clip','scroll','auto'].includes(q.overflowY)){const x=p.getBoundingClientRect();top=Math.max(top,x.top);bottom=Math.min(bottom,x.bottom)}}const area=Math.max(0,right-left)*Math.max(0,bottom-top);return area/(r.width*r.height)>=.5};
+  const visible=${VISIBLE_SPREAD_ELEMENT};
   const row=(c,areas)=>{const area=c.closest('.page-area.js-page-area');const ai=areas.indexOf(area);if(ai<0)return null;const r=c.getBoundingClientRect();if(!visible(c))return null;const id=canvas(c);const all=s.draws.filter(x=>x.canvasId===id);const safe=x=>{const q=x.state||{};return q.a===1&&q.b===0&&q.c===0&&q.d===1&&q.e===0&&q.f===0&&q.alpha===1&&q.composite==='source-over'&&q.filter==='none'};const full=x=>x.args?.length===8&&x.args[0]===0&&x.args[1]===0&&x.args[2]===x.source.width&&x.args[3]===x.source.height&&x.args[4]===0&&x.args[5]===0&&x.args[6]===x.canvasWidth&&x.args[7]===x.canvasHeight;
     const bases=all.filter(full);const base=bases.at(-1);const draws=base?all.filter(x=>x.sequence>=base.sequence):all;const tiles=draws.filter(x=>x!==base);
     const exactUnion=(rects,w,h)=>{if(rects.length!==16||rects.some(x=>x.some(v=>!Number.isInteger(v))))return null;const widths=[...new Set(rects.map(x=>x[2]))],heights=[...new Set(rects.map(x=>x[3]))];if(widths.length!==1||heights.length!==1||widths[0]<=0||heights[0]<=0)return null;const xs=[...new Set(rects.map(x=>x[0]))].sort((a,b)=>a-b),ys=[...new Set(rects.map(x=>x[1]))].sort((a,b)=>a-b);if(xs.length!==4||ys.length!==4||xs[0]!==0||ys[0]!==0)return null;for(let i=1;i<4;i++){if(xs[i]!==xs[i-1]+widths[0]||ys[i]!==ys[i-1]+heights[0])return null}const maxX=xs[3]+widths[0];if(maxX>w||ys[3]+heights[0]!==h)return null;const pairs=new Set(rects.map(x=>`${x[0]}:${x[1]}`));for(const x of xs)for(const y of ys)if(!pairs.has(`${x}:${y}`))return null;return {maxX};};
@@ -96,6 +115,11 @@ COMICDAYS_CAPTURE_HOOK = r"""
     const isDummyArea=area=>!!area&&area.children.length===1&&area.children[0].classList.contains('page-dummy')&&area.children[0].classList.contains('js-page')&&area.querySelectorAll('canvas,img,iframe').length===0;
     const isAdPage=page=>page.classList.contains('page-ad')&&page.classList.contains('js-page-ad');
     const isAdArea=area=>pageChild(area,isAdPage);
+    const isSpreadAdPage=page=>isAdPage(page)&&page.children.length===1&&
+      page.children[0].tagName==='DIV'&&page.children[0].className==='ad-nav-area-wrap page-content'&&
+      page.querySelectorAll('canvas,img').length===0&&
+      (page.querySelectorAll('.js-ad-container').length===2||
+       (page.querySelectorAll('.js-ad-container').length===0&&page.querySelectorAll('iframe').length===2));
     const isSeriesLikePage=page=>page.classList.contains('series-like-page')&&page.classList.contains('js-show-after-load')&&page.children.length===2&&page.children[0].tagName==='DIV'&&page.children[0].className==='series-like-content'&&page.children[0].children.length===2&&page.children[0].children[0].tagName==='P'&&page.children[0].children[0].className==='series-like-description'&&page.children[0].children[1].tagName==='BUTTON'&&page.children[0].children[1].className==='series-like-button js-episode-like-button'&&page.children[1].tagName==='DIV'&&page.children[1].className==='like-page-app-content'&&page.children[1].children.length===2&&page.children[1].children[0].tagName==='P'&&page.children[1].children[0].className==='like-page-app-content-text'&&page.children[1].children[1].tagName==='A'&&page.children[1].children[1].className==='like-page-app-content-link'&&page.children[1].children[1].querySelectorAll('img').length===1&&page.children[1].children[1].querySelector('img')?.className==='like-page-app-content-icon'&&page.querySelectorAll('img').length===1&&page.querySelectorAll('a').length===1&&page.querySelectorAll('button').length===1&&page.querySelectorAll('button.js-episode-like-button').length===1&&page.querySelectorAll('canvas,iframe').length===0;
     const isSeriesLikeArea=area=>!!area&&area.classList.contains('test-series-like-page')&&area.children.length===1&&pageChild(area,isSeriesLikePage);
     const colophonStructure=area=>!!area&&area.id==='viewer-colophon'&&area.children.length===1&&area.children[0].classList.contains('back-matter')&&area.children[0].classList.contains('js-back-matter')&&area.children[0].children.length===1&&area.children[0].children[0].tagName==='DIV'&&area.children[0].children[0].className==='back-matter-content'&&area.querySelectorAll('canvas,iframe').length===0;
@@ -140,9 +164,19 @@ COMICDAYS_CAPTURE_HOOK = r"""
       areas[0].children.length===1&&isFrontArea(areas[0])&&areas.slice(1,colophon-3).every(isBodyAreaShell)&&
       areas.slice(colophon-3,colophon).every(area=>area.children.length===1)&&
       pageChild(areas[colophon-3],isBackFullPage)&&pageChild(areas[colophon-2],isBackHalfPage)&&isAdArea(areas[colophon-1]);
-    const frontPrefixMode=dummyTwoFrontSinglePrefix?'dummy-two-front-single':dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':dummyFrontDoublePrefix?'dummy-front-double':singleFrontBody?'single-front-body':null;
+    // At the last body slider the full back link shares the spread with a single canvas.
+    const dummyFrontFullBack=Number.isInteger(last)&&last>=8&&last%2===0&&last===colophon&&areas.length===last+1&&
+      isDummyArea(areas[0])&&areas[0].children[0].children.length===0&&areas[1].children.length===1&&isFrontArea(areas[1])&&
+      areas.slice(2,last-3).every(isBodyAreaShell)&&areas.slice(last-3,last).every(area=>area.children.length===1)&&
+      pageChild(areas[last-3],isBackFullPage)&&pageChild(areas[last-2],isBackHalfPage)&&pageChild(areas[last-1],isSpreadAdPage);
+    const frontPrefixMode=dummyTwoFrontSinglePrefix?'dummy-two-front-single':
+      dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':
+      dummyFrontDoublePrefix?'dummy-front-double':singleFrontBody?'single-front-body':
+      dummyFrontFullBack?'dummy-front-full-back':null;
     const frontPrefix=frontPrefixMode!==null;
-    const firstBody=singleFrontBody?1:(frontPrefixMode==='dummy-single'||frontPrefixMode==='dummy-two-front-single')?3:(frontPrefixMode==='two-front-double'||frontPrefixMode==='dummy-front-double')?2:canvasFirst;
+    const firstBody=singleFrontBody?1:
+      (frontPrefixMode==='dummy-single'||frontPrefixMode==='dummy-two-front-single')?3:
+      (frontPrefixMode==='two-front-double'||frontPrefixMode==='dummy-front-double'||dummyFrontFullBack)?2:canvasFirst;
     const layouts=Number.isFinite(last)?[
       {name:'legacy-tail',body:last-4,back:last-3,ad:last-2,colophon:last-1},
       {name:'leading-area-tail',body:last-3,back:last-2,ad:last-1,colophon:last},
@@ -170,6 +204,11 @@ COMICDAYS_CAPTURE_HOOK = r"""
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='dummy-single'&&now===2){expected=[firstBody];}
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'&&now===1){reason='front_link_prefix';}
     else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'&&now===3){expected=[firstBody,firstBody+1];}
+    else if(layout.name==='front-prefix-tail'&&dummyFrontFullBack){
+      if(now===1&&visible(areas[0])&&visible(areas[1])&&visibleBody.length===0)reason='front_link_prefix';
+      else if(now%2===0&&now>=firstBody&&now<=bodyEnd)expected=now===bodyEnd?[now]:[now,now+1];
+      else reason='non_body_slider';
+    }
     else if(layout.name==='front-prefix-tail'&&singleFrontBody){
       if(now===1)expected=[firstBody];
       else if(now%2===1&&now<=bodyEnd)expected=[now-1,now];
@@ -189,7 +228,11 @@ COMICDAYS_CAPTURE_HOOK = r"""
     const prefixLayout=layout?.name==='front-prefix-tail'||(layout?.name==='leading-area-tail'&&(frontPrefixMode==='dummy-front-double'||frontPrefixMode==='dummy-two-front-single'));
     // frontPrefix triggers an initialization click. In singleFrontBody that
     // click would turn past the first body canvas while it is still loading.
-    const base={sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!areas[colophon]&&visible(areas[colophon]),complete:false,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,layoutVariant:layout?.name||null,frontPrefix:prefixLayout&&!singleFrontBody,frontPrefixMode:prefixLayout?frontPrefixMode:null};
+    const canAdvancePrefix=prefixLayout&&!singleFrontBody&&(!dummyFrontFullBack||reason==='front_link_prefix');
+    const base={sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,
+      colophon:!!areas[colophon]&&visible(areas[colophon]),complete:false,
+      expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,layoutVariant:layout?.name||null,
+      frontPrefix:canAdvancePrefix,frontPrefixMode:prefixLayout?frontPrefixMode:null};
     const complete=!reason&&expected.length>0&&expected.length<=${MAX_ROWS}&&rows.length===expected.length;
     if(!complete)return {rows:[],...base,reason:reason||'body_area_count'};
     rows.sort((a,b)=>b.rect.x-a.rect.x);
@@ -199,7 +242,11 @@ COMICDAYS_CAPTURE_HOOK = r"""
   window.__comicDaysProductionCapture={active:activeBodyV2, snapshot:async ids=>{const out=[];for(const id of ids||[]){const im=s.imageRefs.get(Number(id));if(!im)continue;const url=im.currentSrc||im.src||'';if(!url.startsWith('blob:')||url.length>4096){out.push({id:Number(id),error:'source_not_blob'});continue}let timer=null;try{const controller=new AbortController();timer=setTimeout(()=>controller.abort(),4000);const r=await fetch(url,{signal:controller.signal});if(!r.ok){out.push({id:Number(id),error:'source_fetch'});continue}const length=Number(r.headers.get('content-length')||0);if(length>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}const b=await r.arrayBuffer();if(b.byteLength>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}out.push({id:Number(id),url,bytes:b64(b),type:r.headers.get('content-type')||im.type||null})}catch(e){out.push({id:Number(id),error:'source_unavailable'})}finally{if(timer!==null)clearTimeout(timer)}}return out},debug:()=>({draws:s.draws.length,mutations:s.mutations.length,images:s.imageRefs.size})};
 })();
 """
-COMICDAYS_CAPTURE_HOOK = COMICDAYS_CAPTURE_HOOK.replace("${MAX_ROWS}", str(MAX_ROWS)).replace("${MAX_SOURCE_BYTES}", str(MAX_SOURCE_BYTES))
+COMICDAYS_CAPTURE_HOOK = (
+    COMICDAYS_CAPTURE_HOOK.replace("${MAX_ROWS}", str(MAX_ROWS))
+    .replace("${MAX_SOURCE_BYTES}", str(MAX_SOURCE_BYTES))
+    .replace("${VISIBLE_SPREAD_ELEMENT}", VISIBLE_SPREAD_ELEMENT)
+)
 
 
 def _safe_state(value: dict[str, Any]) -> bool:
