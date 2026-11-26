@@ -129,6 +129,9 @@ Safe initial pacing defaults:
 
 Missing `crawler.yaml`, or a missing known site entry, must not silently turn the crawler into zero-delay operation.
 
+The distributed YAML sets Magapoke's page-turn delay to 1500 ms and its
+inter-candidate delay to 6000 ms.
+
 Delay values must be non-negative integers. Explicit zero may be supported as an operator override.
 
 Access-stop flags are booleans. Their code defaults should fail safe for supported sites once the shared AccessGuard is wired.
@@ -207,9 +210,9 @@ The same contract applies to full, incremental and bounded Discovery, including
 different keys of one Work and site changes. GUI waits check cooperative stop
 at most every 200 ms. State is not persisted between commands/jobs.
 
-Missing file/site/field defaults to 3000 ms; explicit zero disables this delay.
-The distributed YAML specifies all 13 registered sites: 5000 ms for Hanayume
-and Younganimal, 3000 ms for the others. Existing adapter-internal listing
+Missing file/site/field defaults to 3000 ms. Explicit zero disables this delay.
+The distributed YAML sets 10000 ms for Hanayume, 5000 ms for HERO'S WEB and
+Younganimal, and 3000 ms for the other registered sites. Adapter-internal listing
 pacing remains independent. `discover --crawler-config PATH` selects the file
 (default `crawler.yaml`); the GUI uses its existing `runtime_path`.
 This addition has synthetic CLI/worker coverage; live timing is unverified.

@@ -1112,8 +1112,8 @@ live ticket consumption or fresh live Batch run was performed for this fix.
 Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・
 Work間stable orderingを維持し、同一Workの各Batch phase内を`published_at ASC (NULL last), source_id DESC`で
 old-to-newに並べる。root `crawler.yaml`の`page_turn_delay_ms`はCONTENTの全artifactとprogress persist後、
-initial `go_next()`直前に1回だけ適用する。Batchの`inter_candidate_delay_ms`はcandidate Page close後、次の
-site-accessing candidate前に1回だけ適用する。Magapoke adapterのnavigation retry、Work Ticket、Premium Ticket、
+initial `go_next()`直前に1回だけ適用する。同梱設定では1500ms。Batchの`inter_candidate_delay_ms`はcandidate Page close後、次の
+site-accessing candidate前に1回だけ適用する。同梱設定では6000ms。Magapoke adapterのnavigation retry、Work Ticket、Premium Ticket、
 direct accessの既存挙動は変更していない。Phase 2ではMagapoke adapterがshared AccessGuardへ接続され、
 `pocket.shonenmagazine.com`と`mgpk-cdn.magazinepocket.com`のrelevant hostだけの403/429をfatal stopとする。
 explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。

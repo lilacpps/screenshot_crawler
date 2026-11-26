@@ -1,8 +1,8 @@
 sites:
   magapoke:
     discovery_inter_target_delay_ms: 3000
-    page_turn_delay_ms: 1000
-    inter_candidate_delay_ms: 3000
+    page_turn_delay_ms: 1500
+    inter_candidate_delay_ms: 6000
     stop_on_http_403: true
     stop_on_http_429: true
     stop_on_challenge: true
@@ -55,7 +55,7 @@ sites:
     stop_on_captcha: true
 
   hanayume:
-    discovery_inter_target_delay_ms: 5000
+    discovery_inter_target_delay_ms: 10000
     page_turn_delay_ms: 1500
     inter_candidate_delay_ms: 5000
     stop_on_http_403: true

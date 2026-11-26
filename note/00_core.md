@@ -3609,8 +3609,8 @@ siteを切り替えても状態を引き継ぎ、同一Work内の別key・full/i
 状態はjob/commandを跨いで保持しない。GUIは200ms以下に分割して既存checkpointを確認し、
 待機中の停止要求では次targetへ接続しない。CLIは`discover --crawler-config PATH`
 （既定`crawler.yaml`）、GUIは既存`runtime_path`を使用する。0は明示無効、不正値は接続前に失敗。
-同梱YAMLの全13siteに設定し、hanayume/younganimalは5000ms、他は3000ms。
-既存Batch/page-turn設定とAdapter内の一覧ページ間待機は維持する。
+同梱YAMLのDiscovery待機はHanayumeが10000ms、HERO'S WEBとYounganimalが5000ms、他は3000ms。
+Magapokeの同梱設定はページ送りが1500ms、Batchの候補間が6000ms。Adapter内の一覧ページ間待機は独立している。
 fake sleepによるCLI/GUI workerの順序・回数・失敗継続・停止を検証し、実サイト時間計測は未実施。
 2026-11-13の関連Unitは218件と全site YAML設定確認1件が通過し、GUI入力・Jump+/Manga ONE
 Discoveryのlocal Integrationは29件通過（skipなし）。既存のroot YAML固定値testは変更前から

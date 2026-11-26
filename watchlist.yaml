@@ -642,6 +642,18 @@ targets:
     url: https://pocket.shonenmagazine.com/title/01539/episode/331441
     enabled: true
     label: "プラネテス"
+    discovery_scope:
+      excluded_external_ids:
+        - '331464'
+        - '331465'
+    archive_segments:
+      - order: 1
+        end_external_id: '331456'
+      - order: 3
+        start_external_id: '331457'
+        end_external_id: '331463'
+      - order: 5
+        start_external_id: '331466'
 
   - key: game-chuuban-de-shinu-akuyaku-kizoku
     work_key: game-chuuban-de-shinu-akuyaku-kizoku
@@ -650,12 +662,6 @@ targets:
     enabled: true
     label: "ゲーム中盤で死ぬ悪役貴族に転生したので、外れスキル〖テイム〗を駆使して最強を目指してみた"
 
-  - key: imouto-wa-shitteiru
-    work_key: imouto-wa-shitteiru
-    site: magapoke
-    url: https://pocket.shonenmagazine.com/title/02682/episode/406950
-    enabled: true
-    label: "妹は知っている"
 
   - key: prison-school
     work_key: prison-school
@@ -957,6 +963,9 @@ targets:
     url: https://zebrack-comic.shueisha.co.jp/title/7/chapter/list
     enabled: true
     label: "彼方のアストラ"
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/7/chapter/107/viewer
+    archive_order: 1
 
   - key: black-clover
     work_key: black-clover
@@ -985,6 +994,9 @@ targets:
     url: https://zebrack-comic.shueisha.co.jp/title/19813/chapter/list
     enabled: true
     label: "株式会社マジルミエ"
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/19813/chapter/758084/viewer
+    archive_order: 1
 
   - key: to-love-ru
     work_key: to-love-ru
@@ -1387,7 +1399,7 @@ targets:
     work_key: berserk
     site: piccoma
     url: https://piccoma.com/web/viewer/28600/1910027
-    enabled: true
+    enabled: false
     label: "ベルセルク"
 
   - key: monkey-turn
@@ -1401,7 +1413,7 @@ targets:
     work_key: golden-kamuy
     site: piccoma
     url: https://piccoma.com/web/viewer/4230/882423
-    enabled: true
+    enabled: false
     label: "ゴールデンカムイ"
 
   - key: konjiki-no-gash
@@ -1431,12 +1443,15 @@ targets:
     url: https://piccoma.com/web/viewer/11191/1317625
     enabled: true
     label: "成長チートでなんでもできるようになったが、無職だけは辞められないようです"
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/11191/6683982
+    archive_order: 1
 
   - key: special-a
     work_key: special-a
     site: hanayume
     url: https://hanayume.com/episodes/8c6f15923caa0
-    enabled: true
+    enabled: false
     label: "S・A(スペシャル・エー)"
 
   - key: akatsuki-no-yona-hanayume
@@ -1463,28 +1478,28 @@ targets:
   - key: tenshi-kinryouku-tokyo-chronos
     work_key: tenshi-kinryouku-tokyo-chronos
     site: hanayume
-    url: https://hanayume.com/episodes/b19c766d6814c
+    url: https://hanayume.com/episodes/b7485e37fbfb6
     enabled: true
     label: "天使禁猟区-東京クロノス-"
 
   - key: tenshi-kinryouku
     work_key: tenshi-kinryouku
     site: hanayume
-    url: https://hanayume.com/episodes/52b908ff2362a
+    url: https://hanayume.com/episodes/54f39c9ff7eb8
     enabled: true
     label: "天使禁猟区"
 
   - key: palace-meidi
     work_key: palace-meidi
     site: hanayume
-    url: https://hanayume.com/episodes/0dd5bc98f11a6
+    url: https://hanayume.com/episodes/cae42f83c422a
     enabled: true
     label: "パレス・メイヂ"
 
   - key: w-juliet
     work_key: w-juliet
     site: hanayume
-    url: https://hanayume.com/episodes/b88465e4a84f8
+    url: https://hanayume.com/episodes/12e8687f5e299
     enabled: true
     label: "Wジュリエット"
 
@@ -1492,7 +1507,7 @@ targets:
     work_key: gin-no-romantic-wahaha
     site: hanayume
     url: https://hanayume.com/episodes/92beb419900ae
-    enabled: true
+    enabled: false
     label: "銀のロマンティック…わはは"
 
   - key: tokyo-crazy-paradise
@@ -1505,14 +1520,14 @@ targets:
   - key: nante-suteki-ni-japanesque
     work_key: nante-suteki-ni-japanesque
     site: hanayume
-    url: https://hanayume.com/episodes/8d50d2bb001dc
+    url: https://hanayume.com/episodes/0935ca3078952
     enabled: true
     label: "なんて素敵にジャパネスク"
 
   - key: koucha-ouji
     work_key: koucha-ouji
     site: hanayume
-    url: https://hanayume.com/episodes/5b11ffe50ee60
+    url: https://hanayume.com/episodes/90780c9647db0
     enabled: true
     label: "紅茶王子"
 
@@ -1530,31 +1545,19 @@ targets:
     enabled: true
     label: "フルーツバスケットanother"
 
-  - key: namaikizakari
-    work_key: namaikizakari
-    site: hanayume
-    url: https://hanayume.com/episodes/c1af410475c17
-    enabled: true
-    label: "なまいきざかり。"
 
   - key: golden-days
     work_key: golden-days
     site: hanayume
-    url: https://hanayume.com/episodes/63dd4e6aff01e
+    url: https://hanayume.com/episodes/504ff2e43061a
     enabled: true
     label: "ゴールデン・デイズ"
 
-  - key: takane-no-hana
-    work_key: takane-no-hana
-    site: hanayume
-    url: https://hanayume.com/episodes/488b49b262fa7
-    enabled: true
-    label: "高嶺の花"
 
   - key: koi-ni-mudaguchi
     work_key: koi-ni-mudaguchi
     site: hanayume
-    url: https://hanayume.com/episodes/c5399d37d929b
+    url: https://hanayume.com/episodes/680963db0ecf6
     enabled: true
     label: "恋に無駄口"
 
@@ -1765,7 +1768,7 @@ targets:
     work_key: arisu-tsubasa-no-tantei-kitan
     site: younganimal
     url: https://younganimal.com/series/f84cb27ae698e
-    enabled: true
+    enabled: false
     label: "有栖ツバサの探偵奇譚"
 
   - key: usotsuki-paradox
@@ -1844,33 +1847,710 @@ targets:
     url: https://comic-walker.com/detail/KC_007220_S?episodeType=first
     enabled: true
     label: "アフタヌーンティーはいかがですか？ 私と先輩の、不純で一途なふたり暮らし"
+
   - key: cooking-papa
     work_key: cooking-papa
     site: comicdays
     url: https://comic-days.com/episode/13932016480031248230
     enabled: false
     label: クッキングパパ
+
   - key: kofuku_kissa_3chome_hanayume
     work_key: kofuku_kissa_3chome
     site: hanayume
     url: https://hanayume.com/episodes/a41bc4b15117c
-    enabled: true
+    enabled: false
     label: 幸福喫茶３丁目
+
   - key: dr-koto-shinryoujo-piccoma
     work_key: dr-koto-shinryoujo
     site: piccoma
     url: https://piccoma.com/web/viewer/1902/93115
     enabled: true
     label: Dr.コトー診療所
+
   - key: bokudakega-inaimachi-piccoma
     work_key: bokudakega-inaimachi
     site: piccoma
     url: https://piccoma.com/web/viewer/3312/158600
-    enabled: true
+    enabled: false
     label: 僕だけがいない街
+
   - key: kaioki-magapoke
     work_key: kaioki
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00610/episode/227523
     enabled: true
     label: 海皇紀
+
+  - key: shima-rokku-jumpplus
+    work_key: shima-rokku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107094913049139528
+    enabled: true
+    label: 島ロック
+
+  - key: kokoha-greenwood-hanayume
+    work_key: kokoha-greenwood
+    site: hanayume
+    url: https://hanayume.com/episodes/78400f868c67d
+    enabled: false
+    label: ここはグリーン・ウッド
+
+  - key: planetes-comicdays
+    work_key: planetes
+    site: comicdays
+    url: https://comic-days.com/episode/13932016480029865789
+    enabled: true
+    label: プラネテス
+    discovery_scope:
+      from_url: https://comic-days.com/episode/13932016480029899623
+      through_url: https://comic-days.com/episode/13932016480029888010
+      excluded_external_ids:
+      - '13932016480029894614'
+      - '13932016480029895017'
+      - '13932016480029895466'
+      - '13932016480029896077'
+      - '13932016480029896811'
+      - '13932016480029897523'
+      - '13932016480029897839'
+    archive_segments:
+    - order: 2
+      start_external_id: '13932016480029888010'
+      end_external_id: '13932016480029888010'
+    - order: 4
+      start_external_id: '13932016480029898555'
+      end_external_id: '13932016480029899623'
+
+  - key: hiiragi-sanchino-kyuuketsu-jijou-magapoke
+    work_key: hiiragi-sanchino-kyuuketsu-jijou
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01522/episode/330305
+    enabled: true
+    label: 柊さんちの吸血事情
+
+
+  - key: maihoomuhiiroo-magapoke
+    work_key: maihoomuhiiroo
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01134/episode/400143
+    enabled: true
+    label: マイホームヒーロー
+
+  - key: kounodori-magapoke
+    work_key: kounodori
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00897/episode/313566
+    enabled: true
+    label: コウノドリ
+
+  - key: houseki-no-kuni-magapoke
+    work_key: houseki-no-kuni
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01891/episode/395701
+    enabled: true
+    label: 宝石の国
+
+  - key: ijiranaide-nagatoro-san-magapoke
+    work_key: ijiranaide-nagatoro-san
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00321/episode/176904
+    enabled: true
+    label: イジらないで、長瀞さん
+
+  - key: kawai-dakejanai-shikishu-san-magapoke
+    work_key: kawai-dakejanai-shikishu-san
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00734/episode/247135
+    enabled: true
+    label: 可愛いだけじゃない式守さん
+
+  - key: kanata-no-astra-jumpplus
+    work_key: kanata-no-astra
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10833497643049550210
+    enabled: true
+    label: 彼方のアストラ
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/13932016480028944819
+    archive_order: 2
+
+  - key: tantei-gakuen-q-piccoma
+    work_key: tantei-gakuen-q
+    site: piccoma
+    url: https://piccoma.com/web/viewer/80788/2431523
+    enabled: true
+    label: 探偵学園Ｑ
+
+  - key: doubutsuno-kuni-piccoma
+    work_key: doubutsuno-kuni
+    site: piccoma
+    url: https://piccoma.com/web/viewer/40747/1215646
+    enabled: true
+    label: どうぶつの国
+
+  - key: hatarakiman-piccoma
+    work_key: hatarakiman
+    site: piccoma
+    url: https://piccoma.com/web/viewer/436/28609
+    enabled: true
+    label: 働きマン
+
+  - key: sugar-sugar-lune-piccoma
+    work_key: sugar-sugar-lune
+    site: piccoma
+    url: https://piccoma.com/web/viewer/430/28391
+    enabled: true
+    label: シュガシュガルーン
+
+  - key: hanato-mitsubachi-piccoma
+    work_key: hanato-mitsubachi
+    site: piccoma
+    url: https://piccoma.com/web/viewer/281/18982
+    enabled: true
+    label: 花とみつばち
+
+  - key: kabushikigaisha-magilumiere-jumpplus
+    work_key: kabushikigaisha-magilumiere
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/3269754496555043141
+    enabled: true
+    label: 株式会社マジルミエ
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/17106567261201092908
+    archive_order: 2
+
+  - key: kiminokotoga-daidaidaidaidaisukina-100ninno-kanojo-jumpplus
+    work_key: kiminokotoga-daidaidaidaidaisukina-100ninno-kanojo
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331623812157
+    enabled: true
+    label: 君のことが大大大大大好きな100人の彼女
+
+  - key: shiba-tsuki-bukken-jumpplus
+    work_key: shiba-tsuki-bukken
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106371883871893205
+    enabled: true
+    label: シバつき物件
+
+  - key: buyotopia-jumpplus
+    work_key: buyotopia
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107094914943468502
+    enabled: true
+    label: ブヨトピア
+
+  - key: utsurou-kanojotachi-jumpplus
+    work_key: utsurou-kanojotachi
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257538010369
+    enabled: true
+    label: うつろうカノジョたち
+
+  - key: yami-sute-ana-jumpplus
+    work_key: yami-sute-ana
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257382361538
+    enabled: true
+    label: 闇捨て穴
+
+  - key: eiyuu-kikan-jumpplus
+    work_key: eiyuu-kikan
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567255068949457
+    enabled: true
+    label: 英雄機関
+
+  - key: mutekino-subaru-jumpplus
+    work_key: mutekino-subaru
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107419589191808095
+    enabled: true
+    label: 無敵のスバル
+
+  - key: bartlet-fairy-basslet-jumpplus
+    work_key: bartlet-fairy-basslet
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257689745083
+    enabled: true
+    label: BARTLET FAIRY BASSLET
+
+  - key: ovehanegura-gou-no-akumu-jumpplus
+    work_key: ovehanegura-gou-no-akumu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257538010166
+    enabled: true
+    label: オヴェハネグラ号の悪夢
+
+  - key: shuugeki-no-shieru-jumpplus
+    work_key: shuugeki-no-shieru
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257069547988
+    enabled: true
+    label: 終劇のシエル
+
+  - key: uchikiraremangaka-to-doujinonna-jumpplus
+    work_key: uchikiraremangaka-to-doujinonna
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107094915405394153
+    enabled: true
+    label: 打ち切られ漫画家と同人女
+
+  - key: kentouria-jumpplus
+    work_key: kentouria
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106371852950440097
+    enabled: true
+    label: ケントゥリア
+
+  - key: doramakuin-jumpplus
+    work_key: doramakuin
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567261425734624
+    enabled: true
+    label: ドラマクイン
+
+  - key: noronoropukupuku-jumpplus
+    work_key: noronoropukupuku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191257069547292
+    enabled: true
+    label: のろのろぷくぷく
+
+  - key: mad-jumpplus
+    work_key: mad
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106371875032400936
+    enabled: true
+    label: MAD
+
+  - key: gunnou-kyoushitsu-jumpplus
+    work_key: gunnou-kyoushitsu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567266627682434
+    enabled: true
+    label: 群脳教室
+
+  - key: purizumu-rondo-jumpplus
+    work_key: purizumu-rondo
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107094913049140459
+    enabled: true
+    label: プリズム輪舞曲
+
+  - key: sanagi-no-shinzou-jumpplus
+    work_key: sanagi-no-shinzou
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17107419589372004107
+    enabled: true
+    label: サナギの心臓
+
+  - key: doron-jumpplus
+    work_key: doron
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253189534697938508
+    enabled: true
+    label: どろん
+
+  - key: ten-bou-taikaku-jumpplus
+    work_key: ten-bou-taikaku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106371892805347520
+    enabled: true
+    label: 天傍台閣
+
+  - key: hitokui-manshon-to-ooya-no-mezon-jumpplus
+    work_key: hitokui-manshon-to-ooya-no-mezon
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567263957917249
+    enabled: true
+    label: 人喰いマンションと大家のメゾン
+
+  - key: ghost-girl-jumpplus
+    work_key: ghost-girl
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331679018626
+    enabled: true
+    label: ゴーストガール GHOST GIRL
+
+  - key: seichou-cheat-mushoku-kadocomi
+    work_key: seichou-cheat-mushoku
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_002911_S?episodeType=first
+    enabled: true
+    label: 成長チートでなんでもできるようになったが、無職だけは辞められないようです
+    discovery_scope:
+      through_url: https://comic-walker.com/detail/KC_002911_S/episodes/KC_0029110010900011_E
+    archive_order: 2
+
+  - key: av-danyuu-hajimemashita-piccoma
+    work_key: av-danyuu-hajimemashita
+    site: piccoma
+    url: https://piccoma.com/web/viewer/45563/1259076
+    enabled: true
+    label: AV男優はじめました
+
+  - key: hoshi-ha-utau-hanayume
+    work_key: hoshi-ha-utau
+    site: hanayume
+    url: https://hanayume.com/episodes/fe76538e3215f
+    enabled: true
+    label: 星は歌う
+
+  - key: asura-no-sata-jumpplus
+    work_key: asura-no-sata
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567261425739175
+    enabled: true
+    label: アスラの沙汰
+
+  - key: heugemono-comicdays
+    work_key: heugemono
+    site: comicdays
+    url: https://comic-days.com/episode/10834108156629765951
+    enabled: true
+    label: へうげもの
+
+  - key: sousei-no-apocrypha-yanmaga
+    work_key: sousei-no-apocrypha
+    site: yanmaga
+    url: https://yanmaga.jp/comics/双星のアポクリファ
+    label: 双星のアポクリファ
+    enabled: true
+
+  - key: akademii-saikyou-no-mobuhiiraa-yanmaga
+    work_key: akademii-saikyou-no-mobuhiiraa
+    site: yanmaga
+    url: https://yanmaga.jp/comics/アカデミー最強のモブヒーラー_死にゲー世界のモブに転生した俺は、外れジョブヒーラーと原作知識で無双する
+    enabled: true
+    label: アカデミー最強のモブヒーラー_死にゲー世界のモブに転生した俺は、外れジョブヒーラーと原作知識で無双する
+
+  - key: parallel-paradise-yanmaga
+    work_key: parallel-paradise
+    site: yanmaga
+    url: https://yanmaga.jp/comics/パラレルパラダイス
+    enabled: true
+    label: パラレルパラダイス
+
+  - key: satanofani-yanmaga
+    work_key: satanofani
+    site: yanmaga
+    url: https://yanmaga.jp/comics/サタノファニ
+    enabled: true
+    label: サタノファニ
+
+  - key: takane-to-hana-hanayume
+    work_key: takane-to-hana
+    site: hanayume
+    url: https://hanayume.com/episodes/77cfeb7a8a3dc
+    enabled: true
+    label: 高嶺と花
+
+  - key: imouto-ha-shitte-iru-yanmaga
+    work_key: imouto-ha-shitte-iru
+    site: yanmaga
+    url: https://yanmaga.jp/comics/妹は知っている
+    enabled: true
+    label: 妹は知っている
+
+  - key: shini-tagarino-oujo-kadocomi
+    work_key: shini-tagarino-oujo
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_019661_S
+    enabled: true
+    label: 死にたがりの王女
+
+  - key: not-lives-piccoma
+    work_key: not-lives
+    site: piccoma
+    url: https://piccoma.com/web/viewer/4922/286482
+    enabled: true
+    label: NOT LIVES
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/4922/286561
+
+  - key: taboo-tatoo-piccoma
+    work_key: taboo-tatoo
+    site: piccoma
+    url: https://piccoma.com/web/viewer/5449/313260
+    enabled: true
+    label: タブー・タトゥー
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/5449/313627
+
+  - key: black-black-rotus-piccoma
+    work_key: black-black-rotus
+    site: piccoma
+    url: https://piccoma.com/web/viewer/155344/4046794
+    enabled: true
+    label: ブラック・ブラック・ロータス
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/155344/4549348
+
+  - key: dears-piccoma
+    work_key: dears
+    site: piccoma
+    url: https://piccoma.com/web/viewer/50653/2228977
+    enabled: true
+    label: DearS
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/50653/2229068
+
+  - key: makenhime-piccoma
+    work_key: makenhime
+    site: piccoma
+    url: https://piccoma.com/web/viewer/13220/718102
+    enabled: true
+    label: マケン姫っ！
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/13220/718298
+
+  - key: mitsuboshi-colors-piccoma
+    work_key: mitsuboshi-colors
+    site: piccoma
+    url: https://piccoma.com/web/viewer/7253/402672
+    enabled: true
+    label: 三ツ星カラーズ
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/7253/402877
+
+  - key: you-akuarisuto-piccoma
+    work_key: you-akuarisuto
+    site: piccoma
+    url: https://piccoma.com/web/viewer/162671/4720248
+    enabled: true
+    label: よぅ、アクアリスト
+    discovery_scope:
+      from_url: https://piccoma.com/web/viewer/162671/4720286
+
+  - key: saotome-shimai-ha-manga-notamenara-jumpplus
+    work_key: saotome-shimai-ha-manga-notamenara
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156630995329
+    enabled: true
+    label: 早乙女姉妹は漫画のためなら!?
+
+  - key: asetosekken-comicdays
+    work_key: asetosekken
+    site: comicdays
+    url: https://comic-days.com/episode/10834108156636073733
+    enabled: true
+    label: あせとせっけん
+
+  - key: haru-no-arashi-to-monsutaa-hanayume
+    work_key: haru-no-arashi-to-monsutaa
+    site: hanayume
+    url: https://hanayume.com/episodes/738fe92002e99
+    enabled: true
+    label: 春の嵐とモンスター
+
+  - key: namaikizakari-hanayume
+    work_key: namaikizakari
+    site: hanayume
+    url: https://hanayume.com/episodes/46a0e71635daa
+    enabled: true
+    label: なまいきざかり。
+
+  - key: 3gatsu-no-raion-younganimal
+    work_key: 3gatsu-no-raion
+    site: younganimal
+    url: https://younganimal.com/series/8f7368e602ae0
+    enabled: true
+    label: 3月のライオン
+
+  - key: r15-ja-dame-desuka-magapoke
+    work_key: r15-ja-dame-desuka
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02175/episode/374911
+    enabled: true
+    label: R15＋じゃダメですか？
+
+  - key: nodame-kantaabire-magapoke
+    work_key: nodame-kantaabire
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01654/episode/338868
+    enabled: true
+    label: のだめカンタービレ
+
+  - key: kakkou-no-iinazuke-magapoke
+    work_key: kakkou-no-iinazuke
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01061/episode/304265
+    enabled: true
+    label: カッコウの許嫁
+
+  - key: eden-no-ran-magapoke
+    work_key: eden-no-ran
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00052/episode/883
+    enabled: true
+    label: エデンの檻
+
+  - key: sorawo-matotte-zeblack
+    work_key: sorawo-matotte
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/52982/chapter/list
+    enabled: true
+    label: 空をまとって
+
+  - key: killao-zeblack
+    work_key: killao
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/46353/chapter/list
+    enabled: true
+    label: キルアオ
+
+  - key: one-piece-zeblack
+    work_key: one-piece
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/59/chapter/list
+    enabled: true
+    label: ONE PIECE
+
+  - key: robot-x-laserbeam-zeblack
+    work_key: robot-x-laserbeam
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/116/chapter/list
+    enabled: true
+    label: ROBOT×LASERBEAM
+
+  - key: claymore-zeblack
+    work_key: claymore
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/229/chapter/list
+    enabled: true
+    label: CLAYMORE
+
+  - key: aizu-zeblack
+    work_key: aizu
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/415/chapter/list
+    enabled: true
+    label: I”s<アイズ>
+
+  - key: dr-stone-zeblack
+    work_key: dr-stone
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/69/chapter/list
+    enabled: true
+    label: Dr.STONE
+
+  - key: platinum-end-zeblack
+    work_key: platinum-end
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/2168/chapter/list
+    enabled: true
+    label: プラチナエンド
+
+  - key: fire-panchi-zeblack
+    work_key: fire-panchi
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/105/chapter/list
+    enabled: true
+    label: ファイアパンチ
+
+  - key: undead-unluck-zeblack
+    work_key: undead-unluck
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/4177/chapter/list
+    enabled: true
+    label: アンデッドアンラック
+
+  - key: soul-catchers-zeblack
+    work_key: soul-catchers
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/1111/chapter/list
+    enabled: true
+    label: SOUL CATCHER(S)
+
+  - key: hokenshitsu-no-shinigami-zeblack
+    work_key: hokenshitsu-no-shinigami
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/113/chapter/list
+    enabled: true
+    label: 保健室の死神
+
+  - key: tegamibachi-zeblack
+    work_key: tegamibachi
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/81/chapter/list
+    enabled: true
+    label: テガミバチ
+
+  - key: hinomaru-sumou-zeblack
+    work_key: hinomaru-sumou
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/104/chapter/list
+    enabled: true
+    label: 火ノ丸相撲
+
+  - key: psyrenn-zeblack
+    work_key: psyrenn
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/61/chapter/list
+    enabled: true
+    label: PSYREN―サイレン―
+
+  - key: idol-x-idol-story-comicfuz
+    work_key: idol-x-idol-story
+    site: comicfuz
+    url: https://comic-fuz.com/manga/3140
+    enabled: true
+    label: IDOL×IDOL STORY！
+
+  - key: umi-no-osaki-younganimal
+    work_key: umi-no-osaki
+    site: younganimal
+    url: https://younganimal.com/series/2b97e44016601
+    enabled: true
+    label: 海の御先
+
+  - key: kannaki-sekaino-kamisama-katsudou-herosweb
+    work_key: kannaki-sekaino-kamisama-katsudou
+    site: herosweb
+    url: https://heros-web.com/series/0f023839d7bca
+    enabled: true
+    label: 神無き世界のカミサマ活動
+
+  - key: takopii-no-genzai-jumpplus
+    work_key: takopii-no-genzai
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/3269754496638370192
+    enabled: true
+    label: タコピーの原罪
+
+  - key: hanayamata-comicfuz
+    work_key: hanayamata
+    site: comicfuz
+    url: https://comic-fuz.com/manga/409
+    enabled: true
+    label: ハナヤマタ
+
+  - key: kiniro-mozaiku-comicfuz
+    work_key: kiniro-mozaiku
+    site: comicfuz
+    url: https://comic-fuz.com/manga/410
+    enabled: true
+    label: きんいろモザイク
+
+  - key: newgame-comicfuz
+    work_key: newgame
+    site: comicfuz
+    url: https://comic-fuz.com/manga/370
+    enabled: true
+    label: ＮＥＷ ＧＡＭＥ！
+
+  - key: yumekui-merii-comicfuz
+    work_key: yumekui-merii
+    site: comicfuz
+    url: https://comic-fuz.com/manga/474
+    enabled: true
+    label: 夢喰いメリー
+
+  - key: sekkaku-noukani-tenshoushitanode-yuushaha-mezashimasen-kadocomi
+    work_key: sekkaku-noukani-tenshoushitanode-yuushaha-mezashimasen
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_007947_S
+    enabled: true
+    label: せっかく農家に転生したので勇者は目指しません

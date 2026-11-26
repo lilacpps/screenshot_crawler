@@ -36,5 +36,8 @@ browser-data/
 .DS_Store
 Thumbs.db
 
+# Local Git worktrees
+/.worktrees/
+
 # backup
 backup
