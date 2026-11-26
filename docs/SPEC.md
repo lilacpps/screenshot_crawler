@@ -426,6 +426,10 @@ name.
 fallbackする。空tupleは有効なcapture結果ではなく異常として扱う。
 直接captureが作成したtemporary resourceのcleanupは、そのAdapterのhook自身が責任を持つ。
 
+直接capture hookの既定予算は `RunConfig.page_change_timeout_ms` とし、
+Adapterは `get_capture_timeout_ms(default_ms)` でこのhook専用の有限予算を指定できる。
+Coreはその予算に既存の `adapter_timeout_grace_ms` を加える。
+
 直接capture hookの`CaptureUnavailableError`またはCoreのbounded timeoutはfallback扱いとし、
 fallback後の通常capture失敗は通常どおりrun errorにする。BookWalkerはsource-native PNG/JPEGを
 優先し、source rectangle、geometry、transform、composite、filterを安全に検証できない場合は

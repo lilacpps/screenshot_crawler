@@ -391,6 +391,9 @@ MAX_NATIVE_EPISODE_BYTES = 64_000_000
 MAX_SCALED_NATIVE_EPISODE_BYTES = 128_000_000
 PAGE_CHANGE_TIMEOUT_MS = 10_000
 INITIALIZE_TIMEOUT_MS = 30_000
+# Live 1884x2819 captures with lossless WebP method 6 took up to 18.9s.
+# Core adds its default 2s grace to this capture-only budget.
+CAPTURE_TIMEOUT_MS = 20_000
 RESUME_DIALOG_GRACE_MS = 1_500
 MAX_BODY_WAIT_DIAGNOSTIC_SAMPLES = 8
 _BODY_PAGE_ID = re.compile(r"p([1-9][0-9]*)\Z")
@@ -620,6 +623,9 @@ class PiccomaAdapter(SiteAdapter):
 
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
+
+    def get_capture_timeout_ms(self, default_ms: int) -> int:
+        return max(default_ms, CAPTURE_TIMEOUT_MS)
 
     async def prepare_page(self, page: Page) -> None:
         # Observed 1:1 and high-resolution scaled readers use this viewport.

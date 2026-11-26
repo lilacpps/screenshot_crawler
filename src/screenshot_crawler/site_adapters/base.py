@@ -339,6 +339,11 @@ class SiteAdapter(ABC):
 
         return default_ms
 
+    def get_capture_timeout_ms(self, default_ms: int) -> int:
+        """Return the bounded budget for the direct capture hook."""
+
+        return default_ms
+
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         """Optional site-specific data appended to generic diagnostics."""
         return {}

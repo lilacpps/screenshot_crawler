@@ -1078,6 +1078,39 @@ async def test_runner_falls_back_after_bounded_native_capture_timeout(
     assert adapter.cleanup_calls == 1
 
 
+@pytest.mark.parametrize("capture_timeout_ms", [None, 400])
+async def test_runner_uses_direct_capture_timeout_override(
+    tmp_path: Path, fake_capture: None, capture_timeout_ms: int | None,
+) -> None:
+    class SlowCaptureAdapter(FakeAdapter):
+        def get_capture_timeout_ms(self, default_ms: int) -> int:
+            if capture_timeout_ms is None:
+                return super().get_capture_timeout_ms(default_ms)
+            return capture_timeout_ms
+
+        async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...]:
+            await asyncio.sleep(0.06)
+            return (CaptureResult(data=b"native", width=960, height=1280),)
+
+    adapter = SlowCaptureAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=0,
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.stop_state is PageState.END
+    assert [page.width for page in result.pages] == [960 if capture_timeout_ms else 100]
+
+
 async def test_runner_skips_ad_and_does_not_capture_next_content(
     tmp_path: Path,
     fake_capture: None,

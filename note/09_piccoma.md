@@ -10,6 +10,51 @@ candidate counts and --limit count once. See [shared current behavior](00_core.m
 Adapter navigation/capture proof is unchanged. Local synthetic/browser coverage
 is available; no new real-site retry verification was performed.
 
+## Direct capture timeout (2026-11-26)
+
+Item/Source 41008 (`1902:93229`) exhausted the default 12s capture bound
+on p3 and then on p1 during its one Batch retry. The first attempt saved two
+native pages. The two interruptions were reported during post-capture or
+encoding revalidation, but the per-stage diagnostics show WebP encoding and
+pixel verification took 7.181s and 8.608s. Replay took 2.667s and 3.676s.
+Two earlier attempts on the same item also exhausted the capture bound.
+
+Piccoma sets the direct `capture_page()` budget to at least 20,000 ms
+through `get_capture_timeout_ms()`. Runner adds the existing 2,000 ms
+grace by default, giving 22s per capture. The longest recorded failure
+was 14.632s. Page-change, source-body and replay budgets retain their
+existing bounds. The setting applies automatically to Runner entry
+points, including CLI and Batch, and needs no CLI or YAML changes.
+
+Lossless WebP uses `method=6` and native RGBA keeps `exact=True`. The
+adapter still requires full native source, paint and live page proof,
+a single valid VP8L chunk and exact decoded pixels. Verified native PNG
+is the fallback for WebP encoding or validation failure. The trial with
+lower compression effort completed the episode, but increased file sizes
+by about 22–25% on three local samples. The current implementation keeps
+the original compression settings and gives the direct capture hook more
+time. Timeout classification and the existing one-time Batch retry still
+apply if the extended budget expires.
+
+An isolated shared-CDP direct run revalidated access to Item/Source 41008
+and captured all 18 pages through explicit END in 299.673s. Capture took
+11.384–18.935s per page, with p1 at 18.935s and p3 at 13.330s. The ZIP
+passed CRC, manifest-order and 1884x2819 VP8L decode checks for all 18
+members. The p1 and p2 WebP files were byte-identical to the retained
+method-6 pages from the original failure. This run blocked one non-read
+Piccoma request, used direct access and wrote no Catalog records.
+The report and ZIP are in ignored
+`output/piccoma-41008-capture-bound-20261126-9cf46563/`.
+
+Related validation passed 2,117 Unit tests and 58 browser Integration
+tests with zero skips. Synthetic coverage checks default and extended
+Runner capture budgets, guarded native-only timeout and the existing
+one-time Batch retry. Scoped Ruff passed. Repository-wide Ruff reported
+two existing ComicFUZ Unit-test DTZ001 findings. The 11,183-test full run
+was stopped during browser Integration at 7% because of run time. Its
+result is incomplete. No separate Research suite or live automatic Batch
+retry was run.
+
 ## Native capture timeout and failure-stage diagnostics (2026-11-22)
 
 Piccoma retains a cancelled native-only capture as a timeout when Core asks
@@ -49,9 +94,9 @@ late substage was not retained in that failure, so its cause is unconfirmed.
 A bounded shared-CDP direct-grant probe captured the same p8 in 7.193s;
 replay took 1.932s and method-6 encoding/validation 3.239s. It dispatched no
 Piccoma mutation, ticket or purchase action. This demonstrates current p8
-capture, not the cause of the earlier delay. The method-4 comparison preserved
-every RGBA byte but was not adopted; production codec, timeout and source
-proof budgets remain unchanged. Isolated probe outputs are under
+capture, not the cause of the earlier delay. At that checkpoint the method-4
+comparison preserved every RGBA byte and production still used method 6.
+Isolated probe outputs are under
 `output/piccoma-capture-timeout-20261122/`. Normal Catalog/library are untouched.
 
 The isolated direct-grant live run completed all 18 pages through explicit
@@ -78,7 +123,7 @@ checks passed. Full repository and unrelated Research tests were not selected:
 production changes are Piccoma-local, with no shared Core/Batch/access-policy
 or probe contract change. Live direct capture passed as described above;
 automatic fresh-page retry with live entitlements remains synthetic-only.
-Core behavior is unchanged, so `note/00_core.md` does not require an update.
+This diagnostic change preceded the capture-specific Runner budget above.
 
 ## Scaled overscan left alignment during page readiness (2026-11-22)
 

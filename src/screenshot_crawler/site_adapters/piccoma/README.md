@@ -122,6 +122,12 @@ Validation passed 1167 related Unit and 204 Piccoma browser Integration tests
 with 0 skipped, plus `ruff check src tests`. Full repository/standalone Research
 suites were not required for this site-local change; live verification is above.
 
+Piccoma's direct capture hook defaults to 22s, including 2s of Core grace,
+to allow replay, lossless WebP method 6 and final validation to finish.
+Native RGBA output retains `exact=True` and full decoded-channel verification.
+Page-change, source-body and replay timeouts keep their existing bounds.
+See [the timeout evidence](../../../../note/09_piccoma.md#direct-capture-timeout-2026-11-26).
+
 The 1128x1600 profile was verified on `3312:158685` (Item/Source 41123),
 which failed before p1 with the same supported-viewport error. It requires
 the measured 845.2916870117188x1199 display, 845x1200 frame, +0.5 top offset

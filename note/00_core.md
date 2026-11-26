@@ -2733,6 +2733,14 @@ budget for access readiness, click confirmation, and viewer stabilization.
 Page-change waits still use their original per-phase budget, and the grace
 applies to all adapter calls.
 
+For `capture_page()`, Runner passes `RunConfig.page_change_timeout_ms` to
+`get_capture_timeout_ms(default_ms)` and applies the existing grace to the
+returned budget. The base method returns the supplied value. Piccoma uses a
+20,000 ms minimum plus the default 2,000 ms grace. The override applies only
+to the direct capture hook, including its validation and cleanup. The
+existing timeout fallback, AccessGuard and other operation budgets still
+apply. See [Piccoma's capture budget](09_piccoma.md#direct-capture-timeout-2026-11-26).
+
 ## 8. max_pages
 
 `max_pages` は保存ページ数の安全上限。

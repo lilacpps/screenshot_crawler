@@ -675,6 +675,9 @@ Manifest / Progress更新、packaging、Item completionを行わず、失敗diag
 Locator captureを行わない。`None`、`CaptureUnavailableError`、bounded timeoutでは既存の
 target captureへfallbackする。temporary resourceのcleanupは直接capture hook側が担当する。
 このhookのsite-specificな実装はAdapter内に置き、CoreはBookWalker等のsite名を判定しない。
+Coreは `get_capture_timeout_ms(default_ms)` の戻り値に既存のgraceを加えて
+`capture_page()` を実行する。Baseは `RunConfig.page_change_timeout_ms` を返す。
+Adapterによるoverrideの適用範囲は直接capture hookに限る。
 
 Crawl Requestの実装では、既存`RunConfig`へsite-neutralなrun access intentとoptional output metadataを最小限保持し、Adapterへ`configure_run(page, access_strategy)`で渡す。既定hookは`auto`だけを受け付け、未対応の`direct`/`quota`は明示的に停止する。Manga ONE Adapterは`auto`/`direct`/`quota`を受け付け、site-specific entry操作を実行する。
 

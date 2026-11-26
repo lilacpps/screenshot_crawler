@@ -461,8 +461,11 @@ class CrawlerRunner:
                 await self._check_access(page)
                 identity_key = _identity_key(identity)
                 try:
+                    capture_timeout_ms = adapter.get_capture_timeout_ms(
+                        self.config.page_change_timeout_ms
+                    )
                     captures = await self._adapter_call(
-                        adapter.capture_page(page), "capture_page"
+                        adapter.capture_page(page), "capture_page", timeout_ms=capture_timeout_ms
                     )
                 except (CaptureUnavailableError, PageChangeTimeoutError):
                     captures = None

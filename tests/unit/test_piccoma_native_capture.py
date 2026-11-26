@@ -907,6 +907,16 @@ def test_lossless_webp_round_trip_preserves_full_rgb_without_resizing() -> None:
         assert decoded.convert("RGB").tobytes() == source.tobytes()
 
 
+@pytest.mark.parametrize(("default_ms", "expected_ms"), [(10_000, 20_000), (25_000, 25_000)])
+def test_piccoma_capture_timeout_does_not_change_page_timeout(
+    default_ms: int, expected_ms: int,
+) -> None:
+    adapter = PiccomaAdapter()
+
+    assert adapter.get_capture_timeout_ms(default_ms) == expected_ms
+    assert adapter.get_page_change_timeout_ms(default_ms) == 10_000
+
+
 @pytest.mark.parametrize("preserve_alpha", [False, True])
 def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb(preserve_alpha: bool) -> None:
     source = Image.new("RGBA", (3, 2), (0, 0, 0, 0))

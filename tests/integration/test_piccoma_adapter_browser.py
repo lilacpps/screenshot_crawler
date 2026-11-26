@@ -831,21 +831,16 @@ async def test_piccoma_native_only_core_fallback_never_saves_a_screenshot(
     monkeypatch.setattr(
         adapter, "_capture_verified_page" if timed_out else "capture_page", unavailable_capture
     )
+    monkeypatch.setattr(adapter, "get_capture_timeout_ms", lambda _default_ms: 10)
     monkeypatch.setattr(runner_module, "capture_locator", forbidden_screenshot)
     config = RunConfig(site="piccoma", source_url=SOURCE_URL,
                        output_dir=tmp_path / "crawl", diagnostics_dir=tmp_path / "diagnostics",
                        adapter_timeout_grace_ms=0)
 
-    class ShortCaptureRunner(runner_module.CrawlerRunner):
-        async def _adapter_call(self, awaitable, operation, *, timeout_ms=None):
-            return await super()._adapter_call(
-                awaitable, operation, timeout_ms=10 if operation == "capture_page" else timeout_ms
-            )
-
     error_type = PageChangeTimeoutError if timed_out else UnknownPageStateError
     message = "native capture timed out" if timed_out else "requires verified native capture"
     with pytest.raises(error_type, match=message):
-        await ShortCaptureRunner(config).run(browser_page, adapter)
+        await runner_module.CrawlerRunner(config).run(browser_page, adapter)
     diagnostics = json.loads((config.diagnostics_dir / "metadata.json").read_text(encoding="utf-8"))
     assert diagnostics["error_type"] == error_type.__name__
     interruption = diagnostics["adapter_debug"].get("piccoma_capture_interruption")
@@ -3917,6 +3912,11 @@ async def test_piccoma_native_timeout_retries_same_grant_once_without_screenshot
     created, pages, closed, events = [], [], [], []
 
     class DeadlineAdapter(PiccomaAdapter):
+        def get_capture_timeout_ms(self, default_ms):
+            if len(created) == 1 or retry_fails:
+                return 10
+            return super().get_capture_timeout_ms(default_ms)
+
         async def _capture_verified_page(self, page):
             if len(created) == 1 or retry_fails:
                 self._mark_capture_stage("replay")
@@ -3934,11 +3934,6 @@ async def test_piccoma_native_timeout_retries_same_grant_once_without_screenshot
     class DeadlineRunner(CrawlerRunner):
         def __init__(self, config):
             super().__init__(replace(config, adapter_timeout_grace_ms=0))
-
-        async def _adapter_call(self, awaitable, operation, *, timeout_ms=None):
-            if operation == "capture_page" and (len(created) == 1 or retry_fails):
-                timeout_ms = 10
-            return await super()._adapter_call(awaitable, operation, timeout_ms=timeout_ms)
 
     jpeg = _synthetic_tile_jpeg(width=20, height=30)
 
