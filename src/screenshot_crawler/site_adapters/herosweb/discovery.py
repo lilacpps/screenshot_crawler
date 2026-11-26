@@ -44,7 +44,10 @@ RANGE_PATH = re.compile(
 EPISODE_PATH = re.compile(r"^/episodes/(?P<episode_id>[0-9a-f]{13})/?$")
 RANGE_LABEL = re.compile(r"^(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
 POSITIVE_PRICE = re.compile(r"^[1-9][0-9]{0,15}$")
-RENTAL_LABEL = re.compile(r"^レンタル中 閲覧期限 (?P<days>[0-9]{1,2})日\+(?P<hours>[0-9]{1,2})時間$")
+RENTAL_LABEL = re.compile(
+    r"^レンタル中 閲覧期限 "
+    r"(?:(?P<days>[0-9]{1,2})日\+(?P<hours>[0-9]{1,2})時間|(?P<minutes>[0-5]?[0-9])分)$"
+)
 DATE_FORMAT = "%Y/%m/%d"
 
 WORK_SELECTOR = ".series-h"
@@ -475,8 +478,8 @@ def _rental_remaining(raw: dict[str, object], *, authenticated: bool) -> timedel
         or raw.get("quotaIcons") != []
     ):
         return None
-    days, hours = int(match["days"]), int(match["hours"])
-    duration = timedelta(days=days, hours=hours)
+    days, hours = int(match["days"] or 0), int(match["hours"] or 0)
+    duration = timedelta(days=days, hours=hours, minutes=int(match["minutes"] or 0))
     if hours > 23 or duration > timedelta(days=15):
         return None
     children = raw.get("accessChildren")

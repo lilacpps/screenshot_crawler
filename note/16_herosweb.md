@@ -56,14 +56,14 @@ Access classification is exact-row scoped:
   `eliIfIcon` markers, without competing signals. Partial, duplicate,
   conflicting or unfamiliar structures remain `unknown`.
 - An authenticated exact `eliRentStat` span, with two plain BR children and
-  no competing signals, recognizes `レンタル中 閲覧期限 D日+H時間` as an
-  already acquired rental. It stays `quota`; Discovery records
-  `access_granted_until = scan start + displayed duration - 1 hour`, allowing
-  one hour for display rounding. Hours must be 0–23 and the total at most 15
-  days. A nonpositive conservative bound gives no active grant. This bound is
-  a scheduling expiry, not the exact native expiry. The observed 3-day and
-  15-day displays are supported. Fresh known free/quota/paid observations
-  explicitly clear or replace grants; unknown evidence preserves them.
+  no competing signals, recognizes `レンタル中 閲覧期限 D日+H時間` and
+  `レンタル中 閲覧期限 M分` as already acquired rentals. They stay `quota`.
+  Discovery records the scheduling bound `access_granted_until` as scan start
+  plus the displayed duration minus one hour for rounding. Hours must be 0–23
+  and the total at most 15 days. Minute-only displays accept 0–59 minutes and
+  clear the scheduling grant because the conservative duration is nonpositive.
+  Fresh known free/quota/paid observations explicitly clear or replace grants.
+  Unknown evidence preserves them.
 
 For a positive current authenticated session, the visible owner can display
 this exact rental while the hidden public list retains its exact quota pair.
@@ -191,6 +191,20 @@ Active quota rentals project as direct/取得対象. Known quota/paid Sources
 are no longer counted as unknown/要確認. The earlier display-only correction
 required no rediscovery; rental eligibility requires fresh Discovery to
 observe its grant. Restart an already-running GUI to load the changed policy.
+
+On 2026-11-27, authenticated range 3 of Work `0f023839d7bca` showed
+`レンタル中 閲覧期限 57分` for the completed episode `b5a81e9e1753e`.
+The day/hour-only parser had rejected the owner/mirror pair and aborted Full
+Discovery before the five rentals for chapters 64–67 could reach the Catalog.
+After recognizing the minute-only display, a standard Full refresh observed
+all 87 existing rows. The short rental's scheduling grant was cleared, and
+Batch Plan returned five `direct` candidates (chapter 65 has two parts) and
+zero consuming candidates. The before/after audit verified existing
+Item/Source IDs, acquisition flags, Item status, and CrawlRun/Artifact counts.
+Discovery/Policy and Discovery/Batch Unit tests passed (169), and the
+Discovery browser Integration passed (23, including long and minute-only
+rentals in the same range). Live verification ended at candidate planning.
+
 Historical read-only Inventory verification on 2026-11-23 confirmed quota 66,
 paid 2 and unknown 0. Inventory/Policy Unit and Qt-offscreen model validation
 passed (74 tests in total); no real-site or Catalog write was performed for

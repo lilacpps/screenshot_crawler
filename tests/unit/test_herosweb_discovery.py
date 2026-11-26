@@ -167,7 +167,9 @@ def _rental_row(label: str = "レンタル中 閲覧期限 2日+23時間") -> di
     [("レンタル中 閲覧期限 14日+23時間", 358),
      ("レンタル中 閲覧期限 2日+23時間", 70),
      ("レンタル中 閲覧期限 0日+1時間", 0),
-     ("レンタル中 閲覧期限 0日+0時間", 0)],
+     ("レンタル中 閲覧期限 0日+0時間", 0),
+     ("レンタル中 閲覧期限 57分", 0),
+     ("レンタル中 閲覧期限 0分", 0)],
 )
 def test_authenticated_rental_uses_quota_and_finite_conservative_grant(label, hours):
     raw = _rental_row(label)
@@ -187,7 +189,9 @@ def test_authenticated_rental_uses_quota_and_finite_conservative_grant(label, ho
     assert source.access_granted_until_observed is True
 
 
-@pytest.mark.parametrize("fault", ["marker", "class", "breaks", "extra", "quota", "paid", "hours", "days"])
+@pytest.mark.parametrize(
+    "fault", ["marker", "class", "breaks", "extra", "quota", "paid", "hours", "days", "minutes"]
+)
 def test_rental_rejects_unobserved_or_conflicting_access_tree(fault):
     raw = deepcopy(_rental_row())
     label_node = raw["accessChildren"][0]["children"][0]
@@ -204,8 +208,8 @@ def test_rental_rejects_unobserved_or_conflicting_access_tree(fault):
     elif fault == "paid":
         raw["paidParents"] = ["series-eplist-item-access-paid"]
     else:
-        raw = _rental_row("レンタル中 閲覧期限 2日+24時間" if fault == "hours"
-                          else "レンタル中 閲覧期限 99日+0時間")
+        duration = {"hours": "2日+24時間", "days": "99日+0時間", "minutes": "60分"}[fault]
+        raw = _rental_row(f"レンタル中 閲覧期限 {duration}")
     assert _classify_access(raw, authenticated=True) == "unknown"
     assert _rental_remaining(raw, authenticated=True) is None
 

@@ -29,9 +29,9 @@ Authenticated pages may expose two copies of a range list. The accepted owner
 is one CSS-visible positive-size root. A matching zero-size mirror is accepted
 only beneath the observed plain `.series-eplist` parent, with the exact
 observed `block / none / block` style chain and complete ordered row-record
-equality. The other observed authenticated owner is beneath
-`.series-eplist.mode-user.mode-has-eps`; the anonymous root is also under the
-plain `.series-eplist` parent, not directly beneath `.series-eplist-main`.
+equality, with the authenticated rental exception below. The authenticated
+owner is beneath `.series-eplist.mode-user.mode-has-eps`. The anonymous root
+is under the plain `.series-eplist` parent.
 Unexpected ancestry, extra rendered roots, malformed mirrors, duplicate or
 divergent rows, and unstable hydration fail closed.
 
@@ -58,13 +58,12 @@ are not implemented. Listing presence determines `available`; it does not
 invent a grant or expiry from presence alone.
 
 Authenticated `eliRentStat` rows with the observed exact span/two-BR tree and
-`レンタル中 閲覧期限 D日+H時間` display retain `quota` and supply a finite
-grant: scan start + displayed duration - one hour for rounding. The displayed
-duration is bounded to 15 days and hours to 0–23; a nonpositive conservative
-bound supplies no active grant. Known free/quota/paid observations explicitly
-clear or replace the old grant; unknown evidence preserves it. This supports
-manual ticket rentals without performing a ticket action. The grant is a
-conservative scheduling bound, not an exact site expiry.
+`レンタル中 閲覧期限 D日+H時間` or `レンタル中 閲覧期限 M分` retain
+`quota`. The scheduling bound is scan start plus the displayed duration
+minus one hour for rounding. Day/hour displays are bounded to 15 days and
+hours to 0–23. Minute-only displays accept 0–59 minutes and leave no active
+grant after the one-hour deduction. Known free/quota/paid observations
+explicitly clear or replace the old grant. Unknown evidence preserves it.
 
 Only for this positively authenticated rental may the zero-area hidden public
 list retain the exact quota pair while the visible owner shows the rental.

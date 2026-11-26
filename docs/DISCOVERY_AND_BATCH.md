@@ -2,13 +2,13 @@
 
 ## HERO'S WEB manually acquired rentals (2026-11-24)
 
-Discovery recognizes the authenticated exact-row `eliRentStat` structure and
-`レンタル中 閲覧期限 D日+H時間` display. It retains `access_mode=quota` and
-records a finite scheduling grant in the existing `access_granted_until`, using
-the scan start plus the displayed duration minus one hour for rounding. The
-observed profiles are 3-day and 15-day rentals; hours must be 0–23 and the
-displayed duration cannot exceed 15 days. A nonpositive conservative duration
-produces no active grant. This is not an exact site expiry or a new debit.
+Discovery recognizes the authenticated exact-row `eliRentStat` structure with
+`レンタル中 閲覧期限 D日+H時間` or `レンタル中 閲覧期限 M分`. It retains
+`access_mode=quota` and uses the scan start plus the displayed duration minus
+one hour for rounding as the scheduling bound in `access_granted_until`.
+Hours must be 0–23, the day/hour duration is capped at 15 days, and the
+minute-only display accepts 0–59 minutes. A nonpositive conservative duration
+clears the scheduling grant, so minute-only rows supply no direct candidate.
 Known free/quota/paid observations explicitly replace or clear the previous
 grant; unknown observations preserve it. Full and Incremental both refresh
 every validated range and retain existing Item status/history.

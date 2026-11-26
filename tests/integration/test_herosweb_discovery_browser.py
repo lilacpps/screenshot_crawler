@@ -228,7 +228,7 @@ def _authenticated_page_html(
     latest = f'<a class="series-sort-link mode-new" href="{BASE}/new">最新話から</a>'
     selected_href = f"{BASE}/1" if base else BASE
     selected_class = "series-sort-link" if base else "series-sort-link mode-current"
-    links = latest + f'<a class="{selected_class}" href="{selected_href}">1-3</a>'
+    links = latest + f'<a class="{selected_class}" href="{selected_href}">1-4</a>'
     now_free = (
         '<div class="series-eplist-item-access"><div><span '
         'class="series-eplist-item-access-text mode-free" data-e2e="eliMemFreeBadge">今なら無料</span></div></div>'
@@ -245,7 +245,7 @@ def _authenticated_page_html(
         '<img alt="コイン" data-e2e="eliCoinIcon" data-nimg="1" src="/images/icons/coin.svg">60</span>'
         '</div></div></div>'
     )
-    badges = [now_free, quota, paid]
+    badges = [now_free, quota, paid, quota]
     rows = []
     for index, badge in enumerate(badges, start=1):
         episode_id = f"{index:013x}"
@@ -263,7 +263,11 @@ def _authenticated_page_html(
         '<span class="series-eplist-item-access-text" data-e2e="eliRentStat">'
         'レンタル中<br>閲覧期限<br>2日+23時間</span></div></div>'
     )
-    owner_html = row_html.replace(quota, rental) if rented else row_html
+    owner_html = row_html
+    if rented:
+        owner_html = row_html.replace(quota, rental, 1).replace(
+            quota, rental.replace("2日+23時間", "57分"), 1
+        )
     canonical = BASE if base else f"{BASE}/1"
     listing = (
         '<div class="series-eplist mode-user mode-has-eps">'
@@ -753,9 +757,11 @@ async def test_herosweb_authenticated_listing_checks_session_and_classifies_obse
         records = [
             record async for record in HeroswebDiscoveryAdapter().iter_records(page, target, "full")
         ]
-        assert [record.source.access_mode for record in records] == ["paid", "quota", "free"]
-        assert [record.source.global_display_position for record in records] == [3, 2, 1]
-        source = records[1].source
+        assert [record.source.access_mode for record in records] == ["quota", "paid", "quota", "free"]
+        assert [record.source.global_display_position for record in records] == [4, 3, 2, 1]
+        assert records[0].source.access_granted_until is None
+        assert records[0].source.access_granted_until_observed
+        source = records[2].source
         if rented:
             assert before + timedelta(hours=70) <= source.access_granted_until
             assert source.access_granted_until <= datetime.now(discovery_module.JST) + timedelta(hours=70)
@@ -777,6 +783,8 @@ async def test_herosweb_authenticated_listing_checks_session_and_classifies_obse
         saved = catalog.list_sources(site="herosweb")
         quota_source = next(s for s in saved if s.external_id.endswith("0000000000002"))
         assert bool(quota_source.access_granted_until) is rented
+        near_expiry_source = next(s for s in saved if s.external_id.endswith("0000000000004"))
+        assert near_expiry_source.access_granted_until is None
         item_id = quota_source.item_id
         catalog.mark_item_completed(item_id)
         rented = False
