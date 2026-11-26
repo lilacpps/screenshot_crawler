@@ -36,6 +36,7 @@ from screenshot_crawler.core.errors import (
     UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
+from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
@@ -5127,6 +5128,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._last_render_ready_signature: tuple[int, int] | None = None
         self._entry_only_initialization = False
         self._capture_session = None
+        self._resume_boundary_frame: tuple[object, ...] | None = None
         self._capture_run = 0
         self._output_title: str | None = None
         self._output_author: str | None = None
@@ -5207,6 +5209,7 @@ class BookWalkerAdapter(SiteAdapter):
             )
         self._access_strategy = access_strategy
         self._capture_session = None
+        self._resume_boundary_frame = None
         self._auto_login_attempted = False
         diagnostics_root = Path(
             os.environ.get(
@@ -7378,13 +7381,15 @@ class BookWalkerAdapter(SiteAdapter):
             raise ResumeError("BookWalker capture continuation requires quota intent")
         self._capture_session = session
 
+    _RESUME_FRAME_FIELDS = (
+        "cid", "current", "total", "canvas_id", "content_version",
+        "width", "height", "display_width", "display_height", "connected", "signature",
+    )
+
     async def get_resume_checkpoint(self, page: Page) -> dict[str, Any]:
         from screenshot_crawler.core.resume import ResumeError
 
-        fields = (
-            "cid", "current", "total", "canvas_id", "content_version",
-            "width", "height", "display_width", "display_height", "connected", "signature",
-        )
+        fields = self._RESUME_FRAME_FIELDS
         debug: dict[str, Any] = {"attempts": 0, "reason": "pending"}
         self._capture_debug["bookwalker_checkpoint"] = debug
         boundary = None
@@ -7455,48 +7460,250 @@ class BookWalkerAdapter(SiteAdapter):
         # No counter arithmetic predicts the next spread; actual keyboard transitions do.
         deadline = time.monotonic() + self.page_change_timeout_ms / 1000
         redraw_started = False
+        live_layout = None
+        saved_spread = None
+        repaint_retry = None
         for attempt in range(9):
-            actual = await self.get_resume_checkpoint(page)
+            if repaint_retry is None:
+                actual = await self.get_resume_checkpoint(page)
+            else:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        actual = await self.get_resume_checkpoint(page)
+                except TimeoutError as exc:
+                    raise ResumeError("BookWalker resume native spread redraw retry timed out") from exc
             if (not self._content_ids_match(actual["cid"], expected.get("cid"))
-                or actual["total"] != expected.get("total") or actual["layout"] != expected.get("layout")):
+                or actual["total"] != expected.get("total")):
                 raise ResumeError("BookWalker resume book/total/layout changed")
+            if live_layout is None:
+                live_layout = actual["layout"]
+                if live_layout != expected.get("layout"):
+                    saved_spread = self._saved_native_spread()
+            elif actual["layout"] != live_layout:
+                raise ResumeError("BookWalker resume layout changed during position restore")
             target = expected.get("current")
             if type(target) is not int or not 1 <= target <= actual["total"]:
                 raise ResumeError("Invalid saved BookWalker position")
             if actual["current"] == target and redraw_started:
-                return
+                if saved_spread is None:
+                    return
+                if repaint_retry is None:
+                    # The first comparison and any repaint recovery share one deadline.
+                    deadline = time.monotonic() + self.page_change_timeout_ms / 1000
+                try:
+                    verified = await self._verify_resume_spread(
+                        page, actual, saved_spread, deadline=deadline,
+                        allow_repaint_retry=repaint_retry is None and attempt <= 6,
+                    )
+                finally:
+                    if repaint_retry is not None:
+                        self._capture_debug["bookwalker_resume_boundary"]["repaint_retry"] = repaint_retry
+                if verified:
+                    return
+                # Rejoin by the usual witnessed away-and-back redraw. The first
+                # comparison's bytes and frame are no longer eligible.
+                repaint_retry = self._capture_debug["bookwalker_resume_boundary"]
             if attempt == 8 or time.monotonic() >= deadline:
                 break
-            if not await self._focus_viewer_for_initial_home(page):
-                raise ResumeError("Cannot focus BookWalker for resume")
-            before = await self.get_content_identity(page)
-            await self._arm_native_capture(page)
-            before_frame = await self._initial_page_observation(page)
-            if actual["current"] == target:
-                # Force a witnessed redraw, rather than trusting a restored counter alone.
-                if actual["total"] <= 1:
-                    raise ResumeError("Cannot redraw a single-position resumed reader")
-                direction = "ArrowRight" if target > 1 else "ArrowLeft"
-                redraw_started = True
-            else:
-                direction = "ArrowRight" if actual["current"] > target else "ArrowLeft"
-                redraw_started = True
-            await page.keyboard.press(direction)
-            while time.monotonic() < deadline:
-                await page.wait_for_timeout(100)
-                observed = await self._initial_page_observation(page)
-                old_geometry = before_frame.get("geometry") or {}
-                geometry = observed.get("geometry") or {}
-                painted = (
-                    geometry.get("actualCanvasId") != old_geometry.get("actualCanvasId")
-                    or geometry.get("contentVersion", -1) > old_geometry.get("contentVersion", -1)
-                )
-                if (await self.get_content_identity(page) != before and painted
-                    and observed.get("signature") != before_frame.get("signature")):
-                    break
-            else:
-                break
+            try:
+                async with asyncio.timeout_at(deadline if repaint_retry is not None else None):
+                    if not await self._step_resume_position(page, actual, target, deadline):
+                        break
+            except TimeoutError as exc:
+                if repaint_retry is None:
+                    raise
+                raise ResumeError("BookWalker resume native spread redraw retry timed out") from exc
+            redraw_started = True
         raise ResumeError("BookWalker resume position could not be restored within its bound")
+
+    async def _step_resume_position(
+        self, page: Page, actual: dict[str, Any], target: int, deadline: float,
+    ) -> bool:
+        from screenshot_crawler.core.resume import ResumeError
+
+        if not await self._focus_viewer_for_initial_home(page):
+            raise ResumeError("Cannot focus BookWalker for resume")
+        before = await self.get_content_identity(page)
+        await self._arm_native_capture(page)
+        before_frame = await self._initial_page_observation(page)
+        if actual["current"] == target:
+            # At the saved boundary, witness an adjacent redraw and then return.
+            if actual["total"] <= 1:
+                raise ResumeError("Cannot redraw a single-position resumed reader")
+            direction = "ArrowRight" if target > 1 else "ArrowLeft"
+        else:
+            direction = "ArrowRight" if actual["current"] > target else "ArrowLeft"
+        await page.keyboard.press(direction)
+        while time.monotonic() < deadline:
+            await page.wait_for_timeout(100)
+            observed = await self._initial_page_observation(page)
+            old_geometry = before_frame.get("geometry") or {}
+            geometry = observed.get("geometry") or {}
+            painted = (
+                geometry.get("actualCanvasId") != old_geometry.get("actualCanvasId")
+                or geometry.get("contentVersion", -1) > old_geometry.get("contentVersion", -1)
+            )
+            if (await self.get_content_identity(page) != before and painted
+                and observed.get("signature") != before_frame.get("signature")):
+                return True
+        return False
+
+    _NATIVE_RESUME_PATHS = frozenset({
+        "original_jpeg", "direct_original_jpeg", "reconstructed_jpeg",
+        "native_lossless_webp", "native_png",
+    })
+
+    def _saved_native_spread(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        from screenshot_crawler.core.resume import ResumeError
+
+        if self.capture_mode != "native":
+            raise ResumeError("BookWalker resume book/total/layout changed (native capture required)")
+        store = self._capture_session.store
+        group = store.manifest["capture_groups"][-1]
+        parts = store.pages[group["start"] - 1:group["end"]]
+        if len(parts) != 2 or any(
+            (part.get("metadata", {}).get("bookwalker_capture") or {}).get("returned_path")
+            not in self._NATIVE_RESUME_PATHS
+            for part in parts
+        ):
+            raise ResumeError("BookWalker resume layout changed without a saved native spread")
+        first, second = (part["fingerprint"] for part in parts)
+        if first == second or any(
+            sum(row["fingerprint"] == digest for row in store.pages) != 1
+            for digest in (first, second)
+        ):
+            raise ResumeError("BookWalker resume saved spread fingerprints are ambiguous")
+        return parts[0], parts[1]
+
+    @staticmethod
+    def _decode_resume_rgba(image: CaptureResult) -> bytes:
+        from screenshot_crawler.core.resume import ResumeError
+
+        image_format = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}.get(
+            image.mime_type
+        )
+        width, height = image.width, image.height
+        if (
+            image_format is None or type(width) is not int or type(height) is not int
+            or width <= 0 or height <= 0 or width * height > 8_000_000
+            or not 0 < len(image.data) <= MAX_RESPONSE_BODY_BYTES
+            # Pillow can downconvert some high-precision PNGs on load.
+            or (image_format == "PNG" and (len(image.data) < 29 or image.data[24] > 8))
+        ):
+            raise ResumeError("BookWalker resume native image is outside decoded comparison bounds")
+        try:
+            with Image.open(io.BytesIO(image.data), formats=[image_format]) as decoded:
+                if (
+                    decoded.size != (width, height) or getattr(decoded, "n_frames", 1) != 1
+                    or decoded.mode not in {"RGB", "RGBA", "L", "LA", "P"}
+                    or decoded.info.get("icc_profile") is not None
+                    or decoded.getexif().get(274, 1) != 1
+                    or (
+                        "srgb" not in decoded.info
+                        and any(key in decoded.info for key in ("gamma", "chromaticity"))
+                    )
+                ):
+                    raise ResumeError("BookWalker resume native image has unsupported decode metadata")
+                return decoded.convert("RGBA").tobytes()
+        except (OSError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise ResumeError("BookWalker resume native image could not be decoded") from exc
+
+    def _verify_resume_pixels(
+        self, saved: tuple[dict[str, Any], dict[str, Any]], captures: tuple[CaptureResult, ...],
+        debug: dict[str, Any],
+    ) -> None:
+        from screenshot_crawler.core.resume import ResumeError, plain_path
+
+        debug["comparison"] = "decoded_rgba"
+        debug["parts"] = []
+        matched_pages = []
+        for part, (row, captured) in enumerate(zip(saved, captures, strict=True), start=1):
+            part_debug = {"part": part, "saved_mime": row.get("mime_type"),
+                          "captured_mime": captured.mime_type, "match": False}
+            debug["parts"].append(part_debug)
+            width, height = row.get("width"), row.get("height")
+            if (width, height) != (captured.width, captured.height):
+                raise ResumeError(f"BookWalker resume native spread dimensions differ (part={part})")
+            try:
+                path = plain_path(self._capture_session.directory / row["file"])
+                with path.open("rb") as artifact:
+                    data = artifact.read(MAX_RESPONSE_BODY_BYTES + 1)
+            except OSError as exc:
+                raise ResumeError(
+                    f"BookWalker resume saved native image unavailable (part={part})"
+                ) from exc
+            if fingerprint_bytes(data) != row["fingerprint"]:
+                raise ResumeError(f"BookWalker resume saved native image changed (part={part})")
+            expected = self._decode_resume_rgba(
+                CaptureResult(data, width, height, row.get("mime_type", ""))
+            )
+            if self._decode_resume_rgba(captured) != expected:
+                raise ResumeError(f"BookWalker resume native spread pixels differ (part={part})")
+            part_debug["match"] = True
+            matched_pages.append((width, height, fingerprint_bytes(expected)))
+        if matched_pages[0] == matched_pages[1]:
+            raise ResumeError("BookWalker resume decoded spread parts are ambiguous")
+
+    async def _verify_resume_spread(
+        self, page: Page, boundary: dict[str, Any], saved: tuple[dict[str, Any], dict[str, Any]],
+        *, deadline: float | None = None, allow_repaint_retry: bool = False,
+    ) -> bool:
+        from screenshot_crawler.core.resume import ResumeError
+
+        debug: dict[str, Any] = {"current": boundary["current"], "layout": boundary["layout"]}
+        expected = (boundary["cid"].casefold(), boundary["current"], boundary["total"],
+                    *boundary["layout"])
+        if deadline is None:
+            deadline = time.monotonic() + self.page_change_timeout_ms / 1000
+        try:
+            async with asyncio.timeout_at(deadline):
+                observed = await self._initial_page_observation(page)
+                before = self._initial_frame_join_key(observed)
+                if (before is None or before[:3] + before[5:9] != expected
+                    or observed["signature"][1] <= 0):
+                    raise ResumeError("BookWalker resume native spread boundary changed before capture")
+                captures = await self.capture_page(page)
+                path = self._capture_debug["bookwalker_capture"].get("returned_path")
+                debug["returned_path"] = path
+                if captures is None or len(captures) != 2 or path not in self._NATIVE_RESUME_PATHS:
+                    raise ResumeError("BookWalker resume requires a fresh two-part native spread")
+                if tuple(fingerprint_bytes(part.data) for part in captures) == tuple(
+                    row["fingerprint"] for row in saved
+                ):
+                    debug["comparison"] = "file_sha256"
+                else:
+                    self._verify_resume_pixels(saved, captures, debug)
+                observed = await self._initial_page_observation(page)
+                after = self._initial_frame_join_key(observed)
+                if after != before:
+                    if after is not None:
+                        debug["changed_fields"] = [
+                            field for field, original, final in zip(
+                                self._RESUME_FRAME_FIELDS, before, after, strict=True
+                            )
+                            if original != final
+                        ]
+                        debug["content_versions"] = [before[4], after[4]]
+                        if (
+                            allow_repaint_retry
+                            and after[:3] + after[5:9] == expected
+                            and observed["signature"][1] > 0
+                            and (after[3] != before[3] or after[4] > before[4])
+                        ):
+                            debug["result"] = "redraw_retry"
+                            return False
+                    else:
+                        debug["changed_fields"] = ["frame_unavailable"]
+                    raise ResumeError("BookWalker resume native spread boundary changed during capture")
+                self._resume_boundary_frame = after
+                debug["result"] = "verified"
+                return True
+        except (CaptureUnavailableError, PageChangeTimeoutError, UnknownPageStateError,
+                PlaywrightError, TimeoutError) as exc:
+            raise ResumeError("BookWalker resume native spread verification unavailable") from exc
+        finally:
+            debug.setdefault("result", "failed")
+            self._capture_debug["bookwalker_resume_boundary"] = debug
 
     async def initialize_entry_only(self, page: Page) -> None:
         """Prepare a grant-only entry without changing the reader position."""
@@ -12135,7 +12342,32 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def _press_left_arrow(self, page: Page) -> None:
         await self._arm_native_capture(page)
+        await self._check_resume_boundary_before_advance(page)
         await page.keyboard.press("ArrowLeft")
+
+    async def _check_resume_boundary_before_advance(self, page: Page) -> None:
+        if self._resume_boundary_frame is None:
+            return
+        frame = self._initial_frame_join_key(await self._initial_page_observation(page))
+        if frame != self._resume_boundary_frame:
+            from screenshot_crawler.core.resume import ResumeError
+
+            self._capture_debug["bookwalker_resume_boundary"]["result"] = "changed_before_advance"
+            raise ResumeError("BookWalker resume native spread boundary changed before advance")
+
+    async def _check_resume_successor(self, page: Page) -> None:
+        boundary = self._resume_boundary_frame
+        if boundary is None:
+            return
+        observed = await self._initial_page_observation(page)
+        frame = self._initial_frame_join_key(observed)
+        if (frame is None or frame[0] != boundary[0] or frame[2] != boundary[2]
+            or frame[5:9] != boundary[5:9] or type(observed["current"]) is not int
+            or not boundary[1] < observed["current"] <= boundary[2]):
+            from screenshot_crawler.core.resume import ResumeError
+
+            self._capture_debug["bookwalker_resume_boundary"]["result"] = "unverified_successor"
+            raise ResumeError("BookWalker resume next display did not preserve layout or reading order")
 
     async def _click_left_edge(self, page: Page) -> None:
         """Use the viewer click area only after keyboard navigation stalls."""
@@ -12145,6 +12377,7 @@ class BookWalkerAdapter(SiteAdapter):
         box = await viewport.bounding_box()
         if not box or box["width"] <= 0 or box["height"] <= 0:
             return
+        await self._check_resume_boundary_before_advance(page)
         try:
             await viewport.click(
                 position={
@@ -12159,6 +12392,14 @@ class BookWalkerAdapter(SiteAdapter):
             return
 
     async def wait_for_change(
+        self,
+        page: Page,
+        previous_identity: ContentIdentity | None,
+    ) -> None:
+        await self._wait_for_page_change(page, previous_identity)
+        self._resume_boundary_frame = None
+
+    async def _wait_for_page_change(
         self,
         page: Page,
         previous_identity: ContentIdentity | None,
@@ -12190,12 +12431,14 @@ class BookWalkerAdapter(SiteAdapter):
                     else:
                         self._terminal_skip_identity = None
                         await self._wait_for_render_ready(page)
+                        await self._check_resume_successor(page)
                         return
                 elif previous_identity is None:
                     return
                 elif current != previous_identity:
                     self._terminal_skip_identity = None
                     await self._wait_for_render_ready(page)
+                    await self._check_resume_successor(page)
                     return
                 # Some BookWalker trial readers keep the final content canvas
                 # at N/N after the last left-side action and never expose the

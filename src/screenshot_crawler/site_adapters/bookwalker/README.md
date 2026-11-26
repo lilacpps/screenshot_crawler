@@ -76,9 +76,14 @@ delete old output. Arbitrary nonempty output directories are still rejected.
 Fresh sessions retain the Home guard. Continuing sessions rejoin the saved
 counter through at most eight actual ArrowRight/ArrowLeft operations, witness
 a redraw and stable frame join, then advance normally past the saved group.
-Restored counters alone, temporary canvas IDs, and cross-session artifact
-byte equality are not sufficient to decide which images to skip or replace.
-Saved artifacts remain immutable and the existing capture proof is unchanged.
+If the viewport layout differs from the checkpoint, the adapter compares both
+parts of a freshly drawn source-native spread against the saved boundary.
+The book, total, counter, frame and distinct saved parts must all validate.
+The ordered pair must match by file SHA-256 or by exact decoded RGBA at equal
+dimensions. If the renderer repaints at the same boundary during comparison,
+the adapter can redraw and compare both parts once more within the original
+comparison deadline and movement limit. Comparison captures stay in memory.
+The runner then appends from the next actual display.
 
 Checkpoint creation requires two equal complete frame keys after render readiness.
 A same-boundary repaint permits at most three fresh observation pairs, separated

@@ -11,7 +11,9 @@ from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter_module
 import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError
+from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.resume import ResumeError
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
@@ -261,10 +263,20 @@ async def test_bookwalker_entry_only_does_not_rewind_reader_position(
     assert await browser_page.evaluate("window.__homePresses") == 0
 
 
-@pytest.mark.parametrize("restored", [2, 4, 6])
-@pytest.mark.parametrize("paint_delay", [40, 2300])
+@pytest.mark.parametrize(("restored", "paint_delay", "layout_change"), [
+    (restored, paint_delay, None)
+    for restored in (2, 4, 6) for paint_delay in (40, 2300)
+] + [
+    (6, 40, variation)
+    for variation in (
+        "identical", "cross_codec", "one_changed", "reversed", "dimensions", "single",
+        "rendered", "repaint_once", "replacement_once", "repaint_again", "repaint_then_differs",
+        "layout_during_capture", "position_during_capture", "signature_only",
+        "late_repaint", "backward", "successor_resize",
+    )
+])
 async def test_resume_rejoins_saved_spread_without_home_and_waits_for_redraw(
-    browser_page: Page, restored: int, paint_delay: int,
+    browser_page: Page, tmp_path: Path, restored: int, paint_delay: int, layout_change: str | None,
 ) -> None:
     async def fulfill(route):
         await route.fulfill(content_type="text/html", body=_viewer_html())
@@ -291,16 +303,143 @@ async def test_resume_rejoins_saved_spread_without_home_and_waits_for_redraw(
       });
     }""", {"restored": restored, "delay": paint_delay})
     adapter = BookWalkerAdapter()
+    adapter.capture_mode = "native"
     adapter.page_change_timeout_ms = 12_000
     adapter._initial_content_id = PRODUCT_ID
-    adapter._capture_session = SimpleNamespace(checkpoint={
-        "cid": PRODUCT_ID, "current": 4, "total": 10, "layout": [100,100,100,100],
-    })
+    checkpoint = {"cid": PRODUCT_ID, "current": 4, "total": 10, "layout": [100,100,100,100]}
+    if layout_change is not None:
+        checkpoint["layout"] = [100, 100, 100, 90]
+    def jpeg(color: str) -> CaptureResult:
+        data = io.BytesIO()
+        Image.new("RGB", (4, 3), color).save(data, "JPEG")
+        return CaptureResult(data.getvalue(), 4, 3, "image/jpeg", ".jpg")
+
+    expected = (jpeg("red"), jpeg("blue"))
+    saved_rows = []
+    for index, part in enumerate(expected):
+        name = f"page-{index + 1:04d}.jpg"
+        (tmp_path / name).write_bytes(part.data)
+        saved_rows.append({
+            "file": name, "width": part.width, "height": part.height, "mime_type": part.mime_type,
+            "fingerprint": fingerprint_bytes(part.data), "metadata": {
+                "bookwalker_capture": {"returned_path": "reconstructed_jpeg"},
+            },
+        })
+    adapter._capture_session = SimpleNamespace(
+        checkpoint=checkpoint,
+        directory=tmp_path,
+        store=SimpleNamespace(
+            manifest={"capture_groups": [{"start": 1, "end": 2}]},
+            pages=saved_rows,
+        ),
+    )
+    captures_seen = []
+
+    async def capture_boundary(page):
+        assert layout_change is not None
+        assert await page.evaluate("window.__position") == 4
+        captures_seen.append(True)
+        debug = adapter._capture_debug["bookwalker_capture"]
+        debug["returned_path"] = "rendered_canvas" if layout_change == "rendered" else "reconstructed_jpeg"
+        if layout_change in {"cross_codec", "one_changed", "dimensions"}:
+            debug["returned_path"] = "native_lossless_webp"
+            webp = []
+            for index, part in enumerate(expected):
+                with Image.open(io.BytesIO(part.data)) as encoded:
+                    image = encoded.convert("RGBA")
+                if index == 1 and layout_change == "one_changed":
+                    pixel = image.getpixel((0, 0))
+                    image.putpixel((0, 0), (pixel[0] ^ 1, *pixel[1:]))
+                if index == 1 and layout_change == "dimensions":
+                    image = image.crop((0, 0, 3, 3))
+                data = io.BytesIO()
+                image.save(data, "WEBP", lossless=True, exact=True)
+                webp.append(CaptureResult(data.getvalue(), *image.size, "image/webp", ".webp"))
+            return tuple(webp)
+        if layout_change == "reversed":
+            return expected[::-1]
+        if layout_change == "single":
+            return expected[:1]
+        if layout_change == "repaint_again" or (
+            layout_change in {"repaint_once", "repaint_then_differs"} and len(captures_seen) == 1
+        ):
+            await page.evaluate("window.__version++")
+        if layout_change == "replacement_once" and len(captures_seen) == 1:
+            await page.evaluate("window.__bookwalkerCanvasIdentity = () => 'replacement-canvas'")
+        if layout_change == "repaint_then_differs" and len(captures_seen) == 2:
+            return expected[0], jpeg("green")
+        if layout_change == "layout_during_capture":
+            await page.locator("canvas").evaluate("c => c.style.height = '88px'")
+        if layout_change == "position_during_capture":
+            await page.locator("#pageSliderCounter").evaluate("n => n.textContent = '6 / 10'")
+        if layout_change == "signature_only":
+            await page.locator("canvas").evaluate(
+                "c => { const ctx = c.getContext('2d'); ctx.fillStyle = 'yellow'; ctx.fillRect(0, 0, 60, 60); }"
+            )
+        return expected
+
+    adapter.capture_page = capture_boundary
+    expected_error = {
+        "one_changed": r"spread pixels differ \(part=2\)", "reversed": r"spread pixels differ \(part=1\)",
+        "dimensions": r"spread dimensions differ \(part=2\)",
+        "single": "two-part native spread", "rendered": "two-part native spread",
+        "repaint_again": "changed during capture",
+        "repaint_then_differs": r"spread pixels differ \(part=2\)",
+        "layout_during_capture": "changed during capture",
+        "position_during_capture": "changed during capture",
+        "signature_only": "changed during capture",
+    }.get(layout_change)
+    retried = layout_change in {
+        "repaint_once", "replacement_once", "repaint_again", "repaint_then_differs",
+    }
+    restoration_keys = ["ArrowRight", "ArrowRight", "ArrowLeft"] if retried else ["ArrowRight"]
+    if expected_error is not None:
+        with pytest.raises(ResumeError, match=expected_error):
+            await adapter._restore_capture_position(browser_page)
+        assert len(captures_seen) == (2 if retried else 1)
+        assert await browser_page.evaluate("window.__keys") == restoration_keys
+        return
+
     await adapter._restore_capture_position(browser_page)
     checkpoint = await adapter.get_resume_checkpoint(browser_page)
     assert checkpoint["current"] == 4
     assert "Home" not in await browser_page.evaluate("window.__keys")
     assert await browser_page.evaluate("Array.from(document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)") == [80,40,70,255]
+    assert len(captures_seen) == (2 if retried else int(layout_change is not None))
+    if layout_change in {"identical", "cross_codec", "repaint_once", "replacement_once"}:
+        boundary_debug = adapter._capture_debug["bookwalker_resume_boundary"]
+        assert boundary_debug["comparison"] == (
+            "decoded_rgba" if layout_change == "cross_codec" else "file_sha256"
+        )
+        if retried:
+            assert boundary_debug["repaint_retry"]["result"] == "redraw_retry"
+            assert boundary_debug["repaint_retry"]["changed_fields"] == [
+                "content_version" if layout_change == "repaint_once" else "canvas_id"
+            ]
+        identity = await adapter.get_content_identity(browser_page)
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, identity)
+        assert await browser_page.evaluate("window.__keys") == [*restoration_keys, "ArrowLeft"]
+        assert (await adapter.get_resume_checkpoint(browser_page))["current"] == 6
+        assert adapter._resume_boundary_frame is None
+    if layout_change == "late_repaint":
+        await browser_page.evaluate("window.__version++")
+        with pytest.raises(ResumeError, match="changed before advance"):
+            await adapter.go_next(browser_page)
+        assert await browser_page.evaluate("window.__keys") == ["ArrowRight"]
+    if layout_change in {"backward", "successor_resize"}:
+        await browser_page.evaluate("""fault => {
+            document.addEventListener('keydown', event => {
+                if (event.key !== 'ArrowLeft') return;
+                if (fault === 'backward') window.__position = 0;
+                else document.querySelector('canvas').style.height = '90px';
+            }, true);
+        }""", layout_change)
+        identity = await adapter.get_content_identity(browser_page)
+        await adapter.go_next(browser_page)
+        with pytest.raises(ResumeError, match="did not preserve layout or reading order"):
+            await adapter.wait_for_change(browser_page, identity)
+        assert await browser_page.evaluate("window.__keys") == ["ArrowRight", "ArrowLeft"]
 
 
 @pytest.mark.parametrize("change", ["redraw", "continuous_redraw", "position", "layout"])

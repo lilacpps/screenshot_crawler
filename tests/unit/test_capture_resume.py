@@ -609,6 +609,7 @@ async def test_bookwalker_checkpoint_rechecks_only_same_boundary_redraw(change):
 @pytest.mark.parametrize("field,value", [("cid", "other"), ("total", 20), ("layout", [1, 2, 3, 4])])
 async def test_bookwalker_resume_refuses_changed_book_or_layout_before_moving(field, value):
     adapter = BookWalkerAdapter()
+    adapter.capture_mode = "canvas"
     expected = {"cid": "cid", "current": 3, "total": 10, "layout": [100, 100, 100, 100]}
     actual = {**expected, field: value}
     adapter._capture_session = SimpleNamespace(checkpoint=expected)
@@ -619,6 +620,68 @@ async def test_bookwalker_resume_refuses_changed_book_or_layout_before_moving(fi
     adapter.get_resume_checkpoint = checkpoint
     with pytest.raises(ResumeError, match="book/total/layout"):
         await adapter._restore_capture_position(object())
+
+
+@pytest.mark.parametrize("saved_case", ["native", "rendered", "single", "duplicate"])
+def test_bookwalker_layout_change_requires_an_unambiguous_saved_native_spread(tmp_path, saved_case):
+    session = new_session(tmp_path)
+    seed(session, count=1 if saved_case == "single" else 2)
+    for part in session.store.pages:
+        part["metadata"]["bookwalker_capture"] = {
+            "returned_path": "rendered_canvas" if saved_case == "rendered" else "native_png",
+        }
+    if saved_case == "duplicate":
+        session.store.pages[-1]["fingerprint"] = session.store.pages[0]["fingerprint"]
+    adapter = BookWalkerAdapter()
+    adapter.capture_mode = "native"
+    adapter._capture_session = session
+
+    if saved_case == "native":
+        assert adapter._saved_native_spread() == tuple(session.store.pages)
+    else:
+        error = "ambiguous" if saved_case == "duplicate" else "without a saved native spread"
+        with pytest.raises(ResumeError, match=error):
+            adapter._saved_native_spread()
+
+
+@pytest.mark.parametrize("fault", ["changed_file", "same_pixels", "orientation", "broken"])
+def test_bookwalker_resume_decoded_comparison_rejects_unreliable_evidence(tmp_path, fault):
+    adapter = BookWalkerAdapter()
+    adapter._capture_session = SimpleNamespace(directory=tmp_path)
+    colors = ("red", "red" if fault == "same_pixels" else "blue")
+    rows, captures = [], []
+    for index, color in enumerate(colors, start=1):
+        image = Image.new("RGB", (4, 3), color)
+        data = io.BytesIO()
+        image.save(data, "PNG", compress_level=index)
+        payload = data.getvalue()
+        filename = f"page-{index:04d}.png"
+        (tmp_path / filename).write_bytes(payload)
+        rows.append({
+            "file": filename, "width": 4, "height": 3, "mime_type": "image/png",
+            "fingerprint": hashlib.sha256(payload).hexdigest(),
+        })
+        data = io.BytesIO()
+        image.save(data, "WEBP", lossless=True, exact=True)
+        captures.append(CaptureResult(data.getvalue(), 4, 3, "image/webp", ".webp"))
+    if fault == "changed_file":
+        (tmp_path / rows[1]["file"]).write_bytes(png("green"))
+    elif fault == "orientation":
+        data = io.BytesIO()
+        exif = Image.Exif()
+        exif[274] = 2
+        Image.new("RGB", (4, 3), "blue").save(data, "PNG", exif=exif)
+        captures[1] = CaptureResult(data.getvalue(), 4, 3)
+    elif fault == "broken":
+        captures[1] = CaptureResult(b"not a WebP", 4, 3, "image/webp", ".webp")
+    errors = {
+        "changed_file": "saved native image changed",
+        "same_pixels": "decoded spread parts are ambiguous",
+        "orientation": "unsupported decode metadata",
+        "broken": "could not be decoded",
+    }
+    with pytest.raises(ResumeError, match=errors[fault]):
+        adapter._verify_resume_pixels(tuple(rows), tuple(captures), {})
 
 
 async def test_cli_local_completion_does_not_connect_to_chrome(tmp_path, monkeypatch):

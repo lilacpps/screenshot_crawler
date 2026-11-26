@@ -712,6 +712,11 @@ Site Policyによるquota eligibility判定
 site integrationが対象・保存namespace・優先順を管理し、CoreはCatalogを知らずに
 検証済みmanifestの継続と期限中断を扱う。正常終端の永続化→専用Page close→ZIP→Catalogの順とし、
 途中停止を成功にしない。他の新規runは引き続き非空directoryを拒否する。
+表示寸法が変わった再開の照合はBookWalker Adapterで行う。最後の確定済みsource-native見開きと
+同じ位置を描き直し、両画像のSHA-256または復号後の全RGBA画素が読み順どおりに一致した
+場合は、Coreの既存の境界identity照合と最初のページ送りに進む。
+照合中に同じ境界で再描画が観測された場合、Adapterは一度だけ位置復元と新しい照合を行う。
+前回の照合結果は破棄し、再取得した2枚とフレームの安定を改めて確認する。
 
 - UNKNOWNは停止
 - retryはbounded

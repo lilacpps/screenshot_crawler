@@ -88,7 +88,74 @@ work/listing GET only. Evidence: coverage-followup-other-four-live.json.
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-11-24
+最終同期: 2026-11-27
+
+## 表示寸法が異なる場合の見開き再開（2026-11-27）
+
+Source 1911の最後の確定表示は362/370（再構成JPEG 2枚、各960x1280）。
+保存時のlayoutは `[1904,985,1904,985]`。05:11の再開は同一CID・総数370、
+363/370で安定したが `[1905,944,1905,944]` となり、以前の寸法完全一致で停止した。
+保存済み362枚のうち、境界の各画像のSHA-256は互いに異なり、それぞれ1回だけ現れる。
+
+表示寸法が保存時と違う場合、最後の確定groupがsource-nativeの2枚であり、両画像の
+SHA-256が保存済みmanifest内で各1回だけ現れるものに限り位置復元を試す。新しい寸法を
+復元中に固定し、同一CID・総数と実際のページ操作で確定済み位置を描き直す。通常の
+capture hookで取得した見開きはメモリ上で読み順のSHA-256を比較する。
+ファイルが異なる場合は保存ファイルを再度hash照合し、同じ寸法と復号後の全RGBAを
+読み順で比較する。Pillowで単一フレームJPEG/PNG/WebPをローカル復号し、最大16 MiB・
+800万画素／part、通常の向きと色解釈に限る。高精度PNGは照合対象外。
+RGBAに1画素でも差分がある場合や、同じRGBAの2枚で順序を区別できない場合は停止する。
+2枚が一致し、取得前後で同じframe keyの場合のみ先へ進む。照合後に同一CID・総数・位置・
+寸法でcanvas置換または描画version増加を観測した場合だけ、一致した旧結果を破棄し、
+隣接表示との往復で新しい描画を得て一度だけ2枚とも再照合する。往復は従来の最大8操作に
+含め、初回照合からの14秒期限を共有する。最初の通常送りとその
+入力再試行の直前も同じframeを照合する。Coreの保存済みidentity照合を通し、次が本文なら
+同一CID・総数・新しい寸法でcounterが前進した表示から追記する。
+比較用画像は保存済みファイルやmanifestへ書き込まない。既存の14秒の照合上限と
+590秒の全体予算、quota・capture proof・保存単位を使う。CLI・設定・保存形式の追加はない。
+
+単ページ、rendered fallback、重複・RGBA差分・順序逆転、位置・寸法の変化、根拠のない
+描画変化、再照合での描画変化、期限切れは停止する。
+表示寸法が一致する場合は既存の位置復元とframe joinを使う。
+照合後の診断は `adapter_debug.bookwalker_resume_boundary` に位置・寸法・返却経路・
+結果に加え、比較方式 `file_sha256` / `decoded_rgba` と後者のpart別形式・一致結果を記録する。
+描画変化時は変化した項目と描画versionを、再照合時は初回の結果も記録する。
+
+06:12のSource 1911再開では362/370に戻り、再構成JPEG 2枚のSHA-256が保存2枚と
+読み順で一致した。比較後のframe joinで停止した。失敗後HTMLも362/370、内部・CSSとも
+1905x944だったが、当時は前後で異なったframe項目が記録されず、正確な変化は不明。
+再描画対応の検証ではUnit 332件、関連browser Integration 28件が通過し、skipは0件。
+1回の描き直しとcanvas置換では新しい2枚を照合して次の表示へ進むこと、再描画の反復、
+再取得の片側差分、位置・寸法の変化、version増加の裏付けがないsignature差分では
+停止することを確認した。実サイトの再試行は行わず、保存済みの362枚を保持した。
+
+06:07のSource 1911再開では362/370のnative見開きを取得した。JPEG再構成の
+`selected renderer draw mapping identity unavailable` で2枚ともロスレスWebPとなり、
+当時のファイルSHA-256照合で停止した。両partは960x1280。照合用WebPは記録されておらず、
+この試行の復号画素一致は未確認。保存済み再構成JPEG 2枚については、隔離したローカル
+ChromiumとPillowの復号RGBAが全画素一致することを確認した。そのChromiumの復号結果から
+同じ設定で作ったロスレスWebP 2枚も現行の照合を通過した。Source 1911の実サイト再試行は
+行っていない。
+
+復号比較を追加した最終実装では、関連Unit 332件と再開browser Integration 22件が通過し、
+skipは0件。JPEG→WebPでの再開、1画素差、寸法違い、順序逆転、保存ファイル改変、
+復号での同一画像2枚、向き情報と壊れた画像を検証した。
+
+ファイルSHA-256照合を追加した実装では、関連Unit 328件、BookWalker browser Integration
+250件が通過した。
+最初の本文遷移の検証を追加した最終差分は関連browser 20件で再確認した。
+人工Chromiumで見開きの復元・前方遷移、片側不一致、順序逆転、単ページ、
+rendered経路、照合中／照合後の再描画、逆方向遷移、寸法の再変更を検証した。
+別の生成fixtureでは両方のJPEGを実際に再構成し、CSS寸法を変えた後もSHA-256が
+2枚とも一致して照合を通過することを確認した。各選択にskipはない。
+変更ファイルのRuffとdiff検査は通過し、全体Ruffでは既存のComicFUZテストの
+DTZ001が2件残る。site-local変更のためfull suiteと独立Research suiteは省略した。
+
+実サイトの確認は購入済みとして記録された2冊をstrict directで試した。1冊は購入済み
+入口を検出できず、もう1冊は初期化timeoutで、どちらも照合前に停止した。
+隔離レポートは `output/bw-resume-layout-20261127-1f9f8505/report.json` と
+`output/bw-resume-layout-20261127-43e90b75/report.json`。Source 1911のまる読みは
+実行せず、途中データの362枚と再開試行履歴は保持されている。
 
 ## quota checkpointの同一表示再描画確認（2026-11-24）
 
@@ -100,7 +167,7 @@ signature等を含む完全key一致を要求し、異なる2つのframeをそ�
 CID/current/total/layoutの変化、欠落・不正frame、空白は即停止する。再確認中に
 安定した別ページへ移った場合も初回に固定した境界との比較で拒否する。
 再入場・キー操作・captureの取り直しは行わず、Runnerの保存直前identity照合、
-既存のcapture proof、見開きall-or-none、quota記録・期限・resume layout比較は維持する。
+既存のcapture proof、見開きall-or-none、quota記録・期限を利用する。
 CLI/設定・manifest形式の追加はない。
 
 失敗診断の`adapter_debug.bookwalker_checkpoint`に最終2観測のkey値、attempts、reason、
@@ -176,8 +243,9 @@ devicePixelRatio自体の値は保存証拠に無い。内部寸法だけでも�
 960x1280寸法が正しく、Catalog/Work/Item/Source/Targetのbindingもread-only照合で一致した。
 調査前後に再開参照・manifest・画像・diagnosticsのSHA-256が不変であることを確認した。
 要約は`output/diagnostics/bw1916-resume-investigation-20261121/summary.json`。
-現行resumeでは内部解像度とCSS表示寸法の両方が保存時と一致する必要がある。
-画面条件が異なるまま再開する対応は実装していない。再開参照の削除後は新規取得となるが、
+この時点のresumeは内部解像度とCSS表示寸法の両方に保存時との一致を要求していた。
+現行の不一致時の照合は上記「表示寸法が異なる場合の見開き再開」を参照する。
+再開参照の削除後は新規取得となるが、
 削除自体は上記capture修正の代替にならない。quota履歴は復元しない。
 本調査は保存済みmetrics/Catalog（read-only）/capture診断/codeの照合だけで行い、
 実サイトのreaderは開いていない。保存時の見開き停止は修正前の実サイト証拠であり、
@@ -185,7 +253,7 @@ devicePixelRatio自体の値は保存証拠に無い。内部寸法だけでも�
 synthetic browserで同じmutable sourceを左右へ再利用し、旧JPEGを両方破棄して
 fresh nativeを読書順で返すこと、片側再描画・source/layout/identity/window/reset変更・
 fresh source snapshot欠落・再race・片側pixel mutation・retry使用済み・cancel時の
-fail-closed/cleanupを検証する。ズーム変更時のresume停止規則は維持する。
+fail-closed/cleanupを検証する。
 復元データ調査ではCID/total/layout不一致を移動前に拒否する既存Unitを再実行し、
 3 passed、0 skipped（resume調査のみの時点）。
 
@@ -2217,6 +2285,7 @@ local quotaのcapacity/reset/記録時点/自動refund禁止は20.4から変更�
 各attemptは新規CrawlRunで履歴を残す。実データと共通の永続化契約はCore note §15を参照。
 
 再開時はHomeを省き、保存済みcheckpointのCID/総数/layoutと、実際のcounterを照合する。
+layoutが異なる場合は上記のsource-native見開き照合を使う。
 最大8回のArrowRight/ArrowLeftで保存済み表示へ戻し、必要なら隣接表示との往復で描き直す。
 counter変化だけでは通さず、操作後のcanvas identity/content versionとsignatureの変化、
 通常render readiness、連続したframe joinを確認する。そこから通常のgo_nextで未保存表示へ進む。
@@ -2227,7 +2296,7 @@ checkpoint作成時は上記「quota checkpointの同一表示再描画確認」
 利用者指定の購入済みCID `2532de3b-1769-4210-ab6e-2952e4ecbe08` でstrict direct entryを確認し、
 3/291と4/291への再入場復元、前後操作、1/291への復元を実測した。
 同じcounterでも再入場前後の全canvas hashやcapture分割／解像度／codecは一致しない場合があり、
-これらのcross-session一致をresumeのauthorityにはしない。
+同じlayoutでの復元ではcross-sessionの画像一致を継続条件にしない。
 owned test-only driverは分類をownedのまま同じCaptureSession/Runner/Adapter部品へ条件を注入する。
 canvasモードでは20秒の期限で10枚保存→再開後291枚で正常END→close後ZIP/Catalog完了を確認。
 nativeでは20秒で5枚→30秒の再開で17枚→再度の期限終了を確認した。

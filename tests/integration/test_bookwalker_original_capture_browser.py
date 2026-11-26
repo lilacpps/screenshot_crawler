@@ -13,6 +13,7 @@ from playwright.async_api import Page
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
+from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
@@ -4534,6 +4535,7 @@ async def test_capture_page_default_proves_executed_clear_scaled_reconstruction(
     ("candidate_mode", "clear_mode", "mutation"),
     [
         ("both", "executed", "none"),
+        ("both", "executed", "resume"),
         ("first_only", "executed", "none"),
         ("both", "legacy", "none"),
         ("both", "mixed", "none"),
@@ -4630,7 +4632,7 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
                 source_snapshot,
             )
             self._w2_compare_calls += 1
-            if mutation != "none" and (
+            if mutation not in {"none", "resume"} and (
                 self._w2_compare_calls == 2
                 or (mutation == "redraw_twice" and self._w2_compare_calls == 4)
             ):
@@ -4757,7 +4759,7 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
         assert adapter._w2_compare_calls == 4
         assert adapter._capture_snapshot_handles == []
         return
-    if mutation not in {"none", "redraw", "initial_redraw", "initial_overlay"} or (
+    if mutation not in {"none", "resume", "redraw", "initial_redraw", "initial_overlay"} or (
         mutation == "initial_overlay" and clear_mode == "executed"
     ):
         with pytest.raises(adapter_module.UnknownPageStateError):
@@ -4810,6 +4812,20 @@ async def test_capture_page_default_proves_exact_two_spread_jpegs_and_fails_clos
         part["cropped_chain_pixel_comparison"]["p4b_atomic_current_roi"]["exact"] is True
         for part in shadow["parts"]
     )
+    if mutation == "resume":
+        saved = await adapter.get_resume_checkpoint(browser_page)
+        await adapter._arm_native_capture(browser_page)
+        await browser_page.locator("#spread-renderer").evaluate(
+            "c => {c.style.height = '760px'; c.__w2Redraw();}"
+        )
+        actual = await adapter.get_resume_checkpoint(browser_page)
+        assert actual["layout"] != saved["layout"]
+        await adapter._verify_resume_spread(
+            browser_page, actual,
+            ({"fingerprint": fingerprint_bytes(captures[0].data)},
+             {"fingerprint": fingerprint_bytes(captures[1].data)}),
+        )
+        assert adapter._capture_debug["bookwalker_resume_boundary"]["result"] == "verified"
 
 
 async def test_capture_page_does_not_use_direct_for_cover_union(
