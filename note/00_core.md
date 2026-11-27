@@ -616,7 +616,10 @@ Unsupported query/fragment/paths remain blocked. URL validity does not imply a
 ready registration. Unknown native work identity/title remain unknown.
 Kadocomi converts proven same-work episode URLs to work detail; Zeblack also
 maps numeric viewer paths to the same title's chapter/list without opening a
-viewer. Optional metadata uses the caller's Page, refuses redirects, blocks subresources,
+viewer. Piccoma accepts the exact `?etype=E` suffix on its product episode-list
+registration input and observes the query-free listing. The original paste is
+retained for confirmation and the verified canonical free episode URL is saved.
+Optional metadata uses the caller's Page, refuses redirects, blocks subresources,
 and never calls Discovery/reader/resource/capture or writes persisted data.
 Registration candidate/naming APIs, paste/edit GUI, draft-only detail and atomic
 Watchlist persistence are implemented through Stage 05. No Catalog/schema or

@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from time import monotonic
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
@@ -371,12 +371,13 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
     registration_hosts = ('piccoma.com', 'www.piccoma.com')
 
     def resolve_registration_url(self, url: str) -> UrlResolution:
-        from urllib.parse import urlsplit
-        if urlsplit(url).query not in ("",):
-            return UrlResolution(input_url=url, blockers=("Unsupported metadata or URL; use the canonical Discovery entry and confirm manually",))
         parts = parse_piccoma_viewer_url(url)
         if parts is None:
-            product = parse_piccoma_listing_url(url)
+            listing_url = url
+            # Preserve the original pasted URL for the conversion proof.
+            if urlsplit(url).query == "etype=E":
+                listing_url = url.removesuffix("?etype=E")
+            product = parse_piccoma_listing_url(listing_url)
             if product:
                 return UrlResolution(input_url=url,
                     observation_url=f"https://piccoma.com/web/product/{product}/episodes",

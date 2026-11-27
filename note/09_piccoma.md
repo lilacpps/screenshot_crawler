@@ -664,9 +664,13 @@ digest and a pure one-hole selection accepted. No Full job or save ran.
 Tests:128 targeted and109 affected passed/0skip; independent review PASS.
 Current Stage07 evidence and remaining sites: registration PROGRESS.md.
 
-`/web/product/<id>/episodes` is now an optional observed-conversion input, never
-a directly saved Discovery URL. Without the GUI safe-observation option or with
-failed proof it remains blocked, with no manual bypass. A dedicated one-document
+`/web/product/<id>/episodes` is an optional observed-conversion input. The
+registration hook accepts the exact `?etype=E` suffix on this path and removes it
+before the guarded listing GET, retaining the pasted URL in the preview. Other
+queries are rejected. Local tests cover the query-free GET and final Watchlist
+save. This input variant has no separate live verification. Without the GUI
+safe-observation option or with failed proof it remains blocked, with no manual
+bypass. A dedicated one-document
 observer requires canonical, one list/content container, PCM-list_asc only,
 one declared total matching exact rows and every row's same product, unique
 episode, nonempty episode title and single status wrapper. It reuses the existing

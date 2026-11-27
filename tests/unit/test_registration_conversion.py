@@ -14,19 +14,21 @@ LIST = "https://piccoma.com/web/product/63/episodes"
 SEED = "https://piccoma.com/web/viewer/63/900"
 
 
-def converted(resolver, now=None):
-    initial = resolver.resolve(LIST)
-    proof = ObservedUrlConversion(LIST, "piccoma", LIST, SEED, "piccoma-product:63",
+def converted(resolver, now=None, *, input_url=LIST):
+    initial = resolver.resolve(input_url)
+    proof = ObservedUrlConversion(input_url, "piccoma", LIST, SEED, "piccoma-product:63",
         "63:900", 1, 3, ("PCM-list_asc", "declared-count:3", "status-count:1",
             "PCM-epList_status_free", "¥0"), now or datetime.now(UTC))
     return replace(initial, status="converted", discovery_url=SEED,
         site_work_identity="piccoma-product:63", conversion_proof=proof, blockers=())
 
 
-@pytest.mark.parametrize("suffix", ["", "/"])
+@pytest.mark.parametrize("suffix", ["", "/", "?etype=E", "/?etype=E"])
 def test_listing_is_only_pending_observation_not_manually_registrable(suffix):
     resolver = UrlResolver(_discovery_registry())
-    result = resolver.resolve(LIST + suffix)
+    input_url = LIST + suffix
+    result = resolver.resolve(input_url)
+    assert result.input_url == input_url
     assert result.status == "blocked" and result.observation_url == LIST
     assert result.discovery_url is None and result.site_work_identity is None
     assert result.conversion_proof is None and resolver.resolution_error(result)
@@ -34,6 +36,10 @@ def test_listing_is_only_pending_observation_not_manually_registrable(suffix):
 
 @pytest.mark.parametrize("alter", [
     lambda u: u + "?a=1", lambda u: u + "#", lambda u: u + ";x", lambda u: u + "\\",
+    lambda u: u + "?etype=V", lambda u: u + "?etype=e", lambda u: u + "??etype=E",
+    lambda u: u + "?etype=E&a=1", lambda u: u + "?a=1&etype=E",
+    lambda u: u + "?etype=E#top", lambda u: u.replace("/episodes", "") + "?etype=E",
+    lambda _: SEED + "?etype=E",
     lambda u: u.replace("https:", "http:"), lambda u: u.replace(".com/", ".com.evil.invalid/"),
     lambda u: u.replace("://", "://user@"), lambda u: u.replace("/63/", "/%36%33/"),
     lambda u: u.replace(".com/", ".com:444/"),
@@ -97,12 +103,13 @@ async def test_normal_observe_and_changed_pending_never_navigate():
     assert (await resolver.observe_conversion(object(), replace(pending, discovery_url=SEED))).status == "blocked"
 
 
-def test_unknown_title_conversion_requires_human_confirmation_and_saves_exact_seed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("input_url", [LIST, LIST + "?etype=E"])
+def test_unknown_title_conversion_requires_human_confirmation_and_saves_exact_seed(tmp_path, monkeypatch, input_url):
     batch, path, catalog = setup_batch(tmp_path)
     now = datetime.now(UTC)
     monkeypatch.setattr("screenshot_crawler.registration.models.conversion_now", lambda: now)
-    value = converted(batch.resolver, now)
-    row = batch.add_resolution(1, LIST, value)
+    value = converted(batch.resolver, now, input_url=input_url)
+    row = batch.add_resolution(1, input_url, value)
     assert batch.readiness(row).status != "ready"
     batch.edit_candidate(row, label="人工作品")
     batch.name_work(row, "synthetic_piccoma")
@@ -111,7 +118,7 @@ def test_unknown_title_conversion_requires_human_confirmation_and_saves_exact_se
     service = RegistrationService(path, catalog.path)
     before = path.read_bytes(), catalog.path.read_bytes()
     preview = service.preview(batch)
-    assert f"入力URL: {LIST}" in preview.summary and f"保存URL: {SEED}" in preview.summary
+    assert f"入力URL: {input_url}" in preview.summary and f"保存URL: {SEED}" in preview.summary
     assert before == (path.read_bytes(), catalog.path.read_bytes())
     assert service.save(batch, preview).verified
     target, = yaml.safe_load(path.read_text(encoding="utf-8"))["targets"]

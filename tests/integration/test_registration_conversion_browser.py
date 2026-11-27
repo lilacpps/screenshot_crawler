@@ -61,7 +61,7 @@ def document(mode):
 
 
 @pytest.mark.parametrize("mode", [
-    "ok", "missing_title", "duplicate_title", "skip_paid", "missing_canonical", "wrong_canonical",
+    "ok", "ok_etype_e", "missing_title", "duplicate_title", "skip_paid", "missing_canonical", "wrong_canonical",
     "missing_count", "wrong_count", "duplicate_count", "wrong_order", "ambiguous_order",
     "foreign_row", "duplicate_row", "paid_only", "quota_only", "granted_only", "unknown_only",
     "ambiguous_free", "missing_status", "duplicate_status", "missing_row_title", "duplicate_list",
@@ -92,20 +92,21 @@ async def test_conversion_observes_one_work_document_and_never_opens_reader(brow
         return await fetch(route, url=f"http://127.0.0.1:{server.server_port}/", **kwargs)
     monkeypatch.setattr(Route, "fetch", upstream)
     resolver = UrlResolver(_discovery_registry())
+    input_url = URL + "?etype=E" if mode == "ok_etype_e" else URL
     try:
-        result = await resolver.observe_conversion(browser_page, resolver.resolve(URL))
+        result = await resolver.observe_conversion(browser_page, resolver.resolve(input_url))
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
     assert requests == [("GET", URL)]
-    if mode in {"ok", "missing_title", "duplicate_title", "skip_paid"}:
+    if mode in {"ok", "ok_etype_e", "missing_title", "duplicate_title", "skip_paid"}:
         assert result.status == "converted" and resolver.resolution_error(result) is None
         assert result.discovery_url == "https://piccoma.com/web/viewer/63/" + ("100" if mode == "skip_paid" else "900")
         assert result.conversion_proof.dom_index == (2 if mode == "skip_paid" else 1)
         assert result.conversion_proof.row_count == 3
         assert result.title == (None if mode in {"missing_title", "duplicate_title"} else "人工作品")
-        assert result.input_url == URL and result.site_work_identity == "piccoma-product:63"
+        assert result.input_url == input_url and result.site_work_identity == "piccoma-product:63"
     else:
         assert result.status == "blocked" and result.conversion_proof is None
         assert result.discovery_url is None and result.site_work_identity is None

@@ -628,7 +628,7 @@ Full未実行・Catalog未同期と表示します。「はい」なら既存の
 | カドコミ | `/detail/KC_…_S`、同じ作品prefixの`/episodes/KC_…_E`からdetailへ変換 |
 | マガポケ | `/title/id/episode/id` |
 | マンガワン | `/manga/id/chapter/id` |
-| ピッコマ | `/web/viewer/product/episode`（登録解析時にはviewerを開きません） |
+| ピッコマ | `/web/viewer/product/episode`、`/web/product/id/episodes`（末尾の `?etype=E` も可。一覧では安全なURL変換を有効にしてください） |
 | ヤングアニマル | `/series/id` |
 | ゼブラック | `/title/id/chapter/list`、数値`/title/id`やviewer URLは同作品のlistへ変換 |
 
@@ -639,7 +639,8 @@ percent escapeなどは未対応でブロックします。作品名の自動取
 話名・著者名・巻数は作品名へ混ぜず、カドコミは内部の正式作品名を優先します。
 正式名に含まれる副題・数字・全角文字は残します。取得後のlabelは手動でも調整できます。
 HTMLのscriptを実行せず、ゼブラックは固定された公開作品情報APIだけを読みます。
-ピッコマは入力のviewerを開かず同作品の一覧を読みます。作品名が取得できなくても、
+ピッコマは入力のviewerを開かず同作品の一覧を読みます。一覧URLの `?etype=E` は読み込み前に取り除き、
+一覧から確認した最初の無条件無料話のURLを登録候補にします。作品名が取得できなくても、
 安全な正規URLが確定していれば手入力して明示確認できます。
 一方、作品ページから話URLへの変換はサイトごとに対応が異なり、全サイト共通ではありません。
 

@@ -3168,7 +3168,9 @@ dispatch and canonical plus site-owned native binding/title checks. They do not
 provide new complete-list preview capabilities or change existing Discovery.
 
 Stage 06B adds Piccoma's exact product/episodes listing as an optional observed
-conversion input. Pure parse remains blocked; one guarded listing GET must prove
+conversion input. The registration hook strips the exact `?etype=E` suffix from
+this listing form before deriving the query-free observation URL. Pure parse
+remains blocked; one guarded listing GET must prove
 canonical, oldest-first order, declared/exact count and same-product unique
 episode/status rows. The existing site classifier selects the first unconditional
 free DOM row. Immutable ephemeral input/document/seed/native-ID/DOM/access/time
