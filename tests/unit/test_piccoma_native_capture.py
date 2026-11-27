@@ -918,7 +918,9 @@ def test_piccoma_capture_timeout_does_not_change_page_timeout(
 
 
 @pytest.mark.parametrize("preserve_alpha", [False, True])
-def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb(preserve_alpha: bool) -> None:
+def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb(
+    monkeypatch: pytest.MonkeyPatch, preserve_alpha: bool,
+) -> None:
     source = Image.new("RGBA", (3, 2), (0, 0, 0, 0))
     source.putpixel((0, 0), (17, 189, 231, 64))
     source.putpixel((1, 0), (211, 23, 88, 128))
@@ -932,8 +934,17 @@ def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb(p
     with Image.open(BytesIO(payload)) as expected:
         expected_pixels = expected.convert(mode).tobytes()
 
+    save = Image.Image.save
+    methods = []
+
+    def record_method(image, output, **options):
+        methods.append(options["method"])
+        return save(image, output, **options)
+
+    monkeypatch.setattr(Image.Image, "save", record_method)
     result = encode_lossless_webp(payload, width=3, height=2, preserve_alpha=preserve_alpha)
 
+    assert methods == [4]
     with Image.open(BytesIO(result.data)) as decoded:
         assert decoded.convert(mode).tobytes() == expected_pixels
     assert capture_result_format_is_valid(result, width=3, height=2)

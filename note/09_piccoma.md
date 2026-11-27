@@ -26,15 +26,18 @@ was 14.632s. Page-change, source-body and replay budgets retain their
 existing bounds. The setting applies automatically to Runner entry
 points, including CLI and Batch, and needs no CLI or YAML changes.
 
-Lossless WebP uses `method=6` and native RGBA keeps `exact=True`. The
-adapter still requires full native source, paint and live page proof,
-a single valid VP8L chunk and exact decoded pixels. Verified native PNG
-is the fallback for WebP encoding or validation failure. The trial with
-lower compression effort completed the episode, but increased file sizes
-by about 22–25% on three local samples. The current implementation keeps
-the original compression settings and gives the direct capture hook more
-time. Timeout classification and the existing one-time Batch retry still
-apply if the extended budget expires.
+Since 2026-11-27, new captures use lossless WebP `method=4`. Native RGBA
+keeps `exact=True`. The adapter requires full native source, paint and
+live page proof, a single valid VP8L chunk and exact decoded pixels.
+Verified native PNG is the fallback for WebP encoding or validation failure.
+No CLI or YAML setting is needed. Existing archives are left intact.
+The earlier three-image comparison showed a 0.294% increase in total size
+with method 4. A local comparison on all 18 pages from the 1884x2819 ZIP
+below produced byte-identical WebP output. With the same PNG input and
+alternating method order, encoding and verification averaged 3.102s per
+page at method 6 and 2.777s at method 4, saving 5.851s over the 18 pages.
+The live timing evidence below used method 6. The default 22s capture
+bound, timeout classification and one-time Batch retry remain in effect.
 
 An isolated shared-CDP direct run revalidated access to Item/Source 41008
 and captured all 18 pages through explicit END in 299.673s. Capture took
@@ -1613,7 +1616,7 @@ to exact backing-size validation.
 The 1350x1920 scaled profile now prefers lossless WebP while preserving every
 RGBA byte of the verified replay, including alpha and RGB beneath alpha zero.
 `encode_lossless_webp` and its PNG-fallback wrapper take site-local
-`preserve_alpha=True` for this profile. Pillow encodes RGBA with lossless method 6
+`preserve_alpha=True` for this profile. Pillow encodes RGBA with lossless method 4
 and `exact=True`, then the decoder's complete RGBA stream must equal the input.
 The container must still be one valid VP8L chunk with the expected dimensions,
 version and no additional chunks; alpha is admitted explicitly. The default
@@ -1825,7 +1828,7 @@ manifest, so native-capture metadata was not independently rechecked from it.
 
 ## Current adapter and CLI registration
 
-Phase 07 Stage A and Stage B passed independent review. The distributed `crawler.yaml` sets `sites.piccoma.page_turn_delay_ms: 200`, `inter_candidate_delay_ms: 3000`, and the existing fail-stop flags to true. Manual CLI and Batch use the shared runtime-settings loader and pass the resolved page delay into `RunConfig`; the common 1,000ms fallback and other site values are unchanged. Explicit zero remains valid. Stage B transports the same full native trace as JSON at all six existing checkpoints and restores dicts for existing validators/signatures. Intentional nulls are preserved; unsupported values, malformed/ambiguous JSON, negative zero, schema errors, and payloads above 8 MiB fail closed as unknown target continuity. The 8 MiB cap is a new full-trace transport bound derived as 512 events × 16 KiB/event, with an independent 512 × 256-node traversal bound; it never truncates traces. The existing finite DPR tolerance `1e-7` and raw viewport before/after equality are retained. Stage C compared object and JSON at the same YAML 200ms setting in four interleaved 12-page manual runs: all 48 corresponding WebP files were byte-identical, native-only, and fallback-free. Mean normal cycle fell from 3.601s to 2.743s (0.857s, 23.8%); the six trace RPCs fell by 0.864s and JSON decode added 0.034s. A separate 24-page Batch reached explicit END and passed ZIP/Catalog checks; a fresh prepackage audit then independently verified all 24 manifest entries and 144 native evaluations / 144 JSON decodes. The final Stage C Reviewer review passed with BLOCKING 0. WebP remains lossless method6; no PNG/trace-count/stability/thread refactor is included. The separate [genre correction plan](../research/piccoma-performance/GENRE_FIX_PLAN.md) remains unimplemented and requires verified product-type evidence.
+Phase 07 Stage A and Stage B passed independent review. The distributed `crawler.yaml` sets `sites.piccoma.page_turn_delay_ms: 200`, `inter_candidate_delay_ms: 3000`, and the existing fail-stop flags to true. Manual CLI and Batch use the shared runtime-settings loader and pass the resolved page delay into `RunConfig`; the common 1,000ms fallback and other site values are unchanged. Explicit zero remains valid. Stage B transports the same full native trace as JSON at all six existing checkpoints and restores dicts for existing validators/signatures. Intentional nulls are preserved; unsupported values, malformed/ambiguous JSON, negative zero, schema errors, and payloads above 8 MiB fail closed as unknown target continuity. The 8 MiB cap is a new full-trace transport bound derived as 512 events × 16 KiB/event, with an independent 512 × 256-node traversal bound; it never truncates traces. The existing finite DPR tolerance `1e-7` and raw viewport before/after equality are retained. Stage C compared object and JSON at the same YAML 200ms setting in four interleaved 12-page manual runs: all 48 corresponding WebP files were byte-identical, native-only, and fallback-free. Mean normal cycle fell from 3.601s to 2.743s (0.857s, 23.8%); the six trace RPCs fell by 0.864s and JSON decode added 0.034s. A separate 24-page Batch reached explicit END and passed ZIP/Catalog checks; a fresh prepackage audit then independently verified all 24 manifest entries and 144 native evaluations / 144 JSON decodes. The final Stage C Reviewer review passed with BLOCKING 0. Stage C kept its lossless method-6 encoder, PNG processing, trace count, stability checks and threading. The separate [genre correction plan](../research/piccoma-performance/GENRE_FIX_PLAN.md) remains unimplemented and requires verified product-type evidence.
 
 `PiccomaDiscoveryAdapter` is registered with Discovery. `PiccomaAdapter` is registered in the manual crawl and Batch adapter registries, and `PiccomaSitePolicy` is registered with the generic Batch Planner. Manual access remains non-consuming for exact-free and active manual grants. Current normal Batch may select `piccoma_ticket_auto` quota candidates in the preexisting candidate sequence. Grant-only exposes `work_ticket` (waitfree / ¥0＋) and `binge_ticket` (binge-free) as explicit ordered passes within each Work; `all` initially checks both pools together and replans/refreshes the next current-Work pool after earlier entry attempts. Each pass allows only its own concrete kinds, and a Binge pass never falls back to waitfree or ¥0＋. Grant-only initially resolves availability/stock once per Work before entering its bounded selected episode pool; zero stock skips the Work without per-episode eligibility attempts. Grant-only leaves Items pending after target grant confirmation without Capture/END/ZIP. Site-owned checks still bind the fresh listing row, product-home state, login, exact eligibility exchange, one native ticket modal and one matching affirmative control; after a consuming action they require same-target viewer navigation, a fresh grant row and exact balance/charge change. Unknown results stop without retry. The site Adapter and synthetic tests cover all three kinds and fresh free/grant races. Stage 02's four positive ticket uses and zeroPlus direct-recovery E2E remain historical; no additional ticket use occurred during this 2026-11-19 revision. The Stage 02 live limitations remain: normal packaging removed its run manifest, so native-source metadata was not independently rechecked from those archives, and no account-wide binge balance debit is claimed. The earlier 9473 full-suite result is historical and is not the validation total for this revision.
 
@@ -2079,7 +2082,7 @@ The report's equal-50-height seam/phase and 4x4 grouping analysis is explicitly 
 The native replay contract through exact JPEG response attribution, the 408
 fractional canvas draws, and proven-white RGB composition is unchanged. The
 default result encodes those RGB pixels as lossless WebP (`lossless=True`,
-`method=6`). Validation requires a single `VP8L` chunk with exact RIFF/chunk
+`method=4`). Validation requires a single `VP8L` chunk with exact RIFF/chunk
 lengths and expected encoded dimensions, full file verification/decode, one
 frame, MIME/extension agreement, and byte-for-byte equality of every decoded
 RGB channel with the verified composited pixels. A pixel-identical 1x1 lossy

@@ -123,8 +123,9 @@ with 0 skipped, plus `ruff check src tests`. Full repository/standalone Research
 suites were not required for this site-local change; live verification is above.
 
 Piccoma's direct capture hook defaults to 22s, including 2s of Core grace,
-to allow replay, lossless WebP method 6 and final validation to finish.
-Native RGBA output retains `exact=True` and full decoded-channel verification.
+to allow replay, lossless WebP encoding and final validation to finish.
+New captures use lossless WebP `method=4`, with full decoded-channel
+verification and `exact=True` for native RGBA output.
 Page-change, source-body and replay timeouts keep their existing bounds.
 See [the timeout evidence](../../../../note/09_piccoma.md#direct-capture-timeout-2026-11-26).
 
@@ -161,7 +162,7 @@ to load this behavior. See [current evidence and limits](../../../../note/09_pic
 
 Phase 07 Stage A passed independent review. The distributed root `crawler.yaml` sets Piccoma `page_turn_delay_ms` to 200 and keeps `inter_candidate_delay_ms` at 3000 with the existing stop flags enabled. Both manual CLI and Batch use the existing site-neutral settings loader and resolve this value into `RunConfig`; no Piccoma-specific fallback or shared runtime change was added. If the Piccoma setting is absent, the common 1000ms fallback still applies. The delay remains once after save/progress and before the initial `go_next`, outside the page-change timeout. Rendering stability checks remain unchanged.
 
-Phase 07 Stage B transports all six existing fresh native-trace snapshots as JSON strings and restores full dictionaries for the same Python validators and signatures. It preserves field values and intentional nulls, rejects unsupported JavaScript values/negative zero/ambiguous or oversized payloads, and treats transport/schema errors as unknown target state so Core fallback cannot proceed without continuity proof. Independent Stage B review passed. Call count/order, source-native JPEG binding, 408-draw replay, white composite, lossless WebP method6, encode-time and post-encode verification, and DPR raw-viewport equality are unchanged.
+Phase 07 Stage B transports all six existing fresh native-trace snapshots as JSON strings and restores full dictionaries for the same Python validators and signatures. It preserves field values and intentional nulls, rejects unsupported JavaScript values/negative zero/ambiguous or oversized payloads, and treats transport/schema errors as unknown target state so Core fallback cannot proceed without continuity proof. Independent Stage B review passed. Stage B retained the call count and order, source-native JPEG binding, 408-draw replay, white composite, method-6 lossless WebP, encode-time and post-encode verification, and DPR raw-viewport equality.
 
 Stage C used the reviewed object and JSON implementations with the same YAML `page_turn_delay_ms: 200` setting in four interleaved 12-page manual runs. All 48 corresponding source-native lossless WebP files were byte-identical with zero fallback. Mean normal cycle time was 3.601s (object) versus 2.743s (JSON), a measured 0.857s / 23.8% reduction in these runs; trace RPC time fell by 0.864s and JSON decoding added 0.034s. WebP method6, pacing, and page-change stability time were effectively unchanged. A dedicated 24-page Batch reached explicit END and passed ZIP CRC, lossless-member, Artifact hash/size, and Catalog checks. The fresh prepackage audit also verified all 24 per-page manifest entries, 144 native evaluations, and 144 JSON decodes, while retaining no URLs/titles/raw manifest. The final Stage C review passed with BLOCKING 0. Details and measurement limits are in the [Phase 07 profile](../../../../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../../../../research/piccoma-performance/PHASE07_TESTER.md).
 
@@ -885,7 +886,7 @@ to exact backing-size validation.
 The 1350x1920 scaled profile now prefers lossless WebP while preserving every
 RGBA byte of the verified replay, including alpha and RGB beneath alpha zero.
 `encode_lossless_webp` and its PNG-fallback wrapper take site-local
-`preserve_alpha=True` for this profile. Pillow encodes RGBA with lossless method 6
+`preserve_alpha=True` for this profile. Pillow encodes RGBA with lossless method 4
 and `exact=True`, then the decoder's complete RGBA stream must equal the input.
 The container must still be one valid VP8L chunk with the expected dimensions,
 version and no additional chunks; alpha is admitted explicitly. The default
