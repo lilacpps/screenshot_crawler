@@ -102,3 +102,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [Work単位の完全削除（退避付き）](work-deletion/README.md) —
   複数サイトにまたがる1作品のWatchlist/Catalog完全削除とZIP/status退避、
   read-only preview、強制中断復旧、GUI/CLI、同work_key再登録の段階実装（planned）。
+
+- [Work終了処理 — 巻統合・完成品生成](work-finalization-volume-builder/README.md) —
+  work_key単位のGUI、Piccoma巻境界の自動探索・手動補正、既存巻コピーと話ZIP統合、
+  Books-finalizedへの検証済み出力（planned）。
