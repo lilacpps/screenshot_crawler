@@ -585,20 +585,30 @@ def _viewer_html(
           reader.innerHTML = `<div id="pages"></div><h2 class="title_detail_viewer__detail__info__viewerTitle__GrN4D">{viewer_title}</h2>`;
           const area = document.querySelector('#pages');
           area.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:720px';
+          const variant = '{transition_overlap_variant}';
+          const outgoingClip = ['outgoing_clip', 'outgoing_clip_with_filter',
+            'outgoing_clip_source_changed'].includes(variant);
+          if (outgoingClip || variant === 'incoming_clip')
+            area.style.cssText += ';width:1265px;overflow:hidden';
+          if (variant === 'incoming_clip') area.style.left = '15px';
           numbers.forEach((n, index) => {{
             const image = document.createElement('img');
             image.className = 'G54Y0W_page'; image.alt = `page_${{n}}`;
             image['__reactFiber$fixture'] = {{memoizedProps:{{webMangaViewerData}},return:null}};
             image.src = ('{transition_overlap_variant}' === 'dimensions' && index === 1)
               ? wrongDimensionSrc : src;
+            if (variant === 'outgoing_clip_source_changed' && index === 0)
+              image.src = URL.createObjectURL(imageBlob);
             const allReadyPositions = [945, 655, 355, 55];
             const clippedPositions = numbers.length === 4
               ? [1100, 800, 500, -25] : [1100, 655, -25];
-            const positions = '{transition_overlap_variant}' === 'all_ready'
-              ? allReadyPositions : clippedPositions;
+            let positions = variant === 'all_ready' ? allReadyPositions : clippedPositions;
+            if (outgoingClip) positions = [975, 675, -25];
+            if (variant === 'incoming_clip') positions = [1100, 655, -10];
             const left = positions[index] ?? 55;
             image.style.cssText = `position:absolute;top:40px;left:${{left}}px;width:300px;height:450px;object-fit:fill`;
-            if ('{transition_overlap_variant}' === 'visual_unsafe' && index === 1)
+            if ((variant === 'visual_unsafe' && index === 1)
+                || (variant === 'outgoing_clip_with_filter' && index === 0))
               image.style.filter = 'grayscale(1)';
             area.append(image);
           }});
@@ -2716,15 +2726,20 @@ async def test_comicfuz_runner_crawls_verified_spreads_to_positive_end(
     assert await browser_page.evaluate("() => window.transitionUnreadySeen === true")
 
 
-@pytest.mark.parametrize(("overlap_state", "overlap_size", "extra_tail", "body_count", "first_blank"), [
-    (3, 3, False, 10, True), (3, 4, False, 10, True), (5, 3, False, 10, True),
-    (2, 3, True, 2, True), (2, 4, True, 2, True),
-    (1, 3, True, 1, True), (2, 3, True, 1, True),
-    (1, 3, True, 4, False), (1, 4, True, 4, False), (4, 3, True, 9, True),
-])
+@pytest.mark.parametrize(
+    ("overlap_state", "overlap_size", "extra_tail", "body_count", "first_blank", "variant"),
+    [
+        (3, 3, False, 10, True, "valid"), (3, 4, False, 10, True, "valid"),
+        (5, 3, False, 10, True, "valid"), (4, 3, False, 10, True, "outgoing_clip"),
+        (2, 3, True, 2, True, "valid"), (2, 4, True, 2, True, "valid"),
+        (1, 3, True, 1, True, "valid"), (2, 3, True, 1, True, "valid"),
+        (1, 3, True, 4, False, "valid"), (1, 4, True, 4, False, "valid"),
+        (4, 3, True, 9, True, "valid"),
+    ],
+)
 async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_end(
     browser_page, tmp_path: Path, overlap_state: int, overlap_size: int, extra_tail: bool,
-    body_count: int, first_blank: bool,
+    body_count: int, first_blank: bool, variant: str,
 ) -> None:
     previous = [1, 2] if extra_tail else ([3, 4] if overlap_state == 3 else [7, 8])
     next_group = [3, 4] if extra_tail else ([5, 6] if overlap_state == 3 else [9, 10])
@@ -2732,7 +2747,7 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
         previous, next_group = ([0], [1, 2]) if overlap_state == 1 else ([1, 2], [3])
     elif not first_blank:
         previous, next_group = [0, 1], [2, 3]
-    elif body_count == 9:
+    elif overlap_state == 4:
         previous, next_group = [5, 6], [7, 8]
     new_count = overlap_size - len(previous)
     await _route_comicfuz(
@@ -2744,6 +2759,7 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
         transition_delay_ms=180,
         transition_overlap_state=overlap_state,
         transition_overlap_new_count=new_count,
+        transition_overlap_variant=variant,
     )
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     config = RunConfig(
@@ -2772,21 +2788,25 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
     if body_count == 1:
         assert adapter._advanced_extra_groups == ((1, 2), (3,))
     observed_overlap = await browser_page.evaluate("() => window.transitionOverlapSeen")
+    viewport_ready = [False, *([True] * (overlap_size - 2)), False]
+    if variant == "outgoing_clip":
+        viewport_ready[0] = True
     assert observed_overlap == {
         "state": overlap_state,
         "numbers": expected_overlap,
         "imageReady": [True] * overlap_size,
-        "ready": [False, *([True] * (overlap_size - 2)), False],
+        "ready": viewport_ready,
     }
     assert not (tmp_path / "overlap-output" / "archive.zip").exists()
 
 
-@pytest.mark.parametrize(("extra_tail", "body_count", "first_blank"), [
-    (False, 10, True), (True, 2, True), (True, 1, True), (True, 4, False),
+@pytest.mark.parametrize(("extra_tail", "body_count", "first_blank", "variant"), [
+    (False, 10, True, "valid"), (False, 10, True, "outgoing_clip"),
+    (True, 2, True, "valid"), (True, 1, True, "valid"), (True, 4, False, "valid"),
 ])
 async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_artifact(
     browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool,
-    body_count: int, first_blank: bool,
+    body_count: int, first_blank: bool, variant: str,
 ) -> None:
     catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
@@ -2802,6 +2822,7 @@ async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_ar
             transition_overlap_state=1 if body_count == 1 or not first_blank else (2 if extra_tail else 3),
             transition_overlap_new_count=2 if body_count == 1 else 1,
             persistent_transition_overlap=True,
+            transition_overlap_variant=variant,
         )
     )
 
@@ -2830,6 +2851,7 @@ async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_ar
     ("variant", "extra_tail"),
     [(variant, False) for variant in [
         "outside", "gap", "duplicate", "role", "all_ready", "visual_unsafe", "dimensions",
+        "outgoing_clip_with_filter", "outgoing_clip_source_changed", "incoming_clip",
     ]] + [(variant, True) for variant in ["role", "all_ready", "visual_unsafe", "dimensions"]],
 )
 async def test_comicfuz_invalid_transition_wide_shapes_fail_closed(
@@ -3568,6 +3590,7 @@ async def test_comicfuz_native_page_role_manifest_drift_is_rejected(browser_page
         ("clip", "rect(0px, 10px, 10px, 0px)"),
         ("object-fit", "cover"),
         ("clip-path", "inset(1px)"),
+        ("ancestor-overflow", "hidden"),
     ],
 )
 async def test_comicfuz_rejects_visual_effects_that_change_visible_page_pixels(
@@ -3581,7 +3604,14 @@ async def test_comicfuz_rejects_visual_effects_that_change_visible_page_pixels(
     adapter.resolve_initial_navigation_url(VIEWER_URL)
     await adapter.initialize(browser_page)
     await browser_page.locator("img.G54Y0W_page").first.evaluate(
-        "(element, [name, value]) => element.style.setProperty(name, value)",
+        """(element, [name, value]) => {
+          if (name === 'ancestor-overflow') {
+            element.parentElement.style.width = '500px';
+            element.parentElement.style.overflow = value;
+          } else {
+            element.style.setProperty(name, value);
+          }
+        }""",
         [property_name, value],
     )
 

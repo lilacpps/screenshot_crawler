@@ -1839,6 +1839,7 @@ class ComicFuzAdapter(SiteAdapter):
                         && rect.right <= innerWidth && rect.bottom <= innerHeight;
                       const proof = [];
                       let visualSafe = true;
+                      let overflowClipped = false;
                       const near = (a, b) => Math.abs(a - b) < 0.01;
                       const imageStyle = getComputedStyle(element);
                       const fit = imageStyle.objectFit || 'fill';
@@ -1893,7 +1894,7 @@ class ComicFuzAdapter(SiteAdapter):
                           const bottom = top + node.clientHeight;
                           if (rect.left < left - 0.5 || rect.top < top - 0.5
                               || rect.right > right + 0.5 || rect.bottom > bottom + 0.5)
-                            visualSafe = false;
+                            overflowClipped = true;
                         }
                         proof.push([style.filter, backdrop, mask,
                           clipPath, rotate, scale, translate, perspective, style.clip,
@@ -1906,7 +1907,9 @@ class ComicFuzAdapter(SiteAdapter):
                         src: element.currentSrc || element.src || '',
                         x: rect.x, y: rect.y, width: rect.width, height: rect.height,
                         naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight,
-                        visualSafe, visualProof: [fit, ...proof].join('|'),
+                        visualSafe: visualSafe && !overflowClipped,
+                        onlyOverflowClipped: visualSafe && overflowClipped,
+                        visualProof: [fit, ...proof].join('|'),
                         shown, active: intersects,
                         imageReady: element.complete && element.naturalWidth > 0
                           && element.naturalHeight > 0 && !!(element.currentSrc || element.src),
@@ -2164,12 +2167,17 @@ class ComicFuzAdapter(SiteAdapter):
         ):
             return False
 
-        # The native role/index/dimension join is performed by _all_page_rows.
-        # Ready overlap rows still need the same per-image source and visual
-        # checks as a normal stable spread.
+        # A departing page can fit inside the viewport while the slider clips it.
+        # This exception lets the turn keep polling for the next spread.
         for row in rows:
             if row.get("ready"):
-                self._validate_page_row(row)
+                number = row["number"]
+                verified_outgoing = (
+                    number in previous_set
+                    and self._last_captured_proofs.get(number)
+                    == (row.get("src"), row.get("naturalWidth"), row.get("naturalHeight"))
+                )
+                self._validate_page_row(row, allow_overflow_clip=verified_outgoing)
         return True
 
     def _assert_direct_rental_guard_healthy(self) -> None:
@@ -2307,7 +2315,7 @@ class ComicFuzAdapter(SiteAdapter):
         raise UnknownPageStateError("ComicFUZ spread contains an unsupported page-role sequence")
 
     @staticmethod
-    def _validate_page_row(row: dict[str, Any]) -> None:
+    def _validate_page_row(row: dict[str, Any], *, allow_overflow_clip: bool = False) -> None:
         if (
             not isinstance(row.get("number"), int)
             or not isinstance(row.get("alt"), str)
@@ -2324,7 +2332,11 @@ class ComicFuzAdapter(SiteAdapter):
             or int(row.get("naturalHeight") or 0) <= 0
         ):
             raise UnknownPageStateError("ComicFUZ ready page image lacks a stable source")
-        if row.get("ready") and row.get("visualSafe") is not True:
+        if (
+            row.get("ready")
+            and row.get("visualSafe") is not True
+            and not (allow_overflow_clip and row.get("onlyOverflowClipped") is True)
+        ):
             raise UnknownPageStateError(
                 "ComicFUZ visible image has an unverified filter, transform, or crop"
             )
